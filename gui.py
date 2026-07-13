@@ -483,17 +483,20 @@ class RangeChartApp:
                         troughcolor=COLORS["row_alt"], bordercolor=COLORS["row_alt"],
                         lightcolor=COLORS["accent"], darkcolor=COLORS["accent"])
 
-        # --- Treeview: taller rows, tabular feel, navy heading, navy selection ---
-        style.configure("Treeview", rowheight=34, font=(F, 11),
+        # --- Treeview: taller rows, tabular feel, soft-gray heading (Notion-style),
+        #     navy selection preserved. UI-Polish Phase 4: header switches from
+        #     primary blue to a soft surface so the table reads as content-first
+        #     rather than chrome.
+        style.configure("Treeview", rowheight=38, font=(F, 11),
                         fieldbackground=COLORS["card"], background=COLORS["card"],
                         foreground=COLORS["text"], bordercolor=COLORS["card_border"],
                         relief="flat")
-        style.configure("Treeview.Heading", font=(F, 11, "bold"),
-                        background=COLORS["primary"], foreground="#ffffff",
+        style.configure("Treeview.Heading", font=(F, 10, "bold"),
+                        background=COLORS["surface"], foreground=COLORS["text"],
                         relief="flat", padding=(10, 8))
         style.map(
             "Treeview.Heading",
-            background=[("active", COLORS["primary_hover"])],
+            background=[("active", COLORS["row_hover"])],
         )
         style.map(
             "Treeview",

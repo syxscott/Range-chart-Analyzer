@@ -265,3 +265,22 @@ function rcaBuildTableExport(data, tableId) {
   });
   return { headers, rows };
 }
+
+
+// UI-Polish Phase 5: viz mount-point hook. Currently a no-op.
+// Reserved for a future horizontal-Gantt visualization of species ranges
+// (each species_ranges row -> { name, value: [sectionIdx, range_base, range_top], biozone };
+//  data.sections becomes the Y-axis categories).
+// When implementing, export this function on globalThis and call from
+// rcaRenderResults() after the table HTML is built. The host element
+// already exists in index.html but is `hidden` until first invocation.
+function rcaRenderViz(data) {
+  if (!data) return;
+  var host = (typeof document !== "undefined")
+    ? document.getElementById("viz-host")
+    : null;
+  if (!host) return;
+  // No-op: future ECharts/Plotly init goes here.
+  host.textContent = "";
+}
+if (typeof globalThis !== "undefined") globalThis.rcaRenderViz = rcaRenderViz;

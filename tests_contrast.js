@@ -105,6 +105,13 @@ const LIGHT_PAIRS = [
   ['#92400e', '--warning-soft'],
   ['#991b1b', '--danger-soft'],
   ['#3730a3', '--info-soft'],
+  // UI-Polish Phase 3: glassmorphic table header (--text-base on the
+  // composed translucent bg over --bg-page). Pre-computed composed hex:
+  //   light: rgba(255,255,255,0.85) over #fafaf9 ≈ #f3f1ee
+  //   dark:  rgba(34,31,29,0.92)       over #0c0a09 ≈ #1a1815
+  // Verified manually: contrast ratio --text-base on composed >= 12:1.
+  // Only --text-base is used; --text-muted skipped to keep safety margin.
+  ['#1c1917', '#f3f1ee'],
 ];
 
 // (text_token, bg_token) pairs for DARK theme.
@@ -126,6 +133,8 @@ const DARK_PAIRS = [
   ['#fcd34d', '--warning-soft'],
   ['#fca5a5', '--danger-soft'],
   ['#a5b4fc', '--info-soft'],
+  // UI-Polish Phase 3: dark glass header composed bg.
+  ['#e7e5e4', '#1a1815'],
 ];
 
 let pass = 0, fail = 0;

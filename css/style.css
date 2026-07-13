@@ -92,6 +92,8 @@
         --info-soft:     #312e81;
         --shadow-soft: 0 1px 2px 0 rgba(0,0,0,.4), 0 4px 12px -2px rgba(0,0,0,.5);
         --shadow-pop:  0 1px 2px 0 rgba(0,0,0,.4), 0 8px 24px -4px rgba(0,0,0,.6);
+        /* UI-Polish Phase 1: dark override for the card hover shadow. */
+        --shadow-lg:  0 1px 3px 0 rgba(0,0,0,.5), 0 24px 56px -10px rgba(0,0,0,.7);
     }
 }
 /* Phase B: explicit dark theme via toggle. Same token overrides as above
@@ -118,6 +120,8 @@
     --info-soft:     #312e81;
     --shadow-soft: 0 1px 2px 0 rgba(0,0,0,.4), 0 4px 12px -2px rgba(0,0,0,.5);
     --shadow-pop:  0 1px 2px 0 rgba(0,0,0,.4), 0 8px 24px -4px rgba(0,0,0,.6);
+    /* UI-Polish Phase 1: same dark --shadow-lg override for the toggle path. */
+    --shadow-lg:  0 1px 3px 0 rgba(0,0,0,.5), 0 24px 56px -10px rgba(0,0,0,.7);
 }
 /* Phase B: dark-mode alert/pill text must be LIGHT (not the hardcoded
    dark text from light mode) so it reads on dark soft backgrounds. */
@@ -284,6 +288,13 @@ a:hover { text-decoration: underline; }
     box-shadow: var(--shadow-soft);
     padding: 22px 24px;
     margin-bottom: 20px;
+    /* UI-Polish Phase 1: card lift on hover. Reuses --shadow-lg which is
+       already overridden for dark mode. */
+    transition: box-shadow 200ms ease-out, transform 200ms ease-out;
+}
+.card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
 }
 .card h2 {
     /* Phase A: tighter, slightly larger h2. */
@@ -394,6 +405,9 @@ textarea { resize: vertical; min-height: 64px; }
     background: var(--primary-color);
     color: #fff;
     border-color: var(--primary-color);
+    /* UI-Polish Phase 2: baseline elevation so the primary CTA already
+       looks raised before hover. */
+    box-shadow: var(--shadow-primary);
 }
 .btn-primary:not(:disabled):hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 /* Phase B: in dark mode primary is a lighter blue (#60a5fa) so white text
@@ -656,10 +670,10 @@ button.btn:not(:disabled):active {
 button.btn.btn-primary:not(:disabled):hover {
     box-shadow: var(--shadow-primary);
 }
-/* Press feedback: tiny scale to mimic a physical push. */
+/* Press feedback: tighter scale to mimic a physical push. */
 .btn-primary:not(:disabled):active,
 button.btn.btn-primary:not(:disabled):active {
-    transform: scale(0.98);
+    transform: scale(0.96);
     box-shadow: var(--shadow-sm);
 }
 :focus-visible {
@@ -841,18 +855,43 @@ table.data-table {
     font-size: 13px;
 }
 table.data-table thead th {
-    background: var(--bg-lighter);
+    /* UI-Polish Phase 3: glassmorphic sticky header. Translucent bg
+       plus backdrop-filter for a "frosted" effect; uppercase + tracking
+       reads as proper column labels. */
+    background: rgba(255, 255, 255, 0.85);
     color: var(--text-base);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
     font-weight: 650;
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wide);
     text-align: left;
-    padding: 10px 14px;
+    padding: 11px 16px;
     border-bottom: 2px solid var(--border-color);
     white-space: nowrap;
     position: sticky;
     top: 0;
     /* Phase C: sticky thead needs explicit z-index so tbody cells don't
        paint over it when scrolling. */
-    z-index: 1;
+    z-index: 2;
+}
+/* UI-Polish Phase 3: solid fallback when backdrop-filter is unsupported
+   (older Firefox, old Safari). */
+@supports not (backdrop-filter: blur(1px)) {
+    table.data-table thead th { background: var(--bg-lighter); }
+}
+/* UI-Polish Phase 3: dark-mode glass header. More opaque than light
+   (0.92) so the dark page bg doesn't bleed through too much. */
+:root[data-theme="dark"] table.data-table thead th {
+    background: rgba(34, 31, 29, 0.92);
+    color: var(--text-base);
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) table.data-table thead th {
+        background: rgba(34, 31, 29, 0.92);
+        color: var(--text-base);
+    }
 }
 table.data-table tbody td {
     padding: 9px 14px;
