@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.range_chart_analyzer.json
+.range_chart_analyzer/
+.idea/
+*.egg-info/
+# Test screenshots / output
+屏幕截图_*.jpeg
+range_chart_result.json
+# OS
+Thumbs.db
+.DS_Store

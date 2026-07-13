@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <title>Range Chart Analyzer</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="header-content">
+                <h1>
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
+                    <span data-i18n="app.title">Range Chart Analyzer</span>
+                </h1>
+                <p class="subtitle" data-i18n="app.subtitle"></p>
+                <div class="header-actions">
+                    <div class="theme-toggle" role="group" aria-label="Theme">
+                        <button type="button" data-theme-choice="system" aria-pressed="false" title="System">AUTO</button>
+                        <button type="button" data-theme-choice="light" aria-pressed="false" title="Light">☀</button>
+                        <button type="button" data-theme-choice="dark" aria-pressed="false" title="Dark">☾</button>
+                    </div>
+                    <div class="lang-switch" id="lang-switch" role="tablist" aria-label="Language">
+                        <button type="button" data-lang="zh" role="tab" aria-selected="false">CN</button>
+                        <button type="button" data-lang="en" role="tab" aria-selected="false">EN</button>
+                        <button type="button" data-lang="ja" role="tab" aria-selected="false">JA</button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <main>
+            <section class="card" id="settings-card">
+                <h2>
+                    <span class="card-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+                    <span data-i18n="settings.title"></span>
+                </h2>
+                <p class="card-desc" data-i18n="settings.desc"></p>
+
+                <div class="form-row">
+                    <label class="field-label" for="api-key" data-i18n="settings.apiKey"></label>
+                    <div class="input-with-toggle">
+                        <input type="password" id="api-key" autocomplete="off" spellcheck="false" data-i18n-ph="settings.apiKey.placeholder">
+                        <button type="button" class="input-toggle-btn" id="api-key-toggle" data-i18n="settings.show"></button>
+                    </div>
+                    <p class="field-hint" data-i18n="settings.apiKey.hint"></p>
+                </div>
+
+                <div class="form-grid">
+                    <div class="form-row">
+                        <label class="field-label" for="endpoint" data-i18n="settings.endpoint"></label>
+                        <input type="text" id="endpoint" spellcheck="false">
+                        <p class="field-hint" data-i18n="settings.endpoint.hint"></p>
+                    </div>
+                    <div class="form-row">
+                        <label class="field-label" for="model" data-i18n="settings.model"></label>
+                        <input type="text" id="model" spellcheck="false">
+                        <p class="field-hint" data-i18n="settings.model.hint"></p>
+                    </div>
+                    <div class="form-row">
+                        <label class="field-label" for="max-tokens" data-i18n="settings.maxTokens"></label>
+                        <div class="range-row">
+                            <input type="range" id="max-tokens" min="500" max="32000" step="500" aria-describedby="max-tokens-hint">
+                            <output for="max-tokens" id="max-tokens-out">4000</output>
+                        </div>
+                        <p class="field-hint" id="max-tokens-hint" data-i18n="settings.maxTokens.hint"></p>
+                    </div>
+                    <div class="form-row">
+                        <label class="field-label" for="max-edge" data-i18n="settings.maxEdge"></label>
+                        <div class="range-row">
+                            <input type="range" id="max-edge" min="0" max="8000" step="500" aria-describedby="max-edge-hint">
+                            <output for="max-edge" id="max-edge-out">4000</output>
+                        </div>
+                        <p class="field-hint" id="max-edge-hint" data-i18n="settings.maxEdge.hint"></p>
+                    </div>
+                    <div class="form-row">
+                        <label class="field-label" for="runs" data-i18n="settings.runs"></label>
+                        <div class="range-row">
+                            <input type="range" id="runs" min="1" max="5" step="1" aria-describedby="runs-hint">
+                            <output for="runs" id="runs-out">1</output>
+                        </div>
+                        <p class="field-hint" id="runs-hint" data-i18n="settings.runs.hint"></p>
+                    </div>
+                    <div class="form-row">
+                        <label class="field-label" for="proxy" data-i18n="settings.proxy"></label>
+                        <input type="text" id="proxy" spellcheck="false" data-i18n-ph="settings.proxy.placeholder">
+                        <p class="field-hint" data-i18n="settings.proxy.hint"></p>
+                    </div>
+                    <div class="form-row">
+                        <span class="field-label" id="conn-mode-label" data-i18n="settings.mode"></span>
+                        <div class="segmented" role="radiogroup" aria-labelledby="conn-mode-label" id="conn-mode-seg">
+                            <button type="button" role="radio" data-value="auto" aria-checked="true" data-i18n="settings.mode.auto"></button>
+                            <button type="button" role="radio" data-value="backend" aria-checked="false" data-i18n="settings.mode.backend"></button>
+                            <button type="button" role="radio" data-value="direct" aria-checked="false" data-i18n="settings.mode.direct"></button>
+                        </div>
+                        <select id="conn-mode" hidden>
+                            <option value="auto" selected></option>
+                            <option value="backend"></option>
+                            <option value="direct"></option>
+                        </select>
+                        <p class="field-hint" id="conn-mode-hint" data-i18n="settings.mode.hint"></p>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <span class="field-label" for="remember-key" data-i18n="settings.remember"></span>
+                    <button type="button" id="remember-key" role="switch" aria-checked="true" class="ios-switch">
+                        <span class="ios-switch-knob" aria-hidden="true"></span>
+                    </button>
+                    <p class="field-hint" data-i18n="settings.remember.hint"></p>
+                </div>
+
+                <button type="button" class="btn btn-secondary btn-small" id="save-settings" data-i18n="settings.save"></button>
+            </section>
+
+            <section class="card" id="upload-card">
+                <h2>
+                    <span class="card-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span>
+                    <span data-i18n="upload.title"></span>
+                </h2>
+                <p class="card-desc" data-i18n="upload.desc"></p>
+
+                <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-describedby="dz-aria">
+                    <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <div class="dz-title" data-i18n="upload.dz.title"></div>
+                    <div class="dz-hint" data-i18n="upload.dz.hint"></div>
+                    <span id="dz-aria" class="visually-hidden" data-i18n="upload.dz.aria"></span>
+                </div>
+                <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/*" class="hidden">
+
+                <div class="preview-wrap hidden" id="preview-wrap">
+                    <img class="preview-img" id="preview-img" alt="">
+                    <div class="preview-meta" id="preview-meta"></div>
+                </div>
+
+                <div class="form-grid" style="margin-top:16px;">
+                    <div class="form-row">
+                        <label class="field-label" for="chart-lang" data-i18n="upload.chartLang"></label>
+                        <select id="chart-lang">
+                            <option value="auto" data-i18n="upload.chartLang.auto"></option>
+                            <option value="zh" data-i18n="upload.chartLang.zh"></option>
+                            <option value="en" data-i18n="upload.chartLang.en"></option>
+                            <option value="ja" data-i18n="upload.chartLang.ja"></option>
+                            <option value="ru" data-i18n="upload.chartLang.ru"></option>
+                        </select>
+                        <p class="field-hint" data-i18n="upload.chartLang.hint"></p>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <label class="field-label" for="caption" data-i18n="upload.caption"></label>
+                    <textarea id="caption" data-i18n-ph="upload.caption.placeholder" maxlength="2000"></textarea>
+                    <div class="caption-meta">
+                        <p class="field-hint" data-i18n="upload.caption.hint"></p>
+                        <span class="caption-counter" id="caption-counter" aria-live="polite">0 / 500</span>
+                    </div>
+                </div>
+
+                <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                    <button type="button" class="btn btn-primary btn-lg" id="extract-btn">
+                        <span id="extract-btn-label" data-i18n="upload.extract"></span>
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="reset-btn" data-i18n="upload.reset"></button>
+                </div>
+            </section>
+
+            <section class="card" id="results-card">
+                <h2>
+                    <span class="card-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg></span>
+                    <span data-i18n="results.title"></span>
+                </h2>
+
+                <div id="alert-slot" role="status" aria-live="polite"></div>
+
+                <div id="loading-slot" class="hidden" role="status" aria-live="polite">
+                    <div class="loading-block">
+                        <div class="skeleton-stack" aria-hidden="true">
+                            <div class="skeleton h24"></div>
+                            <div class="skeleton h20"></div>
+                            <div class="skeleton h16"></div>
+                        </div>
+                        <p data-i18n="loading.text"></p>
+                    </div>
+                </div>
+
+                <div id="results-empty" class="empty-state">
+                    <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
+                    <p data-i18n="results.empty"></p>
+                </div>
+
+                <div id="results-content" class="hidden"></div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <span data-i18n="app.title">Range Chart Analyzer</span> &middot; MiniMax M3 &middot; 100% client-side
+        </footer>
+    </div>
+
+    <div class="page-drop-overlay" id="page-drop-overlay" aria-hidden="true">
+        <div class="pd-card" data-i18n="upload.dropOverlay"></div>
+    </div>
+
+    <div class="toast toast-glass" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="js/config.js"></script>
+    <script src="js/i18n.js"></script>
+    <script src="js/prompt.js"></script>
+    <script src="js/json-utils.js"></script>
+    <script src="js/minimax.js"></script>
+    <script src="js/aggregate.js"></script>
+    <script src="js/table.js"></script>
+    <script src="js/export.js"></script>
+    <!-- theme.js must run before app.js so it can set data-theme on documentElement
+         before the first paint and wire the three theme buttons. -->
+    <script src="js/theme.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

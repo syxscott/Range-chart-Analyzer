@@ -1,0 +1,4 @@
+# Range Chart Analyzer runs on the Python standard library alone.
+# Pillow is OPTIONAL: it enables the GUI image thumbnail preview and
+# client-side downscaling of very large images. The app works without it.
+Pillow>=9.0 ; python_version >= "3.8"
