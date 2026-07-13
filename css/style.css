@@ -229,10 +229,16 @@ a:hover { text-decoration: underline; }
     align-items: center;
     gap: 10px;
     /* Phase A: fluid hero with modular scale + tighter tracking. */
-    font-size: clamp(20px, 4vw, 28px);
+    font-size: clamp(22px, 4vw, 32px);
     font-weight: 700;
-    color: var(--text-dark);
     letter-spacing: var(--tracking-tight);
+    /* UI-Demo: subtle gradient text. Even in dark mode the gradient stays
+       legible because the light end (#818cf8) has > 4.5:1 on #221f1d. */
+    background: linear-gradient(135deg, var(--text-dark) 0%, var(--primary-color) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: var(--primary-color); /* fallback for browsers without bg-clip */
 }
 .header h1 svg { color: var(--primary-color); }
 .header .subtitle {
@@ -495,12 +501,18 @@ textarea { resize: vertical; min-height: 64px; }
 }
 .card.io-init {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(14px);
 }
+
+/* UI-Demo stagger: each card has its own transition delay set inline
+   via --card-stagger-i so they fade in sequentially (0ms, 80ms, 160ms)
+   when entering view. The IO observer in app.js toggles .in-view. */
 .card.io-init.in-view {
     opacity: 1;
     transform: none;
-    transition: opacity 280ms ease-out, transform 280ms ease-out;
+    transition: opacity 360ms cubic-bezier(0.2, 0.7, 0.3, 1),
+                transform 360ms cubic-bezier(0.2, 0.7, 0.3, 1);
+    transition-delay: var(--card-stagger-i, 0ms);
 }
 
 /* ==================== Loading -> result cross-fade ==================== */

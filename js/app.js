@@ -617,16 +617,34 @@
     if (reduceMotion || !('IntersectionObserver' in window)) {
       // No animation - cards are already visible by default.
     } else {
-      cards.forEach((c) => c.classList.add('io-init'));
-      const io = new IntersectionObserver((entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            entry.target.classList.add('in-view');
-            io.unobserve(entry.target);
-          }
-        });
-      }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
-      cards.forEach((c) => io.observe(c));
+      // UI-Demo stagger: each card has its own transition delay set inline
+// via --card-stagger-i so they fade in sequentially (0ms, 90ms, 180ms
+// ...) the moment the page paints. The IO observer keeps working but
+// the CSS delay does the sequencing regardless of exactly when each
+// card fires its IO callback.
+cards.forEach((c, i) => {
+        c.classList.add('io-init');
+        c.style.setProperty('--card-stagger-i', (i * 90) + 'ms');
+        // Force reflow so the initial 'io-init' state paints before we
+        // add 'in-view' — without this the browser batches both changes
+        // together and the transition never fires.
+        void c.offsetWidth;
+        c.classList.add('in-view');
+      });
+      // Keep the IO observer for safety (covers edge cases where a card
+      // might not be in the initial paint region), but it's redundant
+      // for the stagger effect.
+      if ('IntersectionObserver' in window) {
+        const io = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              entry.target.classList.add('in-view');
+              io.unobserve(entry.target);
+            }
+          });
+        }, { threshold: 0.05, rootMargin: '0px 0px -5% 0px' });
+        cards.forEach((c) => io.observe(c));
+      }
     }
 
     // Phase C: range rows — live numeric readout as the user drags.
