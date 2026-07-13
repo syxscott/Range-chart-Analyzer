@@ -393,6 +393,35 @@ function test_crossfade_source() {
   check('d-reduced-motion-guard', /prefers-reduced-motion/.test(renderFn));
 }
 
+// ---- BE-5: direct/proxy multi-run path uses Promise.all (concurrent) ----
+function test_be5_promise_all_concurrent() {
+  const src = fs.readFileSync(path.join(__dirname, 'js/app.js'), 'utf8');
+  // Find the multi-run branch (runs > 1, not backend).
+  const i = src.indexOf("} else if (runs > 1) {");
+  const j = src.indexOf('\n      } else {', i);
+  check('be5-found-multirun-block', i > 0 && j > i);
+  const body = src.slice(i, j);
+  check('be5-uses-promise-all', /Promise\.all\s*\(/.test(body));
+  // The old serial for-loop on extractRangeChart must be gone.
+  check('be5-no-serial-for-extract',
+        !/for\s*\(\s*let\s+i\s*=\s*0\s*;[^;]*extractRangeChart/.test(body));
+}
+
+// ---- FE-1: staged loading labels wired into i18n.js and app.js ----
+function test_fe1_staged_labels() {
+  const i18n = fs.readFileSync(path.join(__dirname, 'js/i18n.js'), 'utf8');
+  // i18n.js keys are declared once per locale, so a simple count check is
+  // enough to confirm all three locales have the key.
+  for (const k of ['loading.uploading', 'loading.analyzing', 'loading.aggregating']) {
+    const re = new RegExp("'" + k + "'\\s*:", 'g');
+    const matches = i18n.match(re) || [];
+    check('fe1-i18n-' + k + '-3-langs', matches.length === 3);
+  }
+  const app = fs.readFileSync(path.join(__dirname, 'js/app.js'), 'utf8');
+  check('fe1-app-calls-analyzing-label', /loading\.analyzing/.test(app));
+  check('fe1-app-calls-aggregating-label', /loading\.aggregating/.test(app));
+}
+
 // ---- Phase D: IntersectionObserver entrance in source ----
 function test_io_entrance_source() {
   const src = fs.readFileSync(path.join(__dirname, 'js/app.js'), 'utf8');
@@ -407,6 +436,8 @@ test_i18n_parity();
 test_theme_contract();
 test_crossfade_source();
 test_io_entrance_source();
+test_be5_promise_all_concurrent();
+test_fe1_staged_labels();
 
 // Wait for async races to settle before printing summary.
 setTimeout(() => {

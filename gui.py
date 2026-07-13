@@ -1458,21 +1458,34 @@ class RangeChartApp:
         if runs <= 1:
             self.msg_queue.put(extract(mode=mode, **params))
             return
-        # Multi-run: extract N times and merge successful runs.
-        # M2: count partial failures so the user is warned when some
-        # attempts failed but others succeeded.
+        # Multi-run: extract N times IN PARALLEL via a thread pool, then
+        # merge the successful runs. Concurrent execution trims total wait
+        # from O(N * latency) to ~O(latency). urllib network I/O releases
+        # the GIL so threads are effective for this workload.
+        import concurrent.futures
         ok_datas = []
         last_fail = None
         partial_fails = 0
         any_truncated = False
-        for _ in range(runs):
-            r = extract(mode=mode, **params)
-            if r.ok and r.data is not None:
-                ok_datas.append(r.data)
-                any_truncated = any_truncated or bool(r.truncated)
-            else:
-                last_fail = r
-                partial_fails += 1
+        raws = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=runs) as ex:
+            futures = [ex.submit(extract, mode=mode, **params) for _ in range(runs)]
+            for fut in concurrent.futures.as_completed(futures):
+                try:
+                    r = fut.result()
+                except Exception as exc:
+                    # extract() never raises, but defend against unforeseen
+                    # bugs in user code.
+                    from rca_core.extractor import ExtractResult
+                    r = ExtractResult(ok=False, error_key="err.http", raw=str(exc))
+                if r.ok and r.data is not None:
+                    ok_datas.append(r.data)
+                    any_truncated = any_truncated or bool(r.truncated)
+                    if r.raw:
+                        raws.append(r.raw)
+                else:
+                    last_fail = r
+                    partial_fails += 1
         if not ok_datas:
             self.msg_queue.put(last_fail if last_fail else extract(mode=mode, **params))
             return
@@ -1480,7 +1493,7 @@ class RangeChartApp:
         merged = merge_results(ok_datas, total_runs=runs, schema=schema)
         from rca_core.extractor import ExtractResult
         self.msg_queue.put(ExtractResult(
-            ok=True, data=merged, raw="",
+            ok=True, data=merged, raw="\n---RUN---\n".join(raws)[:8000],
             truncated=any_truncated or bool(partial_fails),
             partial_failures=partial_fails,
         ))

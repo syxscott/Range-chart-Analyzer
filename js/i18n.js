@@ -84,6 +84,9 @@ const RCA_I18N = {
     'upload.resized': '（已压缩上传）',
 
     'loading.text': '正在识读图表，请稍候……通常需要 20 秒到 2 分钟',
+    'loading.uploading': '正在上传图片…',
+    'loading.analyzing': '正在调用模型分析…',
+    'loading.aggregating': '正在聚合多次结果…',
 
     'results.title': '提取结果',
     'results.empty': '还没有结果。请在上方上传一张地层沿线图并点击「开始提取」。',
@@ -224,6 +227,9 @@ RCA_I18N.en = {
   'upload.resized': '(compressed for upload)',
 
   'loading.text': 'Reading the chart, please wait... usually 20 seconds to 2 minutes',
+  'loading.uploading': 'Uploading image…',
+  'loading.analyzing': 'Calling model for analysis…',
+  'loading.aggregating': 'Aggregating multiple results…',
 
   'results.title': 'Extraction results',
   'results.empty': 'No results yet. Upload a range chart above and click "Extract".',
@@ -363,6 +369,9 @@ RCA_I18N.ja = {
   'upload.resized': '（圧縮して送信）',
 
   'loading.text': '図表を読み取っています。しばらくお待ちください……通常 20 秒～2 分',
+  'loading.uploading': '画像アップロード中…',
+  'loading.analyzing': 'モデルによる解析中…',
+  'loading.aggregating': '複数結果を統合中…',
 
   'results.title': '抽出結果',
   'results.empty': 'まだ結果がありません。上で画像をアップロードして「抽出開始」を押してください。',

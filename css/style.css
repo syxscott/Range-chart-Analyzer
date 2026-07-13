@@ -38,6 +38,9 @@
     --shadow-xl: 0 1px 4px 0 rgba(15, 23, 42, 0.08), 0 32px 64px -16px rgba(15, 23, 42, 0.14);
     --shadow-soft: var(--shadow);
     --shadow-pop:  var(--shadow-md);
+    /* Brand-tinted shadow for primary CTAs. */
+    --shadow-primary: 0 1px 2px 0 rgba(15, 23, 42, 0.05),
+                     0 6px 18px -4px rgba(37, 99, 235, 0.35);
 
     /* Phase A: bumped border-radii + new --radius-xl. */
     --transition: all 160ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -629,6 +632,40 @@ textarea { resize: vertical; min-height: 64px; }
 @keyframes rcaPulseBorder {
     0%, 100% { border-color: var(--primary-color); }
     50% { border-color: var(--primary-light); }
+}
+
+/* ==================== Button micro-interaction ==================== */
+.btn,
+button {
+    transition: transform var(--transition-fast), box-shadow var(--transition-fast),
+                background-color var(--transition), border-color var(--transition);
+}
+.btn:not(:disabled):hover,
+button.btn:not(:disabled):hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-pop);
+}
+.btn:not(:disabled):active,
+button.btn:not(:disabled):active {
+    transform: translateY(0);
+    box-shadow: var(--shadow-sm);
+}
+/* Primary buttons get a colored shadow tinted with --primary-color so the
+   hover state reads as "elevated and brand-coloured". */
+.btn-primary:not(:disabled):hover,
+button.btn.btn-primary:not(:disabled):hover {
+    box-shadow: var(--shadow-primary);
+}
+/* Press feedback: tiny scale to mimic a physical push. */
+.btn-primary:not(:disabled):active,
+button.btn.btn-primary:not(:disabled):active {
+    transform: scale(0.98);
+    box-shadow: var(--shadow-sm);
+}
+:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
 }
 
 /* ==================== Skeleton loader ==================== */

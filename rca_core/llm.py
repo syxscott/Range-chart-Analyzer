@@ -1069,6 +1069,81 @@ def call_llm_api(
 
 
 # ---------------------------------------------------------------------------
+# Retry wrapper
+# ---------------------------------------------------------------------------
+# Status codes worth retrying (transient upstream errors).
+# 401/403/400 are authentication / client errors - retrying them is futile
+# and just wastes quota, so they're excluded.
+_RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+
+
+def call_llm_api_with_retry(
+    *,
+    provider: LlmProvider,
+    system_prompt: str,
+    image_b64: str,
+    media_type: str,
+    user_text: str,
+    max_tokens: int,
+    timeout_sec: int = 120,
+    capture_error_body: bool = False,
+    retries: int = 3,
+    backoff_factor: float = 1.6,
+    initial_backoff_sec: float = 0.8,
+) -> tuple[str | None, bool, int | None, str]:
+    """call_llm_api wrapped with exponential-backoff retry on transient errors.
+
+    Retries on:
+      - HTTP 408, 425, 429 (rate limit), 5xx
+      - urllib URLError (network/timeout/DNS)
+
+    Does NOT retry on 4xx other than 408/425/429 (auth/permission errors).
+    On final failure returns the last attempt's result with err_body
+    annotated to indicate retry exhaustion (helpful for diagnostics).
+
+    The function never raises - the inner call_llm_api already swallows
+    exceptions and returns a 4-tuple of (text|None, truncated, status|None, err).
+    """
+    last: tuple[str | None, bool, int | None, str] = (None, False, None, "")
+    for attempt in range(retries):
+        last = call_llm_api(
+            provider=provider,
+            system_prompt=system_prompt,
+            image_b64=image_b64,
+            media_type=media_type,
+            user_text=user_text,
+            max_tokens=max_tokens,
+            timeout_sec=timeout_sec,
+            capture_error_body=capture_error_body,
+        )
+        text, truncated, status, err_body = last
+        # Success: non-None text.
+        if text is not None:
+            return last
+        # Decide whether to retry.
+        retryable = (
+            status in _RETRYABLE_STATUS
+            or status is None  # network error / timeout (no HTTP response)
+        )
+        if not retryable:
+            return last
+        # Stamp retry context into err_body for diagnostics. We do this for
+        # every retryable attempt (including the final one) so the operator
+        # can see the retry history in the returned error body.
+        backoff = initial_backoff_sec * (backoff_factor ** attempt)
+        if err_body:
+            last = (text, truncated, status,
+                    err_body + f"\n[retry {attempt + 1}/{retries} after {backoff:.1f}s]")
+        else:
+            last = (text, truncated, status,
+                    f"[retry {attempt + 1}/{retries} after {backoff:.1f}s]")
+        if attempt == retries - 1:
+            return last
+        time.sleep(backoff)
+    return last
+
+
+# ---------------------------------------------------------------------------
 # Connection test
 # ---------------------------------------------------------------------------
 

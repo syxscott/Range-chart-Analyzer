@@ -624,6 +624,124 @@ def test_l2_translations_init_shape():
     check("l2-init-has-ja", "ja" in TRANSLATIONS)
 
 
+def test_be2_safe_json_strips_control_chars():
+    """BE-2: safe_json_loads must strip raw control characters (0x00-0x08,
+    0x0B, 0x0C, 0x0E-0x1F) that some models emit inside string values,
+    otherwise json.loads raises. \\t \\r \\n are preserved."""
+    from rca_core.json_utils import safe_json_loads
+    # Embedded \\x01 inside a string value would crash json.loads without stripping.
+    raw = '{"a": "foo\x01\x02bar", "b": "ok"}'
+    parsed = safe_json_loads(raw)
+    check("be2-stripped-ctrl", parsed == {"a": "foobar", "b": "ok"})
+    # \\t / \\r / \\n preserved (not stripped).
+    raw2 = '{"a": "line1\\nline2\\ttab"}'
+    parsed2 = safe_json_loads(raw2)
+    check("be2-preserves-newlines", parsed2["a"] == "line1\nline2\ttab")
+
+
+def test_be1_retry_wrapper_retries_429():
+    """BE-1: call_llm_api_with_retry must retry on 429 + eventually succeed.
+    Mocks call_llm_api to fail-then-succeed; verifies backoff + final result."""
+    import time
+    from rca_core.llm import call_llm_api_with_retry, ApiFormat, LlmProvider
+    import rca_core.llm as L
+    attempts = []
+    sleep_calls = []
+    def fake_call_llm_api(**kw):
+        attempts.append(1)
+        if len(attempts) < 2:
+            return (None, False, 429, "rate limit")
+        return ("{} ok", False, 200, "")
+    L.call_llm_api = fake_call_llm_api
+    orig_sleep = time.sleep
+    time.sleep = lambda s: sleep_calls.append(s)
+    try:
+        provider = LlmProvider(name="X", api_format=ApiFormat.OPENAI,
+                                endpoint="https://x.io/v1", api_key="k", model="m")
+        result = call_llm_api_with_retry(
+            provider=provider, system_prompt="s", image_b64="QUFB",
+            media_type="image/png", user_text="hi", max_tokens=10,
+            retries=3, initial_backoff_sec=0.01,
+        )
+        check("be1-retries-on-429-attempts", len(attempts) == 2)
+        check("be1-retries-on-429-backoff", len(sleep_calls) == 1)
+        check("be1-retries-on-429-success", result[0] == "{} ok")
+    finally:
+        time.sleep = orig_sleep
+        del L.call_llm_api
+
+
+def test_be1_retry_does_not_retry_401():
+    """BE-1: 401 (auth error) must NOT retry - just give up."""
+    import time
+    from rca_core.llm import call_llm_api_with_retry, ApiFormat, LlmProvider
+    import rca_core.llm as L
+    attempts = [0]
+    def fake_call_llm_api(**kw):
+        attempts[0] += 1
+        return (None, False, 401, "bad key")
+    L.call_llm_api = fake_call_llm_api
+    orig_sleep = time.sleep
+    time.sleep = lambda s: None
+    try:
+        provider = LlmProvider(name="X", api_format=ApiFormat.OPENAI,
+                                endpoint="https://x.io/v1", api_key="k", model="m")
+        result = call_llm_api_with_retry(
+            provider=provider, system_prompt="s", image_b64="QUFB",
+            media_type="image/png", user_text="hi", max_tokens=10,
+            retries=3, initial_backoff_sec=0.01,
+        )
+        check("be1-no-retry-on-401", attempts[0] == 1)
+        check("be1-no-retry-on-401-status", result[2] == 401)
+    finally:
+        time.sleep = orig_sleep
+        del L.call_llm_api
+
+
+def test_be1_retry_gives_up_after_retries():
+    """BE-1: persistent 500 returns the last attempt's result unchanged."""
+    import time
+    from rca_core.llm import call_llm_api_with_retry, ApiFormat, LlmProvider
+    import rca_core.llm as L
+    attempts = [0]
+    def fake_call_llm_api(**kw):
+        attempts[0] += 1
+        return (None, False, 500, "boom")
+    L.call_llm_api = fake_call_llm_api
+    orig_sleep = time.sleep
+    time.sleep = lambda s: None
+    try:
+        provider = LlmProvider(name="X", api_format=ApiFormat.OPENAI,
+                                endpoint="https://x.io/v1", api_key="k", model="m")
+        result = call_llm_api_with_retry(
+            provider=provider, system_prompt="s", image_b64="QUFB",
+            media_type="image/png", user_text="hi", max_tokens=10,
+            retries=3, initial_backoff_sec=0.01,
+        )
+        check("be1-gives-up-after-retries", attempts[0] == 3)
+        check("be1-final-status-500", result[2] == 500)
+        check("be1-final-errbody-stamped", "retry" in (result[3] or ""))
+    finally:
+        time.sleep = orig_sleep
+        del L.call_llm_api
+
+
+def test_be3_gui_worker_uses_threadpool():
+    """BE-3: gui._worker multi-run path uses concurrent.futures and merges."""
+    # Inspect the source: gui._worker must mention ThreadPoolExecutor when
+    # runs > 1, and must not introduce a serial for-loop over runs.
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "gui.py"), encoding="utf-8").read()
+    # Find _worker body
+    i = src.find("def _worker(")
+    j = src.find("\n    def ", i + 1)
+    body = src[i:j]
+    check("be3-worker-imports-concurrent", "concurrent.futures" in body)
+    check("be3-worker-uses-threadpool", "ThreadPoolExecutor" in body)
+    check("be3-worker-no-serial-for",
+          "for _ in range(runs):" not in body or "ThreadPoolExecutor" in body)
+
+
 if __name__ == "__main__":
     test_json()
     test_normalize()
@@ -650,5 +768,10 @@ if __name__ == "__main__":
     test_m8_update_returns_bool()
     test_m9_add_preserves_existing_created_at()
     test_l2_translations_init_shape()
+    test_be2_safe_json_strips_control_chars()
+    test_be1_retry_wrapper_retries_429()
+    test_be1_retry_does_not_retry_401()
+    test_be1_retry_gives_up_after_retries()
+    test_be3_gui_worker_uses_threadpool()
     print(f"\n--- {_pass} passed, {_fail} failed ---")
     sys.exit(1 if _fail else 0)

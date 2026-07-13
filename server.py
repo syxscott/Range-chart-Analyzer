@@ -204,23 +204,33 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
-        # Multi-run: extract N times, merge the successful runs' data. If no
-        # run succeeds, return the last run's error so the UI can surface it.
+        # Multi-run: extract N times IN PARALLEL via a thread pool, merge
+        # the successful runs' data. Concurrent execution trims total wait
+        # from O(N * latency) to ~O(latency) since urllib I/O releases the
+        # GIL. If no run succeeds, return the last run's error so the UI
+        # can surface it.
+        import concurrent.futures
         ok_datas = []
         last_fail = None
         any_truncated = False
         partial_fails = 0  # M2
         raws = []
-        for _ in range(runs):
-            r = extract(mode=mode, **common)
-            if r.ok and r.data is not None:
-                ok_datas.append(r.data)
-                any_truncated = any_truncated or bool(r.truncated)
-                if r.raw:
-                    raws.append(r.raw)
-            else:
-                last_fail = r
-                partial_fails += 1
+        with concurrent.futures.ThreadPoolExecutor(max_workers=runs) as ex:
+            futures = [ex.submit(extract, mode=mode, **common) for _ in range(runs)]
+            for fut in concurrent.futures.as_completed(futures):
+                try:
+                    r = fut.result()
+                except Exception as exc:
+                    from rca_core.extractor import ExtractResult
+                    r = ExtractResult(ok=False, error_key="err.http", raw=str(exc))
+                if r.ok and r.data is not None:
+                    ok_datas.append(r.data)
+                    any_truncated = any_truncated or bool(r.truncated)
+                    if r.raw:
+                        raws.append(r.raw)
+                else:
+                    last_fail = r
+                    partial_fails += 1
         if not ok_datas:
             r = last_fail
             self._send_json(200, {

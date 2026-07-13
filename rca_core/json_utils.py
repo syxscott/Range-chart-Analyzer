@@ -48,6 +48,11 @@ def safe_json_loads(text: str) -> dict[str, Any]:
     s = str(text).strip()
     s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.MULTILINE)
     s = re.sub(r"\s*```$", "", s, flags=re.MULTILINE)
+    # Models occasionally emit raw control characters (0x00-0x1F except \t
+    # \r \n) inside string values which makes json.loads raise. Strip them
+    # defensively before the strict parse.
+    _ctrl_re = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+    s = _ctrl_re.sub("", s)
     try:
         parsed = json.loads(s)
         if isinstance(parsed, dict):

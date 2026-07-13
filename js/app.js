@@ -266,20 +266,43 @@
         chartLang: $('chart-lang').value,
       };
 
+      // Phase 1: analyze (LLM call). Single-run replaces setBusyLabel
+      // with the per-run counter; multi-run keeps it generic.
+      setBusyLabel(runs > 1 ? t('loading.analyzing') : t('loading.analyzing'));
+
       if (connMode === 'backend') {
         // The server performs the N runs and merges; pass runs through.
         res = await extractRangeChart(Object.assign({}, baseOpts, { runs }));
       } else if (runs > 1) {
-        // Direct/proxy mode: loop client-side and merge with the shared algo.
+        // Direct/proxy mode: fire N requests CONCURRENTLY via Promise.all
+        // so total wait is ~one latency rather than N. Each promise resolves
+        // independently; a failure in one run doesn't cancel the others.
+        setBusyLabel(t('loading.text') + ' (0/' + runs + ')');
         const km = chartMode === 'columnar_section' ? RCA_COLUMNAR_KEYMAP : RCA_DEFAULT_KEYMAP;
+        const promises = [];
+        for (let i = 0; i < runs; i++) {
+          promises.push(
+            extractRangeChart(baseOpts).catch((exc) => ({
+              ok: false, errorKey: 'err.network', raw: String(exc),
+            }))
+          );
+        }
+        // Track completion count for the per-run label.
+        let completed = 0;
+        const tracked = promises.map((p) => p.then((r) => {
+          completed += 1;
+          setBusyLabel(t('loading.text') + ' (' + completed + '/' + runs + ')');
+          return r;
+        }));
+        const results = await Promise.all(tracked);
+        // Phase 2: aggregating.
+        setBusyLabel(t('loading.aggregating'));
         const okDatas = [];
         let lastFail = null;
         let anyTruncated = false;
         let partialFails = 0;
         const raws = [];
-        for (let i = 0; i < runs; i++) {
-          setBusyLabel(t('loading.text') + ' (' + (i + 1) + '/' + runs + ')');
-          const r = await extractRangeChart(baseOpts);
+        for (const r of results) {
           if (r.ok && r.data) {
             okDatas.push(r.data);
             anyTruncated = anyTruncated || !!r.truncated;
