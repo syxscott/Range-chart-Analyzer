@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import concurrent.futures
 import queue
 import sys
 import threading
@@ -1462,7 +1463,6 @@ class RangeChartApp:
         # merge the successful runs. Concurrent execution trims total wait
         # from O(N * latency) to ~O(latency). urllib network I/O releases
         # the GIL so threads are effective for this workload.
-        import concurrent.futures
         ok_datas = []
         last_fail = None
         partial_fails = 0
@@ -1476,7 +1476,6 @@ class RangeChartApp:
                 except Exception as exc:
                     # extract() never raises, but defend against unforeseen
                     # bugs in user code.
-                    from rca_core.extractor import ExtractResult
                     r = ExtractResult(ok=False, error_key="err.http", raw=str(exc))
                 if r.ok and r.data is not None:
                     ok_datas.append(r.data)
@@ -1491,7 +1490,6 @@ class RangeChartApp:
             return
         schema = COLUMNAR_SECTION_SCHEMA if mode == "columnar_section" else RANGE_CHART_SCHEMA
         merged = merge_results(ok_datas, total_runs=runs, schema=schema)
-        from rca_core.extractor import ExtractResult
         self.msg_queue.put(ExtractResult(
             ok=True, data=merged, raw="\n---RUN---\n".join(raws)[:8000],
             truncated=any_truncated or bool(partial_fails),

@@ -12,6 +12,7 @@ Then open http://127.0.0.1:8000/
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import sys
@@ -209,7 +210,6 @@ class Handler(BaseHTTPRequestHandler):
         # from O(N * latency) to ~O(latency) since urllib I/O releases the
         # GIL. If no run succeeds, return the last run's error so the UI
         # can surface it.
-        import concurrent.futures
         ok_datas = []
         last_fail = None
         any_truncated = False
@@ -221,7 +221,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     r = fut.result()
                 except Exception as exc:
-                    from rca_core.extractor import ExtractResult
+                    # extract() never raises, but defend against unforeseen
+                    # bugs in user code.
                     r = ExtractResult(ok=False, error_key="err.http", raw=str(exc))
                 if r.ok and r.data is not None:
                     ok_datas.append(r.data)

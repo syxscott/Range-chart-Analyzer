@@ -266,9 +266,9 @@
         chartLang: $('chart-lang').value,
       };
 
-      // Phase 1: analyze (LLM call). Single-run replaces setBusyLabel
-      // with the per-run counter; multi-run keeps it generic.
-      setBusyLabel(runs > 1 ? t('loading.analyzing') : t('loading.analyzing'));
+      // Phase 1: analyze (LLM call). For single-run use 'analyzing';
+      // multi-run gets a per-run counter below.
+      setBusyLabel(runs > 1 ? t('loading.analyzing') + ' (0/' + runs + ')' : t('loading.analyzing'));
 
       if (connMode === 'backend') {
         // The server performs the N runs and merges; pass runs through.
@@ -277,7 +277,7 @@
         // Direct/proxy mode: fire N requests CONCURRENTLY via Promise.all
         // so total wait is ~one latency rather than N. Each promise resolves
         // independently; a failure in one run doesn't cancel the others.
-        setBusyLabel(t('loading.text') + ' (0/' + runs + ')');
+        setBusyLabel(t('loading.analyzing') + ' (0/' + runs + ')');
         const km = chartMode === 'columnar_section' ? RCA_COLUMNAR_KEYMAP : RCA_DEFAULT_KEYMAP;
         const promises = [];
         for (let i = 0; i < runs; i++) {
@@ -291,7 +291,7 @@
         let completed = 0;
         const tracked = promises.map((p) => p.then((r) => {
           completed += 1;
-          setBusyLabel(t('loading.text') + ' (' + completed + '/' + runs + ')');
+          setBusyLabel(t('loading.analyzing') + ' (' + completed + '/' + runs + ')');
           return r;
         }));
         const results = await Promise.all(tracked);
