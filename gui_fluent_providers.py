@@ -525,7 +525,7 @@ class ProvidersPage(ScrollArea):
             card = ProviderCard(prov, prov.is_current, self._t)
             card.btn_test.clicked.connect(lambda _=False, p=prov, c=card: self._test(p, c))
             card.btn_active.clicked.connect(lambda _=False, pid=prov.id: self._set_current(pid))
-            card.btn_edit.clicked.connect(lambda _=False, pid=prov.id, c=card: self._edit(pid))
+            card.btn_edit.clicked.connect(lambda _=False, pid=prov.id: self._edit(pid))
             card.btn_delete.clicked.connect(lambda _=False, pid=prov.id: self._delete(pid))
             cards.append(card)
         return cards
@@ -579,7 +579,7 @@ class ProvidersPage(ScrollArea):
             pass
         self._refresh()
 
-    def _edit(self, pid, card):
+    def _edit(self, pid):
         """Open the wizard in edit mode for an existing provider."""
         try:
             store = ProviderStore().load()
