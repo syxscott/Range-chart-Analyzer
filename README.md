@@ -26,11 +26,15 @@
 ## 一键启动（最快）
 
 ```bash
-python main.py           # 启动桌面 GUI（默认，无 CORS）
+python main.py           # 现代 Fluent GUI（默认，未装 PySide6 时自动回退 Tkinter）
+python main.py gui       # 强制经典 Tkinter GUI
 python main.py server    # 启动 Web + 本地后端，并自动打开浏览器
 ```
 
-Windows 直接双击 `run.bat` 即可启动桌面 GUI。
+Windows 直接双击 `run.bat` 即可启动（默认现代 Fluent GUI）。
+
+现代 GUI 需要 `pip install PySide6 PySide6-Fluent-Widgets`（可选，~150MB）；
+未安装时 `python main.py` 会自动回退到零依赖的 Tkinter 界面。
 
 `python main.py server` 可选参数：`--port 8080`、`--host 0.0.0.0`、`--no-browser`。
 

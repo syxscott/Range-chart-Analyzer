@@ -1,16 +1,18 @@
 """Range Chart Analyzer - one-click launcher.
 
 Usage:
-    python main.py                # launch the desktop GUI (default, no CORS)
-    python main.py gui            # same as above, explicit
+    python main.py                # modern Fluent GUI (falls back to Tkinter)
+    python main.py fluent         # same as above, explicit
+    python main.py gui            # force the classic Tkinter GUI
+    python main.py tk             # alias for gui
     python main.py server        # launch the web server and open the browser
     python main.py server --port 8080 --no-browser
-    python main.py modern        # native window via PyWebView (requires: pip install pywebview)
-    python main.py --ui modern   # alias for the above
+    python main.py modern        # native window via PyWebView (pip install pywebview)
 
-The GUI is the default because it makes the LLM call server-side (no
-browser CORS limits) and needs zero setup. The "modern" mode is opt-in
-and wraps the existing web frontend in a native window.
+Default (no args) now launches the modern PySide6 + qfluentwidgets GUI.
+If those packages aren't installed, it automatically falls back to the
+classic Tkinter GUI (`gui.py`) — no traceback, zero setup. All modes
+share the same rca_core backend and config.
 """
 
 from __future__ import annotations
@@ -85,14 +87,16 @@ def main() -> int:
     parser.add_argument(
         "mode",
         nargs="?",
-        default="gui",
-        choices=["gui", "server", "web", "modern", "fluent"],
-        help="gui (default): desktop app; server/web: browser + local backend; modern: native window via PyWebView",
+        default="default",
+        choices=["default", "gui", "tk", "server", "web", "modern", "fluent"],
+        help="(default): modern Fluent GUI, falls back to Tkinter; "
+             "gui/tk: force classic Tkinter GUI; server/web: browser + local "
+             "backend; modern: native window via PyWebView; fluent: modern GUI",
     )
     parser.add_argument(
         "--ui",
-        choices=["modern", "fluent"],
-        help="alias: --ui modern | --ui fluent",
+        choices=["modern", "fluent", "tk", "gui"],
+        help="alias: --ui modern | --ui fluent | --ui tk",
     )
     parser.add_argument("--host", default="127.0.0.1", help="server host (server mode)")
     parser.add_argument("--port", type=int, default=8000, help="server port (server mode)")
@@ -103,13 +107,24 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if args.ui == "fluent" or args.mode == "fluent":
-        return launch_fluent()
-    if args.ui == "modern" or args.mode == "modern":
+    ui = args.ui or ""
+    mode = args.mode
+
+    # Explicit classic-Tkinter request.
+    if ui in ("tk", "gui") or mode in ("gui", "tk"):
+        return launch_gui()
+    # Explicit PyWebView request.
+    if ui == "modern" or mode == "modern":
         return launch_modern()
-    if args.mode in ("server", "web"):
+    # Explicit Fluent request.
+    if ui == "fluent" or mode == "fluent":
+        return launch_fluent()
+    # Server / web.
+    if mode in ("server", "web"):
         return launch_server(args.host, args.port, open_browser=not args.no_browser)
-    return launch_gui()
+    # Default (no args): modern Fluent GUI, which itself falls back to
+    # Tkinter when PySide6 / qfluentwidgets aren't installed.
+    return launch_fluent()
 
 
 if __name__ == "__main__":
