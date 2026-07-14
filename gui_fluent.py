@@ -92,9 +92,14 @@ class ExtractWorker(QThread):
     def run(self):
         import concurrent.futures
         params, mode, runs = self._params, self._mode, self._runs
-        if runs <= 1:
-            self.progress.emit("analyzing")
-            self.finished_ok.emit(extract(mode=mode, **params))
+        try:
+            if runs <= 1:
+                self.progress.emit("analyzing")
+                self.finished_ok.emit(extract(mode=mode, **params))
+                return
+        except Exception as exc:  # BUG13: never let exceptions kill the worker
+            self.finished_ok.emit(ExtractResult(
+                ok=False, error_key="err.http", raw=str(exc)))
             return
         ok_datas, last_fail, partial_fails, any_trunc, raws = [], None, 0, False, []
         done = 0
@@ -302,6 +307,8 @@ class ExtractPage(ScrollArea):
             self.lbl_status.setText(self._t("status.loading"))
 
     def _on_extract(self):
+        if self.busy:
+            return  # BUG9: prevent double-start of the worker thread
         if not self.image_b64:
             InfoBar.warning("", self._t("err.noImage"), parent=self.win,
                             position=InfoBarPosition.TOP)
@@ -763,6 +770,21 @@ class RangeChartFluentWindow(FluentWindow):
         try:
             self.save_all()
             self.extract_page._cleanup_paste_tmp()
+        except Exception:
+            pass
+        # BUG12: stop any in-flight worker thread so a late signal
+        # doesn't reach a destroyed ExtractPage widget.
+        try:
+            w = getattr(self.extract_page, "_worker", None)
+            if w is not None:
+                try:
+                    w.finished_ok.disconnect()
+                    w.progress.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+                if w.isRunning():
+                    w.quit()
+                    w.wait(1000)
         except Exception:
             pass
         super().closeEvent(event)

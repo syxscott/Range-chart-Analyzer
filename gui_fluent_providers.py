@@ -242,7 +242,7 @@ class ProviderDragList(QWidget):
             return
         src_idx = next(
             (i for i, c in enumerate(self._cards)
-             if c.provider and c.provider.id == src_idx),
+             if c.provider and c.provider.id == src_id),
             None,
         )
         if src_idx is None:
@@ -255,6 +255,7 @@ class ProviderDragList(QWidget):
             len(self._cards),
         )
         self._cards.insert(insert_idx, card)
+        self._emit_order()
         # Re-layout.
         while self._layout.count():
             item = self._layout.takeAt(0)
