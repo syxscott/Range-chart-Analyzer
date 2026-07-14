@@ -1,0 +1,168 @@
+"""Range Chart Analyzer - Modern UI (PyWebView wrapper).
+
+Starts the existing server.py on a background thread, then opens a native
+window via pywebview pointing at the local server. The web frontend
+(index.html + css/ + js/) is reused unchanged.
+
+Opt-in only:
+    python main.py --ui modern        # via main.py
+    python main.py modern            # shortcut
+    python app.py                    # direct (dev convenience)
+
+If pywebview is not installed OR no native engine is available, falls
+back to opening the local URL in the default browser and exits 0.
+"""
+from __future__ import annotations
+
+import atexit
+import http.client
+import os
+import socket
+import sys
+import threading
+import time
+import webbrowser
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+LOCK_FILE = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer.lock")
+
+
+def _log(msg):
+    print(f"[modern-ui] {msg}", flush=True)
+
+
+def _pick_free_port(preferred=(8000, 8765)):
+    """Try preferred ports first, then ask the kernel for a free one."""
+    for p in preferred:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("127.0.0.1", p))
+                return p
+            except OSError:
+                continue
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _wait_until_ready(host, port, timeout=5.0):
+    """Poll GET / until 200 or timeout. Returns True on success."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        conn = None
+        try:
+            conn = http.client.HTTPConnection(host, port, timeout=0.5)
+            conn.request("GET", "/")
+            r = conn.getresponse()
+            r.read(64)
+            if r.status == 200:
+                return True
+        except OSError:
+            pass
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        time.sleep(0.05)
+    return False
+
+
+def _start_server(host, port):
+    """Launch server.py's ThreadingHTTPServer on a daemon thread.
+
+    Returns (thread, httpd) so the caller can shut it down cleanly.
+    """
+    from http.server import ThreadingHTTPServer
+    import server  # the existing stdlib backend
+
+    httpd = ThreadingHTTPServer((host, port), server.Handler)
+    httpd.daemon_threads = True
+    t = threading.Thread(target=httpd.serve_forever, name="rca-http", daemon=True)
+    t.start()
+    return t, httpd
+
+
+def _write_lock(host, port):
+    try:
+        with open(LOCK_FILE, "w", encoding="utf-8") as f:
+            f.write(f"{host}:{port}\n")
+    except OSError:
+        pass
+
+
+def _clear_lock():
+    try:
+        if os.path.exists(LOCK_FILE):
+            os.remove(LOCK_FILE)
+    except OSError:
+        pass
+
+
+def main():
+    host = "127.0.0.1"
+    port = _pick_free_port()
+    _log(f"starting local backend on http://{host}:{port}/")
+
+    t, httpd = _start_server(host, port)
+    _write_lock(host, port)
+    atexit.register(_clear_lock)
+
+    if not _wait_until_ready(host, port, timeout=5.0):
+        _log("backend failed to become ready in 5s; exiting")
+        return 0
+
+    loading_url = f"http://{host}:{port}/app/loading.html?next=/"
+    final_url = f"http://{host}:{port}/"
+    _log(f"backend ready; opening window -> {final_url}")
+
+    try:
+        import webview  # type: ignore
+    except ImportError:
+        _log(
+            "pywebview is not installed. Run:\n"
+            "    pip install pywebview\n"
+            f"Falling back to opening {final_url} in your default browser."
+        )
+        webbrowser.open(final_url)
+        _log("press Ctrl+C here to stop the backend")
+        try:
+            t.join()
+        except KeyboardInterrupt:
+            pass
+        return 0
+
+    try:
+        window = webview.create_window(
+            "Range Chart Analyzer",
+            url=loading_url,
+            width=1280,
+            height=820,
+            min_size=(960, 640),
+        )
+        webview.start()
+    except Exception as exc:  # noqa: BLE001 - engine availability varies
+        _log(f"native window engine unavailable ({exc.__class__.__name__}).")
+        _log(f"opening {final_url} in your default browser instead.")
+        webbrowser.open(final_url)
+        _log("press Ctrl+C here to stop the backend")
+        try:
+            t.join()
+        except KeyboardInterrupt:
+            pass
+        return 0
+
+    _log("window closed; stopping backend")
+    try:
+        httpd.shutdown()
+        httpd.server_close()
+    except Exception:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

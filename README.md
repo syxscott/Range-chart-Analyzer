@@ -68,6 +68,24 @@ python server.py --port 8000
 
 ---
 
+## 方式二点五：Modern UI（PyWebView 原生窗口，可选）
+
+如果你想要比浏览器标签页更"原生"的体验，但不想用 Tkinter，可以装上 PyWebView
+把现有 Web 前端嵌进一个原生窗口：
+
+```bash
+pip install pywebview
+python main.py --ui modern    # 等价于 python main.py modern
+```
+
+- 共用方式二同一套后端、API Key、配置与多语言；`gui.py` 不受影响。
+- 如果没装 pywebview，或当前系统没有可用的 WebView 引擎（Linux 缺
+  `webkit2gtk-4.0`、Windows 缺 Edge WebView2），程序会打印提示并自动
+  在默认浏览器里打开 `http://127.0.0.1:<port>/`，退出码仍为 0。
+- 启动时会显示 `app/loading.html` 旋转加载页，后端就绪后自动跳到主页。
+
+---
+
 ## 方式三：纯前端静态站（无后端）
 
 直接双击 `index.html`，或用任意静态服务器托管 `index.html` + `css/` + `js/`。

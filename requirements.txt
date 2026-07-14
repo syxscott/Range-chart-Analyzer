@@ -1,10 +1,16 @@
 # Range Chart Analyzer runs on the Python standard library alone.
-# The two optional deps below improve the experience but are not required:
+# The three optional deps below improve the experience but are not required:
 #
 # Pillow: enables the GUI image thumbnail preview and client-side downscaling
 #          of very large images.
 # sv_ttk: swaps the Tkinter "clam" theme for a Windows 11 Fluent-style
 #          flat/modern skin (buttons, inputs, combobox, notebook tabs).
 #          Without it the app falls back to ttk's default clam theme.
+# pywebview: enables `python main.py --ui modern`, a native-window wrapper
+#          around the existing web frontend. On Linux you also need the
+#          system package `webkit2gtk-4.0` (e.g. `apt install
+#          libwebkit2gtk-4.0-dev`). Without pywebview the modern mode
+#          falls back to opening the local URL in the default browser.
 Pillow>=9.0 ; python_version >= "3.8"
 sv_ttk>=2.5  ; python_version >= "3.8"
+pywebview>=5.0 ; python_version >= "3.8"
