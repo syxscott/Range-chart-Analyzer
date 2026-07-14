@@ -63,6 +63,20 @@ def launch_modern() -> int:
     return _modern.main()
 
 
+def launch_fluent() -> int:
+    try:
+        import gui_fluent
+    except Exception as exc:  # PySide6 / qfluentwidgets missing
+        print(
+            "[fluent-ui] PySide6 + qfluentwidgets not available "
+            f"({exc.__class__.__name__}). Falling back to the Tkinter GUI. "
+            "To enable the Fluent UI: pip install PySide6 PySide6-Fluent-Widgets",
+            file=sys.stderr,
+        )
+        return launch_gui()
+    return gui_fluent.main()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Range Chart Analyzer launcher",
@@ -72,13 +86,13 @@ def main() -> int:
         "mode",
         nargs="?",
         default="gui",
-        choices=["gui", "server", "web", "modern"],
+        choices=["gui", "server", "web", "modern", "fluent"],
         help="gui (default): desktop app; server/web: browser + local backend; modern: native window via PyWebView",
     )
     parser.add_argument(
         "--ui",
-        choices=["modern"],
-        help="alias: --ui modern",
+        choices=["modern", "fluent"],
+        help="alias: --ui modern | --ui fluent",
     )
     parser.add_argument("--host", default="127.0.0.1", help="server host (server mode)")
     parser.add_argument("--port", type=int, default=8000, help="server port (server mode)")
@@ -89,6 +103,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.ui == "fluent" or args.mode == "fluent":
+        return launch_fluent()
     if args.ui == "modern" or args.mode == "modern":
         return launch_modern()
     if args.mode in ("server", "web"):
