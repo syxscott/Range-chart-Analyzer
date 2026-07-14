@@ -69,16 +69,26 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _safe_local_path(self, url_path: str) -> str | None:
-        """Resolve a URL path to a file inside ROOT, or None if unsafe."""
+        """Resolve a URL path to a file inside ROOT, or None if unsafe.
+
+        Resolves symlinks via realpath so a symlink inside ROOT pointing
+        outside the project tree cannot be served.
+        """
         clean = unquote(urlparse(url_path).path)
         if clean == "/" or clean == "":
             clean = "/index.html"
-        # Normalize and ensure the result stays under ROOT.
         rel = clean.lstrip("/")
         target = os.path.normpath(os.path.join(ROOT, rel))
-        if not target.startswith(ROOT):
+        # Resolve symlinks + check the resolved path stays under ROOT.
+        real_target = os.path.realpath(target)
+        real_root = os.path.realpath(ROOT)
+        try:
+            common = os.path.commonpath([real_target, real_root])
+        except ValueError:
             return None
-        return target
+        if common != real_root:
+            return None
+        return real_target
 
     # --- routing ---
     def do_GET(self) -> None:
@@ -93,6 +103,16 @@ class Handler(BaseHTTPRequestHandler):
         if ext not in _CONTENT_TYPES:
             self._send_json(403, {"error": "type not allowed"})
             return
+        # 50 MB cap on static files so a runaway client cannot OOM the
+        # server by requesting a multi-GB image.
+        try:
+            file_size = os.path.getsize(target)
+        except OSError:
+            self._send_json(500, {"error": "read error"})
+            return
+        if file_size > 50 * 1024 * 1024:
+            self._send_json(413, {"error": "file too large"})
+            return
         try:
             with open(target, "rb") as f:
                 data = f.read()
@@ -101,6 +121,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_response(200)
         self.send_header("Content-Type", _CONTENT_TYPES[ext])
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)

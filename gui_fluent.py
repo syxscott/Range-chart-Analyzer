@@ -64,12 +64,29 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict) -> None:
+    """Atomic JSON dump: write to .tmp then os.replace (POSIX + Win).
+
+    A crash mid-write used to truncate the live config and lose all
+    settings; the atomic-rename pattern keeps the previous good file
+    intact if the new write fails.
+    """
+    import json
+    tmp = CONFIG_PATH + ".tmp"
     try:
-        import json
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, CONFIG_PATH)
     except Exception:
-        pass
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +598,10 @@ class SettingsPage(ScrollArea):
         g.addWidget(self.lbl_remember, r, 0)
         self.sw_remember = SwitchButton()
         self.sw_remember.setChecked(bool(cfg.get("remember", True)))
+        # BUG28: when remember is OFF, immediately clear the in-memory key
+        # so extract() doesn't use a key the user thought they discarded.
+        self.sw_remember.checkedChanged.connect(
+            lambda on: self.ipt_key.setText("") if not on else None)
         g.addWidget(self.sw_remember, r, 1, Qt.AlignLeft); r += 1
         g.setColumnStretch(1, 1)
         lay.addWidget(card)

@@ -450,7 +450,16 @@ class ProviderWizard(QDialog):
         name = self._ipt_name.text().strip()
         endpoint = self._ipt_endpoint.text().strip().rstrip("/")
         if not name or not endpoint:
-            InfoBar.warning("", self._t("err.noKey"), parent=self,
+            # BUG25: give a specific hint about what is missing instead of
+            # showing a generic err.noKey (which is about API key).
+            missing = []
+            if not name:
+                missing.append(self._t("wizard.fieldName"))
+            if not endpoint:
+                missing.append(self._t("wizard.fieldEndpoint"))
+            msg = self._t("results.noRows") if False else ( # placeholder
+                "Please fill in: " + ", ".join(missing))
+            InfoBar.warning("", msg, parent=self,
                             position=InfoBarPosition.TOP)
             return
         try:

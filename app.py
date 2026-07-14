@@ -109,10 +109,19 @@ def main():
 
     t, httpd = _start_server(host, port)
     _write_lock(host, port)
+    # HIGH-5: register atexit cleanup immediately after starting the server
+    # (BEFORE the readiness probe) so a probe-failure path also releases
+    # the lock and shuts down the daemon thread.
     atexit.register(_clear_lock)
 
     if not _wait_until_ready(host, port, timeout=5.0):
         _log("backend failed to become ready in 5s; exiting")
+        try:
+            httpd.shutdown()
+            httpd.server_close()
+        except Exception:
+            pass
+        # atexit._run will fire _clear_lock on process exit.
         return 0
 
     loading_url = f"http://{host}:{port}/app/loading.html?next=/"
@@ -143,7 +152,10 @@ def main():
             height=820,
             min_size=(960, 640),
         )
-        webview.start()
+        try:
+            webview.start()
+        except KeyboardInterrupt:
+            pass
     except Exception as exc:  # noqa: BLE001 - engine availability varies
         _log(f"native window engine unavailable ({exc.__class__.__name__}).")
         _log(f"opening {final_url} in your default browser instead.")
