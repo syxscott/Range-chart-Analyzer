@@ -247,26 +247,18 @@ class RangeChartApp:
         entry.bind("<FocusOut>", on_focus_out)
     def _bind_button_hover(self, button, kind="primary"):
         """Add smooth cc-switch-style hover / pressed feedback to a button.
-        Receives the ttk.Button widget and configures Enter/Leave/ButtonPress.
+
+        Themed ttk buttons swap their style name on Enter / Leave so the
+        engine re-renders with the right palette. The hover style bumping
+        is deliberately small so the UI doesn't feel jumpy.
         """
-        if kind == "primary":
-            off_bg, off_fg = COLORS["primary"], "#ffffff"
-            on_bg, on_fg = COLORS["primary_hover"], "#ffffff"
-        elif kind == "secondary":
-            off_bg, off_fg = COLORS["card"], COLORS["primary"]
-            on_bg, on_fg = COLORS["row_hover"], COLORS["primary"]
-        else:  # tertiary / ghost
-            off_bg, off_fg = COLORS["bg"], COLORS["ghost"]
-            on_bg, on_fg = COLORS["ghost_hover"], COLORS["primary"]
-        try:
-            button.bind("<Enter>",
-                        lambda _e, b=button, bg=on_bg, fg=on_fg:
-                        b.configure(style=self._style_for(kind, "hover")))
-            button.bind("<Leave>",
-                        lambda _e, b=button:
-                        b.configure(style(self._style_for(kind, "default"))))
-        except Exception:
-            pass
+        hover = self._style_for(kind, "hover")
+        default = self._style_for(kind, "default")
+        # Bind pre-computed style objects (not lambdas calling _style_for at
+        # event-time, which would crash because ttk.Button.configure(style=...)
+        # expects a string not a function reference).
+        button.bind("<Enter>", lambda _e, b=button, s=hover: b.configure(style=s))
+        button.bind("<Leave>", lambda _e, b=button, s=default: b.configure(style=s))
 
     @staticmethod
     def _style_for(kind, state):

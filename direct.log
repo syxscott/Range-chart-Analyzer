@@ -1,0 +1,24 @@
+
+[1;33m📢 Tips:[0m QFluentWidgets Pro is now released. Click [1;96mhttps://qfluentwidgets.com/pages/pro[0m to learn more about it.
+
+PASS module-has-main
+PASS has-extract-page
+PASS has-providers-page
+PASS has-settings-page
+PASS has-about-page
+PASS max-tokens-accessor
+PASS runs-in-range
+PASS chart-type-valid
+PASS lang-cycles
+PASS lang-nav-relabels
+PASS lang-page-relabels
+PASS lang-btn-shows-current
+PASS lang-btn-matches-tr-lang
+PASS lang-ctype-combo-relabels
+PASS extract-worker-is-qthread
+PASS conntest-worker-is-qthread
+Traceback (most recent call last):
+  File "<string>", line 13, in <module>
+  File "D:/GitHub/Range-chart Analyzer/tests_gui_fluent.py", line 262, in run_all
+    _mod = _sys.modules[__name__]
+KeyError: 't'

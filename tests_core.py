@@ -145,6 +145,26 @@ def test_merge():
     check("merge-mode-agreement", opt["agreement"] == "3/3")
 
 
+def test_t12_norm_strips_sp_cf():
+    """aggregate._norm must strip trailing sp./cf. and collapse whitespace."""
+    from rca_core.aggregate import _norm
+    check("norm-strip-sp", _norm("Neoalbaillella sp.") == "neoalbaillella")
+    check("norm-strip-cf", _norm("Entactinia cf. sashidai") == "entactinia sashidai")
+    check("norm-collapse-ws", _norm("  Hello   World  ") == "hello world")
+
+def test_t13_balanced_json_edge_cases():
+    """json_utils must handle empty obj, multi-top-level, escaped quotes."""
+    from rca_core.json_utils import extract_balanced_json_object
+    check("balanced-empty-obj", extract_balanced_json_object("{}") == "{}")
+    check("balanced-first-of-multi",
+          extract_balanced_json_object('noise {"a":1} more {"b":2}') == '{"a":1}')
+    import json
+    # Build a string that contains an actual escaped quote inside.
+    inner = 'he said "hi"'
+    text = json.dumps({"a": inner})
+    check("balanced-escaped-quote",
+          extract_balanced_json_object(text) == text)
+
 def test_prompt():
     for kw in [
         "COLUMNS ARE SEPARATE",
@@ -652,6 +672,7 @@ def test_be1_retry_wrapper_retries_429():
         if len(attempts) < 2:
             return (None, False, 429, "rate limit")
         return ("{} ok", False, 200, "")
+    _saved_cll = L.call_llm_api
     L.call_llm_api = fake_call_llm_api
     orig_sleep = time.sleep
     time.sleep = lambda s: sleep_calls.append(s)
@@ -668,7 +689,7 @@ def test_be1_retry_wrapper_retries_429():
         check("be1-retries-on-429-success", result[0] == "{} ok")
     finally:
         time.sleep = orig_sleep
-        del L.call_llm_api
+        L.call_llm_api = _saved_cll
 
 
 def test_be1_retry_does_not_retry_401():
@@ -680,6 +701,7 @@ def test_be1_retry_does_not_retry_401():
     def fake_call_llm_api(**kw):
         attempts[0] += 1
         return (None, False, 401, "bad key")
+    _saved_cll = L.call_llm_api
     L.call_llm_api = fake_call_llm_api
     orig_sleep = time.sleep
     time.sleep = lambda s: None
@@ -695,7 +717,7 @@ def test_be1_retry_does_not_retry_401():
         check("be1-no-retry-on-401-status", result[2] == 401)
     finally:
         time.sleep = orig_sleep
-        del L.call_llm_api
+        L.call_llm_api = _saved_cll
 
 
 def test_be1_retry_gives_up_after_retries():
@@ -707,6 +729,7 @@ def test_be1_retry_gives_up_after_retries():
     def fake_call_llm_api(**kw):
         attempts[0] += 1
         return (None, False, 500, "boom")
+    _saved_cll = L.call_llm_api
     L.call_llm_api = fake_call_llm_api
     orig_sleep = time.sleep
     time.sleep = lambda s: None
@@ -723,7 +746,7 @@ def test_be1_retry_gives_up_after_retries():
         check("be1-final-errbody-stamped", "retry" in (result[3] or ""))
     finally:
         time.sleep = orig_sleep
-        del L.call_llm_api
+        L.call_llm_api = _saved_cll
 
 
 def test_be3_gui_worker_uses_threadpool():
@@ -768,6 +791,52 @@ if __name__ == "__main__":
     test_m8_update_returns_bool()
     test_m9_add_preserves_existing_created_at()
     test_l2_translations_init_shape()
+
+def test_t5_looks_columnar_detection():
+    """T5: exporter._looks_columnar correctly classifies result shapes.
+    Heuristic: columnar iff sections[0] has 'id' and not 'name'."""
+    from rca_core.exporter import _looks_columnar
+    check("t5-col-id-only", _looks_columnar({"sections": [{"id": "Ki-1", "group": "L"}]}) is True)
+    check("t5-col-name-only", _looks_columnar({"sections": [{"name": "A"}]}) is False)
+    check("t5-col-both", _looks_columnar({"sections": [{"id": "X", "name": "A"}]}) is False)
+
+
+def test_t6_build_table_export_pad_and_truncate():
+    """T6: build_table_export must pad short rows and truncate long rows."""
+    from rca_core import exporter as X
+    orig = X._range_chart_tables
+    def patched(data):
+        cfg = orig(data)
+        for c in cfg:
+            if c["id"] == "species_ranges":
+                c["row"] = lambda r: [r.get("species", "")] + ["x"] * 100  # way too many
+        return cfg
+    X._range_chart_tables = patched
+    try:
+        data = {"species_ranges": [{"species": "X", "section": "A",
+                                     "range_base": "1", "range_top": "2", "biozone": "Z"}]}
+        headers, rows = X.build_table_export(data, "species_ranges", lambda k: k)
+        check("t6-truncate-len", len(rows[0]) == len(headers))
+    finally:
+        X._range_chart_tables = orig
+
+    # Padding: a config whose cols outnumber the row cells
+    def short_row(data):
+        cfg = orig(data)
+        for c in cfg:
+            if c["id"] == "species_ranges":
+                c["row"] = lambda r: [r.get("species", "")]  # return only 1 cell
+        return cfg
+    X._range_chart_tables = short_row
+    try:
+        headers, rows = X.build_table_export(data, "species_ranges", lambda k: k)
+        check("t6-pad-len", len(rows[0]) == len(headers))
+    finally:
+        X._range_chart_tables = orig
+    test_t12_norm_strips_sp_cf()
+    test_t13_balanced_json_edge_cases()
+    test_t5_looks_columnar_detection()
+    test_t6_build_table_export_pad_and_truncate()
     test_be2_safe_json_strips_control_chars()
     test_be1_retry_wrapper_retries_429()
     test_be1_retry_does_not_retry_401()

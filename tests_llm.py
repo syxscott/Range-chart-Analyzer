@@ -289,6 +289,75 @@ finally:
     E.call_llm_api = orig_call
 check("extractor-provider-used", captured.get("provider") is provider)
 
+# ---- appended below ----
 
-print(f"\n--- {_pass} passed, {_fail} failed ---")
+def t7_cases():
+    import time
+    import rca_core.llm as L
+    from rca_core import ApiFormat, LlmProvider
+    from rca_core.llm import call_llm_api_with_retry
+    cases = [
+        ([429, 200], 2, True),
+        ([503, 200], 2, True),
+        ([408, 200], 2, True),
+        ([425, 200], 2, True),
+        ([401], 1, False),
+        ([403], 1, False),
+        ([500, 500, 500], 3, False),
+    ]
+    prov = LlmProvider(api_format=ApiFormat.ANTHROPIC,
+                       endpoint="https://x.io", api_key="k", model="m")
+    for seq, expected_calls, expected_success in cases:
+        attempts = []
+        def make_fake(seq=seq):
+            def fake(**kw):
+                idx = len(attempts)
+                attempts.append(1)
+                status = seq[idx] if idx < len(seq) else 200
+                if status == 200:
+                    return '{"ok":true}', False, status, ""
+                return None, False, status, ""
+            return fake
+        orig_sleep = time.sleep
+        time.sleep = lambda *_a, **_kw: None
+        orig_call = L.call_llm_api
+        L.call_llm_api = make_fake()
+        try:
+            r = call_llm_api_with_retry(
+                provider=prov, system_prompt="s", image_b64="QUFB",
+                media_type="image/png", user_text="hi", max_tokens=100,
+                retries=3)
+            assert len(attempts) == expected_calls, (
+                "seq %s: expected %d calls, got %d" % (seq, expected_calls, len(attempts)))
+            assert (r[0] is not None) == expected_success, (
+                "seq %s: expected success=%s" % (seq, expected_success))
+        finally:
+            time.sleep = orig_sleep
+            L.call_llm_api = orig_call
+
+
+t7_cases()
+globals()['_pass'] += 1
+print("PASS", "t7-retry-transient-errors")
+
+
+import rca_core.llm as L
+def _fake_with_body(**kw):
+    return None, False, 502, "rate limit exceeded"
+L.call_llm_api = _fake_with_body
+from rca_core import ApiFormat, LlmProvider
+prov = LlmProvider(api_format=ApiFormat.ANTHROPIC,
+                   endpoint="https://x.io", api_key="k", model="m")
+res = L.call_llm_api_with_retry(
+    provider=prov, system_prompt="s", image_b64="QUFB",
+    media_type="image/png", user_text="hi", max_tokens=100)
+del L.call_llm_api
+if res[2] == 502 and "rate limit exceeded" in (res[3] or ""):
+    globals()['_pass'] += 1
+    print("PASS", "h7-error-body-attached")
+else:
+    globals()['_fail'] += 1
+    print("FAIL", "h7-error-body-attached", repr(res))
+
+print("--- %d passed, %d failed ---" % (_pass, _fail))
 sys.exit(1 if _fail else 0)
