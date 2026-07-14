@@ -359,9 +359,19 @@ class ExtractPage(ScrollArea):
             pf = result.partial_failures
             total = int((self.result or {}).get("runs", pf + 1) or (pf + 1))
             status += f" - {pf}/{total} failed"
-        elif result.truncated:
+        elif getattr(result, "truncated", False):
             status += " - " + self._t("err.truncated")
         self.lbl_status.setText(status)
+        # Auto-switch to Extract sub-interface + scroll so the result tables
+        # are immediately visible (the user is looking at the loading spinner
+        # area otherwise).
+        from PySide6.QtCore import QTimer as _Q
+        def _jump():
+            try:
+                self.win._nav_extract.click()
+            except Exception:
+                pass
+        _Q.singleShot(50, _jump)
 
     def _render_result(self):
         multi = self.result and int(self.result.get("runs", 1) or 1) > 1
@@ -376,26 +386,44 @@ class ExtractPage(ScrollArea):
             it = self.stack_lay.takeAt(0)
             if it.widget():
                 it.widget().setParent(None)
+        # Friendly empty state when the model returned no data at all.
+        total_rows = sum(len((self.result or {}).get(c["id"], []) or []) for c in configs)
+        if total_rows == 0:
+            self.pivot.addItem(
+                routeKey="empty",
+                text=self._t("results.empty"),
+                onClick=lambda _=False: None,
+            )
+            empty = BodyLabel(self._t("results.empty"))
+            empty.setAlignment(Qt.AlignCenter)
+            self.stack_lay.addSpacing(20)
+            self.stack_lay.addWidget(empty)
+            hint = CaptionLabel(self._t("results.emptyHint") if "results.emptyHint" in
+                                (getattr(self._t, "TRANSLATIONS", {}) or {})
+                                else "The model returned no structured data. Try again with a clearer image or different caption.")
+            hint.setAlignment(Qt.AlignCenter)
+            self.stack_lay.addWidget(hint)
+            self._refresh_conf()
+            return
         for idx, cfg in enumerate(configs):
+            items = (self.result or {}).get(cfg["id"], []) or []
             table = TableWidget()
             table.setBorderVisible(True)
             table.setBorderRadius(8)
             table.setWordWrap(False)
+            table.setMinimumHeight(180)   # never collapse below 180px
             cols = ["#"] + [self._t(c) for c in cfg["cols"]]
             table.setColumnCount(len(cols))
             table.setHorizontalHeaderLabels(cols)
-            items = (self.result or {}).get(cfg["id"], []) or []
-            table.setRowCount(len(items))
+            table.setRowCount(max(1, len(items)))   # at least one row so the table is visible
             for ri, item in enumerate(items):
                 if not isinstance(item, dict):
                     continue
                 cells = cfg["row"](item)
                 values = [str(ri + 1)] + ["" if c is None else str(c) for c in cells]
-                low = False
-                if multi and cfg["id"] == "species_ranges":
-                    ac = int(item.get("agreement_count", 0) or 0)
-                    if ac <= n_runs / 2:
-                        low = True
+                # cc-switch style: flag low-agreement rows (multi-run merge).
+                low = (multi and cfg["id"] == "species_ranges"
+                       and int(item.get("agreement_count", 0) or 0) <= n_runs / 2)
                 for ci, val in enumerate(values):
                     cell = QTableWidgetItem(val)
                     if low:
@@ -404,7 +432,8 @@ class ExtractPage(ScrollArea):
             table.resizeColumnsToContents()
             table.horizontalHeader().setStretchLastSection(True)
             self.tables[cfg["id"]] = table
-            self.pivot.addItem(routeKey=cfg["id"], text=self._t(cfg["title_key"]),
+            label = f"{self._t(cfg['title_key'])} ({len(items)})"
+            self.pivot.addItem(routeKey=cfg["id"], text=label,
                                onClick=lambda k=cfg["id"]: self._show_table(k))
             table.setVisible(idx == 0)
             self.stack_lay.addWidget(table)

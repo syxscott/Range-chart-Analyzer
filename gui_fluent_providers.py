@@ -154,6 +154,12 @@ class ProviderCard(CardWidget):
             "PushButton{background:transparent;color:#475569;border:none;padding:0 10px}"
             "PushButton:hover{color:#0f172a;background:rgba(0,0,0,0.05)}"
         )
+        self.btn_edit = ToolButton(FIF.EDIT)
+        self.btn_edit.setFixedSize(30, 30)
+        self.btn_edit.setStyleSheet(
+            "ToolButton{color:rgba(150,150,150,0.75)}"
+            "ToolButton:hover{color:#0f172a}"
+        )
         self.btn_delete = ToolButton(FIF.DELETE)
         self.btn_delete.setFixedSize(30, 30)
         self.btn_delete.setStyleSheet(
@@ -162,6 +168,7 @@ class ProviderCard(CardWidget):
         )
         row.addWidget(self.btn_test)
         row.addWidget(self.btn_active)
+        row.addWidget(self.btn_edit)
         row.addWidget(self.btn_delete)
 
         self.set_active(is_active)
@@ -320,6 +327,7 @@ class ProviderWizard(QDialog):
 
         fl.addWidget(BodyLabel(self._t("settings.apiKey")), 3, 0)
         self._ipt_key = PasswordLineEdit()
+        self._ipt_key.setPlaceholderText("sk-…")
         fl.addWidget(self._ipt_key, 3, 1)
 
         fl.addWidget(BodyLabel(self._t("settings.model")), 4, 0)
@@ -507,6 +515,7 @@ class ProvidersPage(ScrollArea):
             card = ProviderCard(prov, prov.is_current, self._t)
             card.btn_test.clicked.connect(lambda _=False, p=prov, c=card: self._test(p, c))
             card.btn_active.clicked.connect(lambda _=False, pid=prov.id: self._set_current(pid))
+            card.btn_edit.clicked.connect(lambda _=False, pid=prov.id, c=card: self._edit(pid))
             card.btn_delete.clicked.connect(lambda _=False, pid=prov.id: self._delete(pid))
             cards.append(card)
         return cards
@@ -559,6 +568,23 @@ class ProvidersPage(ScrollArea):
         except Exception:
             pass
         self._refresh()
+
+    def _edit(self, pid, card):
+        """Open the wizard in edit mode for an existing provider."""
+        try:
+            store = ProviderStore().load()
+        except Exception:
+            return
+        existing = next((p for p in store.providers if p.id == pid), None)
+        if existing is None:
+            return
+        wiz = ProviderWizard(self.win, self._t, existing=existing)
+        if wiz.exec() and wiz.created_provider:
+            try:
+                ProviderStore().load().update(wiz.created_provider)
+                self._refresh()
+            except Exception:
+                pass
 
     def _delete(self, pid):
         try:
