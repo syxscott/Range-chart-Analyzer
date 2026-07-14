@@ -279,7 +279,7 @@ class ProviderWizard(QDialog):
         self.created_provider: LlmProvider | None = None
         self._existing = existing
         self.setWindowTitle(self._t("wizard.choosePreset") if existing is None
-                           else self._t("wizard.configureName", default="Configure: " + (existing.name or "")))
+                           else "Configure: " + (existing.name or ""))
         self.resize(720, 560)
 
         self._root = QVBoxLayout(self)
