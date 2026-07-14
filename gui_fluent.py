@@ -416,15 +416,22 @@ class ExtractPage(ScrollArea):
             table.setColumnCount(len(cols))
             table.setHorizontalHeaderLabels(cols)
             table.setRowCount(max(1, len(items)))   # at least one row so the table is visible
+            # Pad / truncate values to len(cols) so a future contributor who
+            # adds a custom row extractor can't silently misalign cells
+            # (mirrors build_table_export's M11 guard).
+            n_cols = len(cols)
             for ri, item in enumerate(items):
                 if not isinstance(item, dict):
                     continue
                 cells = cfg["row"](item)
+                cells = (list(cells) + [""] * n_cols)[:n_cols]
                 values = [str(ri + 1)] + ["" if c is None else str(c) for c in cells]
                 # cc-switch style: flag low-agreement rows (multi-run merge).
                 low = (multi and cfg["id"] == "species_ranges"
                        and int(item.get("agreement_count", 0) or 0) <= n_runs / 2)
                 for ci, val in enumerate(values):
+                    if ci >= n_cols:
+                        break   # extra safety against row lambda drift
                     cell = QTableWidgetItem(val)
                     if low:
                         cell.setBackground(Qt.yellow)

@@ -28,6 +28,11 @@ def _looks_columnar(data: dict[str, Any] | None) -> bool:
     if not sects:
         return False
     first = sects[0]
+    # Both id and name can be present when the LLM is verbose. A section
+    # is *columnar-shaped* only when it has "id" but no "name" — the LLM
+    # would treat "id" as the column label when it produces a columnar
+    # table. If "name" is also present, treat as range-chart (avoids
+    # mis-routing range data into the columnar UI).
     return isinstance(first, dict) and ("id" in first) and ("name" not in first)
 
 
@@ -74,7 +79,9 @@ def _range_chart_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
             "id": "other_fossils",
             "title_key": "sec.fossils",
             "cols": ["col.fossil"],
-            "row": lambda f: [f],
+            # Defensive: items may be plain strings (from rca_core
+            # normalize_result) or dicts (older or third-party producers).
+            "row": lambda f: [f.get("fossil", f.get("text", ""))] if isinstance(f, dict) else [f],
         },
     ]
 
