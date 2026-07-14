@@ -1578,6 +1578,15 @@ class RangeChartApp:
             tree_wrap.columnconfigure(0, weight=1)
             tree.tag_configure("odd", background=COLORS["row_alt"])
             tree.tag_configure("low", background=COLORS["row_low"])
+            # Bug fix: configure each column's heading text + alignment so
+            # the heading row actually renders content. Without this the
+            # thead is rendered but empty, which the clam theme sometimes
+            # collapses to 0 height on Windows DPI scaling.
+            for col in cols:
+                if col == "#":
+                    tree.heading(col, text="#", anchor="center")
+                else:
+                    tree.heading(col, text=self._t(col), anchor="w")
             self.trees[cfg["id"]] = tree
 
         # Fill the trees with data.
