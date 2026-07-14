@@ -173,18 +173,27 @@ class ExtractPage(ScrollArea):
         self.raw_text = ""
         self._last_paste_tmp = None
         self._worker = None
+        self.busy = False
 
         self.setObjectName("extractPage")
         self.setWidgetResizable(True)
         self.setStyleSheet("QScrollArea{border:none;background:transparent}")
         root = QWidget()
         self.setWidget(root)
-        lay = QVBoxLayout(root)
-        lay.setContentsMargins(28, 20, 28, 28)
-        lay.setSpacing(16)
+
+        # Root: horizontal split — left = input, right = results
+        root_lay = QHBoxLayout(root)
+        root_lay.setContentsMargins(20, 16, 20, 16)
+        root_lay.setSpacing(16)
+
+        # ---- Left panel: title + image + caption + run controls ----
+        left_panel = QWidget()
+        left_lay = QVBoxLayout(left_panel)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(12)
 
         self.lbl_title = TitleLabel(self._t("upload.title") if self._t("upload.title") != "upload.title" else "Extract")
-        lay.addWidget(self.lbl_title)
+        left_lay.addWidget(self.lbl_title)
 
         # Image card
         img_card = CardWidget()
@@ -207,7 +216,7 @@ class ExtractPage(ScrollArea):
         self.preview.setFixedHeight(180)
         self.preview.setStyleSheet("border:1px solid rgba(0,0,0,0.08);border-radius:8px;")
         ic.addWidget(self.preview)
-        lay.addWidget(img_card)
+        left_lay.addWidget(img_card)
 
         # Caption card
         cap_card = CardWidget()
@@ -219,7 +228,7 @@ class ExtractPage(ScrollArea):
         self.txt_caption = TextEdit()
         self.txt_caption.setFixedHeight(80)
         cc.addWidget(self.txt_caption)
-        lay.addWidget(cap_card)
+        left_lay.addWidget(cap_card)
 
         # Run row
         run_row = QHBoxLayout()
@@ -236,18 +245,28 @@ class ExtractPage(ScrollArea):
         self.btn_export.clicked.connect(self._export_json)
         run_row.addWidget(self.btn_export)
         run_row.addWidget(self.btn_extract)
-        lay.addLayout(run_row)
+        left_lay.addLayout(run_row)
+        left_lay.addStretch(1)
 
-        # Confidence + results
+        root_lay.addWidget(left_panel, 1)   # left takes 1 share
+
+        # ---- Right panel: confidence + pivot + results ----
+        right_panel = QWidget()
+        right_lay = QVBoxLayout(right_panel)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(10)
+
         self.lbl_conf = StrongBodyLabel("")
-        lay.addWidget(self.lbl_conf)
+        right_lay.addWidget(self.lbl_conf)
         self.pivot = Pivot()
-        lay.addWidget(self.pivot)
+        right_lay.addWidget(self.pivot)
         self.stack = QFrame()
         self.stack_lay = QVBoxLayout(self.stack)
         self.stack_lay.setContentsMargins(0, 0, 0, 0)
         self.tables = {}
-        lay.addWidget(self.stack, 1)
+        right_lay.addWidget(self.stack, 1)
+
+        root_lay.addWidget(right_panel, 2)   # right takes 2 shares (wider)
 
     # ---- image ----
     def _cleanup_paste_tmp(self):
@@ -276,8 +295,9 @@ class ExtractPage(ScrollArea):
         self.lbl_imginfo.setText(f"{name}\n{dims}{tail}")
         pix = QPixmap(path)
         if not pix.isNull():
+            w = max(80, self.preview.width()) if self.preview.width() > 0 else 300
             self.preview.setPixmap(pix.scaled(
-                QSize(max(80, self.preview.width() - 8), 172),
+                QSize(w, 172),
                 Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
     def _choose_image(self):
@@ -353,6 +373,7 @@ class ExtractPage(ScrollArea):
             mode = "columnar_section" if any(
                 k in cap for k in ("column", "section", "柱状", "柱状图", "col")
             ) else "range_chart"
+        self.busy = True
         self._set_busy(True)
         self._worker = ExtractWorker(params, mode, runs)
         self._worker.progress.connect(self._on_progress)
@@ -366,6 +387,7 @@ class ExtractPage(ScrollArea):
             self.lbl_status.setText(self._t("status.loading"))
 
     def _on_result(self, result):
+        self.busy = False
         self._set_busy(False)
         if not result.ok:
             msg = self._t(result.error_key or "err.http")
@@ -461,15 +483,24 @@ class ExtractPage(ScrollArea):
                         cell.setBackground(Qt.yellow)
                     table.setItem(ri, ci, cell)
             table.resizeColumnsToContents()
-            table.horizontalHeader().setStretchLastSection(True)
-            self.tables[cfg["id"]] = table
+            # Wrap table in a scroll area so wide content scrolls horizontally
+            # instead of being squished by setStretchLastSection.
+            scroll = QScrollArea()
+            scroll.setWidget(table)
+            scroll.setWidgetResizable(True)
+            scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+            table.setStyleSheet("border: none;")
+            self.tables[cfg["id"]] = scroll   # store scroll area, not raw table
             label = f"{self._t(cfg['title_key'])} ({len(items)})"
             self.pivot.addItem(routeKey=cfg["id"], text=label,
                                onClick=lambda k=cfg["id"]: self._show_table(k))
-            table.setVisible(idx == 0)
-            self.stack_lay.addWidget(table)
+            scroll.setVisible(idx == 0)
+            self.stack_lay.addWidget(scroll)
         if configs:
             self.pivot.setCurrentItem(configs[0]["id"])
+            # Ensure the first table is shown — qfluentwidgets Pivot.setCurrentItem
+            # does not always fire the onClick callback, so call it explicitly.
+            self._show_table(configs[0]["id"])
         self._refresh_conf()
 
     def _show_table(self, key):
@@ -647,6 +678,7 @@ class RangeChartFluentWindow(FluentWindow):
         super().__init__()
         self.cfg = load_config()
         self.tr = Translator(self.cfg.get("lang", "zh"))
+        self._provider_store = None
 
         self.setWindowTitle("Range Chart Analyzer")
         self.resize(1240, 860)
@@ -766,9 +798,14 @@ class RangeChartFluentWindow(FluentWindow):
 
     def current_provider(self):
         try:
-            return ProviderStore().load().get_current()
+            if self._provider_store is None:
+                self._provider_store = ProviderStore().load()
+            return self._provider_store.get_current()
         except Exception:
             return None
+
+    def invalidate_provider_cache(self):
+        self._provider_store = None
 
     def save_all(self):
         s = self.settings_page
@@ -808,6 +845,7 @@ class RangeChartFluentWindow(FluentWindow):
                     w.wait(1000)
         except Exception:
             pass
+        self.extract_page.busy = False
         super().closeEvent(event)
 
 

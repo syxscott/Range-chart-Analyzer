@@ -404,10 +404,11 @@ def merge_results(
             pass
     out[sch.confidence_field] = round(sum(confs) / len(confs), 4) if confs else 0.0
 
-    # Range-chart-only legacy: also merge "sections" so the original
-    # four-table result shape (sections, species_ranges, biozones,
-    # other_fossils) is preserved untouched.
+    # Merge "sections" for both range-chart and columnar-section schemas.
+    # For range-chart: group by section name and mode-merge scalar fields.
+    # For columnar-section: group by (id, group) and mode-merge all fields.
     if sch.primary_list_key == "species_ranges":
+        # Range-chart sections: keyed by name, formations list-merged.
         sec_groups = {}
         sec_order = []
         for r in runs:
@@ -439,6 +440,40 @@ def merge_results(
         out["sections"] = merged_sections
         if "runs" not in out:
             out["runs"] = n
+    elif sch.primary_list_key == "sections":
+        # Columnar-section sections: keyed by (id, group), mode-merge all fields.
+        sec_groups: dict[tuple, list] = {}
+        sec_order = []
+        for r in runs:
+            for sec in r.get("sections") or []:
+                if not isinstance(sec, dict):
+                    continue
+                key = (_norm(sec.get("id", "")), _norm(sec.get("group", "")))
+                if not any(key):
+                    continue
+                if key not in sec_groups:
+                    sec_groups[key] = []
+                    sec_order.append(key)
+                sec_groups[key].append(sec)
+        merged_sections = []
+        for key in sec_order:
+            group = sec_groups[key]
+            aggr: dict[str, Any] = {"agreement_count": len(group), "agreement": f"{len(group)}/{n}"}
+            seen_keys = set()
+            for g in group:
+                for k, v in g.items():
+                    if k in aggr or k in ("agreement_count", "agreement"):
+                        continue
+                    if v is None:
+                        continue
+                    merged_v = _merge_field_across_runs([x.get(k) for x in group])
+                    if merged_v is _NO_MERGE:
+                        continue
+                    aggr.setdefault(k, merged_v)
+                    seen_keys.add(k)
+            aggr.update(_mode_keys(group, sch.primary_str_mode_fields))
+            merged_sections.append(aggr)
+        out["sections"] = merged_sections
 
     return out
 

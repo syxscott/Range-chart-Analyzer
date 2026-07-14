@@ -121,7 +121,11 @@ TRANSLATIONS["zh"] = {
     "wizard.fieldName": "名称",
     "wizard.fieldFormat": "API 格式",
     "wizard.fieldEndpoint": "端点（基础 URL）",
+    "wizard.apiKeyField": "API Key 字段",
+    "wizard.extraHeaders": "额外请求头 (JSON)",
     "settings.testing": "测试中…",
+    "provider.noEndpoint": "未配置端点",
+    "provider.searchPlaceholder": "搜索提供商名称或地址...",
 }
 
 TRANSLATIONS["en"] = {
@@ -237,7 +241,11 @@ TRANSLATIONS["en"] = {
     "wizard.fieldName": "Name",
     "wizard.fieldFormat": "API Format",
     "wizard.fieldEndpoint": "Endpoint (base URL)",
+    "wizard.apiKeyField": "API Key Field",
+    "wizard.extraHeaders": "Extra Headers (JSON)",
     "settings.testing": "Testing...",
+    "provider.noEndpoint": "Not configured",
+    "provider.searchPlaceholder": "Search providers by name or URL...",
 }
 
 TRANSLATIONS["ja"] = {
@@ -353,7 +361,11 @@ TRANSLATIONS["ja"] = {
     "wizard.fieldName": "名前",
     "wizard.fieldFormat": "APIフォーマット",
     "wizard.fieldEndpoint": "エンドポイント（ベース URL）",
+    "wizard.apiKeyField": "API鍵フィールド",
+    "wizard.extraHeaders": "追加ヘッダー (JSON)",
     "settings.testing": "テスト中…",
+    "provider.noEndpoint": "未設定",
+    "provider.searchPlaceholder": "プロバイダー名またはURLで検索...",
 }
 
 

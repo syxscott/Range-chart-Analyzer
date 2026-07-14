@@ -1155,6 +1155,9 @@ class ConnectionResult:
     status: int | None = None
     error_key: str | None = None
     models_sample: list[str] = field(default_factory=list)
+    # Consecutive failures count — used to badge card health and for retry
+    # decisions in the UI layer.
+    consecutive_failures: int = 0
 
 
 def _now_ms() -> int:
@@ -1192,10 +1195,11 @@ def _probe_openai_models(provider: LlmProvider, timeout_sec: int) -> ConnectionR
         "Authorization": f"Bearer {provider.api_key}",
         "content-type": "application/json",
     }
-    headers.update(provider.extra_body or {})  # no-op for headers
     headers.update(provider.extra_headers)
+    body: dict[str, Any] = {}
+    body.update(provider.extra_body or {})
     t0 = _now_ms()
-    payload_bytes, status, err_body = _post_json(target, {}, headers, timeout_sec)
+    payload_bytes, status, err_body = _post_json(target, body, headers, timeout_sec)
     res = ConnectionResult(ok=False, latency_ms=_now_ms() - t0, status=status)
     if payload_bytes is None:
         if status == 401:
@@ -1264,47 +1268,94 @@ def _probe_gemini_models(provider: LlmProvider, timeout_sec: int) -> ConnectionR
 def _probe_minimal_generate(
     provider: LlmProvider, timeout_sec: int, fmt: ApiFormat
 ) -> ConnectionResult:
-    """Send a single user message with max_tokens=1 to verify the model + key."""
-    # When the provider's model is empty, some endpoints return 401/404
-    # even with a valid key. Fall back to a generic cheap model so the
-    # test actually checks "is the key alive" not "is the model name valid".
-    model = provider.model or ("gpt-4o-mini" if fmt == ApiFormat.OPENAI
-                                else "claude-3-haiku-20240307" if fmt == ApiFormat.ANTHROPIC
-                                else "gemini-2.5-flash")
+    """Send a minimal generate request to verify the model + key.
+
+    If the configured model is rejected (401/403/400), retry with a
+    well-known cheap fallback.  Many aggregator endpoints don't validate
+    the model name strictly and accept the fallback even when the
+    configured name is slightly wrong or unrecognized.
+    """
+    # Canonical fallback models + a slightly larger max_tokens to avoid
+    # endpoints that reject max_tokens=1 as too small.
+    ANTHROPIC_FALLBACKS = ["claude-3-haiku-20240307", "claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022"]
+    OPENAI_FALLBACKS = ["gpt-4o-mini", "gpt-4o", "gpt-4o-2024-08-06"]
+    GEMINI_FALLBACKS = ["gemini-2.0-flash", "gemini-1.5-flash"]
+    PROBE_MAX_TOKENS = 8   # avoid "max_tokens too small" rejections
+
+    def _do_probe(model: str) -> tuple[bytes | None, int | None, bytes, int]:
+        """Returns (payload, status, err_body, latency_ms)."""
+        t0 = _now_ms()
+        if fmt == ApiFormat.OPENAI:
+            target = provider.endpoint.rstrip("/") + "/v1/chat/completions"
+            body = {"model": model, "max_tokens": PROBE_MAX_TOKENS,
+                    "messages": [{"role": "user", "content": "hi"}]}
+            headers = {"Authorization": f"Bearer {provider.api_key}",
+                       "content-type": "application/json"}
+        elif fmt == ApiFormat.GEMINI:
+            base = provider.endpoint.rstrip("/")
+            target = f"{base}/v1beta/models/{model}:generateContent"
+            body = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                    "generation_config": {"max_output_tokens": PROBE_MAX_TOKENS}}
+            headers = {"content-type": "application/json", "x-api-key": provider.api_key}
+        else:  # ANTHROPIC
+            target = provider.endpoint.rstrip("/") + "/v1/messages"
+            body = {"model": model, "max_tokens": PROBE_MAX_TOKENS,
+                    "messages": [{"role": "user", "content": "hi"}]}
+            headers = {"x-api-key": provider.api_key,
+                       "anthropic-version": "2023-06-01",
+                       "content-type": "application/json"}
+        headers.update(provider.extra_headers)
+        body.update(provider.extra_body or {})
+        payload_bytes, status, err_body = _post_json(target, body, headers, timeout_sec)
+        return payload_bytes, status, err_body, _now_ms() - t0
+
+    # Build candidate model list: configured model first, then fallbacks.
+    configured = provider.model.strip() if provider.model else ""
     if fmt == ApiFormat.OPENAI:
-        target = provider.endpoint.rstrip("/") + "/v1/chat/completions"
-        body = {"model": model, "max_tokens": 1,
-                "messages": [{"role": "user", "content": "hi"}]}
-        headers = {"Authorization": f"Bearer {provider.api_key}",
-                   "content-type": "application/json"}
+        fallbacks = OPENAI_FALLBACKS
     elif fmt == ApiFormat.GEMINI:
-        model = provider.model or "gemini-2.5-pro"
-        base = provider.endpoint.rstrip("/")
-        # C4: put API key in x-api-key header, not in the URL.
-        target = f"{base}/v1beta/models/{model}:generateContent"
-        body = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-                "generation_config": {"max_output_tokens": 1}}
-        headers = {"content-type": "application/json", "x-api-key": provider.api_key}
-    else:  # ANTHROPIC
-        target = provider.endpoint.rstrip("/") + "/v1/messages"
-        body = {"model": model, "max_tokens": 1,
-                "messages": [{"role": "user", "content": "hi"}]}
-        headers = {"x-api-key": provider.api_key,
-                   "anthropic-version": "2023-06-01",
-                   "content-type": "application/json"}
-    headers.update(provider.extra_headers)
-    body.update(provider.extra_body)
-    t0 = _now_ms()
-    payload_bytes, status, err_body = _post_json(target, body, headers, timeout_sec)
-    res = ConnectionResult(ok=False, latency_ms=_now_ms() - t0, status=status)
-    if payload_bytes is None:
-        res.error_key = "err.http" if status else "err.network"
-        if status == 401:
-            res.error_key = "err.401"
-        elif status == 403:
-            res.error_key = "err.403"
-        return res
-    res.ok = True
+        fallbacks = GEMINI_FALLBACKS
+    else:
+        fallbacks = ANTHROPIC_FALLBACKS
+
+    candidates: list[str] = []
+    if configured:
+        candidates.append(configured)
+    for fb in fallbacks:
+        if fb not in candidates:
+            candidates.append(fb)
+
+    last_status = None
+    last_err_body = b""
+    best_latency = 0
+    ok_latency = 0
+
+    for model in candidates:
+        payload_bytes, status, err_body, latency = _do_probe(model)
+        last_status = status
+        last_err_body = err_body
+        if payload_bytes is not None:
+            # HTTP 2xx — endpoint accepted the request.
+            ok_latency = latency
+            res = ConnectionResult(ok=True, latency_ms=latency, status=status)
+            return res
+        # Non-2xx or network error: check if we should keep trying.
+        # Stop early on 401/403 when we already tried the configured model —
+        # that means the key itself is rejected, not just the model name.
+        if status in (401, 403) and configured:
+            # Key is likely invalid; don't waste quota on fallbacks.
+            break
+
+    # All candidates exhausted.
+    res = ConnectionResult(ok=False, latency_ms=best_latency or 0, status=last_status or None)
+    if last_status == 401:
+        res.error_key = "err.401"
+    elif last_status == 403:
+        res.error_key = "err.403"
+    elif last_status is None:
+        res.error_key = "err.network"
+    else:
+        res.error_key = "err.http"
     return res
 
 

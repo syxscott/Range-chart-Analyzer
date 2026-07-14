@@ -27,6 +27,7 @@ from rca_core.extractor import (  # noqa: E402
     DEFAULT_ENDPOINT,
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL,
+    ExtractResult,
     clamp_max_tokens,
 )
 from rca_core.aggregate import (  # noqa: E402
@@ -266,11 +267,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         schema = COLUMNAR_SECTION_SCHEMA if mode == 'columnar_section' else RANGE_CHART_SCHEMA
         merged = merge_results(ok_datas, total_runs=runs, schema=schema)
-        # M2: surface partial failures alongside `truncated` so the frontend
-        # can show "M of N runs failed" rather than treating the run as fully
-        # successful.
-        if partial_fails:
-            any_truncated = True
+        # M2: partial_failures is surfaced separately from truncated so the
+        # frontend can distinguish a failed run from a truncated one.
         self._send_json(200, {
             "ok": True,
             "data": merged,
