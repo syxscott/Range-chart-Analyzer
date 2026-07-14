@@ -29,8 +29,7 @@ from qfluentwidgets import (
     LineEdit, PasswordLineEdit, PushButton, PrimaryPushButton, ComboBox,
     SpinBox, SwitchButton, TableWidget, BodyLabel, TitleLabel, SubtitleLabel,
     StrongBodyLabel, CaptionLabel, CardWidget, TextEdit, InfoBar, InfoBarPosition,
-    MessageBoxBase, ScrollArea, IndeterminateProgressRing,
-    SearchLineEdit, setTheme, Theme, setThemeColor, ToolButton, Pivot,
+    ScrollArea, IndeterminateProgressRing, Pivot, setTheme, Theme, setThemeColor,
 )
 
 from rca_core import (
@@ -42,7 +41,9 @@ from rca_core.extractor import (
     DEFAULT_ENDPOINT, DEFAULT_MAX_TOKENS, DEFAULT_MAX_EDGE, DEFAULT_MODEL,
     ExtractResult, clamp_max_tokens,
 )
-from rca_core.llm import ApiFormat, LlmProvider, PROVIDER_PRESETS, test_llm_connection
+
+# New-style provider page (cc-switch alignment + drag-to-reorder).
+from gui_fluent_providers import ProvidersPage  # noqa: E402
 
 try:
     from PIL import Image, ImageGrab  # type: ignore
@@ -137,118 +138,6 @@ class ConnTestWorker(QThread):
         self.done.emit(test_llm_connection(self._provider, timeout_sec=8))
 
 
-# ---------------------------------------------------------------------------
-# Provider preset wizard (modal dialog)
-# ---------------------------------------------------------------------------
-class ProviderWizard(MessageBoxBase):
-    """Two-step provider add: pick a preset (searchable grid) or fill a
-    custom form. Returns the created LlmProvider via .created_provider.
-    """
-    def __init__(self, parent, translate):
-        super().__init__(parent)
-        self._t = translate
-        self.created_provider = None
-        self.titleLabel = SubtitleLabel(self._t("wizard.choosePreset"), self)
-        self.viewLayout.addWidget(self.titleLabel)
-
-        self.search = SearchLineEdit(self)
-        self.search.setPlaceholderText(self._t("settings.searchHint"))
-        self.search.textChanged.connect(self._render_presets)
-        self.viewLayout.addWidget(self.search)
-
-        self.scroll = ScrollArea(self)
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFixedHeight(340)
-        self.scroll.setStyleSheet("QScrollArea{border:none;background:transparent}")
-        self.grid_host = QWidget()
-        self.grid = QGridLayout(self.grid_host)
-        self.grid.setContentsMargins(0, 0, 0, 0)
-        self.grid.setSpacing(8)
-        self.scroll.setWidget(self.grid_host)
-        self.viewLayout.addWidget(self.scroll)
-
-        # Custom form (hidden until "custom" chosen).
-        self.form = QWidget()
-        fl = QGridLayout(self.form)
-        fl.setContentsMargins(0, 8, 0, 0)
-        fl.addWidget(BodyLabel(self._t("wizard.fieldName")), 0, 0)
-        self.ipt_name = LineEdit(); fl.addWidget(self.ipt_name, 0, 1)
-        fl.addWidget(BodyLabel(self._t("wizard.fieldFormat")), 1, 0)
-        self.cmb_fmt = ComboBox(); self.cmb_fmt.addItems([f.value for f in ApiFormat])
-        fl.addWidget(self.cmb_fmt, 1, 1)
-        fl.addWidget(BodyLabel(self._t("wizard.fieldEndpoint")), 2, 0)
-        self.ipt_endpoint = LineEdit(); fl.addWidget(self.ipt_endpoint, 2, 1)
-        fl.addWidget(BodyLabel(self._t("settings.apiKey")), 3, 0)
-        self.ipt_key = PasswordLineEdit(); fl.addWidget(self.ipt_key, 3, 1)
-        fl.addWidget(BodyLabel(self._t("settings.model")), 4, 0)
-        self.ipt_model = LineEdit(); fl.addWidget(self.ipt_model, 4, 1)
-        self.form.setVisible(False)
-        self.viewLayout.addWidget(self.form)
-
-        self.yesButton.setText(self._t("wizard.add"))
-        self.cancelButton.setText(self._t("wizard.cancel"))
-        self.widget.setMinimumWidth(620)
-        self._render_presets()
-
-    def _render_presets(self):
-        # Clear grid
-        while self.grid.count():
-            item = self.grid.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-        q = self.search.text().strip().lower()
-        col_count = 3
-        r = c = 0
-        for preset in PROVIDER_PRESETS:
-            if q and q not in preset.name.lower() and q not in preset.category.lower():
-                continue
-            btn = PushButton(preset.name)
-            btn.setFixedHeight(34)
-            btn.clicked.connect(lambda _=False, p=preset: self._pick(p))
-            self.grid.addWidget(btn, r, c)
-            c += 1
-            if c >= col_count:
-                c = 0
-                r += 1
-        # "custom" option
-        custom = PushButton(self._t("wizard.customProvider"))
-        custom.setFixedHeight(34)
-        custom.clicked.connect(self._show_custom)
-        self.grid.addWidget(custom, r, c)
-
-    def _pick(self, preset):
-        self.ipt_name.setText(preset.name)
-        self.cmb_fmt.setCurrentText(preset.api_format.value)
-        self.ipt_endpoint.setText(preset.endpoint)
-        self.ipt_model.setText(preset.model)
-        self._show_custom()
-
-    def _show_custom(self):
-        self.scroll.setVisible(False)
-        self.search.setVisible(False)
-        self.form.setVisible(True)
-        self.titleLabel.setText(self._t("wizard.configure"))
-
-    def validate(self):
-        name = self.ipt_name.text().strip()
-        endpoint = self.ipt_endpoint.text().strip().rstrip("/")
-        if not name or not endpoint:
-            return False
-        try:
-            fmt = ApiFormat(self.cmb_fmt.currentText())
-        except ValueError:
-            fmt = ApiFormat.ANTHROPIC
-        self.created_provider = LlmProvider(
-            name=name, api_format=fmt, endpoint=endpoint,
-            api_key=self.ipt_key.text().strip(), model=self.ipt_model.text().strip(),
-        )
-        return True
-
-
-# ---------------------------------------------------------------------------
-# Extract page — image input, caption, run button, results
-# ---------------------------------------------------------------------------
 class ExtractPage(ScrollArea):
     def __init__(self, win):
         super().__init__()
@@ -568,124 +457,6 @@ class ExtractPage(ScrollArea):
             self._render_result()
 
 
-# ---------------------------------------------------------------------------
-# Providers page
-# ---------------------------------------------------------------------------
-class ProvidersPage(ScrollArea):
-    def __init__(self, win):
-        super().__init__()
-        self.win = win
-        self._t = win._t
-        self._test_worker = None
-        self.setObjectName("providersPage")
-        self.setWidgetResizable(True)
-        self.setStyleSheet("QScrollArea{border:none;background:transparent}")
-        root = QWidget()
-        self.setWidget(root)
-        self.lay = QVBoxLayout(root)
-        self.lay.setContentsMargins(28, 20, 28, 28)
-        self.lay.setSpacing(16)
-
-        head = QHBoxLayout()
-        self.lbl_title = TitleLabel(self._t("settings.llmProvider"))
-        head.addWidget(self.lbl_title)
-        head.addStretch(1)
-        self.btn_add = PrimaryPushButton(FIF.ADD, self._t("settings.addProvider"))
-        self.btn_add.clicked.connect(self._add_provider)
-        head.addWidget(self.btn_add)
-        self.lay.addLayout(head)
-
-        self.list_host = QWidget()
-        self.list_lay = QVBoxLayout(self.list_host)
-        self.list_lay.setContentsMargins(0, 0, 0, 0)
-        self.list_lay.setSpacing(8)
-        self.lay.addWidget(self.list_host)
-
-        self.lbl_test = CaptionLabel("")
-        self.lay.addWidget(self.lbl_test)
-        self.lay.addStretch(1)
-        self._refresh()
-
-    def _refresh(self):
-        while self.list_lay.count():
-            it = self.list_lay.takeAt(0)
-            if it.widget():
-                it.widget().deleteLater()
-        try:
-            store = ProviderStore().load()
-        except Exception:
-            store = None
-        if not store or not store.providers:
-            self.list_lay.addWidget(BodyLabel(self._t("settings.noProviders")))
-            return
-        for prov in store.providers:
-            self.list_lay.addWidget(self._provider_row(prov, store))
-
-    def _provider_row(self, prov, store):
-        card = CardWidget()
-        row = QHBoxLayout(card)
-        row.setContentsMargins(16, 12, 16, 12)
-        dot = "●" if prov.is_current else "○"
-        has_key = "✓" if prov.api_key else "…"
-        label = BodyLabel(f"{dot} {prov.name}  ·  {prov.model or '-'}  ·  {prov.api_format.value}  ·  {has_key}")
-        row.addWidget(label)
-        row.addStretch(1)
-        btn_test = PushButton(self._t("settings.testConnection"))
-        btn_test.clicked.connect(lambda _=False, p=prov: self._test(p))
-        row.addWidget(btn_test)
-        if not prov.is_current:
-            btn_set = PushButton(self._t("wizard.setActive"))
-            btn_set.clicked.connect(lambda _=False, pid=prov.id: self._set_current(pid))
-            row.addWidget(btn_set)
-        btn_del = ToolButton(FIF.DELETE)
-        btn_del.clicked.connect(lambda _=False, pid=prov.id: self._delete(pid))
-        row.addWidget(btn_del)
-        return card
-
-    def _add_provider(self):
-        wiz = ProviderWizard(self.win, self._t)
-        if wiz.exec() and wiz.created_provider:
-            store = ProviderStore().load()
-            store.add(wiz.created_provider)
-            store.set_current(wiz.created_provider.id)
-            self._refresh()
-
-    def _set_current(self, pid):
-        store = ProviderStore().load()
-        store.set_current(pid)
-        self._refresh()
-
-    def _delete(self, pid):
-        store = ProviderStore().load()
-        store.remove(pid)
-        self._refresh()
-
-    def _test(self, provider):
-        self.lbl_test.setText("⏳ " + self._t("settings.testing"))
-        self._test_worker = ConnTestWorker(provider)
-        self._test_worker.done.connect(self._on_test_done)
-        self._test_worker.start()
-
-    def _on_test_done(self, res):
-        if res.ok:
-            txt = "✓  " + str(res.latency_ms) + " ms"
-            if res.models_sample:
-                txt += "  ·  " + ", ".join(res.models_sample[:3])
-        else:
-            txt = "✗  " + self._t(res.error_key or "err.http")
-            if res.status:
-                txt += f"  (HTTP {res.status})"
-        self.lbl_test.setText(txt)
-
-    def retranslate(self):
-        self.lbl_title.setText(self._t("settings.llmProvider"))
-        self.btn_add.setText(self._t("settings.addProvider"))
-        self._refresh()
-
-
-# ---------------------------------------------------------------------------
-# Settings page
-# ---------------------------------------------------------------------------
 class SettingsPage(ScrollArea):
     def __init__(self, win):
         super().__init__()
