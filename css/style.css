@@ -856,7 +856,12 @@ button.btn.btn-primary:not(:disabled):active {
 .table-actions { display: flex; gap: 8px; }
 
 .table-wrap {
-    overflow-x: auto;
+    /* Bug fix: overflow-x:auto on .table-wrap creates a new stacking
+       context which traps position:thead and makes it invisible (classic
+       CSS gotcha). Switch to overflow:visible so the sticky thead can
+       escape its parent and stick to the scrolling container. The outer
+       .results-scroll-wrapper handles horizontal scroll if needed. */
+    overflow-x: visible;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-sm);
@@ -870,7 +875,7 @@ table.data-table thead th {
     /* UI-Polish Phase 3: glassmorphic sticky header. Translucent bg
        plus backdrop-filter for a "frosted" effect; uppercase + tracking
        reads as proper column labels. */
-    background: rgba(255, 255, 255, 0.85);
+    background: rgba(255, 255, 255, 0.9);
     color: var(--text-base);
     -webkit-backdrop-filter: blur(8px);
     backdrop-filter: blur(8px);
@@ -885,8 +890,9 @@ table.data-table thead th {
     position: sticky;
     top: 0;
     /* Phase C: sticky thead needs explicit z-index so tbody cells don't
-       paint over it when scrolling. */
-    z-index: 2;
+       paint over it when scrolling. z-index 20 to beat the .card (z-index
+       auto) and the stagger entrance transforms. */
+    z-index: 20;
 }
 /* UI-Polish Phase 3: solid fallback when backdrop-filter is unsupported
    (older Firefox, old Safari). */
