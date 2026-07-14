@@ -402,163 +402,187 @@ class RangeChartApp:
                 pass
         F = FONT_FAMILY
 
-        # --- surfaces ---
-        style.configure("TFrame", background=COLORS["bg"])
-        style.configure("Card.TFrame", background=COLORS["card"])
+        # GUI-Mod2: when sv_ttk is loaded its Fluent theme already
+        # provides button / input / combobox / notebook / entry colors
+        # and modern flat shapes. We only override the elements sv_ttk
+        # does-not style well (Treeview / Notebook tab indicator). When
+        # sv_ttk is missing, fall back to applying our custom Morandi palette.
+        if not _HAS_SVTTK:
+            style.configure("TFrame", background=COLORS["bg"])
+            style.configure("Card.TFrame", background=COLORS["card"])
 
-        # --- type hierarchy: larger, more readable, better contrast.
-        # Modern apps use 13-14px body, not 10-11px. We bump everything ~2pt.
-        style.configure("TLabel", background=COLORS["bg"], foreground=COLORS["text"],
-                        font=(F, 11))
-        style.configure("Card.TLabel", background=COLORS["card"], foreground=COLORS["text"],
-                        font=(F, 11))
-        style.configure("Muted.TLabel", background=COLORS["card"],
-                        foreground=COLORS["muted"], font=(F, 10))
-        style.configure("Title.TLabel", background=COLORS["bg"],
-                        foreground=COLORS["heading"], font=(F, 16, "bold"))
-        style.configure("Sub.TLabel", background=COLORS["bg"],
-                        foreground=COLORS["muted"], font=(F, 11))
-        style.configure("Section.TLabel", background=COLORS["card"],
-                        foreground=COLORS["heading"], font=(F, 14, "bold"))
-        # vscode-style group headers: small uppercase muted label.
-        style.configure("Group.TLabel", background=COLORS["bg"],
-                        foreground=COLORS["muted"], font=(F, 10, "bold"))
+            # --- type hierarchy: larger, more readable, better contrast.
+            # Modern apps use 13-14px body, not 10-11px. We bump everything ~2pt.
+            style.configure("TLabel", background=COLORS["bg"], foreground=COLORS["text"],
+                            font=(F, 11))
+            style.configure("Card.TLabel", background=COLORS["card"], foreground=COLORS["text"],
+                            font=(F, 11))
+            style.configure("Muted.TLabel", background=COLORS["card"],
+                            foreground=COLORS["muted"], font=(F, 10))
+            style.configure("Title.TLabel", background=COLORS["bg"],
+                            foreground=COLORS["heading"], font=(F, 16, "bold"))
+            style.configure("Sub.TLabel", background=COLORS["bg"],
+                            foreground=COLORS["muted"], font=(F, 11))
+            style.configure("Section.TLabel", background=COLORS["card"],
+                            foreground=COLORS["heading"], font=(F, 14, "bold"))
+            # vscode-style group headers: small uppercase muted label.
+            style.configure("Group.TLabel", background=COLORS["bg"],
+                            foreground=COLORS["muted"], font=(F, 10, "bold"))
 
-        # --- secondary / default button: more padding, larger font ---
-        style.configure("TButton", font=(F, 11), padding=(16, 9),
-                        background=COLORS["card"], foreground=COLORS["primary"],
-                        bordercolor=COLORS["border"], relief="flat",
-                        focuscolor=COLORS["border_focus"])
-        style.map(
-            "TButton",
-            background=[("pressed", COLORS["row_alt"]), ("active", COLORS["row_hover"]),
-                        ("disabled", COLORS["field_disabled"])],
-            foreground=[("disabled", COLORS["muted"])],
-            bordercolor=[("active", COLORS["primary"])],
-            relief=[("pressed", "flat"), ("!pressed", "flat")],
+            # --- secondary / default button: more padding, larger font ---
+            style.configure("TButton", font=(F, 11), padding=(16, 9),
+                            background=COLORS["card"], foreground=COLORS["primary"],
+                            bordercolor=COLORS["border"], relief="flat",
+                            focuscolor=COLORS["border_focus"])
+            style.map(
+                "TButton",
+                background=[("pressed", COLORS["row_alt"]), ("active", COLORS["row_hover"]),
+                            ("disabled", COLORS["field_disabled"])],
+                foreground=[("disabled", COLORS["muted"])],
+                bordercolor=[("active", COLORS["primary"])],
+                relief=[("pressed", "flat"), ("!pressed", "flat")],
+            )
+
+            # --- primary CTA button (Extract): emerald accent, white text ---
+            style.configure("Primary.TButton", font=(F, 12, "bold"), padding=(18, 11),
+                            background=COLORS["accent"], foreground="#ffffff",
+                            bordercolor=COLORS["accent"], relief="flat",
+                            focuscolor=COLORS["accent_active"])
+            style.map(
+                "Primary.TButton",
+                background=[("pressed", COLORS["accent_active"]),
+                            ("active", COLORS["accent_hover"]),
+                            ("disabled", "#9ca3af")],
+                foreground=[("disabled", "#e5e7eb")],
+                bordercolor=[("active", COLORS["accent_hover"])],
+            )
+
+            # --- small secondary button ---
+            style.configure("Small.TButton", font=(F, 10), padding=(12, 7),
+                            background=COLORS["card"], foreground=COLORS["primary"],
+                            bordercolor=COLORS["border"], relief="flat")
+            style.map(
+                "Small.TButton",
+                background=[("pressed", COLORS["row_alt"]), ("active", COLORS["row_hover"]),
+                            ("disabled", COLORS["field_disabled"])],
+                foreground=[("disabled", COLORS["muted"])],
+            )
+
+            # --- inputs: subtle border, navy focus ring, disabled state ---
+            style.configure("TEntry", padding=2, relief="flat",
+                            fieldbackground=COLORS["field_bg"], foreground=COLORS["text"],
+                            bordercolor=COLORS["border"], insertcolor=COLORS["primary"])
+            style.map(
+                "TEntry",
+                bordercolor=[("focus", COLORS["border_focus"])],
+                fieldbackground=[("disabled", COLORS["field_disabled"])],
+                lightcolor=[("focus", COLORS["border_focus"])],
+                darkcolor=[("focus", COLORS["border_focus"])],
+            )
+            style.configure("TCombobox", padding=2, relief="flat",
+                            fieldbackground=COLORS["field_bg"], foreground=COLORS["text"],
+                            bordercolor=COLORS["border"], arrowcolor=COLORS["primary"])
+            style.map(
+                "TCombobox",
+                fieldbackground=[("readonly", COLORS["field_bg"])],
+                bordercolor=[("focus", COLORS["border_focus"])],
+            )
+            style.configure("TSpinbox", padding=2, relief="flat",
+                            fieldbackground=COLORS["field_bg"], foreground=COLORS["text"],
+                            bordercolor=COLORS["border"], arrowcolor=COLORS["primary"])
+            style.map("TSpinbox", bordercolor=[("focus", COLORS["border_focus"])])
+
+            # --- checkbutton / radiobutton on card + page surfaces ---
+            style.configure("Card.TCheckbutton", background=COLORS["card"],
+                            foreground=COLORS["text"], font=(F, 10), focuscolor=COLORS["card"])
+            style.map("Card.TCheckbutton",
+                      background=[("active", COLORS["card"])],
+                      foreground=[("disabled", COLORS["muted"])])
+            style.configure("TRadiobutton", background=COLORS["bg"],
+                            foreground=COLORS["text"], font=(F, 10), focuscolor=COLORS["bg"])
+            style.map("TRadiobutton", background=[("active", COLORS["bg"])],
+                      foreground=[("selected", COLORS["primary"])])
+
+            # --- progress bar in accent ---
+            style.configure("TProgressbar", background=COLORS["accent"],
+                            troughcolor=COLORS["row_alt"], bordercolor=COLORS["row_alt"],
+                            lightcolor=COLORS["accent"], darkcolor=COLORS["accent"])
+
+            # --- Treeview: taller rows, tabular feel, soft-gray heading (Notion-style),
+            #     navy selection preserved. UI-Polish Phase 4: header switches from
+            #     primary blue to a soft surface so the table reads as content-first
+            #     rather than chrome.
+            style.configure("Treeview", rowheight=38, font=(F, 11),
+                            fieldbackground=COLORS["card"], background=COLORS["card"],
+                            foreground=COLORS["text"], bordercolor=COLORS["card_border"],
+                            relief="flat")
+            style.configure("Treeview.Heading", font=(F, 10, "bold"),
+                            background=COLORS["surface"], foreground=COLORS["text"],
+                            relief="flat", padding=(10, 8))
+            style.map(
+                "Treeview.Heading",
+                background=[("active", COLORS["row_hover"])],
+            )
+            style.map(
+                "Treeview",
+                background=[("selected", COLORS["sel"])],
+                foreground=[("selected", "#ffffff")],
+            )
+
+            # --- notebook tabs ---
+            style.configure("TNotebook", background=COLORS["bg"], borderwidth=0)
+            style.configure("TNotebook.Tab", font=(F, 11), padding=(16, 9),
+                            background=COLORS["row_alt"], foreground=COLORS["muted"])
+            style.map(
+                "TNotebook.Tab",
+                background=[("selected", COLORS["card"])],
+                foreground=[("selected", COLORS["primary"])],
+                expand=[("selected", (0, 0, 0, 0))],
+            )
+
+            # --- separator ---
+            style.configure("TSeparator", background=COLORS["card_border"])
+
+            # --- page-level surfaces ---
+            # Subtle bottom border on the header frame so the title block reads
+            # as a page-level band rather than free-floating text.
+            style.configure("Header.TFrame", background=COLORS["bg"], relief="flat", borderwidth=0)
+
+            # Settings group container.
+            style.configure("SettingsGroup.TLabelframe", background=COLORS["card"],
+                            bordercolor=COLORS["border"], relief="solid", borderwidth=1)
+            style.configure("SettingsGroup.TLabelframe.Label", background=COLORS["card"],
+                            foreground=COLORS["primary"], font=(FONT_FAMILY, 10, "bold"))
+
+            # Hover on Treeview rows (apart from selected) so they feel responsive.
+            style.map("Treeview",
+                      background=[("selected", COLORS["primary"]), ("active", COLORS["row_hover"])],
+                      foreground=[("selected", "#ffffff")])
+
+            # Status bar pieces.
+            style.configure("Status.TFrame", background=COLORS["bg"])
+            style.configure("Status.TLabel", background=COLORS["bg"],
+                            foreground=COLORS["muted"], font=(FONT_FAMILY, 10))
+
+
+        # Always apply: Treeview (Mac Finder header) + Notebook tabs
+        # (modern bottom indicator). sv_ttk's default Treeview is plain;
+        # its notebook tab style also benefits from the override.
+        style.configure(
+            "TNotebook", background=COLORS["bg"], borderwidth=0, padding=0,
+            tabmargins=(0, 0, 0, 0),
         )
-
-        # --- primary CTA button (Extract): emerald accent, white text ---
-        style.configure("Primary.TButton", font=(F, 12, "bold"), padding=(18, 11),
-                        background=COLORS["accent"], foreground="#ffffff",
-                        bordercolor=COLORS["accent"], relief="flat",
-                        focuscolor=COLORS["accent_active"])
-        style.map(
-            "Primary.TButton",
-            background=[("pressed", COLORS["accent_active"]),
-                        ("active", COLORS["accent_hover"]),
-                        ("disabled", "#9ca3af")],
-            foreground=[("disabled", "#e5e7eb")],
-            bordercolor=[("active", COLORS["accent_hover"])],
+        style.configure(
+            "TNotebook.Tab", font=(FONT_FAMILY, 11), padding=(20, 10),
+            background=COLORS["bg"], foreground=COLORS["muted"],
+            borderwidth=0, focuscolor=COLORS["bg"],
         )
-
-        # --- small secondary button ---
-        style.configure("Small.TButton", font=(F, 10), padding=(12, 7),
-                        background=COLORS["card"], foreground=COLORS["primary"],
-                        bordercolor=COLORS["border"], relief="flat")
-        style.map(
-            "Small.TButton",
-            background=[("pressed", COLORS["row_alt"]), ("active", COLORS["row_hover"]),
-                        ("disabled", COLORS["field_disabled"])],
-            foreground=[("disabled", COLORS["muted"])],
-        )
-
-        # --- inputs: subtle border, navy focus ring, disabled state ---
-        style.configure("TEntry", padding=2, relief="flat",
-                        fieldbackground=COLORS["field_bg"], foreground=COLORS["text"],
-                        bordercolor=COLORS["border"], insertcolor=COLORS["primary"])
-        style.map(
-            "TEntry",
-            bordercolor=[("focus", COLORS["border_focus"])],
-            fieldbackground=[("disabled", COLORS["field_disabled"])],
-            lightcolor=[("focus", COLORS["border_focus"])],
-            darkcolor=[("focus", COLORS["border_focus"])],
-        )
-        style.configure("TCombobox", padding=2, relief="flat",
-                        fieldbackground=COLORS["field_bg"], foreground=COLORS["text"],
-                        bordercolor=COLORS["border"], arrowcolor=COLORS["primary"])
-        style.map(
-            "TCombobox",
-            fieldbackground=[("readonly", COLORS["field_bg"])],
-            bordercolor=[("focus", COLORS["border_focus"])],
-        )
-        style.configure("TSpinbox", padding=2, relief="flat",
-                        fieldbackground=COLORS["field_bg"], foreground=COLORS["text"],
-                        bordercolor=COLORS["border"], arrowcolor=COLORS["primary"])
-        style.map("TSpinbox", bordercolor=[("focus", COLORS["border_focus"])])
-
-        # --- checkbutton / radiobutton on card + page surfaces ---
-        style.configure("Card.TCheckbutton", background=COLORS["card"],
-                        foreground=COLORS["text"], font=(F, 10), focuscolor=COLORS["card"])
-        style.map("Card.TCheckbutton",
-                  background=[("active", COLORS["card"])],
-                  foreground=[("disabled", COLORS["muted"])])
-        style.configure("TRadiobutton", background=COLORS["bg"],
-                        foreground=COLORS["text"], font=(F, 10), focuscolor=COLORS["bg"])
-        style.map("TRadiobutton", background=[("active", COLORS["bg"])],
-                  foreground=[("selected", COLORS["primary"])])
-
-        # --- progress bar in accent ---
-        style.configure("TProgressbar", background=COLORS["accent"],
-                        troughcolor=COLORS["row_alt"], bordercolor=COLORS["row_alt"],
-                        lightcolor=COLORS["accent"], darkcolor=COLORS["accent"])
-
-        # --- Treeview: taller rows, tabular feel, soft-gray heading (Notion-style),
-        #     navy selection preserved. UI-Polish Phase 4: header switches from
-        #     primary blue to a soft surface so the table reads as content-first
-        #     rather than chrome.
-        style.configure("Treeview", rowheight=38, font=(F, 11),
-                        fieldbackground=COLORS["card"], background=COLORS["card"],
-                        foreground=COLORS["text"], bordercolor=COLORS["card_border"],
-                        relief="flat")
-        style.configure("Treeview.Heading", font=(F, 10, "bold"),
-                        background=COLORS["surface"], foreground=COLORS["text"],
-                        relief="flat", padding=(10, 8))
-        style.map(
-            "Treeview.Heading",
-            background=[("active", COLORS["row_hover"])],
-        )
-        style.map(
-            "Treeview",
-            background=[("selected", COLORS["sel"])],
-            foreground=[("selected", "#ffffff")],
-        )
-
-        # --- notebook tabs ---
-        style.configure("TNotebook", background=COLORS["bg"], borderwidth=0)
-        style.configure("TNotebook.Tab", font=(F, 11), padding=(16, 9),
-                        background=COLORS["row_alt"], foreground=COLORS["muted"])
         style.map(
             "TNotebook.Tab",
-            background=[("selected", COLORS["card"])],
-            foreground=[("selected", COLORS["primary"])],
-            expand=[("selected", (0, 0, 0, 0))],
+            background=[("selected", COLORS["surface"]), ("active", COLORS["row_hover"])],
+            foreground=[("selected", COLORS["heading"]), ("active", COLORS["heading"])],
+            font=[("selected", (FONT_FAMILY, 11, "bold"))],
         )
-
-        # --- separator ---
-        style.configure("TSeparator", background=COLORS["card_border"])
-
-        # --- page-level surfaces ---
-        # Subtle bottom border on the header frame so the title block reads
-        # as a page-level band rather than free-floating text.
-        style.configure("Header.TFrame", background=COLORS["bg"], relief="flat", borderwidth=0)
-
-        # Settings group container.
-        style.configure("SettingsGroup.TLabelframe", background=COLORS["card"],
-                        bordercolor=COLORS["border"], relief="solid", borderwidth=1)
-        style.configure("SettingsGroup.TLabelframe.Label", background=COLORS["card"],
-                        foreground=COLORS["primary"], font=(FONT_FAMILY, 10, "bold"))
-
-        # Hover on Treeview rows (apart from selected) so they feel responsive.
-        style.map("Treeview",
-                  background=[("selected", COLORS["primary"]), ("active", COLORS["row_hover"])],
-                  foreground=[("selected", "#ffffff")])
-
-        # Status bar pieces.
-        style.configure("Status.TFrame", background=COLORS["bg"])
-        style.configure("Status.TLabel", background=COLORS["bg"],
-                        foreground=COLORS["muted"], font=(FONT_FAMILY, 10))
-
     # ---------- helper to register translatable widgets ----------
     def _reg(self, widget, kind, key):
         self._i18n.append((widget, kind, key))
