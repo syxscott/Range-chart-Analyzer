@@ -1,4 +1,10 @@
 # Range Chart Analyzer runs on the Python standard library alone.
-# Pillow is OPTIONAL: it enables the GUI image thumbnail preview and
-# client-side downscaling of very large images. The app works without it.
+# The two optional deps below improve the experience but are not required:
+#
+# Pillow: enables the GUI image thumbnail preview and client-side downscaling
+#          of very large images.
+# sv_ttk: swaps the Tkinter "clam" theme for a Windows 11 Fluent-style
+#          flat/modern skin (buttons, inputs, combobox, notebook tabs).
+#          Without it the app falls back to ttk's default clam theme.
 Pillow>=9.0 ; python_version >= "3.8"
+sv_ttk>=2.5  ; python_version >= "3.8"

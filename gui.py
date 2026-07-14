@@ -21,6 +21,15 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+# UI-Mod-2: optional Windows 11 Fluent theme (sv_ttk). If unavailable,
+# fall back to ttk's default clam theme.
+try:
+    import sv_ttk
+    _HAS_SVTTK = True
+except ImportError:
+    sv_ttk = None
+    _HAS_SVTTK = False
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rca_core import (  # noqa: E402
@@ -56,57 +65,54 @@ except Exception:
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer.json")
 
-# Palette: warm-neutral surfaces (stone-50) + indigo primary + emerald CTA.
-# Inspired by Linear / Vercel / Notion - softer, warmer, more breathing room
-# than the old cold navy. A single edit here re-themes the whole GUI.
+# UI-Mod-1: 极简现代风 Palette (Morandi / "性冷淡"色系).
+# 深层石板灰主按钮 + 蓝灰点缀 + 冷白背景. 配合 sv_ttk 主题后整体
+# 呈现 Windows 11 Fluent + 莫兰迪柔感的高级感.
 COLORS = {
-    "primary": "#4f46e5",        # indigo-600 - modern, less authoritarian than navy
-    "primary_hover": "#4338ca",
-    "primary_active": "#3730a3",
-    "accent": "#059669",         # emerald - primary CTA
-    "accent_hover": "#047857",
-    "accent_active": "#065f46",
-    # Surfaces - warm stone tones instead of cold blue-gray
-    "bg": "#fafaf9",             # stone-50 page background
-    "surface": "#f5f5f4",        # stone-100 mid-tone surface
+    "primary": "#0f172a",        # 极深石板灰（几乎黑），主按钮底色
+    "primary_hover": "#334155",  # 悬浮时的深灰
+    "primary_active": "#1e293b", # 按下时
+    "accent": "#2563eb",         # 亮蓝强调色（链接/小图标）
+    "accent_hover": "#1d4ed8",
+    "accent_active": "#1e40af",
+    "bg": "#f8fafc",             # 整体背景（带一点冷调的白）
+    "surface": "#ffffff",        # 卡片表面（纯白）
     "card": "#ffffff",
-    "card_border": "#e7e5e4",    # stone-200
+    "card_border": "#e2e8f0",    # 更浅更柔和的边框
     # Foreground
-    "text": "#1c1917",           # stone-900
-    "heading": "#0c0a09",        # stone-950
-    "muted": "#57534e",          # stone-600
-    "muted_alt": "#a8a29e",      # stone-400
+    "text": "#334155",           # 正文（不要用纯黑）
+    "heading": "#0f172a",        # 标题
+    "muted": "#64748b",          # 辅助文字
+    "muted_alt": "#94a3b8",
     # Borders & fields
-    "border": "#d6d3d1",         # stone-300
-    "border_focus": "#4f46e5",
-    "field_bg": "#ffffff",
-    "field_disabled": "#f5f5f4",
+    "border": "#cbd5e1",         # 默认边框
+    "border_focus": "#3b82f6",   # 聚焦时的蓝色
+    "field_bg": "#f1f5f9",       # 输入框背景（极浅灰）
+    "field_disabled": "#f8fafc",
     # Semantic
-    "success": "#059669",
-    "success_soft": "#d1fae5",
-    "warning": "#d97706",
-    "warning_soft": "#fef3c7",
-    "danger": "#dc2626",
-    "danger_soft": "#fee2e2",
-    "info": "#6366f1",
-    "info_soft": "#e0e7ff",
+    "success": "#10b981", "success_soft": "#d1fae5",
+    "warning": "#f59e0b", "warning_soft": "#fef3c7",
+    "danger": "#ef4444", "danger_soft": "#fee2e2",
+    "info": "#3b82f6", "info_soft": "#eff6ff",
     # States
-    "row_alt": "#fafaf9",        # stone-50 zebra
-    "row_hover": "#f5f5f4",      # stone-100 hover
-    "row_low": "#fef3c7",
-    "primary_soft": "#eef2ff",   # indigo-50
-    "sel": "#4f46e5",
+    "row_alt": "#f8fafc",        # 斑马线极淡
+    "row_hover": "#f1f5f9",      # 表格悬浮
+    "row_low": "#fffbeb",
+    "primary_soft": "#f1f5f9",
+    "sel": "#e2e8f0",            # 表格选中（柔和灰，不要瞎眼蓝）
     # CTA
-    "ghost": "#4f46e5",
-    "ghost_hover": "#eef2ff",
+    "ghost": "#64748b",
+    "ghost_hover": "#f1f5f9",
 }
 
 # Font family with graceful fallback; "Segoe UI" on Windows matches the skill's
 # Inter recommendation (clean, functional, neutral) closest among system fonts.
 FONT_FAMILY = "Segoe UI"
-PAD_S = 10   # same-field
-PAD_M = 16   # same-group
-PAD_L = 28   # section gap
+# UI-Mod-4: more whitespace for "breathing room" (per expert review).
+# Same-field / same-group / section gap all bumped.
+PAD_S = 14   # same-field
+PAD_M = 24   # same-group
+PAD_L = 36   # section gap
 
 
 def load_config() -> dict:
@@ -376,10 +382,24 @@ class RangeChartApp:
     def _build_style(self):
         self.root.configure(bg=COLORS["bg"])
         style = ttk.Style()
-        try:
-            style.theme_use("clam")
-        except Exception:
-            pass
+        # UI-Mod-2: prefer sv_ttk (Windows 11 Fluent) when available; fall back
+        # to ttk's built-in clam theme otherwise. Both branches are unit-
+        # tested by the absence/presence of sv_ttk.
+        if _HAS_SVTTK:
+            try:
+                sv_ttk.set_theme("light")
+                # Re-acquire the Style object because sv_ttk rebuilt it.
+                style = ttk.Style()
+            except Exception:
+                try:
+                    style.theme_use("clam")
+                except Exception:
+                    pass
+        else:
+            try:
+                style.theme_use("clam")
+            except Exception:
+                pass
         F = FONT_FAMILY
 
         # --- surfaces ---
