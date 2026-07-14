@@ -72,6 +72,20 @@ def run_all():
         win._cycle_lang()
         check("lang-cycles", win.tr.lang != before)
 
+        # Language switch must re-translate the sidebar nav labels + the
+        # active-page widgets (regression: they used to stay in the old
+        # language). Force zh->en and assert the nav + a page label changed.
+        while win.tr.lang != "zh":
+            win._cycle_lang()
+        zh_nav = win._nav_settings.text()
+        zh_btn = win.settings_page.btn_save.text()
+        win._cycle_lang()  # -> en
+        check("lang-nav-relabels", win._nav_settings.text() != zh_nav)
+        check("lang-page-relabels", win.settings_page.btn_save.text() != zh_btn)
+        check("lang-btn-shows-current", win._lang_btn.text() in ("English", "中文", "日本語"))
+        check("lang-ctype-combo-relabels",
+              win.settings_page.cmb_ctype.itemText(0) not in ("", None))
+
         # Extract worker class exists and is a QThread.
         from PySide6.QtCore import QThread
         check("extract-worker-is-qthread", issubclass(gui_fluent.ExtractWorker, QThread))

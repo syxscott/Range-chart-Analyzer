@@ -561,6 +561,11 @@ class ExtractPage(ScrollArea):
         self.btn_export.setText(self._t("action.exportJson"))
         if not self.result:
             self.lbl_status.setText(self._t("status.ready"))
+            self.lbl_imginfo.setText(self._t("image.none") if not self.image_path else self.lbl_imginfo.text())
+        else:
+            # Re-render the result tables so column headers + tab labels
+            # follow the new language.
+            self._render_result()
 
 
 # ---------------------------------------------------------------------------
@@ -742,14 +747,20 @@ class SettingsPage(ScrollArea):
         g.addWidget(self.lbl_ctype, r, 0)
         self.cmb_ctype = ComboBox()
         self._ctype_codes = ["auto", "range_chart", "columnar_section"]
-        self.cmb_ctype.addItems(["Auto", "Range Chart", "Columnar Section"])
+        self._ctype_keys = ["settings.chartType.auto",
+                            "settings.chartType.rangeChart",
+                            "settings.chartType.columnarSection"]
+        self.cmb_ctype.addItems([self._t(k) for k in self._ctype_keys])
         self.cmb_ctype.setCurrentIndex(self._ctype_codes.index(cfg.get("chart_type", "auto")) if cfg.get("chart_type", "auto") in self._ctype_codes else 0)
         g.addWidget(self.cmb_ctype, r, 1); r += 1
         self.lbl_clang = StrongBodyLabel(self._t("settings.chartLang"))
         g.addWidget(self.lbl_clang, r, 0)
         self.cmb_clang = ComboBox()
         self._clang_codes = ["auto", "zh", "en", "ja", "ru"]
-        self.cmb_clang.addItems(["Auto", "Chinese", "English", "Japanese", "Russian"])
+        # Language names stay stable (they are proper nouns), only the
+        # "Auto" entry is translated.
+        self._clang_names = lambda: [self._t("chartLang.auto"), "中文", "English", "日本語", "Русский"]
+        self.cmb_clang.addItems(self._clang_names())
         self.cmb_clang.setCurrentIndex(self._clang_codes.index(cfg.get("chart_lang", "auto")) if cfg.get("chart_lang", "auto") in self._clang_codes else 0)
         g.addWidget(self.cmb_clang, r, 1); r += 1
         self.lbl_remember = StrongBodyLabel(self._t("settings.remember"))
@@ -782,6 +793,15 @@ class SettingsPage(ScrollArea):
         self.lbl_clang.setText(self._t("settings.chartLang"))
         self.lbl_remember.setText(self._t("settings.remember"))
         self.btn_save.setText(self._t("settings.save"))
+        # Refresh combobox option labels without losing the current choice.
+        ci = self.cmb_ctype.currentIndex()
+        self.cmb_ctype.clear()
+        self.cmb_ctype.addItems([self._t(k) for k in self._ctype_keys])
+        self.cmb_ctype.setCurrentIndex(max(0, ci))
+        li = self.cmb_clang.currentIndex()
+        self.cmb_clang.clear()
+        self.cmb_clang.addItems(self._clang_names())
+        self.cmb_clang.setCurrentIndex(max(0, li))
 
 
 # ---------------------------------------------------------------------------
@@ -809,16 +829,23 @@ class RangeChartFluentWindow(FluentWindow):
         self.settings_page = SettingsPage(self)
         self.about_page = self._build_about()
 
-        self.addSubInterface(self.extract_page, FIF.PHOTO, self._t("tab.extract") if self._t("tab.extract") != "tab.extract" else "Extract")
-        self.addSubInterface(self.providers_page, FIF.CONNECT, self._t("settings.llmProvider"))
-        self.addSubInterface(self.settings_page, FIF.SETTING, self._t("menu.settings"))
-        self.addSubInterface(self.about_page, FIF.INFO, "About",
-                             position=NavigationItemPosition.BOTTOM)
+        # Keep references to the nav items so the sidebar labels can be
+        # re-translated live on language switch.
+        self._nav_extract = self.addSubInterface(
+            self.extract_page, FIF.PHOTO, self._nav_text("tab.extract", "Extract"))
+        self._nav_providers = self.addSubInterface(
+            self.providers_page, FIF.CONNECT, self._t("settings.llmProvider"))
+        self._nav_settings = self.addSubInterface(
+            self.settings_page, FIF.SETTING, self._t("menu.settings"))
+        self._nav_about = self.addSubInterface(
+            self.about_page, FIF.INFO, self._nav_text("tab.about", "About"),
+            position=NavigationItemPosition.BOTTOM)
 
         # Language switcher at the bottom of the nav.
+        self._lang_btn = self._build_lang_button()
         self.navigationInterface.addWidget(
             routeKey="langSwitch",
-            widget=self._build_lang_button(),
+            widget=self._lang_btn,
             onClick=self._cycle_lang,
             position=NavigationItemPosition.BOTTOM,
         )
@@ -826,22 +853,36 @@ class RangeChartFluentWindow(FluentWindow):
     def _t(self, key):
         return self.tr.t(key)
 
+    def _nav_text(self, key, fallback):
+        """Return the translation, or a fallback when the key is missing
+        (so a nav label never shows the raw 'tab.about' string)."""
+        val = self.tr.t(key)
+        return fallback if val == key else val
+
     def _build_about(self):
         page = QWidget()
         page.setObjectName("aboutPage")
         lay = QVBoxLayout(page)
         lay.setContentsMargins(28, 24, 28, 28)
         lay.setSpacing(10)
-        lay.addWidget(TitleLabel("Range Chart Analyzer"))
-        lay.addWidget(BodyLabel("从地层沿线图中提取结构化数据的工具。"))
-        lay.addWidget(CaptionLabel("PySide6 + qfluentwidgets · MiniMax M3 · rca_core"))
+        self._about_title = TitleLabel("Range Chart Analyzer")
+        self._about_body = BodyLabel(self._nav_text("about.desc", "Extract structured data from stratigraphic range charts."))
+        self._about_caption = CaptionLabel("PySide6 + qfluentwidgets · rca_core")
+        lay.addWidget(self._about_title)
+        lay.addWidget(self._about_body)
+        lay.addWidget(self._about_caption)
         lay.addStretch(1)
         return page
 
     def _build_lang_button(self):
         from qfluentwidgets import NavigationPushButton
-        btn = NavigationPushButton(FIF.LANGUAGE, "中/EN/日", False)
+        btn = NavigationPushButton(FIF.LANGUAGE, self._lang_label(), False)
         return btn
+
+    def _lang_label(self):
+        # Show the CURRENT language plus a hint of the next one.
+        names = {"zh": "中文", "en": "English", "ja": "日本語"}
+        return names.get(self.tr.lang, "中文")
 
     def _cycle_lang(self):
         order = ["zh", "en", "ja"]
@@ -849,6 +890,16 @@ class RangeChartFluentWindow(FluentWindow):
         nxt = order[(order.index(cur) + 1) % len(order)]
         self.tr.set_lang(nxt)
         self.cfg["lang"] = nxt
+        save_config(self.cfg)
+        # Re-translate the nav sidebar labels.
+        self._nav_extract.setText(self._nav_text("tab.extract", "Extract"))
+        self._nav_providers.setText(self._t("settings.llmProvider"))
+        self._nav_settings.setText(self._t("menu.settings"))
+        self._nav_about.setText(self._nav_text("tab.about", "About"))
+        self._lang_btn.setText(self._lang_label())
+        # Re-translate the About page.
+        self._about_body.setText(self._nav_text("about.desc", "Extract structured data from stratigraphic range charts."))
+        # Re-translate the three functional pages.
         for p in (self.extract_page, self.providers_page, self.settings_page):
             if hasattr(p, "retranslate"):
                 p.retranslate()
