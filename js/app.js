@@ -235,6 +235,14 @@
       showAlert('warning', t('err.noImage'));
       return;
     }
+    // FIX (file-too-big): reject oversized files before the base64 read blows
+    // up memory. The dropzone advertises a ~20 MB cap; enforce it here so a
+    // dragged-in multi-hundred-MB TIFF can't hang the browser.
+    var _maxFileBytes = (RCA_CONFIG.maxFileBytes) || (20 * 1024 * 1024);
+    if (file.size > _maxFileBytes) {
+      showAlert('warning', t('err.fileTooBig'));
+      return;
+    }
     state.file = file;
     // FR1: claim a load token. If the user picks another file before
     // this one's load promise resolves, the new call bumps the token
@@ -453,6 +461,17 @@
         (res.status ? ' (HTTP ' + res.status + ')' : '');
       // H7: prefer upstream error body for 5xx debugging.
       showAlert('danger', msg, res.errorBody || res.raw);
+      // FIX (results-empty): setBusy(true) hid both #results-empty and
+      // #results-content. On failure there is nothing to render, so restore
+      // the empty-state placeholder — otherwise the previous result (if any)
+      // stays hidden and the page looks blank apart from the alert. If a
+      // prior successful result exists, re-render it so the user keeps their
+      // data instead of losing it on a failed re-extraction.
+      if (state.result) {
+        renderCurrentResult();
+      } else {
+        $('results-empty').classList.remove('hidden');
+      }
       return;
     }
 
@@ -603,6 +622,13 @@
     // passed and the late result overwrote the freshly-cleared state.
     // Mirror `loadToken` / `extractToken` to the new expectedToken so
     // the comments below become truth.
+    //
+    // FIX (reset-abort): also abort the in-flight extraction so its network
+    // request is cancelled instead of running to completion and wasting an
+    // API call (or N calls for multi-run). The token bump already prevents
+    // the stale result from rendering; aborting just stops the underlying
+    // work. Safe to call when nothing is in flight (abort is null/no-op).
+    if (state.abort) state.abort.abort();
     state.expectedToken += 1;
     state.loadToken = state.expectedToken;
     state.extractToken = state.expectedToken;
@@ -678,14 +704,11 @@
 
   // ---- wire up ----
   function init() {
-    // language: stored -> browser -> zh
-    let lang = rcaStoreGet(RCA_STORE.lang, '');
-    if (!lang) {
-      const nav = (navigator.language || 'zh').toLowerCase();
-      if (nav.startsWith('ja')) lang = 'ja';
-      else if (nav.startsWith('en')) lang = 'en';
-      else lang = 'zh';
-    }
+    // language: stored preference wins; default is 简体中文 (zh-CN). The
+    // previous version auto-detected from navigator.language, which made
+    // English browsers default to English — the project's default language
+    // is Simplified Chinese, so we now fall back straight to 'zh'.
+    let lang = rcaStoreGet(RCA_STORE.lang, '') || 'zh';
     rcaSetLang(lang);
     rcaApplyI18n(document);
     applyLangButtons();
@@ -722,6 +745,12 @@
     dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
     dz.addEventListener('drop', (e) => {
       e.preventDefault();
+      // FIX (drop double-trigger): stop the event bubbling to the window-level
+      // drop handler (line ~897), which would otherwise fire handleFile() a
+      // second time for the same file. The token mechanism in handleFile
+      // prevents a duplicate preview, but blocking propagation avoids the
+      // wasted second image decode (notable for large charts).
+      e.stopPropagation();
       dz.classList.remove('dragover');
       const f = e.dataTransfer.files && e.dataTransfer.files[0];
       if (f) handleFile(f);

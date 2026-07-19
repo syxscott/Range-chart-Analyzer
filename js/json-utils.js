@@ -39,6 +39,44 @@ function extractBalancedJsonObject(text) {
   return null;
 }
 
+// Return the first balanced [...] JSON array substring of `text`, or null.
+// Mirrors rca_core.json_utils.extract_balanced_json_array: some models
+// occasionally wrap the response in `[...]` instead of `{...}`. We surface
+// it rather than failing so the caller can wrap it for diagnostics.
+function extractBalancedJsonArray(text) {
+  let start = text.indexOf('[');
+  while (start !== -1) {
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = start; i < text.length; i++) {
+      const c = text[i];
+      if (inString) {
+        if (escape) {
+          escape = false;
+        } else if (c === '\\') {
+          escape = true;
+        } else if (c === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (c === '"') {
+        inString = true;
+      } else if (c === '[') {
+        depth += 1;
+      } else if (c === ']') {
+        depth -= 1;
+        if (depth === 0) {
+          return text.slice(start, i + 1);
+        }
+      }
+    }
+    start = text.indexOf('[', start + 1);
+  }
+  return null;
+}
+
 // Lenient JSON object parse. Strips markdown fences, strips control chars
 // (mirroring rca_core.json_utils.safe_json_loads so both ends survive
 // raw 0x01 bytes in model string values), tries strict parse, then falls
@@ -70,6 +108,16 @@ function safeJsonLoads(text) {
   const candidate = extractBalancedJsonObject(s);
   if (candidate !== null) {
     return JSON.parse(candidate);
+  }
+  // Mirror Python's array fallback: recover a top-level array wrapped in
+  // the synthetic {_array_root} shape so downstream code (which assumes an
+  // object) can introspect it instead of throwing.
+  const arrCandidate = extractBalancedJsonArray(s);
+  if (arrCandidate !== null) {
+    const parsedArr = JSON.parse(arrCandidate);
+    if (Array.isArray(parsedArr)) {
+      return { _array_root: parsedArr };
+    }
   }
   throw new Error('no JSON object found in: ' + s.slice(0, 120));
 }

@@ -161,10 +161,19 @@ def _build_webengine_html(rec: HistoryRecord, tr: Translator) -> str:
     # Serialize i18n + the record's data into JSON once, escape the closing
     # </script> tag, and embed as JS literals. The page bootstraps by
     # calling rcaRenderResults and writing the output to #result-host.
-    i18n_payload = json.dumps(getattr(tr, "translations", {}) or {}, ensure_ascii=False)
+    #
+    # XSS hardening (H3 fix): json.dumps does NOT escape '<' or '/', so a
+    # literal '</script>' inside any of these payloads would close the <script>
+    # block in the HTML parser's eyes and let attacker-controlled markup/JS run
+    # inside QWebEngineView. Replacing '</' with '\\/ '</\' breaks that sequence
+    # inside the JSON string (which is still valid JSON — \/ is an escaped slash)
+    # without changing the parsed value. This is the standard inline-JSON defense
+    # recommended by Google/Mozilla.
+    _defuse = lambda s: s.replace("</", "<\\/")
+    i18n_payload = _defuse(json.dumps(getattr(tr, "translations", {}) or {}, ensure_ascii=False))
     lang_code = getattr(tr, "lang", "zh")
-    result_payload = json.dumps(rec.result or {}, ensure_ascii=False, default=str)
-    raw_payload = json.dumps(rec.raw or "", ensure_ascii=False)
+    result_payload = _defuse(json.dumps(rec.result or {}, ensure_ascii=False, default=str))
+    raw_payload = _defuse(json.dumps(rec.raw or "", ensure_ascii=False))
 
     return f"""<!doctype html>
 <html lang="{lang_code}">

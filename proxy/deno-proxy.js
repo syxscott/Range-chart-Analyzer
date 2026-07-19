@@ -52,13 +52,25 @@ const CORS_BASE = {
   "Access-Control-Max-Age": "86400",
 };
 
+// Authorized when the browser Origin is on the allowlist. An empty allowlist
+// yields null (reject) unless a valid X-Proxy-Key is presented — see the
+// secretOk() check below. This closes the open-relay footgun where an empty
+// list previously became `*`.
 function corsFor(origin) {
-  const allowed = ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes("*")
-    ? "*"
-    : ALLOWED_ORIGINS.includes(origin)
-      ? origin
-      : null;
-  return allowed ? { "Access-Control-Allow-Origin": allowed, ...CORS_BASE } : null;
+  if (ALLOWED_ORIGINS.includes("*")) {
+    return { "Access-Control-Allow-Origin": "*", ...CORS_BASE };
+  }
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    return { "Access-Control-Allow-Origin": origin, ...CORS_BASE };
+  }
+  return null;
+}
+
+// True when the request carries the correct shared secret. Always returns
+// false when no secret is configured.
+function secretOk(request) {
+  if (!PROXY_SHARED_SECRET) return false;
+  return (request.headers.get("X-Proxy-Key") || "") === PROXY_SHARED_SECRET;
 }
 
 function pickHeaders(source, whitelist) {
@@ -72,26 +84,17 @@ function pickHeaders(source, whitelist) {
 Deno.serve(async (request) => {
   const origin = request.headers.get("Origin") || "";
   const cors = corsFor(origin);
+  const authorized = cors !== null || secretOk(request);
 
   if (request.method === "OPTIONS") {
-    if (!cors) return new Response("Forbidden", { status: 403 });
-    return new Response(null, { status: 204, headers: cors });
+    if (!authorized) return new Response("Forbidden", { status: 403 });
+    return new Response(null, { status: 204, headers: cors || {} });
   }
   if (request.method !== "POST") {
-    return new Response("Method Not Allowed", { status: 405, headers: cors || {} });
+    return new Response("Method Not Allowed", { status: 405, headers: (cors || {}) });
   }
-  if (
-    ALLOWED_ORIGINS.length > 0 &&
-    !ALLOWED_ORIGINS.includes("*") &&
-    !ALLOWED_ORIGINS.includes(origin)
-  ) {
+  if (!authorized) {
     return new Response("Forbidden", { status: 403 });
-  }
-  if (PROXY_SHARED_SECRET) {
-    const got = request.headers.get("X-Proxy-Key") || "";
-    if (got !== PROXY_SHARED_SECRET) {
-      return new Response("Unauthorized", { status: 401, headers: cors || {} });
-    }
   }
 
   const lenHeader = request.headers.get("Content-Length");

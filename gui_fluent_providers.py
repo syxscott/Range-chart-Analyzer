@@ -632,14 +632,21 @@ class ProvidersPage(ScrollArea):
         super().__init__()
         self.win = win
         self._t = win._t
-        self._test_worker = None
-        # Hold strong references to retired test workers until their
-        # underlying thread has actually exited, then drop them. Without
-        # this the QThread C++ object is deallocated while the OS thread
-        # is still running test_llm_connection(), and Qt aborts with
-        # "QThread: Destroyed while thread is still running".
-        self._retired_workers = []
-        self._test_target: LlmProvider | None = None
+        # All in-flight test workers, mapped to the card that started them.
+        # We deliberately allow several to run concurrently (one per card):
+        # each worker's done-signal carries its own card, so a slow test on
+        # provider A never blocks or orphans the result of a quick test on
+        # provider B. The previous design held a single `self._test_worker`
+        # and forcibly disconnected any predecessor's done-signal — which
+        # silently dropped that worker's result and froze its card in the
+        # "testing" ⏳ state forever (H1: consecutive-test freeze).
+        self._test_workers: dict = {}
+        # Provider ids that are currently mid-test, so a `_refresh()` that
+        # rebuilds the cards can re-apply the ⏳ state to the new card widget
+        # (it otherwise only preserved health). This also prevents the
+        # indeterminate state where a refresh orphans the visible card while
+        # the worker still completes against the stale one (H2).
+        self._testing_ids: set[str] = set()
         self._search_term = ""
         self._all_cards: list[ProviderCard] = []   # unfiltered list
         self.setObjectName("providersPage")
@@ -751,20 +758,37 @@ class ProvidersPage(ScrollArea):
             cards.append(card)
         return cards
 
+    def _live_card_for(self, provider_id: str):
+        """Return the currently-shown provider card for *provider_id*, or
+        None if the provider has been deleted (no live card to update)."""
+        for c in self.list_widget._cards:
+            if c.provider and c.provider.id == provider_id:
+                return c
+        return None
+
     def _refresh(self):
         if not hasattr(self, "list_widget"):
             return
-        # Store health state for cards that will be rebuilt
+        # Store health + testing state for cards that will be rebuilt, so a
+        # language switch / add / delete doesn't silently drop in-flight
+        # context. (Before the fix, an in-flight test's card could be
+        # orphaned here while its worker was still running → H2 freeze.)
         old_health: dict[str, int] = {}
         for card in self._all_cards:
             if card.provider:
                 old_health[card.provider.id] = card._health_failures
 
+        # Snapshot which providers are mid-test BEFORE rebuilding, so we can
+        # restore ⏳ on the freshly-built cards.
+        testing_snapshot = set(self._testing_ids)
+
         cards = self._build_cards()
-        # Restore health state
+        # Restore health state + testing state
         for card in cards:
             if card.provider and card.provider.id in old_health:
                 card.set_health(old_health[card.provider.id])
+            if card.provider and card.provider.id in testing_snapshot:
+                card.set_testing(True)
 
         self._all_cards = cards
         if not cards:
@@ -909,8 +933,8 @@ class ProvidersPage(ScrollArea):
     def _test(self, provider, card):
         card.set_testing(True)
         card.set_health(0)
-        # (Previously also assigned self._test_target = provider, but
-        # nothing ever read that attribute — dead variable.)
+        if provider is not None:
+            self._testing_ids.add(provider.id)
         from PySide6.QtCore import QThread
 
         class _Worker(QThread):
@@ -922,50 +946,42 @@ class ProvidersPage(ScrollArea):
                 from rca_core.llm import test_llm_connection
                 self.done.emit(test_llm_connection(self._p, timeout_sec=8))
 
-        # Cancel any in-flight test before starting a new one. The old
-        # worker's `done` signal is disconnected (so it can't race the
-        # new handler), and the QThread is retired into
-        # self._retired_workers with a `finished` callback that drops it
-        # once the C++ thread has actually exited. The previous version
-        # only did a 500ms wait() and then let Python GC reclaim the
-        # worker — on a slow network the test_llm_connection() call can
-        # outlive that wait, and Python releases `self._test_worker`
-        # (now reassigned) so the QThread is deallocated mid-run, which
-        # Qt aborts with "QThread: Destroyed while thread is still
-        # running".
-        if self._test_worker is not None and self._test_worker.isRunning():
-            old = self._test_worker
-            try:
-                old.done.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            old.quit()
-            self._retired_workers.append(old)
-            # When the thread truly finishes, drop our reference so the
-            # C++ object can be destroyed safely.
-            def _drop(retired=old):
-                try:
-                    self._retired_workers.remove(retired)
-                except ValueError:
-                    pass
-            old.finished.connect(_drop)
-            # Bounded wait so we don't block UI if the network is stuck;
-            # the `finished` callback above will still drop the worker
-            # eventually.
-            old.wait(500)
+        # FIX (H1): do NOT disconnect/quit any in-flight worker. Each test
+        # runs to completion and reports to its own card via the worker→card
+        # mapping below. Disconnecting the predecessor's done-signal was
+        # the original freeze bug — its card would never receive the result
+        # and stayed stuck in the ⏳ "testing" state forever. We keep a
+        # strong reference in self._test_workers so the QThread is never
+        # deallocated mid-run (the reason the old code retired workers).
+        w = _Worker(provider)
+        self._test_workers[w] = card
+        # Capture both worker and card by value: the worker lets us drop the
+        # reference from _test_workers when it finishes; the card is the
+        # starting card, which _on_test_done resolves to the live card.
+        w.done.connect(lambda res, _w=w, _card=card: self._on_test_done(_w, _card, res))
+        w.finished.connect(lambda _w=w: self._test_workers.pop(_w, None))
+        w.start()
 
-        self._test_worker = _Worker(provider)
-        # Capture `card` by value (default-arg) so the lambda doesn't go
-        # dangling if _refresh() rebuilds cards while the worker is in
-        # flight — the previous version held a reference to the now-dead
-        # widget and crashed on _on_test_done.
-        self._test_worker.done.connect(
-            lambda res, _card=card: self._on_test_done(_card, res)
-        )
-        self._test_worker.start()
-
-    def _on_test_done(self, card, res):
-        card.set_testing(False)
+    def _on_test_done(self, worker, card, res):
+        # FIX (H2): the `card` captured at start time may have been orphaned
+        # by a `_refresh()` (setParent(None)) since the worker was launched.
+        # Writing to an orphan updates an invisible widget while the real,
+        # visible card for the same provider stays stuck in ⏳. Resolve the
+        # live card by provider id and update that instead; if the provider
+        # was deleted mid-test, there is no live card and we just clear the
+        # in-flight state.
+        live = card
+        if card is not None and card.provider is not None:
+            pid = card.provider.id
+            live = self._live_card_for(pid)
+            if live is None:
+                # Provider deleted mid-test — nothing visible to update.
+                self._testing_ids.discard(pid)
+                return
+        if live is not None:
+            live.set_testing(False)
+        if card is not None and card.provider is not None:
+            self._testing_ids.discard(card.provider.id)
         if res is None:
             self.lbl_test.setText("✗")
             return

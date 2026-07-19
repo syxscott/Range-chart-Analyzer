@@ -76,8 +76,13 @@ def _is_private_host(host: str) -> bool:
 
     Used by the endpoint validator to block SSRF. The check resolves the
     hostname via DNS so a name like ``localhost.example.com`` that
-    resolves to 127.0.0.1 is also caught (basic TOCTOU mitigation — the
-    actual outbound request will resolve again and may differ).
+    resolves to 127.0.0.1 is also caught.
+
+    Hardening: ALL addresses returned by getaddrinfo are checked, not just
+    the first. A DNS-rebinding attacker can return a public IP and a
+    private IP in the same answer, hoping the validator samples the public
+    one while the outbound request picks the private one. If any resolved
+    address is non-public we reject the host outright.
     """
     if not host:
         return True
@@ -86,22 +91,31 @@ def _is_private_host(host: str) -> bool:
     # Try a literal IP parse first (avoids DNS entirely).
     try:
         ip = ipaddress.ip_address(bare)
+        return not ip.is_global
     except ValueError:
-        # Not a literal — resolve via DNS. If resolution fails we treat
-        # the host as private (don't let an attacker bypass the check
-        # by passing an unresolvable name).
+        pass
+    # Not a literal — resolve via DNS. If resolution fails we treat the
+    # host as private (don't let an attacker bypass the check by passing
+    # an unresolvable name).
+    try:
+        infos = socket.getaddrinfo(bare, None)
+    except socket.gaierror:
+        return True
+    saw_addr = False
+    for info in infos:
         try:
-            infos = socket.getaddrinfo(bare, None)
-        except socket.gaierror:
-            return True
-        try:
-            ip = ipaddress.ip_address(infos[0][4][0])
+            addr = info[4][0]
+            ip = ipaddress.ip_address(addr)
         except (ValueError, IndexError):
+            # An address we can't parse is treated as unsafe.
             return True
-    # is_global == False covers loopback, private, link-local,
-    # multicast, reserved, and unspecified. We treat all of those as
-    # private for SSRF purposes.
-    return not ip.is_global
+        saw_addr = True
+        # is_global == False covers loopback, private, link-local,
+        # multicast, reserved, and unspecified.
+        if not ip.is_global:
+            return True
+    # No usable address at all → treat as private (fail closed).
+    return not saw_addr
 
 
 def _validate_endpoint(endpoint: str) -> tuple[bool, str]:
@@ -128,6 +142,14 @@ def _validate_endpoint(endpoint: str) -> tuple[bool, str]:
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "RangeChartAnalyzer/1.0"
+
+    # Slowloris / slow-read DoS guard: BaseHTTPRequestHandler applies this
+    # to the connection socket in setup(), so a client that opens a
+    # connection (or declares a large Content-Length) then sends bytes at a
+    # trickle is disconnected after `timeout` seconds of inactivity instead
+    # of pinning a worker thread indefinitely. 60s is generous for a normal
+    # request line + headers + JSON body upload.
+    timeout = 60
 
     # --- helpers ---
     def _send_json(self, status: int, payload: dict) -> None:
@@ -218,20 +240,41 @@ class Handler(BaseHTTPRequestHandler):
         referer = (self.headers.get("Referer") or "").strip()
         x_req = (self.headers.get("X-Requested-With") or "").strip()
         host_hdr = (self.headers.get("Host") or "").strip()
-        # Acceptable: Origin matches Host, or Referer shares the host, or the
-        # client sent a custom header (which browsers never do without CORS
-        # preflight successfully passing).
-        origin_ok = False
+        # CSRF policy (hardened):
+        #  1. If Origin or Referer is present, it MUST match this server's
+        #     Host. A present-but-mismatched Origin is a genuine cross-origin
+        #     request and is rejected outright — it can NOT be rescued by
+        #     tacking on an X-Requested-With header (the previous logic let
+        #     `not origin_ok and not x_req` pass any request carrying an
+        #     arbitrary XRW value, which defeated the check).
+        #  2. X-Requested-With is only a fallback for clients that send
+        #     neither Origin nor Referer (e.g. the test harness or a native
+        #     script on the same host). Browsers cannot forge XRW
+        #     cross-origin without a successful CORS preflight.
+        def _netloc_matches(value: str) -> bool:
+            try:
+                nl = urlparse(value).netloc
+            except ValueError:
+                return False
+            return bool(nl) and nl == host_hdr
+
         if origin:
-            # strip scheme; compare netloc to Host
-            o_netloc = urlparse(origin).netloc
-            if o_netloc and o_netloc == host_hdr:
-                origin_ok = True
-        if not origin_ok and referer:
-            r_netloc = urlparse(referer).netloc
-            if r_netloc and r_netloc == host_hdr:
-                origin_ok = True
-        if not origin_ok and not x_req:
+            if not _netloc_matches(origin):
+                self._send_json(403, {
+                    "ok": False, "error_key": "err.forbidden",
+                    "error_body": "Cross-origin POST rejected (Origin does not match Host).",
+                })
+                return
+        elif referer:
+            if not _netloc_matches(referer):
+                self._send_json(403, {
+                    "ok": False, "error_key": "err.forbidden",
+                    "error_body": "Cross-origin POST rejected (Referer does not match Host).",
+                })
+                return
+        elif not x_req:
+            # No Origin, no Referer, no X-Requested-With → cannot establish
+            # this is a same-origin/first-party request. Reject.
             self._send_json(403, {
                 "ok": False, "error_key": "err.forbidden",
                 "error_body": "Cross-origin POST rejected (need matching Origin/Referer or X-Requested-With header).",

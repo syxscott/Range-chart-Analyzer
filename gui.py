@@ -359,6 +359,7 @@ class RangeChartApp:
         self.raw_text = ""
         self.busy = False
         self.msg_queue: queue.Queue = queue.Queue()
+        self._poll_after_id = None  # _poll_queue timer handle (cancel on close)
 
         # tk variables
         self.var_key = tk.StringVar(value=self.cfg.get("api_key", ""))
@@ -570,9 +571,13 @@ class RangeChartApp:
                             foreground=COLORS["primary"], font=(FONT_FAMILY, 10, "bold"))
 
             # Hover on Treeview rows (apart from selected) so they feel responsive.
+            # FIX (style-map conflict): do NOT redefine the ("selected",
+            # background) state here — it's already set above (line 543) to
+            # COLORS["sel"]. Redefining it to COLORS["primary"] here silently
+            # overrode the design intent (later .map() wins) and made every
+            # selected row bright blue. Keep only the hover ("active") state.
             style.map("Treeview",
-                      background=[("selected", COLORS["primary"]), ("active", COLORS["row_hover"])],
-                      foreground=[("selected", "#ffffff")])
+                      background=[("active", COLORS["row_hover"])],)
 
             # Status bar pieces.
             style.configure("Status.TFrame", background=COLORS["bg"])
@@ -730,11 +735,18 @@ class RangeChartApp:
         self.lbl_key.pack(anchor="w", **pad)
         key_row = ttk.Frame(parent, style="Card.TFrame")
         key_row.pack(fill="x", **pad)
-        self.ent_key = ttk.Entry(key_row, textvariable=self.var_key, show="*", width=30)
-        self.ent_key.pack(side="left", fill="x", expand=True)
-        self.chk_show = ttk.Checkbutton(key_row, variable=self.var_show_key, command=self._toggle_key,
-                                        style="Card.TCheckbutton")
-        self.chk_show.pack(side="left", padx=(6, 0))
+        # FIX (key-toggle): these are the TOP-LEVEL standalone key row.
+        # _refresh_active_panel builds a SECOND key row inside each active
+        # provider card (self.ent_key_sel) which the toggle must update too,
+        # otherwise clicking "show" reveals the top-level row while the
+        # active-card row stays masked. Distinct names avoid the old bug
+        # where _refresh_active_panel reassigned self.ent_key and silently
+        # broke this top-level row's toggle.
+        self.ent_key_top = ttk.Entry(key_row, textvariable=self.var_key, show="*", width=30)
+        self.ent_key_top.pack(side="left", fill="x", expand=True)
+        self.chk_show_top = ttk.Checkbutton(key_row, variable=self.var_show_key, command=self._toggle_key,
+                                            style="Card.TCheckbutton")
+        self.chk_show_top.pack(side="left", padx=(6, 0))
 
         # --- Section: LLM Providers (the major feature) ---
         # Layout: a compact list of providers at the top, with the active
@@ -1008,11 +1020,14 @@ class RangeChartApp:
             except Exception:
                 pass
         # L4: wrap the eye-char update so a future rebuild that destroys
-        # chk_show doesn't crash with TclError on language change.
-        try:
-            self.chk_show.config(text="👁")
-        except Exception:
-            pass
+        # the checkbuttons doesn't crash with TclError on language change.
+        # There are now two: top-level (chk_show_top) and active-card
+        # (chk_show_sel). Update whichever currently exist.
+        for attr in ("chk_show_top", "chk_show_sel"):
+            try:
+                getattr(self, attr, None).config(text="👁")
+            except Exception:
+                pass
         if hasattr(self, "cmb_lang"):
             self.cmb_lang.set(self._lang_display.get(self.tr.lang, "中文"))
         if hasattr(self, "_refresh_provider_list"):
@@ -1047,7 +1062,14 @@ class RangeChartApp:
 
     # ---------- key toggle ----------
     def _toggle_key(self):
-        self.ent_key.config(show="" if self.var_show_key.get() else "*")
+        # Toggle BOTH the top-level key row (ent_key_top) and the active-card
+        # key row (ent_key_sel). They share var_show_key, so read the same
+        # value; the conditional is just for clarity.
+        show = "" if self.var_show_key.get() else "*"
+        if getattr(self, "ent_key_top", None) is not None:
+            self.ent_key_top.config(show=show)
+        if getattr(self, "ent_key_sel", None) is not None:
+            self.ent_key_sel.config(show=show)
 
     # ---------- settings ----------
     def _collect_cfg(self) -> dict:
@@ -1309,14 +1331,16 @@ class RangeChartApp:
             if label_key == "settings.apiKey":
                 key_row = ttk.Frame(grid, style="Card.TFrame")
                 key_row.grid(row=r, column=1, sticky="we", pady=3)
-                self.ent_key = ttk.Entry(key_row, textvariable=self.var_key,
-                                          show="" if self.var_show_key.get() else "*",
-                                          width=40)
-                self.ent_key.pack(side="left", fill="x", expand=True)
-                self.chk_show = ttk.Checkbutton(key_row, variable=self.var_show_key,
-                                                command=self._toggle_key,
-                                                style="Card.TCheckbutton")
-                self.chk_show.pack(side="left", padx=(6, 0))
+                # Active-card key row — distinct from the top-level
+                # self.ent_key_top. _toggle_key updates BOTH rows.
+                self.ent_key_sel = ttk.Entry(key_row, textvariable=self.var_key,
+                                              show="" if self.var_show_key.get() else "*",
+                                              width=40)
+                self.ent_key_sel.pack(side="left", fill="x", expand=True)
+                self.chk_show_sel = ttk.Checkbutton(key_row, variable=self.var_show_key,
+                                                    command=self._toggle_key,
+                                                    style="Card.TCheckbutton")
+                self.chk_show_sel.pack(side="left", padx=(6, 0))
                 return
             text = ("•" * 8) if (is_secret and value) else (value or "—")
             ttk.Label(grid, text=text, style="Card.TLabel",
@@ -1609,7 +1633,15 @@ class RangeChartApp:
             # any error here would otherwise freeze the app with no
             # breadcrumb.
             log.exception("UI message pump crashed in _poll_queue")
-        self.root.after(120, self._poll_queue)
+        # FIX (close-crash): only re-arm the timer if the root window still
+        # exists. on_close() destroys the root without cancelling this
+        # callback, so after the worker thread enqueues a late result the
+        # next _poll_queue would operate on a destroyed Tcl widget →
+        # silent TclError. Skip the reschedule entirely when shutting down.
+        if getattr(self, "root", None) is not None and self.root.winfo_exists():
+            self._poll_after_id = self.root.after(120, self._poll_queue)
+        else:
+            self._poll_after_id = None
 
     def _on_result(self, result):
         self._set_busy(False)
@@ -1690,6 +1722,17 @@ class RangeChartApp:
                     tree.heading(col, text="#", anchor="center")
                 else:
                     tree.heading(col, text=self._t(col), anchor="w")
+            # FIX (tree columns): give each column a sensible default width
+            # and stretch behavior. Without this all columns default to ~200px
+            # and the rightmost columns vanish off-screen when there are many
+            # (e.g. species_ranges with 6+ columns); the window can be resized
+            # but columns don't follow. "#" is fixed-narrow and centered; data
+            # columns share the stretch so they fill the viewport.
+            for col in cols:
+                if col == "#":
+                    tree.column(col, width=40, minwidth=32, stretch=False, anchor="center")
+                else:
+                    tree.column(col, width=110, minwidth=60, stretch=True, anchor="w")
             self.trees[cfg["id"]] = tree
 
         # Fill the trees with data.
@@ -1788,6 +1831,16 @@ class RangeChartApp:
             self._cleanup_paste_tmp()
         except Exception:
             pass
+        # FIX (close-crash): cancel the pending _poll_queue callback so the
+        # worker thread's late result doesn't get delivered to a destroyed
+        # root → TclError. _poll_queue itself also guards via winfo_exists(),
+        # but cancelling here closes the race cleanly.
+        if getattr(self, "_poll_after_id", None) is not None:
+            try:
+                self.root.after_cancel(self._poll_after_id)
+            except Exception:
+                pass
+            self._poll_after_id = None
         self.root.destroy()
 
 

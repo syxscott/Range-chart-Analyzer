@@ -163,6 +163,7 @@ const RCA_I18N = {
     'err.empty': '模型返回为空。',
     'err.truncated': '结果可能被截断（达到 max_tokens）。可在设置中调高「最大输出 Token」后重试。',
     'err.imageRead': '无法读取图片文件。',
+    'err.fileTooBig': '图片过大（上限 20 MB），请先压缩后再上传。',
     'footer.clientSide': '100% 客户端运行',
     'footer.backend': '通过同源后端代理',
   },
@@ -329,6 +330,7 @@ RCA_I18N.en = {
   'err.empty': 'The model returned an empty response.',
   'err.truncated': 'The result may be truncated (hit max_tokens). Increase "Max output tokens" in settings and retry.',
   'err.imageRead': 'Could not read the image file.',
+  'err.fileTooBig': 'Image is too large (max 20 MB); please compress it first.',
   'footer.clientSide': '100% client-side',
   'footer.backend': 'Via same-origin backend',
 };
@@ -494,6 +496,7 @@ RCA_I18N.ja = {
   'err.empty': 'モデルの応答が空でした。',
   'err.truncated': '結果が途切れている可能性があります（max_tokens に到達）。設定で「最大出力トークン」を上げて再試行してください。',
   'err.imageRead': '画像ファイルを読み込めませんでした。',
+  'err.fileTooBig': '画像が大きすぎます（上限 20 MB）。圧縮してからアップロードしてください。',
   'footer.clientSide': '100% クライアントサイド',
   'footer.backend': '同オリジン経由で実行',
 };

@@ -14,6 +14,9 @@ const RCA_CONFIG = {
   // bodies. Kept high (4000) so small italic species names stay legible for
   // OCR; a lower cap blurs dense chart text and causes misreads.
   maxImageEdge: 4000,
+  // Max upload file size (bytes). handleFile() rejects anything larger before
+  // the base64 read so a dragged-in huge TIFF can't exhaust browser memory.
+  maxFileBytes: 20 * 1024 * 1024,
 };
 
 // Clamp a max_tokens value to the allowed range. Falls back to the default

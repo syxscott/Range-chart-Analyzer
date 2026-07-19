@@ -23,15 +23,16 @@ function rcaAggMode(values) {
   for (const v of nonEmpty) counts.set(v, (counts.get(v) || 0) + 1);
   let top = 0;
   for (const c of counts.values()) if (c > top) top = c;
-  // H4 parity: when all values are unique (top == 1) tie-break
-  // deterministically by sorted order so input order doesn't silently
-  // decide the merged string across sessions.
-  if (top === 1 && counts.size === nonEmpty.length) {
-    const sorted = nonEmpty.slice().sort();
-    return sorted[0];
-  }
-  for (const v of nonEmpty) if (counts.get(v) === top) return v;
-  return nonEmpty[0];
+  // H4 parity: break ANY tie at the top count deterministically by sorted
+  // order — not just the all-unique case. This mirrors Python's _mode
+  // (aggregate.py), where a partial tie (e.g. [B,B,A,A]) also sorts and
+  // takes the first ('A'), instead of falling back to first-seen input
+  // order ('B'). Without this the browser (direct/proxy) path and the
+  // Python (GUI/backend) path disagree on merged strings across sessions.
+  const topVals = [];
+  for (const [v, c] of counts) if (c === top) topVals.push(v);
+  if (topVals.length === 1) return topVals[0];
+  return topVals.slice().sort((a, b) => String(a) < String(b) ? -1 : (String(a) > String(b) ? 1 : 0))[0];
 }
 
 // Sentinel returned by mergeFieldAcrossRuns to signal the key carries
@@ -181,11 +182,19 @@ function mergePrimaryList(runs, km, n) {
   const groups = new Map();
   const order = [];
   for (const r of runs) {
+    // Per-run dedup: if a single run emits the same primary row twice
+    // (model hiccup), count it once so agreement_count can't exceed n
+    // (e.g. "3/2"), which would break consensus filters expecting
+    // agreement_count <= total runs. Mirrors the Python
+    // _merge_primary_list `seen_in_run` guard (aggregate.py).
+    const seenInRun = new Set();
     for (const it of r[km.primary] || []) {
       if (!it || typeof it !== 'object') continue;
       const parts = km.idKeys.map((k) => rcaAggNorm(it[k]));
       if (!parts.some((p) => p)) continue;
       const key = parts.join('');
+      if (seenInRun.has(key)) continue;
+      seenInRun.add(key);
       if (!groups.has(key)) { groups.set(key, []); order.push(key); }
       groups.get(key).push(it);
     }

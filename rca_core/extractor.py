@@ -310,8 +310,22 @@ def extract_range_chart(
             usage=usage or {},
             warning=warning if truncated else "",
         )
+    try:
+        data = normalize_result(parsed)
+    except Exception as exc:
+        # Defensive: the ``extract_range_chart`` contract promises never to
+        # raise, so an unexpected failure inside the normalizer (all of its
+        # branches are guarded today, but future edits could regress) must be
+        # surfaced as a hard error result rather than propagating up the stack
+        # to a caller that assumes the promise holds (e.g. the server's
+        # single-run path at server.py does not wrap extract() in try/except).
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw=raw_text, truncated=truncated, usage=usage or {},
+            latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+        )
     return ExtractResult(
-        ok=True, data=normalize_result(parsed), raw=raw_text,
+        ok=True, data=data, raw=raw_text,
         truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
         warning=warning if truncated else "",
     )
@@ -557,8 +571,17 @@ def extract_columnar_section(
             usage=usage or {},
             warning=warning if truncated else "",
         )
+    try:
+        data = normalize_columnar_result(parsed)
+    except Exception as exc:
+        # Never-raises contract (see extract_range_chart for rationale).
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw=raw_text, truncated=truncated, usage=usage or {},
+            latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+        )
     return ExtractResult(
-        ok=True, data=normalize_columnar_result(parsed), raw=raw_text,
+        ok=True, data=data, raw=raw_text,
         truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
         warning=warning if truncated else "",
     )
@@ -697,8 +720,17 @@ def extract_abundance_diagram(
             usage=usage or {},
             warning=warning if truncated else "",
         )
+    try:
+        data = normalize_abundance_result(parsed)
+    except Exception as exc:
+        # Never-raises contract (see extract_range_chart for rationale).
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw=raw_text, truncated=truncated, usage=usage or {},
+            latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+        )
     return ExtractResult(
-        ok=True, data=normalize_abundance_result(parsed), raw=raw_text,
+        ok=True, data=data, raw=raw_text,
         truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
         warning=warning if truncated else "",
     )

@@ -34,6 +34,17 @@ const UPSTREAM = 'https://api.minimaxi.com/anthropic';
 // is actually served from. '*' is allowed for local testing but allows
 // any site to route LLM calls through your Worker — never deploy '*' to
 // production.
+// SECURITY: this list MUST be non-empty in production. An empty list here
+// is treated as "deny all inbound origins" — the Worker will reject every
+// request with 403 until you either (a) add an origin below, or (b) set a
+// PROXY_SHARED_SECRET so access is gated by a secret instead. This closes
+// the open-relay footgun where an empty allowlist previously became `*`
+// (any site that discovered your Worker URL could burn your LLM quota).
+//
+// Note: this allowlist governs the browser's Origin only. Because the
+// outbound target (MiniMax) is hardcoded below, the Worker is NEVER an
+// arbitrary-URL forwarder — it can only proxy to MiniMax — but open access
+// still lets strangers spend your quota.
 const ALLOWED_ORIGINS = [
   // 'https://yourname.github.io',
   // 'http://localhost:8000',
@@ -42,6 +53,9 @@ const ALLOWED_ORIGINS = [
 // Optional shared secret. Set via `wrangler secret put PROXY_SHARED_SECRET`
 // (https://developers.cloudflare.com/workers/configuration/secrets/). When
 // set, requests must include `X-Proxy-Key: <secret>`. Empty string = off.
+// If you set this, origin allowlisting is still applied when the allowlist
+// is non-empty, but a valid key alone is enough to pass when the allowlist
+// is empty.
 const PROXY_SHARED_SECRET = '';
 
 // Path allowlist: only these path prefixes are forwarded to the upstream.
@@ -82,13 +96,28 @@ const CORS_HEADERS = {
   'Access-Control-Max-Age': '86400',
 };
 
+// Decide whether an inbound request is authorized to use this proxy, and
+// return the CORS headers to echo back (or null to reject). Authorization
+// is granted when EITHER the browser Origin is on the allowlist OR the
+// request carries a valid X-Proxy-Key. An empty allowlist with no secret
+// configured yields null (reject) — this is the deliberate fix for the
+// open-relay footgun where an empty list previously became `*`.
 function corsFor(origin) {
-  const allowed = ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes('*')
-    ? '*'
-    : ALLOWED_ORIGINS.includes(origin)
-      ? origin
-      : null;
-  return allowed ? { 'Access-Control-Allow-Origin': allowed, ...CORS_HEADERS } : null;
+  const originOk = ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin);
+  if (originOk) {
+    // Reflect the specific origin (not `*`) so credentials/cookies could be
+    // used later if needed; `*` only when the allowlist is literally `*`.
+    const allowOrigin = ALLOWED_ORIGINS.includes('*') ? '*' : origin;
+    return { 'Access-Control-Allow-Origin': allowOrigin, ...CORS_HEADERS };
+  }
+  return null;
+}
+
+// True when the request carries the correct shared secret. Always returns
+// false when no secret is configured (an empty secret is treated as "off").
+function secretOk(request) {
+  if (!PROXY_SHARED_SECRET) return false;
+  return (request.headers.get('X-Proxy-Key') || '') === PROXY_SHARED_SECRET;
 }
 
 function pickHeaders(source, whitelist) {
@@ -105,27 +134,25 @@ function pickHeaders(source, whitelist) {
 export default {
   async fetch(request) {
     const origin = request.headers.get('Origin') || '';
+    // Authorized when the Origin is allowlisted OR a valid secret is
+    // presented. With an empty allowlist and no secret, corsFor() returns
+    // null here and every request is rejected — this is the deliberate
+    // closure of the open-relay footgun. The outbound target is still the
+    // hardcoded MiniMax endpoint, so even an authorized caller can only
+    // reach MiniMax, never an arbitrary URL.
     const cors = corsFor(origin);
+    const authorized = cors !== null || secretOk(request);
 
     // Preflight
     if (request.method === 'OPTIONS') {
-      if (!cors) return new Response('Forbidden', { status: 403 });
-      return new Response(null, { status: 204, headers: cors });
+      if (!authorized) return new Response('Forbidden', { status: 403 });
+      return new Response(null, { status: 204, headers: cors || {} });
     }
     if (request.method !== 'POST') {
-      return new Response('Method Not Allowed', { status: 405, headers: cors || {} });
+      return new Response('Method Not Allowed', { status: 405, headers: (cors || {}) });
     }
-    // Origin check (skip when allowlist is empty AND '*' is the default
-    // — that mode is intentionally permissive for local dev).
-    if (ALLOWED_ORIGINS.length > 0 && !ALLOWED_ORIGINS.includes('*') && !ALLOWED_ORIGINS.includes(origin)) {
+    if (!authorized) {
       return new Response('Forbidden', { status: 403 });
-    }
-    // Shared-secret check
-    if (PROXY_SHARED_SECRET) {
-      const got = request.headers.get('X-Proxy-Key') || '';
-      if (got !== PROXY_SHARED_SECRET) {
-        return new Response('Unauthorized', { status: 401, headers: cors || {} });
-      }
     }
 
     // Body size cap

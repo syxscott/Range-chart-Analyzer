@@ -250,6 +250,11 @@ class ExtractPage(ScrollArea):
         self._last_paste_tmp = None
         self._worker = None
         self.busy = False
+        # Generation counter for stale-result guarding. Bumped on every new
+        # extraction start and on reset; the worker stamps the launch value on
+        # its result, and _on_result drops results whose generation no longer
+        # matches the live one (i.e. the user moved on).
+        self._extract_gen = 0
 
         self.setObjectName("extractPage")
         self.setWidgetResizable(True)
@@ -502,9 +507,18 @@ class ExtractPage(ScrollArea):
                 mode = "range_chart"
         self.busy = True
         self._set_busy(True)
+        # FIX (stale-result guard): bump the generation so any result from a
+        # previously-launched worker is dropped. The closure captures the
+        # launch-time gen; on result, it bails unless the live gen still matches
+        # (i.e. the user didn't start a new extraction or reset meanwhile).
+        # Also bumped on reset. See _on_result() for the matching check.
+        self._extract_gen = getattr(self, "_extract_gen", 0) + 1
+        launch_gen = self._extract_gen
         self._worker = ExtractWorker(params, mode, runs)
         self._worker.progress.connect(self._on_progress)
-        self._worker.finished_ok.connect(self._on_result)
+        self._worker.finished_ok.connect(
+            lambda res, _g=launch_gen: (self._on_result(res)
+                                        if getattr(self, "_extract_gen", 0) == _g else None))
         self._worker.start()
 
     def _on_progress(self, text):
@@ -516,6 +530,9 @@ class ExtractPage(ScrollArea):
     def _on_result(self, result):
         self.busy = False
         self._set_busy(False)
+        # Stale-result guard lives in the worker connection closure in
+        # run_extraction() — it drops results whose generation no longer matches
+        # the live one. Nothing to check here; just render.
         if not result.ok:
             msg = self._t(result.error_key or "err.http")
             if result.status:
@@ -585,6 +602,15 @@ class ExtractPage(ScrollArea):
         from PySide6.QtCore import QTimer as _Q
         def _jump():
             try:
+                # FIX (auto-jump guard): only switch back to the Extract page
+                # if the user is still looking at it. If they already navigated
+                # to History/Usage/Settings during the wait, don't yank them
+                # back — the singleShot timer can't be cancelled, so guard
+                # here instead.
+                if getattr(self.win, "stackedWidget", None) is None:
+                    return
+                if self.win.stackedWidget.currentWidget() is not self:
+                    return
                 self.win._nav_extract.click()
             except Exception:
                 pass
@@ -659,6 +685,17 @@ class ExtractPage(ScrollArea):
             self.stack_lay.addWidget(hint)
             self._refresh_conf()
             return
+        # FIX (HIGH-1): clear the pivot before repopulating. Previously this
+        # method only *added* items, so a retranslate() that called
+        # _render_result() followed by _rebuild_pivot() (which also clears +
+        # adds) would temporarily double-populate the pivot. During that
+        # window, currentItemChanged could fire _show_table on a stale scroll
+        # widget that _rebuild_pivot had already takeAt()'d → wrapped-C++ crash
+        # on some qfluent builds. Clearing here makes _render_result the
+        # single source of pivot population and lets retranslate call it
+        # alone.
+        if self.pivot.count() > 0:
+            self.pivot.clear()
         for idx, cfg in enumerate(configs):
             items = (self.result or {}).get(cfg["id"], []) or []
             table = TableWidget()
@@ -683,11 +720,24 @@ class ExtractPage(ScrollArea):
             # adds a custom row extractor can't silently misalign cells
             # (mirrors build_table_export's M11 guard).
             n_cols = len(cols)
+            # FIX (H1): block signals during the bulk fill so that setItem()
+            # calls never fire itemChanged. Without this, the handler would
+            # run on the very first setItem and (a) mark the table dirty and
+            # (b) freeze a snapshot BEFORE every row is filled — corrupting
+            # the Undo baseline with a half-built table. Re-enable signals
+            # immediately after the loop; real user edits then flow through.
+            table.blockSignals(True)
             for ri, item in enumerate(items):
                 if not isinstance(item, dict):
                     continue
                 cells = cfg["row"](item)
-                cells = (list(cells) + [""] * n_cols)[:n_cols]
+                # Truncate/pad to the DATA-column count (n_cols - 1, since the
+                # leading "#" index column is prepended below). The previous
+                # `[:n_cols]` over-counted by one and could drop the last data
+                # column when the row extractor returned fewer values than
+                # expected.
+                n_data = max(1, n_cols - 1)
+                cells = (list(cells) + [""] * n_data)[:n_data]
                 values = [str(ri + 1)] + ["" if c is None else str(c) for c in cells]
                 # cc-switch style: flag low-agreement rows (multi-run merge).
                 low = (multi and cfg["id"] == "species_ranges"
@@ -699,6 +749,7 @@ class ExtractPage(ScrollArea):
                     if low:
                         cell.setBackground(Qt.yellow)
                     table.setItem(ri, ci, cell)
+            table.blockSignals(False)
             table.resizeColumnsToContents()
             # Wrap table in a scroll area so wide content scrolls horizontally
             # instead of being squished by setStretchLastSection.
@@ -1034,12 +1085,11 @@ class ExtractPage(ScrollArea):
             self.lbl_imginfo.setText(self._t("image.none") if not self.image_path else self.lbl_imginfo.text())
         else:
             # Re-render the result tables so column headers + tab labels
-            # follow the new language.
+            # follow the new language. _render_result() now also rebuilds
+            # the pivot (clearing it first), so we deliberately do NOT call
+            # _rebuild_pivot() afterwards — that used to double-populate
+            # the pivot and could crash on some qfluent builds (HIGH-1).
             self._render_result()
-        # HIGH-1: rebuild the pivot tabs so their translated labels update
-        # when the user switches language with an existing result loaded.
-        if self.result is not None:
-            self._rebuild_pivot()
 
 
 class SettingsPage(ScrollArea):
@@ -1763,23 +1813,16 @@ class RangeChartFluentWindow(FluentWindow):
         except Exception:
             pass
         # Stop any in-flight worker so a late signal doesn't reach a
-        # destroyed widget. First try the cooperative cancel event (the
-        # worker polls its own _abort Event to break out of the network
-        # call promptly), then disconnect signals, then wait. terminate()
-        # is a last-resort hard kill (bounded wait so exit never blocks
-        # indefinitely).
+        # destroyed widget. Disconnect the worker's signals first (so the
+        # finished_ok/progress/done callbacks can't fire on a teardown page),
+        # then quit the thread with a bounded wait, then terminate() as a
+        # last-resort hard kill — bounded so exit never blocks indefinitely.
+        # NOTE: the old code referenced a cooperative `_abort` cancel event
+        # that neither ExtractWorker nor the test _Worker ever defined — that
+        # branch was dead. Cleanup here is purely disconnect + quit + wait.
         try:
             w = getattr(self.extract_page, "_worker", None)
             if w is not None:
-                # Cooperative cancel: signal the worker to abort the
-                # in-flight request. The network call uses a short timeout
-                # so it returns promptly once cancelled.
-                abort_evt = getattr(w, "_abort", None)
-                if abort_evt is not None:
-                    try:
-                        abort_evt.set()
-                    except Exception:
-                        pass
                 try:
                     w.finished_ok.disconnect()
                     w.progress.disconnect()
@@ -1792,26 +1835,23 @@ class RangeChartFluentWindow(FluentWindow):
                         w.wait(2000)
         except Exception:
             pass
-        # Same deal for the providers page's connection-test worker -
-        # it lives on its own QThread and would otherwise leak past
-        # window close.
+        # Same deal for the providers page's connection-test workers.
+        # _test_workers is a dict[worker, card] (changed from a single
+        # _test_worker by the H1 freeze fix) — clean up every live one.
         try:
-            tw = getattr(self.providers_page, "_test_worker", None)
-            if tw is not None:
-                abort_evt = getattr(tw, "_abort", None)
-                if abort_evt is not None:
+            tw_dict = getattr(self.providers_page, "_test_workers", None)
+            if tw_dict is not None:
+                for tw in list(tw_dict.keys()):
                     try:
-                        abort_evt.set()
-                    except Exception:
+                        tw.done.disconnect()
+                    except (TypeError, RuntimeError):
                         pass
-                try:
-                    tw.done.disconnect()
-                except (TypeError, RuntimeError):
-                    pass
-                if tw.isRunning():
-                    tw.quit()
-                    if not tw.wait(2000):
-                        tw.terminate()
+                for tw in list(tw_dict.keys()):
+                    if tw.isRunning():
+                        tw.quit()
+                        if not tw.wait(2000):
+                            tw.terminate()
+                            tw.wait(500)
                         tw.wait(1000)
         except Exception:
             pass

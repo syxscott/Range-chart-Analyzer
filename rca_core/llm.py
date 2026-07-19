@@ -931,6 +931,34 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
         return None, None, f"[network] {type(e).__name__}: {e}".encode("utf-8")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse all 3xx redirects on outbound LLM calls.
+
+    SSRF hardening: the server-side endpoint validator (server.py
+    ``_validate_endpoint``) only vets the *initial* URL host. Without this
+    handler ``urlopen`` would transparently follow a ``302 Location:
+    http://169.254.169.254/…`` (cloud metadata) or an intranet address,
+    bypassing the allowlist entirely. Legitimate LLM APIs answer POSTs
+    directly and never 3xx, so blocking redirects costs nothing.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            req.full_url, code,
+            f"redirect to {newurl!r} refused (SSRF guard)",
+            headers, fp,
+        )
+
+
+# Opener that raises on any redirect instead of following it. Installed as
+# urllib's default opener so EVERY outbound call made through
+# ``urllib.request.urlopen`` (including future ones) refuses 3xx redirects.
+# urllib openers are thread-safe for concurrent ``.open()`` calls, so a single
+# global opener is fine for the app's thread pool. Tests that monkeypatch
+# ``urllib.request.urlopen`` (tests_llm.py) bypass this opener and keep working.
+urllib.request.install_opener(urllib.request.build_opener(_NoRedirect()))
+
+
 _VERSION_TAIL = re.compile(r"/v\d+(?:beta)?/?$", re.IGNORECASE)
 
 
