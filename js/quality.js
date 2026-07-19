@@ -183,21 +183,21 @@ function scoreAccuracy(data) {
   }
 
   // I4 fix: agreement_count <= runs data-integrity check.
-  // Only fires when runs field is present (merged multi-run results).
-  if (data && data.runs !== undefined && data.runs !== null) {
-    for (const row of speciesRows) {
-      if (!row || typeof row !== 'object') continue;
-      const ac = row.agreement_count;
-      if (ac === undefined || ac === null) continue;
-      const n = data.runs;
-      if (n === undefined || n === null) continue;
-      try {
-        if (parseInt(ac, 10) > parseInt(n, 10)) {
-          issues.push({severity: 'warning', msg_key: 'quality.agreement_exceeds_runs'});
-          break;
-        }
-      } catch (_) { /* non-numeric — skip */ }
-    }
+  // Mirrors Python: row.runs overrides data.runs (merged rows carry runs only at top level).
+  for (const row of speciesRows) {
+    if (!row || typeof row !== 'object') continue;
+    const ac = row.agreement_count;
+    if (ac === undefined || ac === null) continue;
+    const rowRun = row.runs;
+    const n = (rowRun !== undefined && rowRun !== null) ? rowRun
+             : (data && data.runs !== undefined ? data.runs : null);
+    if (n === undefined || n === null) continue;
+    try {
+      if (parseInt(ac, 10) > parseInt(n, 10)) {
+        issues.push({severity: 'warning', msg_key: 'quality.agreement_exceeds_runs'});
+        break;
+      }
+    } catch (_) { /* non-numeric — skip */ }
   }
 
   if (checks === 0) return [1.0, issues];

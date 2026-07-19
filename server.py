@@ -284,7 +284,7 @@ class Handler(BaseHTTPRequestHandler):
         #     (127.0.0.1 / ::1 / localhost). This guards against a malicious
         #     page that POSTs from the browser with XRW but no Origin/Referer.
         #  4. Nothing present → reject.
-        _localhost_patterns = ("localhost", "127.0.0.1", "[::1]")
+        _localhost_patterns = ("localhost", "127.0.0.1", "::1")
         if origin:
             if not _netloc_matches(origin):
                 self._send_json(403, {

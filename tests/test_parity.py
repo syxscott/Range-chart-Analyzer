@@ -15,7 +15,7 @@ from __future__ import annotations
 import subprocess
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from rca_core.aggregate import merge_results, RANGE_CHART_SCHEMA
+from rca_core.aggregate import merge_results
 
 
 # ---------------------------------------------------------------------------
