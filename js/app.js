@@ -199,6 +199,12 @@
       const inp = $(srcId), out = $(outId);
       if (inp && out) out.textContent = inp.value;
     });
+    // Mirror the enhance checkbox into state so runExtraction reads it.
+    const enh = $('enhance');
+    if (enh) {
+      enh.addEventListener('change', () => { state._enhance = enh.checked; });
+      state._enhance = !!enh.checked;
+    }
   }
 
   // ---- alerts ----
@@ -302,6 +308,10 @@
     // FIX-6: show the Cancel button only while an extraction is in flight.
     const cancelBtn = $('cancel-btn');
     if (cancelBtn) cancelBtn.classList.toggle('hidden', !busy);
+    // FIX (force-rerun): show "Force rerun" when a result is present so the
+    // user can re-extract (bypassing cache) without resetting the image.
+    const rerunBtn = $('force-rerun-btn');
+    if (rerunBtn) rerunBtn.classList.toggle('hidden', !(!!state.result && !busy));
     if (busy) {
       $('results-empty').classList.add('hidden');
       $('results-content').classList.add('hidden');
@@ -360,6 +370,10 @@
         caption: $('caption').value,
         chartLang: $('chart-lang').value,
         signal: abort.signal,
+        // FIX (force-rerun): bypass server cache on explicit user request.
+        force_rerun: !!state._forceRerun,
+        // FIX (enhance): pre-process image to boost VLM recognition.
+        enhance: state._enhance || false,
       };
 
       // Phase 1: analyze (LLM call). For single-run use 'analyzing';
@@ -781,6 +795,17 @@
     if (cancelBtn) {
       cancelBtn.addEventListener('click', () => {
         if (state.abort) state.abort.abort();
+      });
+    }
+    // FIX (force-rerun): re-extract bypassing the server-side cache so the
+    // user can force a fresh VLM call even for identical inputs.
+    state._forceRerun = false;
+    const rerunBtn = $('force-rerun-btn');
+    if (rerunBtn) {
+      rerunBtn.addEventListener('click', () => {
+        state._forceRerun = true;
+        runExtraction();
+        state._forceRerun = false;
       });
     }
 

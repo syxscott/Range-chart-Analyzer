@@ -7,6 +7,33 @@ names.
 
 from __future__ import annotations
 
+# PROMPT_VERSION: bump this whenever the prompt text changes meaningfully.
+# The cache layer (rca_core/cache.py) includes this in its cache key so that
+# old cached results produced by a previous prompt version are not served
+# after a prompt upgrade. Keep in sync with js/prompt.js PROMPT_VERSION.
+PROMPT_VERSION = "v2"
+
+
+def _degradation_clause() -> str:
+    """Instruction that teaches the model to degrade gracefully instead of
+    hallucinating when a value is ambiguous or unreadable.
+
+    Rather than inventing data (which inflates confidence with wrong values),
+    the model emits a best-effort value with a low confidence score — letting
+    the UI flag the row for human review.
+    """
+    return (
+        "- DEGRADE GRACEFULLY. If a species name, range boundary, bed number, or "
+        "other value is ambiguous or partially unreadable, still emit your best "
+        "guess BUT lower the `confidence` field (e.g. 0.3–0.5) and append a brief "
+        "note to the relevant field in parentheses such as \"(unclear)\" or "
+        "\"(partially obscured)\". NEVER invent a plausible-looking value with high "
+        "confidence — a low-confidence guess is far more useful than a confident "
+        "fabrication. If a value is completely unreadable, leave the field empty "
+        "string and lower confidence."
+    )
+
+
 RANGE_CHART_SYSTEM_PROMPT = "\n".join([
     "You are an expert in radiolarian (and general micropaleontology) biostratigraphy reading a stratigraphic range chart (also called a species distribution chart).",
     "",
@@ -61,6 +88,7 @@ RANGE_CHART_SYSTEM_PROMPT = "\n".join([
     "- Preserve bed/level numbers exactly as printed (e.g. 'Bed 23c', 'Bed 27a').",
     "- If the chart is NOT a stratigraphic range/distribution chart, return all arrays empty and confidence 0.0.",
     "- Return JSON only, no markdown fences, no commentary.",
+    _degradation_clause(),
 ])
 
 CHART_LANG_HINT = {
@@ -118,6 +146,7 @@ ABUNDANCE_DIAGRAM_SYSTEM_PROMPT = "\n".join([
     "- Only extract what you can READ from the diagram. Do not invent data that is not present.",
     "- If the figure is NOT a fossil abundance / pollen diagram, return all arrays empty and confidence 0.0.",
     "- Return JSON only, no markdown fences, no commentary.",
+    _degradation_clause(),
 ])
 
 COLUMNAR_SECTION_SYSTEM_PROMPT = "\n".join([
@@ -167,4 +196,5 @@ COLUMNAR_SECTION_SYSTEM_PROMPT = "\n".join([
     "- The 'confidence_by_section' float reflects the section-level extraction quality; 'overall_confidence' is figure-wide.",
     "- If the figure is NOT a columnar section / columnar correlation chart, return all arrays empty and confidence 0.0.",
     "- Return JSON only, no markdown fences, no commentary.",
+    _degradation_clause(),
 ])

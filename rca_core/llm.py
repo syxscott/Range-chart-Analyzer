@@ -1050,6 +1050,12 @@ def _call_openai(
                 ],
             },
         ],
+        # FIX (json-object): ask OpenAI-compatible APIs to emit only valid JSON.
+        # This single field eliminates the vast majority of markdown-fence /
+        # prose-wrapped / truncated outputs that the fallback chain otherwise
+        # has to clean up. No effect on providers that ignore it (Anthropic /
+        # Gemini paths don't reach this function).
+        "response_format": {"type": "json_object"},
     }
     body.update(provider.extra_body)
     headers = {

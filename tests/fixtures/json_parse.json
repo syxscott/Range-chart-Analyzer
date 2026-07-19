@@ -1,0 +1,55 @@
+{
+  "_comment": "Fixtures for testing the safe_json_loads / safeJsonLoads 6-level fallback chain. Each case is a raw model response that should parse to the expected dict.",
+  "cases": [
+    {
+      "name": "clean_json_object",
+      "input": "{\"species_ranges\": [{\"species\": \"Tyrannosaurus\", \"section\": \"Hell Creek\"}]}",
+      "should_parse": true
+    },
+    {
+      "name": "markdown_fence_json",
+      "input": "```json\n{\"species_ranges\": [{\"species\": \"Triceratops\"}]}\n```",
+      "should_parse": true
+    },
+    {
+      "name": "markdown_fence_bare",
+      "input": "```\n{\"biozones\": [{\"name\": \"Zone A\"}]}\n```",
+      "should_parse": true
+    },
+    {
+      "name": "prose_wrapped_json",
+      "input": "Here is the extracted data:\n{\"sections\": [{\"name\": \"Section 1\", \"age_range\": \"Maastrichtian\"}]}\nLet me know if you need anything else.",
+      "should_parse": true
+    },
+    {
+      "name": "markdown_fence_with_prose",
+      "input": "Sure! Here you go:\n```json\n{\"other_fossils\": [\"Ammonite\", \"Belemnite\"]}\n```\nHope this helps!",
+      "should_parse": true
+    },
+    {
+      "name": "top_level_array",
+      "input": "[{\"species\": \"A\"}, {\"species\": \"B\"}]",
+      "should_parse": true
+    },
+    {
+      "name": "truncated_json_no_close",
+      "input": "{\"species_ranges\": [{\"species\": \"Tyrannosaurus\", \"section\": \"Hell Creek\"",
+      "should_parse": false
+    },
+    {
+      "name": "empty_string",
+      "input": "",
+      "should_parse": false
+    },
+    {
+      "name": "only_prose_no_json",
+      "input": "I'm sorry, I cannot extract data from this image.",
+      "should_parse": false
+    },
+    {
+      "name": "control_chars_in_string",
+      "input": "{\"species\": \"Tyran\\u0000nosaurus\", \"section\": \"Hell\\u0001 Creek\"}",
+      "should_parse": true
+    }
+  ]
+}

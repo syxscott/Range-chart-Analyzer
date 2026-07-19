@@ -77,21 +77,59 @@ function extractBalancedJsonArray(text) {
   return null;
 }
 
-// Lenient JSON object parse. Strips markdown fences, strips control chars
-// (mirroring rca_core.json_utils.safe_json_loads so both ends survive
-// raw 0x01 bytes in model string values), tries strict parse, then falls
-// back to a top-level array wrapper or the first balanced {...} object.
+// Strip markdown code fences (```json ... ```) from a model response.
+// Handles: ```json ``` / ``` ``` / leading-only / multiple fences.
+// Returns the string unchanged if no fence is present.
+function stripMarkdownFence(text) {
+  if (!text) return text;
+  let s = String(text).trim();
+  // If the whole text is one fenced block, extract its inner content.
+  let fenceBlock = s.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/i);
+  if (fenceBlock) return fenceBlock[1].trim();
+  // FIX (fenced+prose): also handle a fenced block surrounded by prose on
+  // either side, e.g. "Here:\n```json\n{...}\n```\nThanks". The stricter
+  // regex above requires the fence to span the whole string; this one
+  // locates the first fenced block anywhere in the text.
+  fenceBlock = s.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
+  if (fenceBlock) return fenceBlock[1].trim();
+  // Otherwise strip leading/trailing fence lines defensively.
+  s = s.replace(/^```(?:json)?\s*/gmi, '');
+  s = s.replace(/\s*```$/gmi, '');
+  return s;
+}
+
+// Find the first JSON object or array inside prose (e.g. "Here is the
+// result:\n{\"a\":1}\nLet me know."). Returns null if nothing balanced.
+function extractJsonLike(text) {
+  if (!text) return null;
+  const s = String(text).trim();
+  for (const [opener, extractor] of [['{', extractBalancedJsonObject],
+                                      ['[', extractBalancedJsonArray]]) {
+    const start = s.indexOf(opener);
+    if (start !== -1) {
+      const candidate = extractor(s.slice(start));
+      if (candidate !== null) return candidate;
+    }
+  }
+  return null;
+}
+
+// Lenient JSON object parse with a 6-level fallback chain.
+// Chain (each runs only if prior failed):
+//   1. Strip markdown fences (```json ... ```)
+//   2. Strip raw control chars (0x00-0x1F except \t\r\n)
+//   3. Strict JSON.parse (incl. top-level arrays → wrapped)
+//   4. Balanced-brace object extraction ({...})
+//   5. Balanced-bracket array extraction ([...]) → wrapped
+//   6. Prose-embedded JSON (extractJsonLike) — last resort
 // Throws on failure.
 function safeJsonLoads(text) {
   if (!text) throw new Error('empty text');
-  let s = String(text).trim();
-  // Strip leading/trailing markdown code fences.
-  s = s.replace(/^```(?:json)?\s*/gm, '');
-  s = s.replace(/\s*```$/gm, '');
-  // Strip the same control chars Python's safe_json_loads strips. Some
-  // model providers emit raw 0x01 bytes inside string values; without
-  // this JSON.parse throws on otherwise-valid JSON.
+  // Level 1: strip markdown fences.
+  let s = stripMarkdownFence(String(text).trim());
+  // Level 2: strip raw control chars that JSON.parse rejects.
   s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+  // Level 3: strict parse.
   try {
     const parsed = JSON.parse(s);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -105,19 +143,27 @@ function safeJsonLoads(text) {
   } catch (_e) {
     /* fall through to balanced-object extraction */
   }
+  // Level 4: balanced-brace object extraction.
   const candidate = extractBalancedJsonObject(s);
   if (candidate !== null) {
-    return JSON.parse(candidate);
+    try { return JSON.parse(candidate); } catch (_e) { /* fall through */ }
   }
-  // Mirror Python's array fallback: recover a top-level array wrapped in
-  // the synthetic {_array_root} shape so downstream code (which assumes an
-  // object) can introspect it instead of throwing.
+  // Level 5: balanced-bracket array extraction → wrapped.
   const arrCandidate = extractBalancedJsonArray(s);
   if (arrCandidate !== null) {
-    const parsedArr = JSON.parse(arrCandidate);
-    if (Array.isArray(parsedArr)) {
-      return { _array_root: parsedArr };
-    }
+    try {
+      const parsedArr = JSON.parse(arrCandidate);
+      if (Array.isArray(parsedArr)) return { _array_root: parsedArr };
+    } catch (_e) { /* fall through */ }
+  }
+  // Level 6: prose-embedded JSON (last resort).
+  const prose = extractJsonLike(s);
+  if (prose !== null) {
+    try {
+      const parsed = JSON.parse(prose);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) return { _array_root: parsed };
+    } catch (_e) { /* fall through */ }
   }
   throw new Error('no JSON object found in: ' + s.slice(0, 120));
 }

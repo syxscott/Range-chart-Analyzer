@@ -76,20 +76,89 @@ def extract_balanced_json_array(text: str) -> str | None:
     return None
 
 
+def strip_markdown_fence(text: str) -> str:
+    """Strip markdown code fences (```json ... ```) from a model response.
+
+    Models frequently wrap their JSON in fenced code blocks. This handles
+    several variants:
+      - ```json ... ```  (fence with language tag)
+      - ``` ... ```       (bare fence)
+      - leading ``` with no trailing fence (truncated response)
+      - multiple fences (take content between first opening and last closing)
+    Returns the cleaned string unchanged if no fence is present.
+    """
+    if not text:
+        return text
+    s = str(text).strip()
+    # If the whole text is one fenced block, extract its inner content.
+    fence_block = re.match(
+        r"^```(?:json)?\s*\n?(.*?)\n?```\s*$", s, re.DOTALL | re.IGNORECASE
+    )
+    if fence_block:
+        return fence_block.group(1).strip()
+    # FIX (fenced+prose): also handle a fenced block surrounded by prose on
+    # either side, e.g. "Here:\n```json\n{...}\n```\nThanks". The stricter
+    # regex above requires the fence to span the whole string; this one
+    # locates the first fenced block anywhere in the text.
+    fence_block = re.search(
+        r"```(?:json)?\s*\n?(.*?)\n?```", s, re.DOTALL | re.IGNORECASE
+    )
+    if fence_block:
+        return fence_block.group(1).strip()
+    # Otherwise strip any leading/trailing fence lines defensively.
+    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.MULTILINE | re.IGNORECASE)
+    s = re.sub(r"\s*```$", "", s, flags=re.MULTILINE)
+    return s
+
+
+def extract_json_like(text: str) -> str | None:
+    """Find the first JSON object or array inside prose.
+
+    Models sometimes embed JSON inside explanatory text, e.g.
+      "Here is the result:\n{\"a\":1}\nLet me know if you need more."
+    or wrap it in markdown. This locates the first `{` or `[` and extracts
+    the balanced substring from there. Returns None if nothing balanced is
+    found.
+    """
+    if not text:
+        return None
+    s = str(text).strip()
+    # Prefer the first '{' (object); fall back to first '[' (array).
+    for opener, extractor in (("{", extract_balanced_json_object),
+                               ("[", extract_balanced_json_array)):
+        start = s.find(opener)
+        if start != -1:
+            candidate = extractor(s[start:])
+            if candidate is not None:
+                return candidate
+    return None
+
+
 def safe_json_loads(text: str) -> dict[str, Any]:
-    """Lenient JSON object parse. Strips fences, tries strict, then falls
-    back to the first balanced {...} object. Raises ValueError on failure.
+    """Lenient JSON object parse with a 6-level fallback chain.
+
+    The chain (each step only runs if the previous one failed):
+      1. Strip markdown fences (```json ... ```).
+      2. Strip raw control characters (0x00-0x1F except \\t\\r\\n).
+      3. Strict ``json.loads`` — handles clean JSON and top-level arrays.
+      4. Balanced-brace object extraction (first ``{...}``).
+      5. Balanced-bracket array extraction (first ``[...]``) → wrapped.
+      6. Prose-embedded JSON (``extract_json_like``) — last resort.
+
+    Raises ValueError only if every level fails.
     """
     if not text:
         raise ValueError("empty text")
     s = str(text).strip()
-    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.MULTILINE)
-    s = re.sub(r"\s*```$", "", s, flags=re.MULTILINE)
-    # Models occasionally emit raw control characters (0x00-0x1F except \t
-    # \r \n) inside string values which makes json.loads raise. Strip them
-    # defensively before the strict parse.
+
+    # Level 1: strip markdown fences.
+    s = strip_markdown_fence(s)
+
+    # Level 2: strip raw control characters that json.loads rejects.
     _ctrl_re = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
     s = _ctrl_re.sub("", s)
+
+    # Level 3: strict parse.
     try:
         parsed = json.loads(s)
         if isinstance(parsed, dict):
@@ -104,17 +173,37 @@ def safe_json_loads(text: str) -> dict[str, Any]:
                     "_note": "model returned a top-level array; wrapping for diagnostics"}
     except Exception:
         pass
+
+    # Level 4: balanced-brace object extraction.
     candidate = extract_balanced_json_object(s)
     if candidate is not None:
-        return json.loads(candidate)
-    # H3: some models occasionally emit a top-level array instead of an
-    # object. Try to recover that too rather than giving up. The caller's
-    # normalize_* functions all expect a dict, so we wrap the array in a
-    # synthetic key so the downstream pipeline still has something to
-    # inspect (and can surface a friendlier error than "missing sections").
+        try:
+            return json.loads(candidate)
+        except Exception:
+            pass
+
+    # Level 5: balanced-bracket array extraction → wrapped.
     candidate = extract_balanced_json_array(s)
     if candidate is not None:
-        parsed = json.loads(candidate)
-        if isinstance(parsed, list):
-            return {"_array_root": parsed, "_note": "model returned a top-level array; wrapping for diagnostics"}
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, list):
+                return {"_array_root": parsed,
+                        "_note": "model returned a top-level array; wrapping for diagnostics"}
+        except Exception:
+            pass
+
+    # Level 6: prose-embedded JSON (last resort).
+    candidate = extract_json_like(s)
+    if candidate is not None:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+            if isinstance(parsed, list):
+                return {"_array_root": parsed,
+                        "_note": "model returned a top-level array; wrapping for diagnostics"}
+        except Exception:
+            pass
+
     raise ValueError(f"no JSON object found in {s[:120]!r}")

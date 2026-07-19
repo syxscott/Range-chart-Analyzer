@@ -193,6 +193,25 @@ function rcaRenderResults(data, rawText) {
   parts.push('</span>');
   parts.push('<span class="label">' + rcaEsc(t('results.confidence')) + '</span>');
   parts.push('</div>');
+  // FIX (quality): quality badge next to the confidence ring. Shows the
+  // composite score (0.0–1.0) and a letter grade (A/B/C/D/F) with a tooltip
+  // listing detected issues. Lets the user judge extraction reliability at a
+  // glance and spot low-confidence rows for manual review.
+  const q = data.quality;
+  if (q && typeof q.score === 'number') {
+    const qpct = Math.round(q.score * 100);
+    let qLevel = 'low';
+    if (q.score >= 0.75) qLevel = 'high';
+    else if (q.score >= 0.6) qLevel = 'mid';
+    const issuesList = (q.issues || [])
+      .map((iss) => t(iss.msg_key || 'quality.invalid_result'))
+      .filter(Boolean)
+      .join('; ');
+    parts.push('<span class="quality-badge ' + qLevel + '" title="' + rcaEsc(issuesList) + '">');
+    parts.push('<span class="qb-num">' + qpct + '%</span> ');
+    parts.push('<span class="qb-grade">' + rcaEsc(q.grade || '-') + '</span>');
+    parts.push('</span>');
+  }
   parts.push('<div class="rt-actions">');
   parts.push('<button type="button" class="btn btn-secondary btn-small" id="btn-export-all">' + rcaEsc(t('results.exportAll')) + '</button>');
   parts.push('</div>');

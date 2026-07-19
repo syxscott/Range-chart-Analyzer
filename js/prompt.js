@@ -4,6 +4,17 @@
 // Russian and to always emit English scientific names.
 'use strict';
 
+// PROMPT_VERSION: keep in sync with rca_core/prompt.py PROMPT_VERSION. The
+// cache layer includes this in its cache key so old cached results from a
+// previous prompt version are not served after a prompt upgrade.
+const PROMPT_VERSION = 'v2';
+
+// Teaches the model to degrade gracefully (low confidence + note) instead of
+// hallucinating when a value is ambiguous/unreadable.
+function _degradationClause() {
+  return '- DEGRADE GRACEFULLY. If a species name, range boundary, bed number, or other value is ambiguous or partially unreadable, still emit your best guess BUT lower the `confidence` field (e.g. 0.3–0.5) and append a brief note to the relevant field in parentheses such as "(unclear)" or "(partially obscured)". NEVER invent a plausible-looking value with high confidence — a low-confidence guess is far more useful than a confident fabrication. If a value is completely unreadable, leave the field empty string and lower confidence.';
+}
+
 const RANGE_CHART_SYSTEM_PROMPT = [
 'You are an expert in radiolarian (and general micropaleontology) biostratigraphy reading a stratigraphic range chart (also called a species distribution chart).',
 '',
@@ -57,7 +68,8 @@ const RANGE_CHART_SYSTEM_PROMPT = [
 '- If a biozone appears in multiple sections with different thicknesses, emit one entry per section (set "section" and that section\'s "thickness_m"), so multi-section thickness data is not lost.',
 '- Preserve bed/level numbers exactly as printed (e.g. Bed 23c, Bed 27a).',
 '- If the chart is NOT a stratigraphic range/distribution chart, return all arrays empty and confidence 0.0.',
-'- Return JSON only, no markdown fences, no commentary.'
+'- Return JSON only, no markdown fences, no commentary.',
+_degradationClause()
 ].join('\n');
 
 // Optional per-chart-language hint appended to the user message.
@@ -119,7 +131,8 @@ const COLUMNAR_SECTION_SYSTEM_PROMPT = [
 '- Preserve range_top_idx (higher/younger) >= range_base_idx (lower/older). If unknown, leave the index empty.',
 '- The confidence_by_section float reflects the section-level extraction quality; overall_confidence is figure-wide.',
 '- If the figure is NOT a columnar section / columnar correlation chart, return all arrays empty and confidence 0.0.',
-'- Return JSON only, no markdown fences, no commentary.'
+'- Return JSON only, no markdown fences, no commentary.',
+_degradationClause()
 ].join('\n');
 
 // Abundance-diagram (pollen / percentage / relative-abundance diagram)
@@ -172,5 +185,6 @@ const ABUNDANCE_DIAGRAM_SYSTEM_PROMPT = [
 '- Preserve level / sample labels exactly as printed (e.g. 120 cm, Sample 5, Unit 2b).',
 '- Only extract what you can READ from the diagram. Do not invent data that is not present.',
 '- If the figure is NOT a fossil abundance / pollen diagram, return all arrays empty and confidence 0.0.',
-'- Return JSON only, no markdown fences, no commentary.'
+'- Return JSON only, no markdown fences, no commentary.',
+_degradationClause()
 ].join('\n');

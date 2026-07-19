@@ -18,12 +18,35 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
+_QUALIFIER_PATTERNS = [
+    (re.compile(r"\s+sp\.?$", re.IGNORECASE), "sp"),
+    (re.compile(r"\s+cf\.?\s+", re.IGNORECASE), "cf"),
+    (re.compile(r"\s+aff\.?\s+", re.IGNORECASE), "aff"),
+    (re.compile(r"\s+\?$", re.IGNORECASE), "unidentified"),
+]
+
+
+def _extract_qualifiers(s: str) -> frozenset:
+    """Return the set of open nomenclature qualifiers present in ``s``."""
+    if not s:
+        return frozenset()
+    quals = set()
+    for pattern, name in _QUALIFIER_PATTERNS:
+        if pattern.search(s):
+            quals.add(name)
+    return frozenset(quals)
+
+
 def _norm(s):
     if not s:
         return ""
     t = str(s).strip()
-    t = re.sub(r"\s+sp\.?$", "", t, flags=re.IGNORECASE).strip()
-    t = re.sub(r"\s+cf\.?\s+", " ", t, flags=re.IGNORECASE).strip()
+    # B-1 fix: do NOT strip sp./cf./aff. here — that info is preserved by
+    # _extract_qualifiers and carried into the dedup key as a separate
+    # component so "Genus sp." and "Genus" are NOT merged together.
+    # The original code stripped these suffixes, causing indeterminate
+    # (sp.) / cf. specimens to be silently collapsed into the identified
+    # species — a serious taxonomic data-integrity bug.
     t = re.sub(r"\s+", " ", t)
     return t.lower()
 
@@ -307,8 +330,15 @@ def _merge_primary_list(runs, schema, n):
         for it in items:
             if not isinstance(it, dict):
                 continue
-            key = tuple(_norm(it.get(k)) for k in schema.primary_id_keys)
-            if not any(key):
+            # B-1 fix: include open-nomenclature qualifiers (sp./cf./aff./?)
+            # in the dedup key so "Genus sp." and "Genus" stay separate.
+            species_val = it.get("species", "") or ""
+            key = (
+                tuple(_norm(it.get(k)) for k in schema.primary_id_keys),
+                _extract_qualifiers(species_val),
+            )
+            key0 = tuple(k[0] if isinstance(k, tuple) else k for k in key)  # for None check
+            if not any(key0):
                 continue
             if key in seen_in_run:
                 continue
@@ -353,6 +383,28 @@ def _merge_primary_list(runs, schema, n):
         # Schema-declared mode fields also get cleanly populated
         # (overrides setdefault above if needed).
         aggr.update(_mode_keys(group, schema.primary_str_mode_fields))
+        # B-1 fix: species mode was computed on _norm()-stripped values
+        # (qualifiers lost). Restore the most-common original species string
+        # that produced the mode, so "sp." / "cf." / "aff." are preserved.
+        if "species" in schema.primary_str_mode_fields:
+            species_mode = aggr.get("species") or ""
+            if species_mode:
+                # Count original species strings that normalised to the mode value
+                species_counter: dict[str, int] = {}
+                for g in group:
+                    sp_val = (g.get("species") or "").strip()
+                    if not sp_val:
+                        continue
+                    if _norm(sp_val) == species_mode:
+                        species_counter[sp_val] = species_counter.get(sp_val, 0) + 1
+                if species_counter:
+                    most_common_original = max(
+                        species_counter,
+                        key=species_counter.get,
+                    )
+                    quals = _extract_qualifiers(most_common_original)
+                    if quals:
+                        aggr["species"] = most_common_original
         merged.append(aggr)
 
     # Apply schema sort_keys (e.g. agreement_count desc, species asc).
@@ -405,11 +457,16 @@ def _merge_named_lists(runs, schema):
             for it in items:
                 if not isinstance(it, dict):
                     continue
-                label = (
-                    _norm(it.get("name"))
-                    or _norm(it.get("marker"))
-                    or _norm(it.get("meaning"))
+                # B-1 fix: include qualifiers (sp./cf./aff./?) in the dedup
+                # label so "N. optima Zone (cf.)" and "N. optima Zone" are not
+                # silently collapsed.  Extract from whichever field is non-empty.
+                _raw_label_src = (
+                    it.get("name") or it.get("marker") or it.get("meaning") or ""
                 )
+                label = _norm(_raw_label_src)
+                quals = _extract_qualifiers(_raw_label_src)
+                if quals:
+                    label = label + "\x1f" + "|".join(sorted(quals))
                 if not label:
                     # No name/marker/meaning field (e.g. abundance-diagram
                     # single-site with empty name, or columnar cross_beds

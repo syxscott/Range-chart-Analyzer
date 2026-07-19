@@ -7,13 +7,31 @@
 // keymap (backward compatible).
 'use strict';
 
+// B-1 fix: removed the sp./cf./aff. strip — that info is now preserved
+// by rcaExtractQualifiers and carried into the dedup key as a separate
+// component so "Genus sp." and "Genus" are NOT merged together.
 function rcaAggNorm(s) {
   if (!s) return '';
   let t = String(s).trim();
-  t = t.replace(/\s+sp\.?$/i, '').trim();
-  t = t.replace(/\s+cf\.?\s+/i, ' ').trim();
   t = t.replace(/\s+/g, ' ');
   return t.toLowerCase();
+}
+
+// B-1 fix: mirror of Python _extract_qualifiers (aggregate.py).
+// Returns the set of open-nomenclature qualifiers present in string s.
+const _QUALIFIER_RE = [
+  [/\s+sp\.?$/i, 'sp'],
+  [/\s+cf\.?\s+/i, 'cf'],
+  [/\s+aff\.?\s+/i, 'aff'],
+  [/\s+\?$/i, 'unidentified'],
+];
+function rcaExtractQualifiers(s) {
+  if (!s) return [];
+  const quals = [];
+  for (const [re, name] of _QUALIFIER_RE) {
+    if (re.test(s)) quals.push(name);
+  }
+  return quals;
 }
 
 function rcaAggMode(values) {
@@ -190,9 +208,15 @@ function mergePrimaryList(runs, km, n) {
     const seenInRun = new Set();
     for (const it of r[km.primary] || []) {
       if (!it || typeof it !== 'object') continue;
+      // B-1 fix: include open-nomenclature qualifiers (sp./cf./aff./?)
+      // in the dedup key so "Genus sp." and "Genus" stay separate.
       const parts = km.idKeys.map((k) => rcaAggNorm(it[k]));
       if (!parts.some((p) => p)) continue;
-      const key = parts.join('');
+      // Extract qualifiers from the species/id fields for the key.
+      const speciesRaw = it['species'] || it['id'] || '';
+      const quals = rcaExtractQualifiers(speciesRaw);
+      const qualsSuffix = quals.length ? '\x1f' + quals.join('|') : '';
+      const key = parts.join('') + qualsSuffix;
       if (seenInRun.has(key)) continue;
       seenInRun.add(key);
       if (!groups.has(key)) { groups.set(key, []); order.push(key); }
@@ -206,6 +230,32 @@ function mergePrimaryList(runs, km, n) {
     // First pass: mode-merge the declared string fields.
     for (const f of km.strModeFields) {
       aggr[f] = rcaAggMode(group.map((g) => g[f]));
+    }
+    // B-1 fix: species/taxon mode was computed on _norm()-stripped values
+    // (qualifiers lost). Restore the most-common original species/taxon string
+    // that produced the mode, so "sp." / "cf." / "aff." are preserved.
+    // Use the actual primary ID field (last element of km.idKeys, which is 'species'
+    // for range-chart and 'taxon' for abundance-diagram).
+    const primaryIdField = km.idKeys[km.idKeys.length - 1];
+    const primaryMode = aggr[primaryIdField] || '';
+    if (primaryMode) {
+      const counter = {};
+      for (const g of group) {
+        const raw = (g && g[primaryIdField] || '').trim();
+        if (!raw) continue;
+        if (rcaAggNorm(raw) === primaryMode) {
+          counter[raw] = (counter[raw] || 0) + 1;
+        }
+      }
+      if (Object.keys(counter).length > 0) {
+        const mostCommon = Object.keys(counter).reduce(
+          (a, b) => counter[a] >= counter[b] ? a : b
+        );
+        const quals = rcaExtractQualifiers(mostCommon);
+        if (quals.length > 0) {
+          aggr[primaryIdField] = mostCommon;
+        }
+      }
     }
     // BUGFIX: previous version iterated `for (g of group) for (k of g)`
     // and used `if (aggr[k] !== undefined) continue;` — the first run
@@ -287,7 +337,19 @@ function mergeNamedLists(runs, km) {
     for (const r of runs) {
       for (const it of r[key] || []) {
         if (!it || typeof it !== 'object') continue;
-        let label = rcaAggNorm(it.name) || rcaAggNorm(it.marker) || rcaAggNorm(it.meaning);
+        // B-1 fix: include qualifiers (sp./cf./aff./?) in the dedup
+        // label so "N. optima Zone (cf.)" and "N. optima Zone" are not
+        // silently collapsed.
+        const rawLabel = it.name || it.marker || it.meaning || '';
+        let label = rcaAggNorm(rawLabel);
+        const quals = rcaExtractQualifiers(rawLabel);
+        if (quals.length > 0) label = label + '\x1f' + quals.join('|');
+        // B-1 fix (named-list path): fold section into label so the same
+        // biozone name in different sections produces separate rows.
+        const section = rcaAggNorm(it.section || '');
+        if (section && label && !label.startsWith('__nolabel__')) {
+          label = label + '\x1f\x1e' + section;
+        }
         if (!label) {
           // No name/marker/meaning field (e.g. abundance-diagram single-site
           // with empty name, or columnar cross_beds which key on bed indices).

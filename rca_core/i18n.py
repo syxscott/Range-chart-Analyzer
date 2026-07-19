@@ -262,6 +262,19 @@ TRANSLATIONS["zh"] = {
     "onboarding.step3.desc": "提取结果可在线编辑、导出为 XLSX / CSV / JSON / TSV。",
     "onboarding.skip": "跳过",
     "onboarding.gotIt": "我知道了",
+    "quality.label": "提取质量",
+    "quality.missing_top_level": "部分顶级字段缺失",
+    "quality.empty_primary_rows": "未提取到物种/丰度数据",
+    "quality.missing_confidence": "缺少置信度",
+    "quality.unmatched_section_ref": "部分物种的剖面引用不匹配",
+    "quality.all_section_refs_unmatched": "所有物种的剖面引用均不匹配",
+    "quality.biozone_section_mismatch": "生物带剖面引用不匹配",
+    "quality.sections_absent": "物种引用了剖面但未声明任何剖面",
+    "quality.agreement_exceeds_runs": "agreement_count 超过总运行次数",
+    "quality.confidence_mismatch": "整体置信度与行置信度不一致",
+    "quality.many_extras": "模型输出了较多未定义字段",
+    "quality.null_fields": "部分预期字段为空",
+    "quality.invalid_result": "提取结果无效",
 }
 
 TRANSLATIONS["en"] = {
@@ -521,6 +534,19 @@ TRANSLATIONS["en"] = {
     "onboarding.step3.desc": "Results can be edited inline and exported as XLSX / CSV / JSON / TSV.",
     "onboarding.skip": "Skip",
     "onboarding.gotIt": "Got it",
+    "quality.label": "Extraction quality",
+    "quality.missing_top_level": "Some top-level fields are missing",
+    "quality.empty_primary_rows": "No species/abundance rows extracted",
+    "quality.missing_confidence": "Missing confidence score",
+    "quality.unmatched_section_ref": "Some species reference unknown sections",
+    "quality.all_section_refs_unmatched": "All species section references are unmatched",
+    "quality.biozone_section_mismatch": "Biozone section reference mismatch",
+    "quality.sections_absent": "Species reference sections but none declared",
+    "quality.agreement_exceeds_runs": "agreement_count exceeds total runs",
+    "quality.confidence_mismatch": "Overall confidence diverges from row confidences",
+    "quality.many_extras": "Model emitted many undefined fields",
+    "quality.null_fields": "Some expected fields are null",
+    "quality.invalid_result": "Invalid extraction result",
 }
 
 TRANSLATIONS["ja"] = {
@@ -780,6 +806,19 @@ TRANSLATIONS["ja"] = {
     "onboarding.step3.desc": "結果はインラインで編集でき、XLSX / CSV / JSON / TSV としてエクスポートできます。",
     "onboarding.skip": "スキップ",
     "onboarding.gotIt": "了解",
+    "quality.label": "抽出品質",
+    "quality.missing_top_level": "一部のトップレベルフィールドがありません",
+    "quality.empty_primary_rows": "種/豊度データが抽出されませんでした",
+    "quality.missing_confidence": "-confidence スコアがありません",
+    "quality.unmatched_section_ref": "一部種のセクション参照が一致しません",
+    "quality.all_section_refs_unmatched": "すべての種のセクション参照が一致しません",
+    "quality.biozone_section_mismatch": "生物帯のセクション参照が一致しません",
+    "quality.sections_absent": "種がセクション参照しているがセクションが未宣言",
+    "quality.agreement_exceeds_runs": "agreement_count が総ラン数を超えています",
+    "quality.confidence_mismatch": "全体-confidence と行-confidence が一致しません",
+    "quality.many_extras": "モデルが多くの未定義フィールドを出力しました",
+    "quality.null_fields": "一部の期待されたフィールドが null です",
+    "quality.invalid_result": "無効な抽出結果",
 }
 
 

@@ -76,6 +76,13 @@
                         <p class="field-hint" id="max-edge-hint" data-i18n="settings.maxEdge.hint"></p>
                     </div>
                     <div class="form-row">
+                        <label class="field-label" for="enhance" data-i18n="settings.enhance"></label>
+                        <div class="range-row">
+                            <input type="checkbox" id="enhance" role="switch" aria-describedby="enhance-hint">
+                        </div>
+                        <p class="field-hint" id="enhance-hint" data-i18n="settings.enhance.hint"></p>
+                    </div>
+                    <div class="form-row">
                         <label class="field-label" for="runs" data-i18n="settings.runs"></label>
                         <div class="range-row">
                             <input type="range" id="runs" min="1" max="5" step="1" aria-describedby="runs-hint">
@@ -174,6 +181,7 @@
                     </button>
                     <button type="button" class="btn btn-secondary" id="reset-btn" data-i18n="upload.reset"></button>
                     <button type="button" class="btn btn-secondary hidden" id="cancel-btn" data-i18n="upload.cancel"></button>
+                    <button type="button" class="btn btn-secondary hidden" id="force-rerun-btn" data-i18n="upload.forceRerun"></button>
                 </div>
             </section>
 

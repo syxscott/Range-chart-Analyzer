@@ -790,6 +790,36 @@ button.btn.btn-primary:not(:disabled):active {
     letter-spacing: var(--tracking-wide);
 }
 
+/* Quality badge — sits beside the confidence ring. */
+.quality-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-left: 10px;
+    cursor: help;
+    border: 1px solid var(--border-color);
+    background: var(--surface);
+    color: var(--text-base);
+    transition: background 120ms ease;
+}
+.quality-badge .qb-num { font-variant-numeric: tabular-nums; }
+.quality-badge .qb-grade {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 0 4px;
+    border-radius: 4px;
+}
+.quality-badge.high { border-color: var(--success-color); }
+.quality-badge.high .qb-grade { color: var(--success-color); }
+.quality-badge.mid { border-color: var(--warning-color); }
+.quality-badge.mid .qb-grade { color: var(--warning-color); }
+.quality-badge.low { border-color: var(--danger-color); }
+.quality-badge.low .qb-grade { color: var(--danger-color); }
+
 /* ==================== Status / alerts ==================== */
 .alert {
     padding: 12px 16px;

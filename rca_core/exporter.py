@@ -168,7 +168,20 @@ def get_configs_for_result(data: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Return the table config list appropriate for ``data``."""
     if _looks_abundance(data):
         return _abundance_diagram_tables(data)
-    return _columnar_section_tables(data) if _looks_columnar(data) else _range_chart_tables(data)
+    # I7 fix: also detect columnar shape even when sections is empty
+    # (VLM failed to extract — schema shape still tells us the mode).
+    if _looks_columnar(data):
+        return _columnar_section_tables(data)
+    # I7 fix: also detect columnar shape when sections is empty but the data
+    # came from a columnar extraction (identified by the presence of columnar-only
+    # fields like fossil_legend / lithology_legend / cross_beds).
+    sects = data.get("sections") if data else None
+    if isinstance(sects, list):
+        # Columnar data may have sections=[] when the VLM failed to parse any columns.
+        # Detect by the presence of any columnar-named key.
+        if any(k in data for k in ("fossil_legend", "lithology_legend", "cross_beds")):
+            return _columnar_section_tables(data)
+    return _range_chart_tables(data)
 
 
 def _abundance_diagram_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:

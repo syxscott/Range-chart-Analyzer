@@ -165,8 +165,9 @@ Range-chart Analyzer/
 ├── run_gui.bat             # Windows GUI 启动器
 ├── run_server.bat          # Windows 服务器启动器
 ├── requirements.txt        # 仅 Pillow（可选）
-├── tests_core.py           # 核心单元测试（48 项）
+├── tests_core.py           # 核心单元测试（169 项）
 ├── tests_logo.py           # logo 生成测试（9 项）
+├── tests/                  # 新增单元测试（test_csrf / test_ssrf / test_parity / test_enhance / test_cache / test_quality）
 ├── rca_core/logo.py        # 窗口 logo 生成器（Pillow）
 ├── assets/
 │   ├── logo.png            # 256x256 主图

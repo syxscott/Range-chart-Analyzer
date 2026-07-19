@@ -92,7 +92,58 @@ class ExtractResult:
     warning: str = ""
 
 
-def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE):
+def _enhance_image_pil(img: "Image.Image") -> "Image.Image":
+    """Pillow-only image enhancement for thin lines and small text.
+
+    Applies a light unsharp mask + contrast boost. This is intentionally
+    conservative — we do NOT upsample here (that is done by the caller via
+    max_edge) and we avoid heavy denoising that could erase faint range
+    lines. For stronger enhancement (3× upsample + NLMeans denoising +
+    CLAHE) the optional cv2 path in `_enhance_image_cv2` is used when
+    available.
+    """
+    try:
+        from PIL import ImageEnhance, ImageFilter  # type: ignore
+    except Exception:
+        return img
+    # Unsharp mask sharpens thin lines and small italic species names.
+    img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
+    # Gentle contrast boost helps faint pencil lines stand out.
+    img = ImageEnhance.Contrast(img).enhance(1.15)
+    return img
+
+
+def _enhance_image_cv2(img: "Image.Image") -> "Image.Image":
+    """Optional OpenCV-based enhancement (3× upsample + NLMeans denoise).
+
+    Falls back to the Pillow path when cv2 is not installed. The caller
+    decides which path to use via the ``enhance`` parameter.
+    """
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception:
+        return _enhance_image_pil(img)
+    arr = np.array(img)
+    # 3× upsample — helps the VLM read small rotated text.
+    h, w = arr.shape[:2]
+    arr = cv2.resize(arr, (w * 3, h * 3), interpolation=cv2.INTER_LANCZOS4)
+    # NLMeans denoising — removes scan noise without erasing thin lines.
+    if len(arr.shape) == 3:
+        arr = cv2.fastNlMeansDenoisingColored(arr, None, 10, 10, 7, 21)
+    else:
+        arr = cv2.fastNlMeansDenoising(arr, None, 10, 7, 21)
+    # CLAHE contrast enhancement for faint lines.
+    if len(arr.shape) == 3:
+        lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+        arr = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+    return Image.fromarray(arr)  # type: ignore
+
+
+def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE,
+                   enhance: bool = False):
     """Read an image, optionally downscale so its long edge <= max_edge.
 
     Returns ``(base64, media_type, width, height, resized, decode_error)``.
@@ -100,6 +151,12 @@ def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE):
     ``decode_error`` flag is True when the file could not be decoded as
     an image (corrupt PNG header, etc.) — callers can use this to surface
     a friendlier error instead of showing a 0×0 thumbnail.
+
+    When ``enhance=True`` the image is pre-processed before downscale to
+    improve VLM recognition of thin range lines and small italic species
+    names. Uses the Pillow-only path by default; the stronger cv2 path
+    (3× upsample + NLMeans + CLAHE) is used when ``enhance='cv2'`` and
+    cv2 is installed.
 
     Bug-15 fix: the previous version returned ``width=0, height=0`` for
     both "Pillow missing" and "decode failed", making the two cases
@@ -127,6 +184,15 @@ def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE):
         # wrong format). Distinguish from "no Pillow" so the UI can show
         # a real error instead of a 0×0 image.
         return base64.b64encode(raw).decode("ascii"), mime, 0, 0, False, True
+
+    # FIX (enhance): pre-process the image to boost VLM recognition of thin
+    # lines and small text. Default off — the user opts in via the UI.
+    if enhance:
+        if enhance == "cv2":
+            img = _enhance_image_cv2(img)
+        else:
+            img = _enhance_image_pil(img)
+        w, h = img.size  # re-read size (cv2 path may have upsampled)
 
     long_edge = max(w, h)
     if max_edge and long_edge > max_edge:
@@ -402,11 +468,23 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
         for b in items or []:
             if not isinstance(b, dict):
                 continue
+            top_idx = fi(b.get("range_top_idx"))
+            base_idx = fi(b.get("range_base_idx"))
+            # B-3 fix: enforce top (younger/higher) >= base (older/lower).
+            # The prompt says "1-indexed from bottom (oldest=1), top >= base".
+            # If the model emitted them reversed, swap and flag so the UI
+            # can surface a warning without discarding the data.
+            swapped = False
+            if top_idx is not None and base_idx is not None and top_idx < base_idx:
+                top_idx, base_idx = base_idx, top_idx
+                swapped = True
             row = {
                 "pattern": s(b.get("pattern")),
-                "range_top_idx": fi(b.get("range_top_idx")),
-                "range_base_idx": fi(b.get("range_base_idx")),
+                "range_top_idx": top_idx,
+                "range_base_idx": base_idx,
             }
+            if swapped:
+                row["_warning"] = "index_order_swap"
             _carry_extras(b, _KNOWN_BLOCK_KEYS, row)
             out.append(row)
         return out
@@ -416,11 +494,20 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
         for u in items or []:
             if not isinstance(u, dict):
                 continue
+            top_idx = fi(u.get("range_top_idx"))
+            base_idx = fi(u.get("range_base_idx"))
+            # B-3 fix: same swap-logic for age_units.
+            swapped = False
+            if top_idx is not None and base_idx is not None and top_idx < base_idx:
+                top_idx, base_idx = base_idx, top_idx
+                swapped = True
             row = {
                 "label": s(u.get("label")),
-                "range_top_idx": fi(u.get("range_top_idx")),
-                "range_base_idx": fi(u.get("range_base_idx")),
+                "range_top_idx": top_idx,
+                "range_base_idx": base_idx,
             }
+            if swapped:
+                row["_warning"] = "index_order_swap"
             _carry_extras(u, _KNOWN_UNIT_KEYS, row)
             out.append(row)
         return out

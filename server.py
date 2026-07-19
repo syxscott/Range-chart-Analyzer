@@ -16,11 +16,28 @@ import concurrent.futures
 import ipaddress
 import json
 import os
+import re
 import socket
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
+
+
+# S8 fix: redact API-key-like patterns from error_body before echoing to the UI.
+# Upstream servers may echo back request headers (including Authorization)
+# or query params. We redact common key formats to prevent accidental leakage.
+_API_KEY_RE = re.compile(
+    r'(sk-|Bearer |x-api-key[:=]\s*)[a-zA-Z0-9_\-]{8,}',
+    re.IGNORECASE,
+)
+
+
+def _redact_error_body(body):
+    """Remove API-key-like tokens from a string before sending to the client."""
+    if not isinstance(body, str):
+        return ""
+    return _API_KEY_RE.sub(r'\1[REDACTED]', body)
 
 # Allow running as `python server.py` from the project root.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -59,7 +76,9 @@ _CONTENT_TYPES = {
     ".ico": "image/x-icon",
 }
 
-MAX_BODY_BYTES = 40 * 1024 * 1024  # 40 MB cap on request bodies
+MAX_BODY_BYTES = 20 * 1024 * 1024  # S9 fix: 20 MB cap (was 40 MB).
+# Multi-run (runs<=5) means concurrent decoded images could use up to
+# ~5 * 15 MB ≈ 75 MB; 20 MB cap keeps total memory safe for 2 GB machines.
 
 
 # Bug-6 fix: client-controlled ``provider.endpoint`` is now validated
@@ -258,6 +277,14 @@ class Handler(BaseHTTPRequestHandler):
                 return False
             return bool(nl) and nl == host_hdr
 
+        # CSRF policy (S1 fix — tightened XRW fallback):
+        #  1. Origin present → must match Host (reject cross-origin).
+        #  2. Origin absent, Referer present → must match Host.
+        #  3. Both absent: X-Requested-With is accepted ONLY from localhost
+        #     (127.0.0.1 / ::1 / localhost). This guards against a malicious
+        #     page that POSTs from the browser with XRW but no Origin/Referer.
+        #  4. Nothing present → reject.
+        _localhost_patterns = ("localhost", "127.0.0.1", "[::1]")
         if origin:
             if not _netloc_matches(origin):
                 self._send_json(403, {
@@ -272,9 +299,19 @@ class Handler(BaseHTTPRequestHandler):
                     "error_body": "Cross-origin POST rejected (Referer does not match Host).",
                 })
                 return
-        elif not x_req:
-            # No Origin, no Referer, no X-Requested-With → cannot establish
-            # this is a same-origin/first-party request. Reject.
+        elif x_req:
+            # XRW only trusted when the connection is from localhost.
+            try:
+                client_host = self.client_address[0]
+            except Exception:
+                client_host = ""
+            if client_host not in _localhost_patterns:
+                self._send_json(403, {
+                    "ok": False, "error_key": "err.forbidden",
+                    "error_body": "X-Requested-With is only accepted from localhost.",
+                })
+                return
+        else:
             self._send_json(403, {
                 "ok": False, "error_key": "err.forbidden",
                 "error_body": "Cross-origin POST rejected (need matching Origin/Referer or X-Requested-With header).",
@@ -403,7 +440,51 @@ class Handler(BaseHTTPRequestHandler):
         )
 
         if runs == 1:
+            # FIX (cache): check the cache first so identical reruns are
+            # free. The key includes image, provider, model, prompt version,
+            # and extraction parameters. A hit returns immediately; a miss
+            # falls through to the actual LLM call.
+            force_rerun = bool(req.get("force_rerun"))
+            cache_hit = None
+            if not force_rerun:
+                from rca_core.cache import get_cache
+                from rca_core.prompt import PROMPT_VERSION
+                cache = get_cache()
+                # C1 fix: use stable business fields only — never repr(provider)
+                # (repr includes uuid4 id + time.time() which change on every
+                # request, making the single-run cache命中率 ≈ 0).
+                prov = common["provider"]
+                ckey = cache.make_key(
+                    endpoint=prov.endpoint if prov else "",
+                    model=prov.model if prov else "",
+                    api_format=prov.api_format.value if prov else "",
+                    extra_headers=list(prov.extra_headers.keys()) if prov else [],
+                    prompt_version=PROMPT_VERSION,
+                    max_tokens=common["max_tokens"],
+                    chart_lang=common["chart_lang"],
+                    mode=mode,
+                    image_b64=common["image_b64"],
+                )
+                cache_hit = cache.get(ckey)
+            if cache_hit is not None:
+                # FIX (quality): ensure the quality badge is present even on
+                # a cache hit. The cached payload may predate the quality
+                # scorer if an older client wrote it.
+                if isinstance(cache_hit, dict) and "quality" not in cache_hit:
+                    from rca_core.quality import score_range_chart
+                    cache_hit["quality"] = score_range_chart(cache_hit)
+                self._send_json(200, {"ok": True, "data": cache_hit,
+                                      "cached": True})
+                return
             result = extract(mode=mode, **common)
+            # FIX (quality): score single-run results too for a consistent
+            # quality badge in the UI.
+            if result.ok and result.data and isinstance(result.data, dict):
+                from rca_core.quality import score_range_chart
+                result.data["quality"] = score_range_chart(result.data)
+                # Write the scored result back to the cache.
+                if not force_rerun:
+                    cache.put(ckey, result.data)
             self._send_json(200, {
                 "ok": result.ok,
                 "data": result.data,
@@ -417,17 +498,17 @@ class Handler(BaseHTTPRequestHandler):
                 "warning": getattr(result, "warning", "") or "",
                 # H7: surface upstream error body so the frontend can show
                 # the real 5xx reason instead of a generic alert.
-                "error_body": result.error_body,
+                "error_body": _redact_error_body(result.error_body),
                 "usage": result.usage or {},
                 "latency_ms": result.latency_ms or 0,
             })
             return
 
-        # Multi-run: extract N times IN PARALLEL via a thread pool, merge
-        # the successful runs' data. Concurrent execution trims total wait
-        # from O(N * latency) to ~O(latency) since urllib I/O releases the
-        # GIL. If no run succeeds, return the last run's error so the UI
-        # can surface it.
+        # I5 fix (multi-run cache): check the cache before launching threads.
+        # Cache hits are used directly; only cache misses invoke the LLM.
+        # This avoids redundant LLM calls when the user re-runs with the same
+        # parameters (e.g. tweaking caption and re-running).
+        force_rerun = bool(req.get("force_rerun"))
         ok_datas = []
         last_fail = None
         any_truncated = False
@@ -437,56 +518,99 @@ class Handler(BaseHTTPRequestHandler):
         total_in, total_out = 0, 0
         total_cr, total_cc = 0, 0
         est_in, est_out = False, False
-        # Runs execute concurrently, so the meaningful latency is the wall-clock
-        # time of the whole batch — not the sum of each run's latency (which
-        # would over-count 3x for 3 parallel runs). We also track the slowest
-        # single run for reference.
         max_run_latency = 0
         batch_t0 = time.perf_counter()
-        # Per-future hard timeout: user's timeout_sec is the per-request LLM
-        # timeout, plus a small grace window (10s) for Python/JIT overhead.
         per_future_timeout = timeout_sec + 10
-        with concurrent.futures.ThreadPoolExecutor(max_workers=runs) as ex:
-            futures = [ex.submit(extract, mode=mode, **common) for _ in range(runs)]
-            for fut in concurrent.futures.as_completed(futures):
-                try:
-                    r = fut.result(timeout=per_future_timeout)
-                except concurrent.futures.TimeoutError:
-                    r = ExtractResult(
-                        ok=False, error_key="err.timeout",
-                        error_body=f"per-future timeout after {per_future_timeout}s",
-                    )
-                except Exception as exc:
-                    # extract() never raises, but defend against unforeseen
-                    # bugs in user code.
-                    r = ExtractResult(ok=False, error_key="err.http", raw=str(exc))
-                if r.ok and r.data is not None:
-                    ok_datas.append(r.data)
-                    any_truncated = any_truncated or bool(r.truncated)
-                    if r.raw:
-                        raws.append(r.raw)
-                    u = r.usage or {}
-                    total_in += int(u.get("input_tokens") or 0)
-                    total_out += int(u.get("output_tokens") or 0)
-                    total_cr += int(u.get("cache_read_tokens") or 0)
-                    total_cc += int(u.get("cache_creation_tokens") or 0)
-                    est_in = est_in or bool(u.get("estimated"))
-                    est_out = est_out or bool(u.get("estimated"))
-                    max_run_latency = max(max_run_latency, int(r.latency_ms or 0))
-                    # M40: pick the first non-empty warning as the
-                    # merged hint. All runs hit the same max_tokens
-                    # ceiling if they truncated, so this collapses to a
-                    # single user-facing message regardless of N.
-                    if not merged_warning and getattr(r, "warning", ""):
-                        merged_warning = r.warning
-                else:
-                    last_fail = r
-                    partial_fails += 1
-                    # Capture a failed run's warning too (e.g. parse
-                    # error after a partial response) — same first-wins
-                    # strategy so we surface at most one hint.
-                    if not merged_warning and getattr(r, "warning", ""):
-                        merged_warning = r.warning
+
+        # Pre-compute per-slot cache keys using the same stable fields as
+        # the single-run path (C1 fix). Each run slot gets its own entry so
+        # that cache hits on different slots are independent.
+        from rca_core.cache import get_cache
+        from rca_core.prompt import PROMPT_VERSION as PROMPT_VERSION
+        prov = common["provider"]
+        slot_keys = []
+        for _ in range(runs):
+            prov_slot = LlmProvider(
+                name=prov.name,
+                api_format=prov.api_format,
+                endpoint=prov.endpoint,
+                api_key=prov.api_key,
+                model=prov.model,
+                extra_headers=dict(prov.extra_headers),
+            )
+            slot_ckey = get_cache().make_key(
+                endpoint=prov_slot.endpoint,
+                model=prov_slot.model,
+                api_format=prov_slot.api_format.value,
+                extra_headers=list(prov_slot.extra_headers.keys()),
+                prompt_version=PROMPT_VERSION,
+                max_tokens=common["max_tokens"],
+                chart_lang=common["chart_lang"],
+                mode=mode,
+                image_b64=common["image_b64"],
+            )
+            slot_keys.append(slot_ckey)
+
+        if not force_rerun:
+            cache = get_cache()
+            for ckey in slot_keys:
+                cached = cache.get(ckey)
+                if cached is not None:
+                    if isinstance(cached, dict) and "quality" not in cached:
+                        from rca_core.quality import score_range_chart
+                        cached["quality"] = score_range_chart(cached)
+                    ok_datas.append(cached)
+
+        misses = runs - len(ok_datas)
+        if misses <= 0:
+            # All runs were cache hits — merge directly.
+            pass  # falls through to merge
+        else:
+            # I5-fix: store (original_run_index, future_or_None) pairs so that
+            # as_completed's completion-order index does NOT corrupt the cache key lookup.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=misses) as ex:
+                pending = []  # list of (run_idx, future_or_None)
+                for run_idx in range(runs):
+                    if run_idx < len(ok_datas):
+                        pending.append((run_idx, None))  # cache hit — result already in ok_datas
+                    else:
+                        pending.append((run_idx, ex.submit(extract, mode=mode, **common)))
+                # as_completed yields futures in completion order, not original order.
+                # We must use the stored run_idx, not the enumeration order.
+                for run_idx, fut in concurrent.futures.as_completed([f for _, f in pending]):
+                    if fut is None:
+                        continue  # cache hit slot
+                    try:
+                        r = fut.result(timeout=per_future_timeout)
+                    except concurrent.futures.TimeoutError:
+                        r = ExtractResult(
+                            ok=False, error_key="err.timeout",
+                            error_body=f"per-future timeout after {per_future_timeout}s",
+                        )
+                    except Exception as exc:
+                        r = ExtractResult(ok=False, error_key="err.http", raw=str(exc))
+                    if r.ok and r.data is not None:
+                        if not force_rerun:
+                            get_cache().put(slot_keys[run_idx], r.data)
+                        ok_datas.append(r.data)
+                        any_truncated = any_truncated or bool(r.truncated)
+                        if r.raw:
+                            raws.append(r.raw)
+                        u = r.usage or {}
+                        total_in += int(u.get("input_tokens") or 0)
+                        total_out += int(u.get("output_tokens") or 0)
+                        total_cr += int(u.get("cache_read_tokens") or 0)
+                        total_cc += int(u.get("cache_creation_tokens") or 0)
+                        est_in = est_in or bool(u.get("estimated"))
+                        est_out = est_out or bool(u.get("estimated"))
+                        max_run_latency = max(max_run_latency, int(r.latency_ms or 0))
+                        if not merged_warning and getattr(r, "warning", ""):
+                            merged_warning = r.warning
+                    else:
+                        last_fail = r
+                        partial_fails += 1
+                        if not merged_warning and getattr(r, "warning", ""):
+                            merged_warning = r.warning
         total_latency = int((time.perf_counter() - batch_t0) * 1000)
         if not ok_datas:
             r = last_fail
@@ -499,7 +623,7 @@ class Handler(BaseHTTPRequestHandler):
                 "truncated": any_truncated,
                 # Surface the upstream error body so the client can show
                 # the real 5xx reason instead of a generic alert (H7).
-                "error_body": r.error_body if r else "",
+                "error_body": _redact_error_body(r.error_body) if r else "",
                 "usage": r.usage if r else {},
                 "latency_ms": r.latency_ms if r else 0,
                 "warning": getattr(r, "warning", "") if r else "",
@@ -507,6 +631,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         schema = SCHEMA_BY_MODE.get(mode, RANGE_CHART_SCHEMA)
         merged = merge_results(ok_datas, total_runs=runs, schema=schema)
+        # FIX (quality): score the merged result so the UI can show a
+        # quality badge ("0.87 / B-Good") and flag low-confidence rows.
+        from rca_core.quality import score_range_chart
+        quality = score_range_chart(merged)
+        merged["quality"] = quality
         # M2: partial_failures is surfaced separately from truncated so the
         # frontend can distinguish a failed run from a truncated one.
         merged_usage = {
