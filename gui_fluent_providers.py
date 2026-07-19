@@ -22,7 +22,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QDrag, QKeyEvent, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QScrollArea, QVBoxLayout, QWidget, QLineEdit,
+    QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLineEdit,
 )
 
 from qfluentwidgets import (
@@ -142,9 +142,18 @@ class ProviderCard(CardWidget):
         self._t = translate
         self._active = is_active
         self._testing = False
-        self._health_failures = 0   # consecutive failures from last test
+        # Hydrate the in-memory badge state from the persisted
+        # consecutive_failures count so the badge survives app restart.
+        # Clamp to the same range the GUI displays (≤3) — values above
+        # that would only show as "✗3+" so loading a stale 9 from disk
+        # would visually look identical to a fresh 3 anyway.
+        self._health_failures = min(int(getattr(provider, "consecutive_failures", 0) or 0), 3)
         self.setObjectName("providerCard")
-        self.setFixedHeight(82)
+        # Use min+max instead of fixed height so the card can grow if the provider
+        # name is long (font scaling, translations) without clipping content.
+        self.setMinimumHeight(72)
+        self.setMaximumHeight(120)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.setAttribute(Qt.WA_Hover, True)
 
         row = QHBoxLayout(self)
@@ -167,7 +176,7 @@ class ProviderCard(CardWidget):
             "color:#2563eb;" if is_active else "color:rgba(120,120,120,0.7);"
         )
         name_row.addWidget(self.lbl_dot)
-        self._health_badge = HealthBadge(0)
+        self._health_badge = HealthBadge(self._health_failures)
         name_row.addWidget(self._health_badge)
         name_row.addStretch(1)
         mid.addLayout(name_row)
@@ -337,8 +346,16 @@ class ProviderWizard(QDialog):
         self._t = translate
         self.created_provider: LlmProvider | None = None
         self._existing = existing
-        self.setWindowTitle(self._t("wizard.choosePreset") if existing is None
-                           else "Configure: " + (existing.name or ""))
+        # Bug fix: preserve the original id + created_at across an edit so
+        # LlmProvider.__post_init__ doesn't auto-generate a fresh UUID on
+        # the new instance (which would make store.update() fail its
+        # id-based lookup and silently drop the rename).
+        self._edit_id: str = existing.id if existing else ""
+        self._edit_created_at: float = existing.created_at if existing else 0
+        if existing is None:
+            self.setWindowTitle(self._t("wizard.choosePreset"))
+        else:
+            self.setWindowTitle(self._t("wizard.configureName").format(name=existing.name or ""))
         self.resize(720, 580)
 
         self._root = QVBoxLayout(self)
@@ -375,25 +392,25 @@ class ProviderWizard(QDialog):
         lbl = BodyLabel(self._t("wizard.fieldName"))
         fl.addWidget(lbl, r, 0, 1, 2); r += 1
         self._ipt_name = LineEdit()
-        fl.addWidget(self._ipt_name, r - 1, 0, 1, 2)
+        fl.addWidget(self._ipt_name, r, 0, 1, 2); r += 1
 
         lbl = BodyLabel(self._t("wizard.fieldFormat"))
         fl.addWidget(lbl, r, 0, 1, 2); r += 1
         self._cmb_fmt = ComboBox()
         self._cmb_fmt.addItems([f.value for f in ApiFormat])
-        fl.addWidget(self._cmb_fmt, r - 1, 0, 1, 2)
+        fl.addWidget(self._cmb_fmt, r, 0, 1, 2); r += 1
 
         lbl = BodyLabel(self._t("wizard.fieldEndpoint"))
         fl.addWidget(lbl, r, 0, 1, 2); r += 1
         self._ipt_endpoint = LineEdit()
         self._ipt_endpoint.setPlaceholderText("https://")
-        fl.addWidget(self._ipt_endpoint, r - 1, 0, 1, 2)
+        fl.addWidget(self._ipt_endpoint, r, 0, 1, 2); r += 1
 
         lbl = BodyLabel(self._t("settings.apiKey"))
         fl.addWidget(lbl, r, 0, 1, 2); r += 1
         self._ipt_key = PasswordLineEdit()
         self._ipt_key.setPlaceholderText("sk-…")
-        fl.addWidget(self._ipt_key, r - 1, 0, 1, 2)
+        fl.addWidget(self._ipt_key, r, 0, 1, 2); r += 1
 
         # API Key field name selector (cc-switch alignment)
         lbl = BodyLabel(self._t("wizard.apiKeyField"))
@@ -401,19 +418,19 @@ class ProviderWizard(QDialog):
         self._cmb_key_field = ComboBox()
         self._cmb_key_field.addItems(["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"])
         self._cmb_key_field.setCurrentIndex(0)
-        fl.addWidget(self._cmb_key_field, r - 1, 0, 1, 2)
+        fl.addWidget(self._cmb_key_field, r, 0, 1, 2); r += 1
 
         lbl = BodyLabel(self._t("settings.model"))
         fl.addWidget(lbl, r, 0, 1, 2); r += 1
         self._ipt_model = LineEdit()
-        fl.addWidget(self._ipt_model, r - 1, 0, 1, 2)
+        fl.addWidget(self._ipt_model, r, 0, 1, 2); r += 1
 
         # Extra headers field
         lbl = BodyLabel(self._t("wizard.extraHeaders"))
         fl.addWidget(lbl, r, 0, 1, 2); r += 1
         self._ipt_extra_headers = LineEdit()
         self._ipt_extra_headers.setPlaceholderText('{"X-Custom-Header": "value"}')
-        fl.addWidget(self._ipt_extra_headers, r - 1, 0, 1, 2)
+        fl.addWidget(self._ipt_extra_headers, r, 0, 1, 2); r += 1
 
         fl.setColumnStretch(1, 1)
         self._form.setVisible(False)
@@ -518,7 +535,10 @@ class ProviderWizard(QDialog):
             btn.setVisible(False)
         self._scroll.setVisible(False)
         self._form.setVisible(True)
-        self.setWindowTitle(self._t("wizard.configure"))
+        # Only clobber the title when creating a new provider (not editing an existing one,
+        # where __init__ already set the provider-specific "Configure [Name]" title).
+        if not self._existing:
+            self.setWindowTitle(self._t("wizard.configure"))
 
     def _prefill(self, existing: LlmProvider):
         self._ipt_name.setText(existing.name)
@@ -538,19 +558,26 @@ class ProviderWizard(QDialog):
                 pass
         self._show_form()
 
-    def _parse_extra_headers(self) -> dict:
-        """Parse extra_headers from the text field."""
+    def _parse_extra_headers(self) -> tuple[dict, str | None]:
+        """Parse extra_headers from the text field.
+
+        Returns ``(headers, error_message)``. ``error_message`` is None
+        when the field is empty or parsed successfully. When the field
+        is non-empty but malformed, returns ``({}, error_message)`` so
+        the caller can surface a warning (the previous version silently
+        dropped the user's input).
+        """
         text = self._ipt_extra_headers.text().strip()
         if not text:
-            return {}
+            return {}, None
+        import json
         try:
-            import json
             parsed = json.loads(text)
-            if isinstance(parsed, dict):
-                return parsed
-        except Exception:
-            pass
-        return {}
+        except Exception as exc:
+            return {}, f"{type(exc).__name__}: {exc}"
+        if isinstance(parsed, dict):
+            return parsed, None
+        return {}, f"extra_headers must be a JSON object, got {type(parsed).__name__}"
 
     def _on_ok(self):
         name = self._ipt_name.text().strip()
@@ -568,14 +595,31 @@ class ProviderWizard(QDialog):
             fmt = ApiFormat(self._cmb_fmt.currentText())
         except ValueError:
             fmt = ApiFormat.ANTHROPIC
-        extra_headers = self._parse_extra_headers()
+        extra_headers, headers_err = self._parse_extra_headers()
+        if headers_err is not None:
+            # Don't block save — user may have a legitimate reason to
+            # save without headers — but warn so the mistake isn't
+            # silent. The previous version just discarded the input.
+            InfoBar.warning(
+                "",
+                f"extra_headers ignored: {headers_err}",
+                parent=self,
+                position=InfoBarPosition.TOP,
+            )
         self.created_provider = LlmProvider(
+            id=self._edit_id,                       # preserve on edit; ignored when "" (add)
             name=name,
             api_format=fmt,
             endpoint=endpoint,
             api_key=self._ipt_key.text().strip(),
             model=self._ipt_model.text().strip(),
             extra_headers=extra_headers,
+            created_at=self._edit_created_at,       # same reasoning
+            # Preserve is_current on edit. The wizard rebuilds the provider
+            # from scratch and the LlmProvider default is False, which would
+            # silently deactivate the user's currently-active provider and
+            # reroute LLM calls/credentials to a different endpoint.
+            is_current=(bool(self._existing.is_current) if self._existing else False),
         )
         self.accept()
 
@@ -589,6 +633,12 @@ class ProvidersPage(ScrollArea):
         self.win = win
         self._t = win._t
         self._test_worker = None
+        # Hold strong references to retired test workers until their
+        # underlying thread has actually exited, then drop them. Without
+        # this the QThread C++ object is deallocated while the OS thread
+        # is still running test_llm_connection(), and Qt aborts with
+        # "QThread: Destroyed while thread is still running".
+        self._retired_workers = []
         self._test_target: LlmProvider | None = None
         self._search_term = ""
         self._all_cards: list[ProviderCard] = []   # unfiltered list
@@ -754,21 +804,47 @@ class ProvidersPage(ScrollArea):
             return
         id_to_p = {p.id: p for p in store.providers}
         store.providers = [id_to_p[i] for i in order if i in id_to_p]
+        # Persist the new visual order to sort_index, not just the list
+        # order. ProviderStore.load() re-sorts by sort_index on every read;
+        # without this the next refresh() (and the next app launch) would
+        # snap the cards back to the original positions.
+        for idx, p in enumerate(store.providers):
+            p.sort_index = idx
         store.save()
         self.win.invalidate_provider_cache()
         # Refresh to rebuild cards
         self._refresh()
+        self._sync_settings_page()
 
     def _add_provider(self):
+        # Guard against double-click / rapid clicks: if a wizard is
+        # already open, raise it instead of stacking a new instance.
+        # The previous version would happily open N modals on top of
+        # each other, each one writing to the store on close.
+        if getattr(self, "_provider_wizard", None) is not None:
+            try:
+                if self._provider_wizard.isVisible():
+                    self._provider_wizard.raise_()
+                    self._provider_wizard.activateWindow()
+                    return
+            except RuntimeError:
+                # Underlying C++ object was destroyed — fall through and
+                # open a fresh wizard.
+                self._provider_wizard = None
         wiz = ProviderWizard(self.win, self._t)
-        if wiz.exec() and wiz.created_provider:
-            store = self._load_store()
-            if store:
-                store.add(wiz.created_provider)
-                store.set_current(wiz.created_provider.id)
-                store.save()
-                self.win.invalidate_provider_cache()
-                self._refresh()
+        self._provider_wizard = wiz
+        try:
+            if wiz.exec() and wiz.created_provider:
+                store = self._load_store()
+                if store:
+                    store.add(wiz.created_provider)
+                    store.set_current(wiz.created_provider.id)
+                    store.save()
+                    self.win.invalidate_provider_cache()
+                    self._refresh()
+                    self._sync_settings_page()
+        finally:
+            self._provider_wizard = None
 
     def _set_current(self, pid):
         store = self._load_store()
@@ -777,6 +853,7 @@ class ProvidersPage(ScrollArea):
             store.save()
             self.win.invalidate_provider_cache()
             self._refresh()
+            self._sync_settings_page()
 
     def _edit(self, pid):
         """Open the wizard in edit mode for an existing provider."""
@@ -788,10 +865,22 @@ class ProvidersPage(ScrollArea):
             return
         wiz = ProviderWizard(self.win, self._t, existing=existing)
         if wiz.exec() and wiz.created_provider:
-            store.update(wiz.created_provider)
+            ok = store.update(wiz.created_provider)
+            if not ok:
+                # Should not happen now that the wizard preserves the id,
+                # but log + surface rather than silently dropping the edit.
+                print(f"[rca] provider update failed for id={pid!r}")
+                InfoBar.error(
+                    "",
+                    self._t("wizard.updateFailed"),
+                    parent=self,
+                    position=InfoBarPosition.TOP,
+                )
+                return
             store.save()
             self.win.invalidate_provider_cache()
             self._refresh()
+            self._sync_settings_page()
 
     def _delete(self, pid):
         store = self._load_store()
@@ -800,11 +889,28 @@ class ProvidersPage(ScrollArea):
             store.save()
             self.win.invalidate_provider_cache()
             self._refresh()
+            self._sync_settings_page()
+
+    def _sync_settings_page(self) -> None:
+        """Push the freshly-changed active provider into the Settings page.
+
+        Without this the Settings page keeps showing the old name /
+        endpoint / model until the user switches tabs or restarts the
+        app. Best-effort: a missing or misnamed settings page is
+        silently ignored.
+        """
+        try:
+            sp = getattr(self.win, "settings_page", None)
+            if sp is not None and hasattr(sp, "refresh_active"):
+                sp.refresh_active()
+        except Exception as exc:
+            print(f"[rca] sync settings page: {exc}")
 
     def _test(self, provider, card):
         card.set_testing(True)
         card.set_health(0)
-        self._test_target = provider
+        # (Previously also assigned self._test_target = provider, but
+        # nothing ever read that attribute — dead variable.)
         from PySide6.QtCore import QThread
 
         class _Worker(QThread):
@@ -816,8 +922,46 @@ class ProvidersPage(ScrollArea):
                 from rca_core.llm import test_llm_connection
                 self.done.emit(test_llm_connection(self._p, timeout_sec=8))
 
+        # Cancel any in-flight test before starting a new one. The old
+        # worker's `done` signal is disconnected (so it can't race the
+        # new handler), and the QThread is retired into
+        # self._retired_workers with a `finished` callback that drops it
+        # once the C++ thread has actually exited. The previous version
+        # only did a 500ms wait() and then let Python GC reclaim the
+        # worker — on a slow network the test_llm_connection() call can
+        # outlive that wait, and Python releases `self._test_worker`
+        # (now reassigned) so the QThread is deallocated mid-run, which
+        # Qt aborts with "QThread: Destroyed while thread is still
+        # running".
+        if self._test_worker is not None and self._test_worker.isRunning():
+            old = self._test_worker
+            try:
+                old.done.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            old.quit()
+            self._retired_workers.append(old)
+            # When the thread truly finishes, drop our reference so the
+            # C++ object can be destroyed safely.
+            def _drop(retired=old):
+                try:
+                    self._retired_workers.remove(retired)
+                except ValueError:
+                    pass
+            old.finished.connect(_drop)
+            # Bounded wait so we don't block UI if the network is stuck;
+            # the `finished` callback above will still drop the worker
+            # eventually.
+            old.wait(500)
+
         self._test_worker = _Worker(provider)
-        self._test_worker.done.connect(lambda res: self._on_test_done(card, res))
+        # Capture `card` by value (default-arg) so the lambda doesn't go
+        # dangling if _refresh() rebuilds cards while the worker is in
+        # flight — the previous version held a reference to the now-dead
+        # widget and crashed on _on_test_done.
+        self._test_worker.done.connect(
+            lambda res, _card=card: self._on_test_done(_card, res)
+        )
         self._test_worker.start()
 
     def _on_test_done(self, card, res):
@@ -825,18 +969,45 @@ class ProvidersPage(ScrollArea):
         if res is None:
             self.lbl_test.setText("✗")
             return
+        # Read the persisted streak from the provider record (re-fetched
+        # by id so a concurrent rename/edit doesn't race the write below),
+        # not from card._health_failures — _test() resets that to 0 at
+        # the start of the in-progress test for the visual badge, which
+        # would otherwise make every failure look like the first.
+        store = self._load_store()
+        live = store.by_id(card.provider.id) if (store and card.provider is not None) else None
+        old_streak = int(getattr(live, "consecutive_failures", None)
+                         if live is not None
+                         else getattr(card.provider, "consecutive_failures", 0) or 0)
         if res.ok:
+            new_streak = 0
             card.set_health(0)
             txt = "✓  " + str(res.latency_ms) + " ms"
             if res.models_sample:
                 txt += "  ·  " + ", ".join(res.models_sample[:3])
         else:
-            # Count consecutive failures (capped at 3 for badge display)
-            failures = getattr(res, 'consecutive_failures', 1)
-            card.set_health(min(failures, 3))
+            new_streak = min(old_streak + 1, 3)
+            card.set_health(new_streak)
             txt = "✗  " + self._t(getattr(res, 'error_key', None) or "err.http")
             if getattr(res, 'status', None):
                 txt += f"  (HTTP {res.status})"
+        # Persist the streak to the provider store so the badge survives
+        # an app restart. Write the live by-id record (not card.provider,
+        # which may be stale if a concurrent rename/edit rebuilt the cards)
+        # and only touch consecutive_failures so the user's other fields
+        # are preserved. Failure to write isn't fatal — we just log and
+        # continue (the badge still updates in-memory for this session).
+        if new_streak != old_streak and card.provider is not None:
+            try:
+                store = self._load_store()
+                cur = store.by_id(card.provider.id) if store else None
+                target = cur or card.provider
+                target.consecutive_failures = new_streak
+                if store:
+                    store.update(target)
+                    store.save()
+            except Exception as exc:
+                print(f"[rca] persist health streak failed: {exc}")
         self.lbl_test.setText(txt)
 
     def retranslate(self):
@@ -844,5 +1015,15 @@ class ProvidersPage(ScrollArea):
             self.lbl_title.setText(self._t("settings.llmProvider"))
         if hasattr(self, "btn_add"):
             self.btn_add.setText(self._t("settings.addProvider"))
+        # The search bar is hidden by default and only revealed on
+        # Ctrl+F, so the original placeholder was set in whatever
+        # language was active at startup — refresh it so a user who
+        # switches languages mid-session sees the new translation.
+        if hasattr(self, "_search_input"):
+            self._search_input.setPlaceholderText(
+                self._t("provider.searchPlaceholder")
+                if self._t("provider.searchPlaceholder") != "provider.searchPlaceholder"
+                else "Search providers... (Ctrl+F)"
+            )
         if hasattr(self, "list_widget"):
             self._refresh()

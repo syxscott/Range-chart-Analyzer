@@ -2,7 +2,6 @@
 'use strict';
 
 (function () {
-  'use strict';
 
   // Current in-memory state.
   const state = {
@@ -20,6 +19,9 @@
     expectedToken: 0,
     loadToken: 0,         // captured inside handleFile's load promise
     extractToken: 0,      // captured inside runExtraction's main promise
+    // FIX-6: AbortController for the in-flight extraction so the user can
+    // cancel a long-running (possibly multi-run) request.
+    abort: null,
   };
 
   // ---- element helpers ----
@@ -45,6 +47,11 @@
     const cap = ($('caption') && $('caption').value || '').toLowerCase();
     const fileName = (state.file && state.file.name || '').toLowerCase();
     const blob = cap + ' ' + fileName;
+    // Abundance / pollen diagram keywords (checked first — most specific).
+    const abKeys = ['pollen', 'abundance', 'percentage diagram', 'palyno', '孢粉', '花粉', '丰度', '百分比'];
+    for (const k of abKeys) {
+      if (blob.indexOf(k) !== -1) return 'abundance_diagram';
+    }
     // Columnar keywords (English + Japanese / Chinese tokens).
     const keys = ['column', 'columns', 'columnar', 'col_section', 'col_sections', '柱状', '柱状図', '柱状图'];
     for (const k of keys) {
@@ -53,9 +60,36 @@
     return 'range_chart';
   }
 
+  // Resolve the chart extraction mode. Manual choice wins over the
+  // heuristic; 'auto' falls back to rcaAutoDetectChartMode().
+  function rcaResolveChartMode() {
+    const sel = $('chart-mode');
+    const choice = sel ? sel.value : 'auto';
+    if (choice === 'range_chart' || choice === 'columnar_section' || choice === 'abundance_diagram') {
+      return choice;
+    }
+    return rcaAutoDetectChartMode();
+  }
+
+  // Map a result object's shape to an export filename prefix. Mirrors the
+  // shape detection in table.js / rca_core.exporter so exported files are
+  // labeled by the chart kind they actually hold.
+  function rcaResultFilePrefix(result) {
+    if (result && Array.isArray(result.abundances)) return 'abundance_diagram_';
+    if (result && Array.isArray(result.sections) && !Array.isArray(result.species_ranges)) {
+      return 'columnar_section_';
+    }
+    return 'range_chart_';
+  }
+
   function toast(msg) {
     const el = $('toast');
     if (!el) return;
+    // Clear first so an identical message still re-announces to screen
+    // readers (aria-live only fires on actual text changes).
+    el.textContent = '';
+    // Force a reflow so the empty->text change is observed as two mutations.
+    void el.offsetWidth;
     el.textContent = msg;
     el.classList.add('show');
     clearTimeout(toast._t);
@@ -80,6 +114,30 @@
     // Phase C: sync segmented + range outputs to loaded values.
     syncSegmentedFromSelect();
     syncRangeOutputs();
+    syncFooterModel();
+  }
+
+  // FIX-5: footer should reflect the actually-configured model, not a
+  // hardcoded product name.
+  function syncFooterModel() {
+    const el = $('footer-model');
+    if (!el) return;
+    const m = ($('model') && $('model').value.trim()) || RCA_CONFIG.defaultModel;
+    el.textContent = m;
+  }
+
+  // Footer should reflect whether extraction actually runs in-browser or
+  // via the same-origin backend — "100% client-side" is misleading when the
+  // user is in backend transport mode.
+  function syncFooterRuntime() {
+    const el = $('footer-runtime');
+    if (!el) return;
+    const mode = rcaResolveMode();
+    const i18nKey = mode === 'backend' ? 'footer.backend' : 'footer.clientSide';
+    // Use the data-i18n attribute so rcaApplyI18n re-translates it on
+    // language switch instead of getting frozen in the current language.
+    el.setAttribute('data-i18n', i18nKey);
+    el.textContent = t(i18nKey);
   }
 
   function saveSettings() {
@@ -87,29 +145,38 @@
     // unavailable (private mode / quota exceeded) instead of falsely
     // claiming "settings saved".
     const writes = [
-      rcaStoreSet(RCA_STORE.endpoint, $('endpoint').value.trim() || RCA_CONFIG.defaultEndpoint),
-      rcaStoreSet(RCA_STORE.model, $('model').value.trim() || RCA_CONFIG.defaultModel),
-      rcaStoreSet('rca.maxTokens', $('max-tokens').value.trim() || String(RCA_CONFIG.defaultMaxTokens)),
-      rcaStoreSet(RCA_STORE.proxy, $('proxy').value.trim()),
-      rcaStoreSet(RCA_STORE.mode, $('conn-mode').value),
-      rcaStoreSet(RCA_STORE.maxEdge, $('max-edge').value.trim() || String(RCA_CONFIG.maxImageEdge)),
-      rcaStoreSet(RCA_STORE.runs, $('runs').value.trim() || '1'),
+      [RCA_STORE.endpoint, rcaStoreSet(RCA_STORE.endpoint, $('endpoint').value.trim() || RCA_CONFIG.defaultEndpoint)],
+      [RCA_STORE.model, rcaStoreSet(RCA_STORE.model, $('model').value.trim() || RCA_CONFIG.defaultModel)],
+      ['rca.maxTokens', rcaStoreSet('rca.maxTokens', $('max-tokens').value.trim() || String(RCA_CONFIG.defaultMaxTokens))],
+      [RCA_STORE.proxy, rcaStoreSet(RCA_STORE.proxy, $('proxy').value.trim())],
+      [RCA_STORE.mode, rcaStoreSet(RCA_STORE.mode, $('conn-mode').value)],
+      [RCA_STORE.maxEdge, rcaStoreSet(RCA_STORE.maxEdge, $('max-edge').value.trim() || String(RCA_CONFIG.maxImageEdge))],
+      [RCA_STORE.runs, rcaStoreSet(RCA_STORE.runs, $('runs').value.trim() || '1')],
     ];
     // Phase C: remember-key is a switch button; read aria-checked.
     const rk = $('remember-key');
     const remember = rk ? rk.getAttribute('aria-checked') === 'true' : false;
-    writes.push(rcaStoreSet(RCA_STORE.rememberKey, remember ? '1' : ''));
+    writes.push([RCA_STORE.rememberKey, rcaStoreSet(RCA_STORE.rememberKey, remember ? '1' : '')]);
     if (remember) {
-      writes.push(rcaStoreSet(RCA_STORE.apiKey, $('api-key').value.trim()));
+      writes.push([RCA_STORE.apiKey, rcaStoreSet(RCA_STORE.apiKey, $('api-key').value.trim())]);
     } else {
-      writes.push(rcaStoreSet(RCA_STORE.apiKey, ''));
+      writes.push([RCA_STORE.apiKey, rcaStoreSet(RCA_STORE.apiKey, '')]);
     }
     // FR3: if ANY write failed (private mode, quota, blocked storage)
-    // — surface a real warning. Otherwise the success toast is honest.
-    if (writes.every((w) => w !== false)) {
+    // — surface a real warning. M2: surface which specific key failed so
+    // the user can act (e.g. disable a browser extension that's blocking
+    // storage). The previous version only said "save failed" with no
+    // detail.
+    const failedKeys = writes.filter(([_, status]) => status === false).map(([k]) => k);
+    if (failedKeys.length === 0) {
       toast(t('settings.saved'));
+      syncFooterModel();
+      syncFooterRuntime();
     } else {
-      toast(t('settings.saveFailed'));
+      // Keep the user-facing message stable (i18n key unchanged) but add
+      // the specific failing key(s) in parens for diagnostic value.
+      const detail = failedKeys.join(', ');
+      toast(`${t('settings.saveFailed')} (${detail})`);
     }
   }
 
@@ -136,12 +203,19 @@
 
   // ---- alerts ----
   function clearAlert() {
-    $('alert-slot').innerHTML = '';
+    const slot = $('alert-slot');
+    if (!slot) return;
+    slot.innerHTML = '';
   }
 
   function showAlert(kind, message, rawDetail) {
     const slot = $('alert-slot');
-    let html = '<div class="alert alert-' + kind + '"><div>' + rcaEsc(message);
+    // M3: error-level alerts need role="alert" so screen readers announce
+    // them immediately (aria-live=polite on the parent slot only gets the
+    // "next opportunity" announcement). Keep role="status" for warnings —
+    // they're informational and shouldn't interrupt the user.
+    const role = (kind === 'danger') ? 'alert' : 'status';
+    let html = '<div class="alert alert-' + kind + '" role="' + role + '"><div>' + rcaEsc(message);
     if (rawDetail) {
       html += '<pre>' + rcaEsc(String(rawDetail).slice(0, 4000)) + '</pre>';
     }
@@ -165,9 +239,15 @@
     // FR1: claim a load token. If the user picks another file before
     // this one's load promise resolves, the new call bumps the token
     // and our async continuation will see a mismatch and silently drop.
+    // Also bump extractToken + expectedToken: an in-flight extraction
+    // from the PREVIOUS file must NOT write its result into this file's
+    // preview (the previous version only bumped loadToken, which left
+    // extractToken stale and caused old extraction results to render
+    // into the new image).
     state.expectedToken += 1;
+    state.loadToken = state.expectedToken;
+    state.extractToken = state.expectedToken;
     const myToken = state.expectedToken;
-    state.loadToken = myToken;
     clearAlert();
     try {
       const edgeEl = $('max-edge');
@@ -200,6 +280,7 @@
   function setBusy(busy) {
     state.busy = busy;
     const btn = $('extract-btn');
+    if (!btn) return;
     btn.disabled = busy;
     if (busy) {
       // M4: keep the data-i18n hook on the inner span so a language switch
@@ -210,6 +291,9 @@
       btn.innerHTML = '<span id="extract-btn-label" data-i18n="upload.extract">' + rcaEsc(t('upload.extract')) + '</span>';
     }
     $('loading-slot').classList.toggle('hidden', !busy);
+    // FIX-6: show the Cancel button only while an extraction is in flight.
+    const cancelBtn = $('cancel-btn');
+    if (cancelBtn) cancelBtn.classList.toggle('hidden', !busy);
     if (busy) {
       $('results-empty').classList.add('hidden');
       $('results-content').classList.add('hidden');
@@ -237,6 +321,9 @@
     state.expectedToken += 1;
     state.extractToken = state.expectedToken;
     const myToken = state.extractToken;
+    // FIX-6: fresh AbortController for this extraction; cancel-btn aborts it.
+    const abort = new AbortController();
+    state.abort = abort;
     setBusy(true);
 
     // FR4: wrap the body in try/finally so an unexpected exception
@@ -246,7 +333,7 @@
     try {
       const maxTokens = rcaClampMaxTokens($('max-tokens').value);
       const connMode = rcaResolveMode();  // 'backend' | 'direct' (transport)
-      const chartMode = rcaAutoDetectChartMode();  // 'range_chart' | 'columnar_section' (chart type)
+      const chartMode = rcaResolveChartMode();  // manual choice or auto-detect heuristic
       const runsEl = $('runs');
       const runs = Math.max(1, Math.min(parseInt(runsEl && runsEl.value, 10) || 1, 5));
       // transport: where the LLM call actually runs (browser vs same-origin backend).
@@ -264,11 +351,17 @@
         mediaType: state.mediaType,
         caption: $('caption').value,
         chartLang: $('chart-lang').value,
+        signal: abort.signal,
       };
 
       // Phase 1: analyze (LLM call). For single-run use 'analyzing';
-      // multi-run gets a per-run counter below.
-      setBusyLabel(runs > 1 ? t('loading.analyzing') + ' (0/' + runs + ')' : t('loading.analyzing'));
+      // multi-run gets a per-run counter below. Use the structured form
+      // so a language switch mid-extraction re-translates the prefix.
+      setBusyLabel(
+        runs > 1
+          ? { i18nKey: 'loading.analyzing', params: { done: 0, total: runs } }
+          : { i18nKey: 'loading.analyzing' }
+      );
 
       if (connMode === 'backend') {
         // The server performs the N runs and merges; pass runs through.
@@ -277,8 +370,9 @@
         // Direct/proxy mode: fire N requests CONCURRENTLY via Promise.all
         // so total wait is ~one latency rather than N. Each promise resolves
         // independently; a failure in one run doesn't cancel the others.
-        setBusyLabel(t('loading.analyzing') + ' (0/' + runs + ')');
-        const km = chartMode === 'columnar_section' ? RCA_COLUMNAR_KEYMAP : RCA_DEFAULT_KEYMAP;
+        setBusyLabel({ i18nKey: 'loading.analyzing', params: { done: 0, total: runs } });
+        const km = (typeof RCA_KEYMAP_BY_MODE !== 'undefined' && RCA_KEYMAP_BY_MODE[chartMode])
+          || RCA_DEFAULT_KEYMAP;
         const promises = [];
         for (let i = 0; i < runs; i++) {
           promises.push(
@@ -291,12 +385,12 @@
         let completed = 0;
         const tracked = promises.map((p) => p.then((r) => {
           completed += 1;
-          setBusyLabel(t('loading.analyzing') + ' (' + completed + '/' + runs + ')');
+          setBusyLabel({ i18nKey: 'loading.analyzing', params: { done: completed, total: runs } });
           return r;
         }));
         const results = await Promise.all(tracked);
         // Phase 2: aggregating.
-        setBusyLabel(t('loading.aggregating'));
+        setBusyLabel({ i18nKey: 'loading.aggregating' });
         const okDatas = [];
         let lastFail = null;
         let anyTruncated = false;
@@ -318,9 +412,12 @@
           // M2: surface "some runs failed" via truncated flag and a dedicated
           // count so the UI can show "M of N runs failed".
           if (partialFails > 0) anyTruncated = true;
+          // Auto-detect the keymap from data shape so the merge uses the
+          // correct schema even when the user's mode selection was wrong.
+          const detectedKm = rcaAutoDetectKeymap(okDatas);
           res = {
             ok: true,
-            data: rcaMergeResults(okDatas, runs, km),
+            data: rcaMergeResults(okDatas, runs, detectedKm),
             raw: raws.join('\n---RUN---\n').slice(0, 8000),
             truncated: anyTruncated,
             partialFailures: partialFails,
@@ -333,12 +430,21 @@
       // FR4: always restore the UI — even on synchronous throw inside the
       // try block above or an unhandled rejection from extractRangeChart.
       setBusy(false);
+      // FIX-6: only clear the shared handle if it's still ours (a newer
+      // extraction may have already replaced it).
+      if (state.abort === abort) state.abort = null;
     }
 
     // FR2: any concurrent Reset / new file selection bumps state.extractToken
     // past our captured myToken; in that case drop the result silently so
     // we don't override the user's current intent.
     if (myToken !== state.extractToken) {
+      return;
+    }
+
+    // FIX-6: user cancelled — show a lightweight toast, no scary error alert.
+    if (abort.signal.aborted) {
+      toast(t('upload.cancelled'));
       return;
     }
 
@@ -370,11 +476,38 @@
   }
 
   // Update just the loading-slot text (used to show per-run progress).
-  function setBusyLabel(text) {
+  // Accepts either a plain string (legacy callers) or an { i18nKey, ...params }
+  // object. The structured form is preferred because the i18n key gets
+  // re-translated live on every call — so when the user switches language
+  // mid-extraction, the in-progress label picks up the new translation
+  // immediately.
+  const _busyLabelFmt = { i18nKey: null, params: null };
+  function setBusyLabel(arg) {
     const slot = $('loading-slot');
     if (!slot) return;
     const p = slot.querySelector('p');
-    if (p) p.textContent = text;
+    if (!p) return;
+    if (typeof arg === 'string') {
+      _busyLabelFmt.i18nKey = null;
+      _busyLabelFmt.params = null;
+      p.textContent = arg;
+      return;
+    }
+    if (arg && typeof arg === 'object' && arg.i18nKey) {
+      _busyLabelFmt.i18nKey = arg.i18nKey;
+      _busyLabelFmt.params = arg.params || {};
+      p.textContent = formatBusyLabel(arg.i18nKey, arg.params || {});
+    }
+  }
+
+  // Build the loading-slot text from the i18n key + params. Mirrors the
+  // template "{base} ({done}/{total})" used for multi-run progress.
+  function formatBusyLabel(i18nKey, params) {
+    const base = t(i18nKey);
+    if (params && params.done != null && params.total != null) {
+      return base + ' (' + params.done + '/' + params.total + ')';
+    }
+    return base;
   }
 
   function renderCurrentResult() {
@@ -398,8 +531,8 @@
     const numEl = content.querySelector('.confidence-ring .num');
     if (numEl) {
       const target = parseInt(numEl.getAttribute('data-target') || '0', 10);
-      const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      if (reduce || target <= 0) {
+      const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (prefersReducedMotion || target <= 0) {
         numEl.textContent = String(target);
       } else {
         const start = performance.now();
@@ -433,9 +566,7 @@
         };
         // M13: name the file after the chart kind so columnar exports don't
         // end up mislabeled.
-        const isCol = state.result && Array.isArray(state.result.sections)
-          && !Array.isArray(state.result.species_ranges);
-        const filename = isCol ? 'columnar_section_result.json' : 'range_chart_result.json';
+        const filename = rcaResultFilePrefix(state.result) + 'result.json';
         rcaDownload(filename, JSON.stringify(payload, null, 2), 'application/json');
         return;
       }
@@ -453,9 +584,7 @@
         const { headers, rows } = rcaBuildTableExport(state.result, csvId);
         // M13: pick the file prefix based on the chart kind, same logic
         // as the all-JSON export above.
-        const isCol = state.result && Array.isArray(state.result.sections)
-          && !Array.isArray(state.result.species_ranges);
-        const prefix = isCol ? 'columnar_section_' : 'range_chart_';
+        const prefix = rcaResultFilePrefix(state.result);
         rcaDownload(prefix + csvId + '.csv', rcaToCsv(headers, rows), 'text/csv');
         return;
       }
@@ -467,7 +596,16 @@
     // FR2: bump the token so any in-flight handleFile / runExtraction
     // awaiting promises drop their stale results instead of clobbering
     // the cleared UI.
+    //
+    // BUGFIX: previous version only bumped `expectedToken` but did NOT
+    // update `state.extractToken` / `state.loadToken`. The in-flight
+    // extraction's `myToken === state.extractToken` check therefore
+    // passed and the late result overwrote the freshly-cleared state.
+    // Mirror `loadToken` / `extractToken` to the new expectedToken so
+    // the comments below become truth.
     state.expectedToken += 1;
+    state.loadToken = state.expectedToken;
+    state.extractToken = state.expectedToken;
     state.file = null;
     state.dataUrl = null;
     state.mediaType = null;
@@ -506,12 +644,23 @@
     rcaApplyI18n(document);
     applyLangButtons();
     applyDocLangAttr();
+    // syncFooterRuntime() writes the textContent directly (and also updates
+    // the data-i18n attribute), so it bypasses rcaApplyI18n's static-DOM
+    // walk — we must call it explicitly to pick up the new translation.
+    syncFooterRuntime();
     // Re-render results so column headers follow the new language.
     if (state.result) renderCurrentResult();
     // Re-apply preview meta labels if a file is loaded.
     if (state.file && state.dataUrl) {
       // meta is language-dependent; rebuild it cheaply.
       handleFileMetaRefresh();
+    }
+    // BUGFIX: the loading-slot label is a plain <p> (not data-i18n), so
+    // rcaApplyI18n doesn't refresh it. Re-render it from the cached
+    // (i18nKey, params) so a language switch mid-extraction picks up
+    // the new translation instead of staying frozen in the old one.
+    if (state.busy && _busyLabelFmt.i18nKey) {
+      setBusyLabel({ i18nKey: _busyLabelFmt.i18nKey, params: _busyLabelFmt.params });
     }
   }
 
@@ -543,6 +692,7 @@
     applyDocLangAttr();
 
     loadSettings();
+    syncFooterRuntime();
 
     // language switch
     $('lang-switch').addEventListener('click', (e) => {
@@ -563,6 +713,7 @@
     // dropzone
     const dz = $('dropzone');
     const fileInput = $('file-input');
+    if (!dz || !fileInput) return;
     dz.addEventListener('click', () => fileInput.click());
     dz.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
@@ -582,6 +733,8 @@
 
     // paste image from clipboard anywhere on the page
     window.addEventListener('paste', (e) => {
+      // e.clipboardData can be null in Firefox/Safari Private Mode and some
+      // embedded contexts — guard before reading .items.
       const items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
       for (const it of items) {
@@ -594,16 +747,31 @@
 
     $('extract-btn').addEventListener('click', runExtraction);
     $('reset-btn').addEventListener('click', resetUpload);
+    // FIX-6: cancel the in-flight extraction on demand.
+    const cancelBtn = $('cancel-btn');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        if (state.abort) state.abort.abort();
+      });
+    }
 
     // Phase D: caption character counter. Soft warn at 300, hard warn at 500.
+    // BUGFIX: textarea has maxlength=2000 but the counter displayed "X / 500",
+    // so a 2000-char caption would never reach 500 from the user's view even
+    // though the input would silently cap. Read the actual maxlength off the
+    // element and use it as the denominator, with a sensible default if the
+    // attribute is missing.
     const captionEl = $('caption');
     const counterEl = $('caption-counter');
     if (captionEl && counterEl) {
+      const capMax = parseInt(captionEl.getAttribute('maxlength'), 10) || 500;
+      const softWarn = Math.max(60, Math.round(capMax * 0.6));
+      const hardWarn = capMax;
       const updateCounter = () => {
         const n = captionEl.value.length;
-        counterEl.textContent = n + ' / 500';
-        counterEl.classList.toggle('warn', n >= 300 && n < 500);
-        counterEl.classList.toggle('over', n >= 500);
+        counterEl.textContent = n + ' / ' + capMax;
+        counterEl.classList.toggle('warn', n >= softWarn && n < hardWarn);
+        counterEl.classList.toggle('over', n >= hardWarn);
       };
       captionEl.addEventListener('input', updateCounter);
       updateCounter();
@@ -634,17 +802,15 @@ cards.forEach((c, i) => {
       // Keep the IO observer for safety (covers edge cases where a card
       // might not be in the initial paint region), but it's redundant
       // for the stagger effect.
-      if ('IntersectionObserver' in window) {
-        const io = new IntersectionObserver((entries) => {
-          entries.forEach((entry) => {
-            if (entry.isIntersecting) {
-              entry.target.classList.add('in-view');
-              io.unobserve(entry.target);
-            }
-          });
-        }, { threshold: 0.05, rootMargin: '0px 0px -5% 0px' });
-        cards.forEach((c) => io.observe(c));
-      }
+      const io = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('in-view');
+            io.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.05, rootMargin: '0px 0px -5% 0px' });
+      cards.forEach((c) => io.observe(c));
     }
 
     // Phase C: range rows — live numeric readout as the user drags.
@@ -657,15 +823,13 @@ cards.forEach((c, i) => {
       sync();
     });
 
-    // Phase C: iOS-style toggle for remember-key. Hidden select still
-    // exists for form-serialization; the switch just mirrors it.
+    // Phase C: iOS-style toggle for remember-key. The aria-checked attribute
+    // is the source of truth — saveSettings() reads it back directly.
     const rk = $('remember-key');
     if (rk && rk.tagName === 'BUTTON') {
       rk.addEventListener('click', () => {
         const next = rk.getAttribute('aria-checked') !== 'true';
         rk.setAttribute('aria-checked', next ? 'true' : 'false');
-        // hidden input style: write state to reflect hidden checkbox-like value
-        var_hidden_set('remember-key-state', next ? '1' : '');
       });
       // initialize from remembered state via loadSettings (which sets checked attribute already)
     }
@@ -686,6 +850,9 @@ cards.forEach((c, i) => {
         sel.value = val;
         // fire change so any later watcher (and the existing logic) sees it
         sel.dispatchEvent(new Event('change'));
+        // Footer copy depends on the resolved transport (backend vs direct);
+        // refresh it immediately so the user sees the new label.
+        syncFooterRuntime();
       });
       // keep segmented in sync with external programmatic changes
       seg.addEventListener('keydown', (e) => {
@@ -696,15 +863,6 @@ cards.forEach((c, i) => {
         seg.querySelector(`button[data-value="${next}"]`).click();
         e.preventDefault();
       });
-    }
-
-    // Phase C: tiny helper to update a hidden <input> the way getElementById
-    // would. Used by the iOS switch above.
-    function var_hidden_set(id, v) {
-      // hidden element lives next to the switch button in DOM; find by id
-      var el = document.getElementById(id);
-      if (!el) return;
-      el.value = String(v);
     }
 
     // Phase C: page-wide drop overlay — drop a file ANYWHERE on the page

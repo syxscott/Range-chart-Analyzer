@@ -1,9 +1,20 @@
 // export.js - copy TSV to clipboard, download CSV / JSON.
 'use strict';
 
+// Sanitize one CSV/TSV cell against formula injection (OWASP): prefix a
+// single quote when the cell starts with a formula trigger (= + - @) so
+// Excel/LibreOffice treats it as text instead of executing =CMD(...) etc.
+function rcaFormulaSafe(value) {
+  const s = value === null || value === undefined ? '' : String(value);
+  if (s && (s[0] === '=' || s[0] === '+' || s[0] === '-' || s[0] === '@')) {
+    return "'" + s;
+  }
+  return s;
+}
+
 // Escape one CSV cell: wrap in quotes if it contains comma, quote, or newline.
 function rcaCsvCell(value) {
-  const s = value === null || value === undefined ? '' : String(value);
+  const s = rcaFormulaSafe(value);
   if (/[",\n\r]/.test(s)) {
     return '"' + s.replace(/"/g, '""') + '"';
   }
@@ -23,7 +34,10 @@ function rcaToCsv(headers, rows) {
 // Build a TSV string (tabs). Newlines/tabs inside cells are collapsed to spaces
 // so a single record stays on one line when pasted into a spreadsheet.
 function rcaToTsv(headers, rows) {
-  const clean = (v) => (v === null || v === undefined ? '' : String(v).replace(/[\t\r\n]+/g, ' '));
+  const clean = (v) => {
+    const safe = rcaFormulaSafe(v);
+    return safe.replace(/[\t\r\n]+/g, ' ');
+  };
   const lines = [headers.map(clean).join('\t')];
   for (const row of rows) {
     lines.push(row.map(clean).join('\t'));
@@ -33,8 +47,12 @@ function rcaToTsv(headers, rows) {
 
 // Trigger a file download from a text blob.
 function rcaDownload(filename, text, mime) {
-  // Prepend a UTF-8 BOM for CSV so Excel reads CJK/Cyrillic correctly.
-  const needsBom = (mime || '').indexOf('csv') !== -1;
+  // Prepend a UTF-8 BOM for CSV / TSV so Excel reads CJK/Cyrillic
+  // correctly when the user opens the file with double-click. Without
+  // the BOM, Excel interprets the file as the system code page (usually
+  // Windows-1252) and turns CJK / Cyrillic characters into mojibake.
+  const lowerMime = (mime || '').toLowerCase();
+  const needsBom = lowerMime.indexOf('csv') !== -1 || lowerMime.indexOf('tsv') !== -1;
   const parts = needsBom ? ['﻿', text] : [text];
   const blob = new Blob(parts, { type: (mime || 'text/plain') + ';charset=utf-8' });
   const url = URL.createObjectURL(blob);

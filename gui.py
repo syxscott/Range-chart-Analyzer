@@ -13,6 +13,7 @@ image downscale); without it the app still works but shows no thumbnail.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import concurrent.futures
 import queue
@@ -20,6 +21,13 @@ import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+
+# Bug-12 fix: a module-level logger so the dozens of bare `except
+# Exception:` blocks below have somewhere to report what they swallowed.
+# Without this, a button silently failing leaves no trace and the user
+# has no idea why "nothing happened". The logger writes to stderr by
+# default; redirect via the standard logging config if you want a file.
+log = logging.getLogger("rca.gui")
 
 # UI-Mod-2: optional Windows 11 Fluent theme (sv_ttk). If unavailable,
 # fall back to ttk's default clam theme.
@@ -45,6 +53,7 @@ from rca_core import (  # noqa: E402
 from rca_core.aggregate import (
     COLUMNAR_SECTION_SCHEMA,
     RANGE_CHART_SCHEMA,
+    SCHEMA_BY_MODE,
     merge_results,
 )
 from rca_core.extractor import (  # noqa: E402
@@ -52,9 +61,10 @@ from rca_core.extractor import (  # noqa: E402
     DEFAULT_MAX_TOKENS,
     DEFAULT_MAX_EDGE,
     DEFAULT_MODEL,
+    ExtractResult,
     clamp_max_tokens,
 )
-from rca_core import merge_results, ProviderStore  # noqa: E402
+from rca_core import ProviderStore  # noqa: E402
 from rca_core.llm import ApiFormat, LlmProvider, PROVIDER_PRESETS  # noqa: E402
 
 try:
@@ -124,9 +134,19 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict) -> None:
+    # Atomic write: write to a sibling tmp file, fsync, then os.replace. Mirrors
+    # ProviderStore.save() so a crash mid-write can never truncate the config
+    # file (which used to lose the API key + settings together).
     try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        tmp = CONFIG_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except (AttributeError, OSError):
+                pass
+        os.replace(tmp, CONFIG_PATH)
     except Exception:
         pass
 
@@ -208,9 +228,12 @@ class ToastNotification:
     def _reposition(self):
         self.win.update_idletasks()
         sw = self.win.winfo_screenwidth()
-        sh = self.win.winfo_screenwidth()
-        # Stack new toasts above existing ones.
+        sh = self.win.winfo_screenheight()
+        # Stack new toasts above existing ones; clamp to screen so a
+        # long stack of toasts never falls off the bottom of the screen.
         y_offset = 24 + len(ToastNotification.ACTIVE) * 52
+        max_y = max(24, sh - self.win.winfo_reqheight() - 24)
+        y_offset = min(y_offset, max_y)
         self.win.geometry(f"+{sw - self.win.winfo_reqwidth() - 24}+{y_offset}")
 
     def dismiss(self):
@@ -814,6 +837,7 @@ class RangeChartApp:
             ("auto", "Auto"),
             ("range_chart", "Range Chart"),
             ("columnar_section", "Columnar Section"),
+            ("abundance_diagram", "Abundance / Pollen"),
         ]
         self.cmb_chart_type = ttk.Combobox(
             adv_frame, state="readonly", width=14,
@@ -1075,9 +1099,14 @@ class RangeChartApp:
         self.image_path = path
         # Load + encode in a thread-free quick step (files are local).
         try:
-            b64, mime, w, h, resized = load_image_b64(path, self._max_edge())
+            b64, mime, w, h, resized, decode_error = load_image_b64(path, self._max_edge())
         except Exception:
             self.var_status.set(self._t("err.imageRead"))
+            return None
+        if decode_error:
+            # Bug-15 fix: surface a specific "corrupt image" message
+            # instead of silently going through with a 0×0 thumbnail.
+            self.var_status.set(self._t("err.imageDecode"))
             return None
         self.image_b64 = b64
         self.media_type = mime
@@ -1133,13 +1162,24 @@ class RangeChartApp:
             self._cleanup_paste_tmp()
             self.image_path = tmp_path
             self._last_paste_tmp = tmp_path
-            b64, mime, w, h, resized = load_image_b64(tmp_path, self._max_edge())
+            b64, mime, w, h, resized, decode_error = load_image_b64(tmp_path, self._max_edge())
         except Exception:
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
             self.var_status.set(self._t("err.imageRead"))
+            return None
+        if decode_error:
+            # Bug-15 fix: clipboard image is corrupt. Delete the tmp file
+            # and surface a specific message rather than uploading 0×0.
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            self._last_paste_tmp = None
+            self.image_path = None
+            self.var_status.set(self._t("err.imageDecode"))
             return None
         self.image_b64 = b64
         self.media_type = mime
@@ -1504,7 +1544,9 @@ class RangeChartApp:
         mode = (self.var_chart_type.get() or "auto").strip()
         if mode == "auto":
             cap = (self.txt_caption.get("1.0", "end").strip() + " " + (self.image_path or "")).lower()
-            if any(k in cap for k in ("column", "section", "柱状", "柱状図", "col")):
+            if any(k in cap for k in ("pollen", "abundance", "percentage diagram", "palyno", "孢粉", "花粉", "丰度", "百分比")):
+                mode = "abundance_diagram"
+            elif any(k in cap for k in ("column", "columns", "columnar", "col_section", "col_sections", "柱状", "柱状図", "柱状图")):
                 mode = "columnar_section"
             else:
                 mode = "range_chart"
@@ -1530,7 +1572,10 @@ class RangeChartApp:
                     r = fut.result()
                 except Exception as exc:
                     # extract() never raises, but defend against unforeseen
-                    # bugs in user code.
+                    # bugs in user code. Bug-12 fix: log so the exception
+                    # class + traceback is recoverable when the user reports
+                    # "nothing happened".
+                    log.exception("extract future raised in worker thread")
                     r = ExtractResult(ok=False, error_key="err.http", raw=str(exc))
                 if r.ok and r.data is not None:
                     ok_datas.append(r.data)
@@ -1543,7 +1588,7 @@ class RangeChartApp:
         if not ok_datas:
             self.msg_queue.put(last_fail if last_fail else extract(mode=mode, **params))
             return
-        schema = COLUMNAR_SECTION_SCHEMA if mode == "columnar_section" else RANGE_CHART_SCHEMA
+        schema = SCHEMA_BY_MODE.get(mode, RANGE_CHART_SCHEMA)
         merged = merge_results(ok_datas, total_runs=runs, schema=schema)
         self.msg_queue.put(ExtractResult(
             ok=True, data=merged, raw="\n---RUN---\n".join(raws)[:8000],
@@ -1558,6 +1603,12 @@ class RangeChartApp:
                 self._on_result(result)
         except queue.Empty:
             pass
+        except Exception:
+            # Bug-12 fix: log so a real exception in the UI pump isn't
+            # silently dropped. The pump is what keeps the UI alive, so
+            # any error here would otherwise freeze the app with no
+            # breadcrumb.
+            log.exception("UI message pump crashed in _poll_queue")
         self.root.after(120, self._poll_queue)
 
     def _on_result(self, result):
@@ -1687,12 +1738,21 @@ class RangeChartApp:
         self.root.clipboard_append(text)
         self.var_status.set(self._t("status.copied"))
 
+    def _export_prefix(self) -> str:
+        """Filename prefix reflecting the current result's chart kind."""
+        r = self.result or {}
+        if isinstance(r.get("abundances"), list):
+            return "abundance_diagram_"
+        if isinstance(r.get("sections"), list) and "species_ranges" not in r:
+            return "columnar_section_"
+        return "range_chart_"
+
     def _export_csv(self, table_id):
         if not self.result:
             return
         path = filedialog.asksaveasfilename(
             title=self._t("dialog.saveCsv"), defaultextension=".csv",
-            initialfile=f"range_chart_{table_id}.csv",
+            initialfile=f"{self._export_prefix()}{table_id}.csv",
             filetypes=[("CSV", "*.csv")],
         )
         if not path:
@@ -1707,7 +1767,7 @@ class RangeChartApp:
             return
         path = filedialog.asksaveasfilename(
             title=self._t("dialog.saveJson"), defaultextension=".json",
-            initialfile="range_chart_result.json",
+            initialfile=f"{self._export_prefix()}result.json",
             filetypes=[("JSON", "*.json")],
         )
         if not path:

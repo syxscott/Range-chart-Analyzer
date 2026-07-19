@@ -70,6 +70,10 @@ def _get(base, path):
 
 def _post(base, path, data, headers=None):
     h = headers or {"Content-Type": "application/json"}
+    # Default X-Requested-With so requests pass the server's CSRF/origin
+    # check (the real frontend always sends it). Tests that want to assert
+    # on the cross-origin rejection path can override it.
+    h.setdefault("X-Requested-With", "XMLHttpRequest")
     body = data if isinstance(data, bytes) else data.encode("utf-8")
     req = urllib.request.Request(base + path, data=body, headers=h, method="POST")
     return urllib.request.urlopen(req, timeout=10)
@@ -165,10 +169,23 @@ def test_post_extract_bad_json():
     try:
         try:
             r = _post(base, "/api/extract", "not json",
-                      {"Content-Type": "text/plain"})
+                      {"Content-Type": "application/json"})
             check("bad-json-400", False)
         except urllib.error.HTTPError as e:
             check("bad-json-400", e.code == 400)
+    finally:
+        _stop(httpd, t)
+
+
+def test_post_extract_wrong_content_type():
+    """The CSRF guard rejects non-JSON POSTs with 415 before parsing."""
+    base, httpd, t = _start()
+    try:
+        try:
+            _post(base, "/api/extract", "{}", {"Content-Type": "text/plain"})
+            check("wrong-ctype-415", False)
+        except urllib.error.HTTPError as e:
+            check("wrong-ctype-415", e.code == 415)
     finally:
         _stop(httpd, t)
 

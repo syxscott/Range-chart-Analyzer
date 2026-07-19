@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -36,6 +37,20 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
+
+# Local imports kept lazy so this module can be imported on Python versions
+# or in environments that don't have the rest of rca_core available.
+def _usage_helpers():
+    from .usage import estimate_tokens, parse_usage
+    return estimate_tokens, parse_usage
+def estimate_tokens(text: str) -> int:
+    """Forwarded to rca_core.usage.estimate_tokens; indirection keeps
+    this module importable in isolation (e.g. for some unit tests)."""
+    fn, _ = _usage_helpers()
+    return fn(text)
+def parse_usage(payload, fmt_hint: str = ""):
+    fn, p = _usage_helpers()
+    return p(payload, fmt_hint)
 
 # ---------------------------------------------------------------------------
 # API format
@@ -75,6 +90,14 @@ class LlmProvider:
     is_current: bool = False
     created_at: float = 0.0
     sort_index: int = 0
+    # Consecutive connection-test failures (0..3+). Persisted so the
+    # health badge survives an app restart — the previous version kept
+    # this only on the in-memory ProviderCard widget, so a user who
+    # saw a ⚠ before quitting saw a clean ✓ on next launch and might
+    # mistake a broken endpoint for a healthy one. Capped at 3 by the
+    # GUI (the badge displays ✗, ✗2, ✗3+) so any value above 3 is fine
+    # here but not very informative.
+    consecutive_failures: int = 0
 
     def __post_init__(self) -> None:
         if isinstance(self.api_format, str):
@@ -359,11 +382,11 @@ PROVIDER_PRESETS: list[ProviderPreset] = [
        category="cn_official",
        doc_url="https://xiaomimimo.com", api_key_hint="..."),
     _p("Kimi", ApiFormat.ANTHROPIC,
-       "https://api.moonshot.cn/v1", "kimi-k2-turbo-preview",
+       "https://api.moonshot.cn/anthropic", "kimi-k2-turbo-preview",
        category="cn_official",
        doc_url="https://platform.moonshot.cn/console/api-keys", api_key_hint="sk-..."),
     _p("Kimi For Coding", ApiFormat.ANTHROPIC,
-       "https://api.moonshot.cn/v1", "kimi-k2-turbo-preview",
+       "https://api.moonshot.cn/anthropic", "kimi-k2-turbo-preview",
        category="cn_official",
        doc_url="https://platform.moonshot.cn/console/api-keys", api_key_hint="sk-..."),
 
@@ -616,6 +639,23 @@ def _default_store_path() -> str:
     return os.path.join(base, "providers.json")
 
 
+def _chmod_user_only(path: str) -> None:
+    """Restrict a file to owner read/write (0600) on POSIX. No-op on
+    Windows (ACLs are inherited from the home directory).
+
+    Bug-9 fix: ``providers.json`` contains plaintext API keys; if the
+    file is created without an explicit mode, the user's umask may leave
+    it world-readable (e.g. umask 022 → mode 0644). Tightening here
+    closes that leak on Linux/macOS. Best-effort — if chmod fails (e.g.
+    on a read-only mount), we don't crash the save.
+    """
+    try:
+        if hasattr(os, "chmod"):
+            os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 @dataclass
 class ProviderStore:
     """Read/write/switch LLM providers on disk."""
@@ -681,7 +721,13 @@ class ProviderStore:
             json.dump(data, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
+        # Bug-9 fix: tighten permissions on POSIX *before* the rename so
+        # the final file is never readable by other users. On Windows
+        # this is a no-op (the ACL model differs); the worst case is
+        # readable only to the current user via the inherited DACL.
+        _chmod_user_only(tmp)
         os.replace(tmp, self.path)
+        _chmod_user_only(self.path)
 
     # -- defaults --------------------------------------------------------
 
@@ -695,7 +741,11 @@ class ProviderStore:
             name=mini.name,
             api_format=mini.api_format,
             endpoint=mini.endpoint,
-            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            # Read the MiniMax-specific env var (not ANTHROPIC_API_KEY, which
+            # previously mis-attributed the user's Anthropic key to MiniMax -
+            # a functional break AND a third-party key leak). Empty by default;
+            # the user pastes their MiniMax key in the UI.
+            api_key=os.environ.get("MINIMAX_API_KEY", ""),
             model=mini.model,
             extra_headers=dict(mini.extra_headers),
             is_current=True,
@@ -750,6 +800,12 @@ class ProviderStore:
         with self.lock:
             for i, p in enumerate(self.providers):
                 if p.id == provider.id:
+                    # Preserve the active flag: the wizard rebuilds the provider
+                    # with is_current=False (default), so naively replacing
+                    # would deactivate an active provider and get_current()
+                    # would silently fall back to the first list entry,
+                    # rerouting calls/credentials to a different endpoint.
+                    provider.is_current = p.is_current
                     self.providers[i] = provider
                     self.save()
                     return True
@@ -836,6 +892,9 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
 
     Returns ``(None, status, body_bytes)`` for HTTPError so callers can
     surface the upstream error body instead of just the status code (H7).
+    For network-layer failures (DNS, refused connection, timeout, etc.) the
+    status is ``None`` and ``body_bytes`` carries a short diagnostic string
+    so the caller can distinguish timeout from connection-refused in logs.
     """
     req = urllib.request.Request(
         url,
@@ -855,10 +914,39 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
         except Exception:
             err_body = b""
         return None, e.code, err_body
-    except (urllib.error.URLError, TimeoutError):
-        return None, None, b""
-    except Exception:
-        return None, None, b""
+    except TimeoutError as e:
+        # Python 3.10+ raises TimeoutError from socket.timeout; older code
+        # surfaces it as URLError(timeout=...). Mark it explicitly so logs
+        # don't say "connection refused" when the real cause was a slow
+        # upstream.
+        return None, None, f"[network] timeout: {e}".encode("utf-8")
+    except urllib.error.URLError as e:
+        # URLError.reason distinguishes DNS from "refused" from "no route".
+        reason = getattr(e, "reason", None)
+        msg = f"[network] {type(reason).__name__ if reason else 'URLError'}: {reason or e}"
+        return None, None, msg.encode("utf-8")
+    except Exception as e:
+        # Last-resort guard: log the exception class + str so a future
+        # contributor can triage without re-running.
+        return None, None, f"[network] {type(e).__name__}: {e}".encode("utf-8")
+
+
+_VERSION_TAIL = re.compile(r"/v\d+(?:beta)?/?$", re.IGNORECASE)
+
+
+def _api_base(endpoint: str) -> str:
+    """Normalize an endpoint by stripping a trailing API-version segment
+    (``/v1``, ``/v1beta``) so per-format callers can append their canonical
+    path without producing ``/v1/v1`` double paths.
+
+    Presets historically embed ``/v1`` in the endpoint (e.g.
+    ``https://api.openai.com/v1``); the per-format callers also append
+    ``/v1/...``, which doubled the segment and 404'd ~48 OpenAI presets
+    plus the official Google Gemini endpoint (``/v1beta/v1beta``). Non-version
+    trailing segments (``/anthropic``, ``/compatible-mode``, ``/openai``)
+    are preserved.
+    """
+    return _VERSION_TAIL.sub("", (endpoint or "").rstrip("/"))
 
 
 def _call_anthropic(
@@ -870,10 +958,10 @@ def _call_anthropic(
     user_text: str,
     max_tokens: int,
     timeout_sec: int,
-) -> tuple[str | None, bool, int | None, str]:
+) -> tuple[str | None, bool, int | None, str, dict | None]:
     if not image_b64:
-        return None, False, None, ""
-    target = provider.endpoint.rstrip("/") + "/v1/messages"
+        return None, False, None, "", None
+    target = _api_base(provider.endpoint) + "/v1/messages"
     body: dict[str, Any] = {
         "model": provider.model,
         "max_tokens": max_tokens or 4000,
@@ -895,7 +983,13 @@ def _call_anthropic(
         "content-type": "application/json",
     }
     headers.update(provider.extra_headers)
-    return _read_response(target, body, headers, timeout_sec)
+    text, truncated, status, err_body, payload = _read_response(target, body, headers, timeout_sec)
+    usage = None
+    if payload is not None:
+        u = parse_usage(payload, "anthropic")
+        if u:
+            usage = dict(u); usage["estimated"] = False
+    return text, truncated, status, err_body, usage
 
 
 def _call_openai(
@@ -907,13 +1001,17 @@ def _call_openai(
     user_text: str,
     max_tokens: int,
     timeout_sec: int,
-) -> tuple[str | None, bool, int | None, str]:
+) -> tuple[str | None, bool, int | None, str, dict | None]:
     if not image_b64:
-        return None, False, None, ""
-    target = provider.endpoint.rstrip("/") + "/v1/chat/completions"
+        return None, False, None, "", None
+    target = _api_base(provider.endpoint) + "/v1/chat/completions"
+    # OpenAI reasoning models (o1/o3/o4-mini) reject `max_tokens` and require
+    # `max_completion_tokens`; sending the legacy name 400s the request.
+    model = provider.model
+    is_reasoning = bool(model and re.match(r"^o\d", model))
     body: dict[str, Any] = {
-        "model": provider.model,
-        "max_tokens": max_tokens or 4000,
+        "model": model,
+        ("max_completion_tokens" if is_reasoning else "max_tokens"): max_tokens or 4000,
         "messages": [
             {"role": "system", "content": system_prompt},
             {
@@ -934,19 +1032,33 @@ def _call_openai(
     payload_bytes, status, err_body = _post_json(target, body, headers, timeout_sec)
     err_str = _decode_err_body(err_body)
     if payload_bytes is None:
-        return None, False, status, err_str
+        return None, False, status, err_str, None
     try:
         payload = json.loads(payload_bytes.decode("utf-8"))
     except Exception:
-        return None, False, status, err_str
+        return None, False, status, err_str, None
     choices = payload.get("choices") or []
     raw_text = ""
     if choices and isinstance(choices[0], dict):
         msg = choices[0].get("message") or {}
-        raw_text = msg.get("content", "") or ""
-    finish = choices[0].get("finish_reason") if choices else None
+        content = msg.get("content", "")
+        # Some OpenAI-compatible endpoints return content as a list of parts
+        # ({"type":"text","text":...}) rather than a plain string; collapse
+        # it to text so downstream JSON parsing doesn't receive a list.
+        if isinstance(content, list):
+            raw_text = "".join(
+                (p.get("text", "") if isinstance(p, dict) else (p if isinstance(p, str) else ""))
+                for p in content
+            )
+        else:
+            raw_text = content or ""
+    finish = choices[0].get("finish_reason") if choices and isinstance(choices[0], dict) else None
     truncated = finish == "length"
-    return raw_text, truncated, status, err_str
+    usage = None
+    u = parse_usage(payload, "openai")
+    if u:
+        usage = dict(u); usage["estimated"] = False
+    return raw_text, truncated, status, err_str, usage
 
 
 def _call_gemini(
@@ -958,15 +1070,15 @@ def _call_gemini(
     user_text: str,
     max_tokens: int,
     timeout_sec: int,
-) -> tuple[str | None, bool, int | None, str]:
+) -> tuple[str | None, bool, int | None, str, dict | None]:
     if not image_b64:
-        return None, False, None, ""
+        return None, False, None, "", None
     # Gemini accepts the API key via query param (key=) or header
     # (x-api-key). We default to the header to keep the key out of server,
     # proxy, and Referer logs — matching the safe pattern used by the other
     # format callers. Callers can override via provider.extra_headers.
     model = provider.model or "gemini-2.5-pro"
-    base = provider.endpoint.rstrip("/")
+    base = _api_base(provider.endpoint)
     target = f"{base}/v1beta/models/{model}:generateContent"
     body: dict[str, Any] = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
@@ -984,19 +1096,22 @@ def _call_gemini(
     body.update(provider.extra_body)
     headers = {
         "content-type": "application/json",
-        # Keep the API key in the header, not in the URL, to avoid leaking
-        # the key via proxy / server / Referer logs.
+        # Google's official Generative Language API authenticates via
+        # `x-goog-api-key` (or ?key=); `x-api-key` is an Anthropic convention
+        # the official endpoint ignores, so the "Google Gemini" preset 401'd.
+        # Send both so official Google + third-party Gemini proxies both work.
+        "x-goog-api-key": provider.api_key,
         "x-api-key": provider.api_key,
     }
     headers.update(provider.extra_headers)
     payload_bytes, status, err_body = _post_json(target, body, headers, timeout_sec)
     err_str = _decode_err_body(err_body)
     if payload_bytes is None:
-        return None, False, status, err_str
+        return None, False, status, err_str, None
     try:
         payload = json.loads(payload_bytes.decode("utf-8"))
     except Exception:
-        return None, False, status, err_str
+        return None, False, status, err_str, None
     candidates = payload.get("candidates") or []
     raw_text = ""
     if candidates and isinstance(candidates[0], dict):
@@ -1005,29 +1120,35 @@ def _call_gemini(
         for part in parts:
             if isinstance(part, dict) and "text" in part:
                 raw_text += part["text"]
-    finish = candidates[0].get("finishReason") if candidates else None
+    finish = candidates[0].get("finishReason") if candidates and isinstance(candidates[0], dict) else None
     truncated = finish in ("MAX_TOKENS", "LENGTH")
-    return raw_text, truncated, status, err_str
+    usage = None
+    u = parse_usage(payload, "gemini")
+    if u:
+        usage = dict(u); usage["estimated"] = False
+    return raw_text, truncated, status, err_str, usage
 
 
 def _read_response(
     target: str, body: dict[str, Any], headers: dict[str, str], timeout_sec: int
-) -> tuple[str | None, bool, int | None, str]:
+) -> tuple[str | None, bool, int | None, str, dict | None]:
+    """Anthropic-format specific reader. Returns the parsed payload as the
+    5th element so the caller can extract usage without re-parsing."""
     payload_bytes, status, err_body = _post_json(target, body, headers, timeout_sec)
     err_str = _decode_err_body(err_body)
     if payload_bytes is None:
-        return None, False, status, err_str
+        return None, False, status, err_str, None
     try:
         payload = json.loads(payload_bytes.decode("utf-8"))
     except Exception:
-        return None, False, status
+        return None, False, status, err_str, None
     raw_text = ""
     for c in payload.get("content", []) or []:
         if isinstance(c, dict) and c.get("type") == "text":
             raw_text = c.get("text", "")
             break
     truncated = payload.get("stop_reason") == "max_tokens"
-    return raw_text, truncated, status, err_str
+    return raw_text, truncated, status, err_str, payload
 
 
 def call_llm_api(
@@ -1040,13 +1161,20 @@ def call_llm_api(
     max_tokens: int,
     timeout_sec: int = 120,
     capture_error_body: bool = False,
-) -> tuple[str | None, bool, int | None, str]:
+) -> tuple[str | None, bool, int | None, str, dict | None]:
     """Dispatch a call on the provider's API format. Never raises.
 
-    H7: the 4th tuple element is the upstream error body string (decoded,
-    truncated to 2 KB). Set ``capture_error_body=True`` to populate it on
-    success too — usually callers only need it on failure, in which case
-    it comes through automatically.
+    Returns ``(raw_text, truncated, status, err_body, usage)``:
+
+    * ``raw_text``    — model text response (None on error / no image)
+    * ``truncated``   — True when the model hit the max_tokens limit
+    * ``status``      — HTTP status (None on network failure)
+    * ``err_body``    — decoded, truncated upstream error body
+    * ``usage``       — token usage dict
+      ``{input_tokens, output_tokens, cache_read_tokens,
+        cache_creation_tokens, estimated}``
+      or ``None`` when the API didn't return a usage block and we
+      couldn't estimate it (no text).
     """
     dispatch = {
         ApiFormat.ANTHROPIC: _call_anthropic,
@@ -1054,7 +1182,7 @@ def call_llm_api(
         ApiFormat.GEMINI: _call_gemini,
     }
     fn = dispatch.get(provider.api_format) or _call_anthropic
-    raw_text, truncated, status, err_body = fn(
+    raw_text, truncated, status, err_body, usage = fn(
         provider=provider,
         system_prompt=system_prompt,
         image_b64=image_b64,
@@ -1065,7 +1193,19 @@ def call_llm_api(
     )
     if capture_error_body and not err_body:
         err_body = ""
-    return raw_text, truncated, status, err_body
+    # When the API didn't return a usage block but we got text back, fall
+    # back to local estimation. Flag the row so the UI can label it.
+    if usage is None and raw_text:
+        est_in = estimate_tokens(user_text + " " + system_prompt)
+        est_out = estimate_tokens(raw_text)
+        usage = {
+            "input_tokens": est_in,
+            "output_tokens": est_out,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "estimated": True,
+        }
+    return raw_text, truncated, status, err_body, usage
 
 
 # ---------------------------------------------------------------------------
@@ -1090,21 +1230,14 @@ def call_llm_api_with_retry(
     retries: int = 3,
     backoff_factor: float = 1.6,
     initial_backoff_sec: float = 0.8,
-) -> tuple[str | None, bool, int | None, str]:
+) -> tuple[str | None, bool, int | None, str, dict | None]:
     """call_llm_api wrapped with exponential-backoff retry on transient errors.
 
-    Retries on:
-      - HTTP 408, 425, 429 (rate limit), 5xx
-      - urllib URLError (network/timeout/DNS)
-
-    Does NOT retry on 4xx other than 408/425/429 (auth/permission errors).
-    On final failure returns the last attempt's result with err_body
-    annotated to indicate retry exhaustion (helpful for diagnostics).
-
-    The function never raises - the inner call_llm_api already swallows
-    exceptions and returns a 4-tuple of (text|None, truncated, status|None, err).
+    Returns the same 5-tuple as ``call_llm_api``. The retry annotations
+    (the ``[retry N/M after Xs]`` suffix) are appended to ``err_body`` so
+    the operator can see how many attempts were spent before giving up.
     """
-    last: tuple[str | None, bool, int | None, str] = (None, False, None, "")
+    last: tuple[str | None, bool, int | None, str, dict | None] = (None, False, None, "", None)
     for attempt in range(retries):
         last = call_llm_api(
             provider=provider,
@@ -1116,27 +1249,41 @@ def call_llm_api_with_retry(
             timeout_sec=timeout_sec,
             capture_error_body=capture_error_body,
         )
-        text, truncated, status, err_body = last
-        # Success: non-None text.
+        text, truncated, status, err_body, usage = last
         if text is not None:
             return last
-        # Decide whether to retry.
         retryable = (
             status in _RETRYABLE_STATUS
-            or status is None  # network error / timeout (no HTTP response)
+            or status is None
         )
         if not retryable:
             return last
-        # Stamp retry context into err_body for diagnostics. We do this for
-        # every retryable attempt (including the final one) so the operator
-        # can see the retry history in the returned error body.
+        # MEDIUM-2: network errors (status=None) can persist across multiple
+        # retries and may indicate a persistent connectivity issue.
+        # Cap network-error retries at 1 so we fail fast rather than burning
+        # through all retries on a persistently unreachable endpoint.
+        if status is None and attempt >= 1:
+            # Even when we cap network-error retries at 1 attempt, the caller
+            # still needs to know we did try — annotate err_body with the
+            # retry summary so the surfaced message reads "1 attempt, gave up"
+            # instead of "single connection failure with no indication of
+            # retry behaviour".
+            backoff_final = initial_backoff_sec * (backoff_factor ** attempt)
+            net_suffix = f"[retry {attempt + 1}/{retries} after {backoff_final:.1f}s — network error, giving up]"
+            if err_body:
+                last = (text, truncated, status, err_body + "\n" + net_suffix, usage)
+            else:
+                last = (text, truncated, status, net_suffix, usage)
+            return last
         backoff = initial_backoff_sec * (backoff_factor ** attempt)
+        suffix = f"[retry {attempt + 1}/{retries} after {backoff:.1f}s]"
         if err_body:
-            last = (text, truncated, status,
-                    err_body + f"\n[retry {attempt + 1}/{retries} after {backoff:.1f}s]")
+            err_body = err_body + "\n" + suffix
+        elif status is not None:
+            err_body = f"HTTP {status}\n" + suffix
         else:
-            last = (text, truncated, status,
-                    f"[retry {attempt + 1}/{retries} after {backoff:.1f}s]")
+            err_body = suffix
+        last = (text, truncated, status, err_body, usage)
         if attempt == retries - 1:
             return last
         time.sleep(backoff)
@@ -1190,7 +1337,7 @@ def _extract_models(payload: dict[str, Any], fmt: ApiFormat) -> list[str]:
 
 
 def _probe_openai_models(provider: LlmProvider, timeout_sec: int) -> ConnectionResult:
-    target = provider.endpoint.rstrip("/") + "/v1/models"
+    target = _api_base(provider.endpoint) + "/v1/models"
     headers = {
         "Authorization": f"Bearer {provider.api_key}",
         "content-type": "application/json",
@@ -1232,13 +1379,17 @@ def _probe_anthropic_models(provider: LlmProvider, timeout_sec: int) -> Connecti
 
 def _probe_gemini_models(provider: LlmProvider, timeout_sec: int) -> ConnectionResult:
     model = provider.model or "gemini-2.5-pro"
-    base = provider.endpoint.rstrip("/")
+    base = _api_base(provider.endpoint)
     # C4: put API key in x-api-key header (same as _call_gemini). Earlier
     # this function put it in the URL via ?key=... which leaked the key
     # into proxy/Referer logs. Users who need the URL form can override via
     # `extra_headers={"X-Use-Url-Key": "1"}` (gate detected via the body shape).
     target = f"{base}/v1beta/models"
-    headers = {"content-type": "application/json", "x-api-key": provider.api_key}
+    headers = {
+        "content-type": "application/json",
+        "x-goog-api-key": provider.api_key,
+        "x-api-key": provider.api_key,
+    }
     headers.update(provider.extra_headers)
     t0 = _now_ms()
     payload_bytes, status, err_body = _post_json(target, {}, headers, timeout_sec)
@@ -1286,19 +1437,21 @@ def _probe_minimal_generate(
         """Returns (payload, status, err_body, latency_ms)."""
         t0 = _now_ms()
         if fmt == ApiFormat.OPENAI:
-            target = provider.endpoint.rstrip("/") + "/v1/chat/completions"
+            target = _api_base(provider.endpoint) + "/v1/chat/completions"
             body = {"model": model, "max_tokens": PROBE_MAX_TOKENS,
                     "messages": [{"role": "user", "content": "hi"}]}
             headers = {"Authorization": f"Bearer {provider.api_key}",
                        "content-type": "application/json"}
         elif fmt == ApiFormat.GEMINI:
-            base = provider.endpoint.rstrip("/")
+            base = _api_base(provider.endpoint)
             target = f"{base}/v1beta/models/{model}:generateContent"
             body = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}],
                     "generation_config": {"max_output_tokens": PROBE_MAX_TOKENS}}
-            headers = {"content-type": "application/json", "x-api-key": provider.api_key}
+            headers = {"content-type": "application/json",
+                       "x-goog-api-key": provider.api_key,
+                       "x-api-key": provider.api_key}
         else:  # ANTHROPIC
-            target = provider.endpoint.rstrip("/") + "/v1/messages"
+            target = _api_base(provider.endpoint) + "/v1/messages"
             body = {"model": model, "max_tokens": PROBE_MAX_TOKENS,
                     "messages": [{"role": "user", "content": "hi"}]}
             headers = {"x-api-key": provider.api_key,
@@ -1340,11 +1493,23 @@ def _probe_minimal_generate(
             res = ConnectionResult(ok=True, latency_ms=latency, status=status)
             return res
         # Non-2xx or network error: check if we should keep trying.
-        # Stop early on 401/403 when we already tried the configured model —
-        # that means the key itself is rejected, not just the model name.
-        if status in (401, 403) and configured:
+        #
+        # Bug-7 fix: distinguish "credential rejected" (401/403) from
+        # "model not found" (400/404). On 401/403 the configured key is
+        # bad — retrying with fallback models only burns quota and may
+        # trigger upstream anti-abuse, so bail immediately. On 400/404
+        # the configured model name is the problem — *that's* when the
+        # fallback list is useful. Apply the early-stop only AFTER the
+        # configured model has been tried, so users with a valid key +
+        # wrong model name still get the fallback benefit.
+        if status in (401, 403) and model == configured:
             # Key is likely invalid; don't waste quota on fallbacks.
             break
+        if status in (400, 404) and model != configured:
+            # Configured model is rejected; we ARE trying fallbacks now,
+            # and they all failed too. Stop early to avoid further burns.
+            # (Falls through to the loop's natural end.)
+            pass
 
     # All candidates exhausted.
     res = ConnectionResult(ok=False, latency_ms=best_latency or 0, status=last_status or None)

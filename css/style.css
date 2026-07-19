@@ -10,7 +10,7 @@
 
     --success-color: #10b981;
     --success-soft:  #d1fae5;
-    --warning-color: #f59e0b;
+    --warning-color: #b45309;  /* amber-700: ~4.7:1 on white (was #f59e0b ≈ 2.9:1, failed WCAG AA) */
     --warning-soft:  #fef3c7;
     --danger-color:  #ef4444;
     --danger-soft:   #fee2e2;
@@ -154,26 +154,11 @@
     :root:not([data-theme]) .pill-low { color: #fca5a5; }
 }
 
-/* Phase A: button micro-interaction + focus-visible */
-.btn,
-button {
-    transition: transform var(--transition-fast), box-shadow var(--transition-fast),
-                background-color var(--transition), border-color var(--transition);
-}
-.btn:not(:disabled):hover,
-button.btn:not(:disabled):hover {
-    transform: translateY(-1px);
-    box-shadow: var(--shadow-pop);
-}
-.btn:not(:disabled):active,
-button.btn:not(:disabled):active {
-    transform: translateY(0);
-    box-shadow: var(--shadow-sm);
-}
-:focus-visible {
-    outline: 2px solid var(--primary-color);
-    outline-offset: 2px;
-    border-radius: var(--radius-sm);
+/* Button row layout */
+.btn-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 /* Phase D: reduce all motion when the user requests it. */
@@ -183,6 +168,18 @@ button.btn:not(:disabled):active {
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
     }
+}
+
+/* Narrow-viewport layout — phones (<480px) can't fit the two-column
+   form-grid (each column is at least 220px, so 2 cols blow past the
+   viewport). Collapse to a single column on small screens so users
+   don't have to scroll horizontally inside a settings card. */
+@media (max-width: 480px) {
+    .form-grid { grid-template-columns: 1fr; }
+    /* The header h1 can also wrap awkwardly — keep the page chrome
+       honest on narrow viewports. */
+    .header-content h1 { font-size: 18px; }
+    .header-actions { gap: 6px; }
 }
 
 /* ==================== Reset & base ==================== */
@@ -298,14 +295,22 @@ a:hover { text-decoration: underline; }
        already overridden for dark mode. */
     transition: box-shadow 200ms ease-out, transform 200ms ease-out;
 }
+/* FIX-4: remove translateY from base hover — touch devices would shift on long-press.
+       Shadow lift is harmless; translateY is kept in the media query below for pointer devices. */
 .card:hover {
-    transform: translateY(-2px);
     box-shadow: var(--shadow-lg);
+}
+/* Only re-apply translateY on devices that support hover (no phantom shift on touch-hold) */
+@media (hover: hover) and (pointer: fine) {
+    .card:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-lg);
+    }
 }
 .card h2 {
     /* Phase A: tighter, slightly larger h2. */
     font-size: 16px;
-    font-weight: 650;
+    font-weight: 600;
     color: var(--text-dark);
     letter-spacing: var(--tracking-tight);
     margin-bottom: 4px;
@@ -354,7 +359,14 @@ input[type="text"], input[type="password"], input[type="number"], select, textar
     background: var(--bg-white);
     transition: var(--transition);
 }
+/* Only show the focus ring when the user is keyboard-navigating
+   (Tab/Shift+Tab). Mouse-clicking shouldn't reveal an outline that
+   makes the input look broken. Older browsers that don't support
+   :focus-visible fall back to the standard :focus behavior. */
 input:focus, select:focus, textarea:focus {
+    outline: none;
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible {
     outline: none;
     border-color: var(--primary-color);
     box-shadow: 0 0 0 3px var(--primary-soft);
@@ -428,6 +440,12 @@ textarea { resize: vertical; min-height: 64px; }
     border-color: var(--border-strong);
 }
 .btn-secondary:not(:disabled):hover { background: var(--bg-lighter); }
+/* In dark mode --bg-lighter is nearly identical to --bg-light (#1f1c1a vs #161312),
+   making the hover feedback imperceptible. Use a lighter overlay instead. */
+:root[data-theme="dark"] .btn-secondary:not(:disabled):hover { background: rgba(255,255,255,0.07); }
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) .btn-secondary:not(:disabled):hover { background: rgba(255,255,255,0.07); }
+}
 .btn-small { padding: 6px 12px; font-size: 12px; }
 .btn-lg { padding: 12px 26px; font-size: 15px; }
 
@@ -711,6 +729,10 @@ button.btn.btn-primary:not(:disabled):active {
     from { background-position: 200% 0; }
     to   { background-position: -200% 0; }
 }
+/* FIX-7: disable skeleton shimmer when user prefers reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    .skeleton { animation: none; background: var(--bg-lighter); }
+}
 
 /* ==================== Skeleton loader ==================== */
 .skeleton-stack {
@@ -856,12 +878,18 @@ button.btn.btn-primary:not(:disabled):active {
 .table-actions { display: flex; gap: 8px; }
 
 .table-wrap {
-    /* Bug fix: overflow-x:auto on .table-wrap creates a new stacking
-       context which traps position:thead and makes it invisible (classic
-       CSS gotcha). Switch to overflow:visible so the sticky thead can
-       escape its parent and stick to the scrolling container. The outer
-       .results-scroll-wrapper handles horizontal scroll if needed. */
-    overflow-x: visible;
+    /* Wide tables (many columns, e.g. species_ranges + agreement column on
+       multi-run results) must scroll horizontally instead of overflowing the
+       card or getting clipped on narrow screens. overflow-x:auto turns this
+       into the horizontal scroll container the results tables need.
+
+       Note: a scroll container caps position:sticky headers to itself rather
+       than the viewport. Since these result tables render inline in a card
+       (the whole page scrolls, not a fixed-height region), we intentionally
+       do NOT rely on a viewport-sticky thead here — correct horizontal
+       scrolling matters more than a header that sticks while page-scrolling. */
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-sm);
@@ -872,14 +900,13 @@ table.data-table {
     font-size: 13px;
 }
 table.data-table thead th {
-    /* UI-Polish Phase 3: glassmorphic sticky header. Translucent bg
-       plus backdrop-filter for a "frosted" effect; uppercase + tracking
-       reads as proper column labels. */
+    /* FIX-8: backdrop-filter is GPU-heavy in dark mode.
+       Only apply blur in light mode; dark mode uses a solid
+       translucent background without blur for performance. */
     background: rgba(255, 255, 255, 0.9);
-    color: var(--text-base);
-    -webkit-backdrop-filter: blur(8px);
     backdrop-filter: blur(8px);
-    font-weight: 650;
+    color: var(--text-base);
+    font-weight: 600;
     font-size: var(--text-xs);
     text-transform: uppercase;
     letter-spacing: var(--tracking-wide);
@@ -887,41 +914,90 @@ table.data-table thead th {
     padding: 11px 16px;
     border-bottom: 2px solid var(--border-color);
     white-space: nowrap;
-    position: sticky;
-    top: 0;
-    /* Phase C: sticky thead needs explicit z-index so tbody cells don't
-       paint over it when scrolling. z-index 20 to beat the .card (z-index
-       auto) and the stagger entrance transforms. */
-    z-index: 20;
+    /* Note: position:sticky was removed because .table-wrap is now the
+       horizontal-scroll container; a sticky thead inside it would stick to
+       the table-wrap's top edge rather than the viewport, with no visual
+       benefit. The strong bottom-border keeps the header visually distinct. */
 }
-/* UI-Polish Phase 3: solid fallback when backdrop-filter is unsupported
-   (older Firefox, old Safari). */
+/* FIX-8: no blur for older browsers (graceful degradation). */
 @supports not (backdrop-filter: blur(1px)) {
-    table.data-table thead th { background: var(--bg-lighter); }
+    table.data-table thead th { background: var(--bg-lighter); backdrop-filter: none; }
 }
-/* UI-Polish Phase 3: dark-mode glass header. More opaque than light
-   (0.92) so the dark page bg doesn't bleed through too much. */
+/* FIX-8: dark mode — solid bg without blur for performance. */
 :root[data-theme="dark"] table.data-table thead th {
-    background: rgba(34, 31, 29, 0.92);
-    color: var(--text-base);
+    background: rgba(34, 31, 29, 0.95);
+    backdrop-filter: none;
 }
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme]) table.data-table thead th {
-        background: rgba(34, 31, 29, 0.92);
-        color: var(--text-base);
+        background: rgba(34, 31, 29, 0.95);
+        backdrop-filter: none;
     }
 }
-table.data-table tbody td {
+table.data-table tbody td,
+table.data-table tbody th[scope="row"] {
     padding: 9px 14px;
     border-bottom: 1px solid var(--border-color);
     vertical-align: top;
     color: var(--text-base);
     transition: background 100ms;
+    /* Prevent long text (species names, coordinates) from blowing out table width.
+       Truncate with ellipsis; the full value is available via the title attribute. */
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
-table.data-table tbody tr:last-child td { border-bottom: none; }
+/* Cells that contain user-visible formatted content (section names, fossil text)
+   need to wrap, not truncate. Override the nowrap rule for these specific cells. */
+table.data-table td.cell-wrapping {
+    white-space: normal;
+    word-break: break-word;
+}
+/* FIX-1: row-header cells (the index column) must not inherit the bold,
+   centered <th> defaults — render them like a plain, muted body cell. */
+table.data-table tbody th[scope="row"] {
+    font-weight: 400;
+    text-align: left;
+}
+/* Sticky first column so the row index stays visible while scrolling horizontally.
+   The cell needs an explicit background (matching the row's bg) or the table
+   content scrolls underneath it and looks transparent. */
+table.data-table thead th:first-child,
+table.data-table tbody td:first-child,
+table.data-table tbody th[scope="row"]:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+}
+table.data-table thead th:first-child { z-index: 2; top: 0; }
+table.data-table tbody th[scope="row"]:first-child { z-index: 1; }
+/* Light mode row bg for the sticky cell (dark mode handled separately below). */
+table.data-table thead th:first-child { background: rgba(255,255,255,0.95); }
+table.data-table tbody tr:nth-child(even) td:first-child,
+table.data-table tbody tr:nth-child(even) th[scope="row"]:first-child { background: rgba(0,0,0,0.018); }
+/* Dark mode sticky backgrounds. */
+:root[data-theme="dark"] table.data-table thead th:first-child,
+:root[data-theme="dark"] table.data-table tbody td:first-child,
+:root[data-theme="dark"] table.data-table tbody th[scope="row"]:first-child { background: rgba(34,31,29,0.95); }
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) table.data-table thead th:first-child,
+    :root:not([data-theme]) table.data-table tbody td:first-child,
+    :root:not([data-theme]) table.data-table tbody th[scope="row"]:first-child { background: rgba(34,31,29,0.95); }
+}
+table.data-table tbody tr:last-child td,
+table.data-table tbody tr:last-child th[scope="row"] { border-bottom: none; }
 /* Phase C: softer zebra + hover lift. */
-table.data-table tbody tr:nth-child(even) td { background: rgba(0,0,0,0.018); }
-table.data-table tbody tr:hover td { background: var(--primary-soft); }
+table.data-table tbody tr:nth-child(even) td,
+table.data-table tbody tr:nth-child(even) th[scope="row"] { background: rgba(0,0,0,0.035); }
+:root[data-theme="dark"] table.data-table tbody tr:nth-child(even) td,
+:root[data-theme="dark"] table.data-table tbody tr:nth-child(even) th[scope="row"] { background: rgba(255,255,255,0.04); }
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) table.data-table tbody tr:nth-child(even) td,
+    :root:not([data-theme]) table.data-table tbody tr:nth-child(even) th[scope="row"] { background: rgba(255,255,255,0.04); }
+}
+table.data-table tbody tr:hover td,
+table.data-table tbody tr:hover th[scope="row"] { background: var(--primary-soft); }
 .cell-species { font-style: italic; }
 .cell-empty { color: var(--text-light); }
 /* Phase C: monospace numeric cells for range_top/range_base. */
@@ -992,12 +1068,15 @@ table.data-table tbody tr:hover td { background: var(--primary-soft); }
     color: var(--text-dark);
     border: 1px solid var(--border-color);
     backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
 }
 @supports not (backdrop-filter: blur(1px)) {
     .toast-glass { background: var(--bg-white); }
 }
-:root[data-theme="dark"] .toast-glass,
+:root[data-theme="dark"] .toast-glass {
+    background: rgba(34, 31, 29, 0.78);
+    color: var(--text-dark);
+    border-color: var(--border-strong);
+}
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme]) .toast-glass {
         background: rgba(34, 31, 29, 0.78);

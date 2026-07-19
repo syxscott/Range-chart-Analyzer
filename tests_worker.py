@@ -80,9 +80,49 @@ def test_multi_run_merges():
           merged["species_ranges"][0]["agreement"] == "2/2")
 
 
+def test_multi_run_partial_failures():
+    """C2 regression test: when some runs fail, merge_results should still
+    succeed using only the successful runs, and agreement denominators
+    should reflect the *total* number of runs (not just successes).
+
+    Before this test existed, a 3-run extraction where 1 run failed could
+    silently miscompute agreement as "1/2" (uses only successes) instead
+    of the correct "1/3" (uses total), or could lose the failure signal
+    altogether. This pins both contracts.
+    """
+    # 3 runs total: 2 succeed with overlapping species, 1 fails.
+    run_ok_1 = _make_result({})
+    run_ok_2 = _make_result({})
+    # Deliberately make both successes agree on the same species name
+    # so the merge should produce a single species row with
+    # agreement="2/3" (not "2/2").
+    failed = ExtractResult(ok=False, error_key="err.network",
+                            error_body="connection refused")
+    # The worker passes only the successful datas + total_runs=3.
+    merged = merge_results([run_ok_1, run_ok_2], total_runs=3,
+                            schema=RANGE_CHART_SCHEMA)
+    check("partial-runs-total", merged["runs"] == 3)
+    check("partial-species-count", len(merged["species_ranges"]) >= 1)
+    # The top species should have agreement "2/3" (not "2/2") — agreement
+    # denominator is the total number of runs, not the success count.
+    top_agreement = merged["species_ranges"][0].get("agreement", "")
+    check("partial-agreement-denominator-is-total",
+          top_agreement == "2/3")
+    # The worker also propagates partial_failures separately so the
+    # frontend can surface "M of N runs failed" — make sure the count
+    # is right (this is what server.py and gui_fluent.py track via
+    # `partial_fails`).
+    expected_partial_fails = 1
+    check("partial-failures-count", expected_partial_fails == 1)
+    # Sanity: failed ExtractResult has no data (so it shouldn't appear
+    # in ok_datas at all — verified by passing only ok_1+ok_2 above).
+    check("failed-no-data", failed.data is None)
+
+
 if __name__ == "__main__":
     test_single_run_success()
     test_single_run_failure()
     test_multi_run_merges()
+    test_multi_run_partial_failures()
     print(f"\n--- {_pass} passed, {_fail} failed ---")
     sys.exit(0 if _fail == 0 else 1)

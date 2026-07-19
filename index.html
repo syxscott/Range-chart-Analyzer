@@ -128,7 +128,7 @@
                     <div class="dz-hint" data-i18n="upload.dz.hint"></div>
                     <span id="dz-aria" class="visually-hidden" data-i18n="upload.dz.aria"></span>
                 </div>
-                <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/*" class="hidden">
+                <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" class="hidden">
 
                 <div class="preview-wrap hidden" id="preview-wrap">
                     <img class="preview-img" id="preview-img" alt="">
@@ -136,6 +136,16 @@
                 </div>
 
                 <div class="form-grid" style="margin-top:16px;">
+                    <div class="form-row">
+                        <label class="field-label" for="chart-mode" data-i18n="upload.chartMode"></label>
+                        <select id="chart-mode">
+                            <option value="auto" data-i18n="upload.chartMode.auto"></option>
+                            <option value="range_chart" data-i18n="upload.chartMode.rangeChart"></option>
+                            <option value="columnar_section" data-i18n="upload.chartMode.columnarSection"></option>
+                            <option value="abundance_diagram" data-i18n="upload.chartMode.abundanceDiagram"></option>
+                        </select>
+                        <p class="field-hint" data-i18n="upload.chartMode.hint"></p>
+                    </div>
                     <div class="form-row">
                         <label class="field-label" for="chart-lang" data-i18n="upload.chartLang"></label>
                         <select id="chart-lang">
@@ -154,15 +164,16 @@
                     <textarea id="caption" data-i18n-ph="upload.caption.placeholder" maxlength="2000"></textarea>
                     <div class="caption-meta">
                         <p class="field-hint" data-i18n="upload.caption.hint"></p>
-                        <span class="caption-counter" id="caption-counter" aria-live="polite">0 / 500</span>
+                        <span class="caption-counter" id="caption-counter" aria-live="polite">0 / 2000</span>
                     </div>
                 </div>
 
-                <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <div class="btn-row">
                     <button type="button" class="btn btn-primary btn-lg" id="extract-btn">
                         <span id="extract-btn-label" data-i18n="upload.extract"></span>
                     </button>
                     <button type="button" class="btn btn-secondary" id="reset-btn" data-i18n="upload.reset"></button>
+                    <button type="button" class="btn btn-secondary hidden" id="cancel-btn" data-i18n="upload.cancel"></button>
                 </div>
             </section>
 
@@ -200,7 +211,7 @@
         </main>
 
         <footer class="footer">
-            <span data-i18n="app.title">Range Chart Analyzer</span> &middot; MiniMax M3 &middot; 100% client-side
+            <span data-i18n="app.title">Range Chart Analyzer</span> &middot; <span id="footer-model">MiniMax M3</span> &middot; <span id="footer-runtime" data-i18n="footer.clientSide">100% client-side</span>
         </footer>
     </div>
 

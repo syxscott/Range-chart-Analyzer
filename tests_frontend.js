@@ -14,24 +14,36 @@ const vm = require('vm');
 // Build a minimal browser-ish context.
 function buildContext() {
   const stored = new Map();
-  // Simple attribute store for documentElement.
+  // Backing store for documentElement attributes. theme.js toggles
+  // data-theme via setAttribute / removeAttribute and then reads it back
+  // via getAttribute; both must hit the same map.
   const docElAttrs = {};
   const docEl = {
     lang: 'zh-CN',
-    setAttribute: (k, v) => { docElAttrs[k] = v; },
-    removeAttribute: (k) => { delete docElAttrs[k]; },
-    getAttribute: (k) => (k in docElAttrs ? docElAttrs[k] : null),
+    style: {},
+    dataset: {},
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    setAttribute: (k, v) => { docElAttrs[String(k)] = String(v); },
+    removeAttribute: (k) => { delete docElAttrs[String(k)]; },
+    getAttribute: (k) => (k in docElAttrs ? docElAttrs[String(k)] : null),
   };
   const ctx = {
     console,
     setTimeout, clearTimeout,
-    // DOM stubs.
+    // DOM stubs. Keep this as a SINGLE document declaration — a duplicate
+    // shadows the first and the mock loses its backing store. theme.js +
+    // app.js both touch document.* at load time.
     document: {
       addEventListener() {}, removeEventListener() {},
       getElementById: (id) => makeEl(id),
+      // Default: no theme-choice buttons exist in the test sandbox, so an
+      // empty NodeList matches what theme.js's wireToggleButtons sees when
+      // the page hasn't been wired up yet.
       querySelectorAll: () => [],
+      createElement: () => makeEl('el'),
       documentElement: docEl,
       body: makeEl('body'),
+      head: makeEl('head'),
       readyState: 'complete',
     },
     window: {
@@ -69,6 +81,8 @@ function buildContext() {
     AbortController: class { constructor(){ this.signal={}; } abort(){} },
     btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
     atob: (s) => Buffer.from(s, 'base64').toString('binary'),
+    // Browser-only globals used by rcaResolveMode / syncFooterRuntime etc.
+    location: { protocol: 'http:', host: 'localhost', pathname: '/' },
   };
   // Make sure global.* points to the same context.
   ctx.globalThis = ctx;

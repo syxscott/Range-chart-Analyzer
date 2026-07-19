@@ -17,6 +17,7 @@ let src = fs.readFileSync(path.join(__dirname, 'js', 'aggregate.js'), 'utf8');
 // Append a postamble that aliases them onto `globalThis` (== ctx in vm).
 src += '\nglobalThis.RCA_DEFAULT_KEYMAP = RCA_DEFAULT_KEYMAP;\n'
   + 'globalThis.RCA_COLUMNAR_KEYMAP = RCA_COLUMNAR_KEYMAP;\n'
+  + 'globalThis.RCA_ABUNDANCE_KEYMAP = RCA_ABUNDANCE_KEYMAP;\n'
   + 'globalThis.rcaMergeResults = rcaMergeResults;\n';
 const ctx = {};
 vm.createContext(ctx);
@@ -25,6 +26,7 @@ const {
   rcaMergeResults,
   RCA_DEFAULT_KEYMAP,
   RCA_COLUMNAR_KEYMAP,
+  RCA_ABUNDANCE_KEYMAP,
 } = ctx;
 
 let pass = 0, fail = 0;
@@ -153,6 +155,50 @@ function assert(name, got, want) {
   check('keymap-defaults-differ', RCA_DEFAULT_KEYMAP !== RCA_COLUMNAR_KEYMAP);
   check('default-keymap-is-range', RCA_DEFAULT_KEYMAP.primary === 'species_ranges');
   check('columnar-keymap-is-sections', RCA_COLUMNAR_KEYMAP.primary === 'sections');
+}
+
+// --- abundance-diagram: dedup by (site, taxon, level) + majority vote ---
+// Parallel to tests_core.test_abundance_schema_and_merge.
+{
+  check('ab-keymap-primary', RCA_ABUNDANCE_KEYMAP.primary === 'abundances');
+  const run = (ab) => ({
+    sites: [{name:'Core A',location:'',age_range:'',depth_unit:'cm'}],
+    abundances: [{taxon:'Pinus',site:'Core A',level:'120 cm',depth:'120',abundance:ab,abundance_unit:'%'}],
+    zones: [{name:'PAZ-3',age:'',level_range:'80-140 cm'}],
+    confidence: 0.8,
+  });
+  const m = rcaMergeResults([run('35'), run('35'), run('40')], 3, RCA_ABUNDANCE_KEYMAP);
+  check('ab-merge-dedup', m.abundances.length === 1);
+  check('ab-merge-agreement', m.abundances[0].agreement === '3/3');
+  check('ab-merge-majority', m.abundances[0].abundance === '35');
+  check('ab-merge-sites-dedup', m.sites.length === 1);
+  check('ab-merge-zones-dedup', m.zones.length === 1);
+}
+
+// --- named-list items lacking name/marker/meaning must not be dropped ---
+// Parallel to tests_core.test_named_list_no_label_not_dropped.
+{
+  const abRun = (ab) => ({
+    sites: [{name:'',location:'35N',age_range:'Holocene',depth_unit:'cm'}],
+    abundances: [{taxon:'Pinus',site:'',level:'120 cm',depth:'120',abundance:ab,abundance_unit:'%'}],
+    zones: [{name:'PAZ-3',age:'',level_range:'80-140 cm'}],
+    confidence: 0.8,
+  });
+  const m = rcaMergeResults([abRun('35'), abRun('35')], 2, RCA_ABUNDANCE_KEYMAP);
+  check('nl-empty-name-site-kept', m.sites.length === 1);
+  check('nl-empty-name-site-fields', m.sites[0].location === '35N');
+
+  const cbRun = (fb) => ({
+    sections: [{id:'Ki-1',group:'L',lithology_blocks:[],age_units:[],samples:[],
+                coordinates_text:'',thickness_m:'',confidence_by_section:0.7}],
+    fossil_legend: [], lithology_legend: [],
+    cross_beds: [{from_section:'Ki-1',from_bed_idx:fb,to_section:'Ki-2',to_bed_idx:4}],
+    confidence: 0.7,
+  });
+  const m2 = rcaMergeResults([cbRun(3), cbRun(3)], 2, RCA_COLUMNAR_KEYMAP);
+  check('nl-crossbeds-identical-kept', m2.cross_beds.length === 1);
+  const m3 = rcaMergeResults([cbRun(3), cbRun(9)], 2, RCA_COLUMNAR_KEYMAP);
+  check('nl-crossbeds-distinct-kept', m3.cross_beds.length === 2);
 }
 
 console.log('---', pass, 'passed,', fail, 'failed ---');

@@ -178,6 +178,25 @@ def test_prompt():
         "Return JSON only",
     ]:
         check(f"prompt-kw:{kw[:20]}", kw in RANGE_CHART_SYSTEM_PROMPT)
+    # Hard parity: biozone schema must declare a `section` field in BOTH
+    # the Python and JS range-chart prompts (multi-section biozone
+    # thickness preservation; added by the contract alignment). Catch
+    # future drift that the substring-only test would miss.
+    import re as _re
+    import os as _os
+    _js_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "js", "prompt.js")
+    _js_src = open(_js_path, encoding="utf-8").read()
+    _m = _re.search(r"const RANGE_CHART_SYSTEM_PROMPT = \[([\s\S]*?)\]\.join\(['\"]\\n['\"]\)", _js_src)
+    check("rc-prompt-js-present", _m is not None)
+    _js_prompt = _m.group(1) if _m else ""
+    check("rc-prompt-biozone-section-py",
+          '"section": "Pingdingshan"' in RANGE_CHART_SYSTEM_PROMPT)
+    check("rc-prompt-biozone-section-js",
+          '"section": "Pingdingshan"' in _js_prompt)
+    check("rc-prompt-multisection-rule-py",
+          "If a biozone appears in multiple sections" in RANGE_CHART_SYSTEM_PROMPT)
+    check("rc-prompt-multisection-rule-js",
+          "If a biozone appears in multiple sections" in _js_prompt)
 
 
 def test_columnar_schema():
@@ -294,7 +313,7 @@ def test_extract_dispatches_provider():
     # Stub the llm layer so no real HTTP is made.
     def fake_call(**kw):
         captured.update(kw)
-        return '{"confidence":0.5}', False, 200, ""
+        return '{"confidence":0.5}', False, 200, "", {"input_tokens": 10, "output_tokens": 5, "cache_read_tokens": 0, "cache_creation_tokens": 0, "estimated": False}
     import rca_core.extractor as E
     orig_ext = E.call_llm_api
     E.call_llm_api = fake_call
@@ -311,6 +330,40 @@ def test_extract_dispatches_provider():
         res_legacy = extract(mode="range_chart", api_key="k2", image_b64="QUFB",
                              media_type="image/png")
         check("extract-legacy-ok", res_legacy.ok)
+    finally:
+        E.call_llm_api = orig_ext
+
+
+def test_extract_measures_latency():
+    """extract_range_chart must measure wall-clock latency of the API call
+    on both success and error paths (regression: latency_ms was never set)."""
+    import time as _time
+    import rca_core.extractor as E
+    from rca_core import ExtractResult
+
+    orig_ext = E.call_llm_api
+
+    def slow_ok(**kw):
+        _time.sleep(0.03)
+        return ('{"confidence":0.5}', False, 200, "",
+                {"input_tokens": 1, "output_tokens": 1,
+                 "cache_read_tokens": 0, "cache_creation_tokens": 0,
+                 "estimated": False})
+
+    def slow_err(**kw):
+        _time.sleep(0.03)
+        return (None, False, 500, "boom", None)
+
+    try:
+        E.call_llm_api = slow_ok
+        r = E.extract_range_chart(image_b64="QUFB", media_type="image/png", api_key="k")
+        check("latency-success-ok", r.ok)
+        check("latency-success-measured", r.latency_ms >= 20)
+
+        E.call_llm_api = slow_err
+        r2 = E.extract_range_chart(image_b64="QUFB", media_type="image/png", api_key="k")
+        check("latency-error-not-ok", not r2.ok)
+        check("latency-error-measured", r2.latency_ms >= 20)
     finally:
         E.call_llm_api = orig_ext
 
@@ -377,11 +430,23 @@ def test_gemini_key_in_header():
 
     srv = HTTPServer(("127.0.0.1", 59935), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    time.sleep(0.2)
+    # Poll for readiness instead of a fixed sleep — CI under load may
+    # not be ready in 0.2s, and waiting longer than needed is wasteful.
+    import socket
+    for _ in range(40):
+        try:
+            with socket.create_connection(("127.0.0.1", 59935), timeout=0.05):
+                break
+        except OSError:
+            time.sleep(0.05)
+    else:
+        check("gemini-server-ready-59935", False)
+        srv.shutdown()
+        return
     provider = LlmProvider(api_format=ApiFormat.GEMINI,
                            endpoint="http://127.0.0.1:59935",
                            api_key="SECRET-GEMINI-KEY", model="gemini-2.5-pro")
-    raw, truncated, status, err_body = LLM_mod.call_llm_api(
+    raw, truncated, status, err_body, usage = LLM_mod.call_llm_api(
         provider=provider, system_prompt="s", image_b64="QUFB",
         media_type="image/png", user_text="hi", max_tokens=100,
     )
@@ -425,25 +490,43 @@ def test_gemini_probe_does_not_leak_key_in_url():
 
     srv = HTTPServer(("127.0.0.1", 59937), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    time.sleep(0.2)
+    import socket
+    for _ in range(40):
+        try:
+            with socket.create_connection(("127.0.0.1", 59937), timeout=0.05):
+                break
+        except OSError:
+            time.sleep(0.05)
+    else:
+        check("gemini-server-ready-59937", False)
+        srv.shutdown()
+        return
     provider = LlmProvider(api_format=ApiFormat.GEMINI,
                            endpoint="http://127.0.0.1:59937",
                            api_key="LEAK-TEST-KEY", model="gemini-2.5-pro")
     res = LLM_mod.test_llm_connection(provider, timeout_sec=5)
     srv.shutdown()
     check("gemini-probe-ok", res.ok)
+    # Probe-firing assertion: the previous version used `if h_get:` /
+    # `if h_post:` which silently PASSed when the probe didn't actually
+    # fire (no requests captured). Make sure at least one probe ran so
+    # the assertions below are meaningful.
+    probe_fired = bool(captured.get("gets")) or bool(captured.get("posts"))
+    check("gemini-probe-fired", probe_fired)
     # No GET request should have ?key= in it; only /v1beta/models.
     bad_gets = [p for p in captured.get("gets", []) if "key=" in p]
     check("gemini-probe-get-no-key", not bad_gets)
     # The minimal-generate probe (if it ran) must put the key in header, not URL.
     bad_posts = [p for p in captured.get("posts", []) if "key=" in p]
     check("gemini-probe-post-no-key", not bad_posts)
-    # And the header must carry the key on both probes.
+    # And the header must carry the key on both probes. Only check the
+    # branches that actually fired — if a probe didn't run, that's the
+    # `gemini-probe-fired` assertion above failing, not these.
     h_get = [v for v in captured.get("get_x_api_key", []) if v]
     h_post = [v for v in captured.get("post_x_api_key", []) if v]
-    if h_get:
+    if captured.get("gets"):
         check("gemini-probe-get-header", any(k == "LEAK-TEST-KEY" for k in h_get))
-    if h_post:
+    if captured.get("posts"):
         check("gemini-probe-post-header", any(k == "LEAK-TEST-KEY" for k in h_post))
 
 
@@ -670,8 +753,8 @@ def test_be1_retry_wrapper_retries_429():
     def fake_call_llm_api(**kw):
         attempts.append(1)
         if len(attempts) < 2:
-            return (None, False, 429, "rate limit")
-        return ("{} ok", False, 200, "")
+            return (None, False, 429, "rate limit", None)
+        return ("{} ok", False, 200, "", None)
     _saved_cll = L.call_llm_api
     L.call_llm_api = fake_call_llm_api
     orig_sleep = time.sleep
@@ -700,7 +783,7 @@ def test_be1_retry_does_not_retry_401():
     attempts = [0]
     def fake_call_llm_api(**kw):
         attempts[0] += 1
-        return (None, False, 401, "bad key")
+        return (None, False, 401, "bad key", None)
     _saved_cll = L.call_llm_api
     L.call_llm_api = fake_call_llm_api
     orig_sleep = time.sleep
@@ -728,7 +811,7 @@ def test_be1_retry_gives_up_after_retries():
     attempts = [0]
     def fake_call_llm_api(**kw):
         attempts[0] += 1
-        return (None, False, 500, "boom")
+        return (None, False, 500, "boom", None)
     _saved_cll = L.call_llm_api
     L.call_llm_api = fake_call_llm_api
     orig_sleep = time.sleep
@@ -765,6 +848,241 @@ def test_be3_gui_worker_uses_threadpool():
           "for _ in range(runs):" not in body or "ThreadPoolExecutor" in body)
 
 
+def test_abundance_normalize():
+    """Abundance-diagram normalize coerces the strict shape and clamps confidence."""
+    from rca_core.extractor import normalize_abundance_result
+    d = normalize_abundance_result({
+        "sites": [{"name": "Core A", "depth_unit": "cm", "extra": "keep"}],
+        "abundances": [
+            {"taxon": "Pinus", "level": "120 cm", "depth": "120",
+             "abundance": "35", "abundance_unit": "%"},
+            "not-a-dict",
+        ],
+        "zones": [{"name": "PAZ-3", "age": "Early Holocene", "level_range": "80-140 cm"}],
+        "confidence": 1.7,  # out of range → clamp to 1.0
+    })
+    check("ab-norm-keys", sorted(d.keys()) == ["abundances", "confidence", "sites", "zones"])
+    check("ab-norm-sites", len(d["sites"]) == 1 and d["sites"][0]["name"] == "Core A")
+    check("ab-norm-extras", d["sites"][0].get("_extras", {}).get("extra") == "keep")
+    check("ab-norm-drops-nondict", len(d["abundances"]) == 1)
+    row = d["abundances"][0]
+    check("ab-norm-row", row["taxon"] == "Pinus" and row["abundance"] == "35"
+          and row["abundance_unit"] == "%")
+    check("ab-norm-zone", d["zones"][0]["name"] == "PAZ-3")
+    check("ab-norm-conf-clamp", d["confidence"] == 1.0)
+
+
+def test_abundance_schema_and_merge():
+    """ABUNDANCE_DIAGRAM_SCHEMA dedups by (site, taxon, level) and majority-votes."""
+    from rca_core.aggregate import (
+        ABUNDANCE_DIAGRAM_SCHEMA, SCHEMA_BY_MODE, merge_results,
+    )
+    check("ab-schema-primary", ABUNDANCE_DIAGRAM_SCHEMA.primary_list_key == "abundances")
+    check("ab-schema-idkeys",
+          ABUNDANCE_DIAGRAM_SCHEMA.primary_id_keys == ["site", "taxon", "level"])
+    check("ab-schema-registered",
+          SCHEMA_BY_MODE.get("abundance_diagram") is ABUNDANCE_DIAGRAM_SCHEMA)
+
+    def run(ab_val):
+        return {
+            "sites": [{"name": "Core A", "location": "", "age_range": "", "depth_unit": "cm"}],
+            "abundances": [{"taxon": "Pinus", "site": "Core A", "level": "120 cm",
+                            "depth": "120", "abundance": ab_val, "abundance_unit": "%"}],
+            "zones": [{"name": "PAZ-3", "age": "", "level_range": "80-140 cm"}],
+            "confidence": 0.8,
+        }
+    # 3 runs: abundance 35 appears twice, 40 once → majority 35.
+    m = merge_results([run("35"), run("35"), run("40")], total_runs=3,
+                      schema=ABUNDANCE_DIAGRAM_SCHEMA)
+    check("ab-merge-dedup", len(m["abundances"]) == 1)
+    check("ab-merge-agreement", m["abundances"][0]["agreement"] == "3/3")
+    check("ab-merge-majority", m["abundances"][0]["abundance"] == "35")
+    check("ab-merge-sites-dedup", len(m["sites"]) == 1)
+    check("ab-merge-zones-dedup", len(m["zones"]) == 1)
+
+
+def test_abundance_export_and_detect():
+    """Abundance results route to the abundance table set and export cleanly."""
+    from rca_core.extractor import normalize_abundance_result
+    from rca_core.exporter import (
+        _looks_abundance, get_configs_for_result, build_table_export,
+    )
+    d = normalize_abundance_result({
+        "sites": [{"name": "Core A", "depth_unit": "cm"}],
+        "abundances": [{"taxon": "Pinus", "level": "120 cm", "abundance": "35",
+                        "abundance_unit": "%"}],
+        "zones": [{"name": "PAZ-3"}],
+        "confidence": 0.8,
+    })
+    check("ab-detect", _looks_abundance(d) is True)
+    check("ab-detect-neg", _looks_abundance({"species_ranges": []}) is False)
+    cfgs = get_configs_for_result(d)
+    check("ab-tables", [c["id"] for c in cfgs] == ["sites", "abundances", "zones"])
+    headers, rows = build_table_export(d, "abundances", lambda k: k)
+    check("ab-export-len", len(rows) == 1 and len(rows[0]) == len(headers))
+    check("ab-export-taxon", "Pinus" in rows[0])
+
+
+def test_named_list_no_label_not_dropped():
+    """Regression: items in a schema list_key that lack name/marker/meaning
+    (abundance single-site with empty name; columnar cross_beds) must NOT be
+    silently dropped when merging multiple runs — they fall back to a content
+    signature so identical items collapse and distinct ones survive."""
+    from rca_core.aggregate import (
+        merge_results, ABUNDANCE_DIAGRAM_SCHEMA, COLUMNAR_SECTION_SCHEMA,
+    )
+
+    def ab_run(ab):
+        return {
+            "sites": [{"name": "", "location": "35N", "age_range": "Holocene", "depth_unit": "cm"}],
+            "abundances": [{"taxon": "Pinus", "site": "", "level": "120 cm",
+                            "depth": "120", "abundance": ab, "abundance_unit": "%"}],
+            "zones": [{"name": "PAZ-3", "age": "", "level_range": "80-140 cm"}],
+            "confidence": 0.8,
+        }
+    m = merge_results([ab_run("35"), ab_run("35")], total_runs=2,
+                      schema=ABUNDANCE_DIAGRAM_SCHEMA)
+    check("nl-empty-name-site-kept", len(m["sites"]) == 1)
+    check("nl-empty-name-site-fields", m["sites"][0].get("location") == "35N")
+
+    def cb_run(fb):
+        return {
+            "sections": [{"id": "Ki-1", "group": "L", "lithology_blocks": [],
+                          "age_units": [], "samples": [], "coordinates_text": "",
+                          "thickness_m": "", "confidence_by_section": 0.7}],
+            "fossil_legend": [], "lithology_legend": [],
+            "cross_beds": [{"from_section": "Ki-1", "from_bed_idx": fb,
+                            "to_section": "Ki-2", "to_bed_idx": 4}],
+            "confidence": 0.7,
+        }
+    # Identical cross_beds across 2 runs → collapse to 1 (was dropped to 0).
+    m2 = merge_results([cb_run(3), cb_run(3)], total_runs=2,
+                       schema=COLUMNAR_SECTION_SCHEMA)
+    check("nl-crossbeds-identical-kept", len(m2["cross_beds"]) == 1)
+    # Distinct cross_beds → both preserved.
+    m3 = merge_results([cb_run(3), cb_run(9)], total_runs=2,
+                       schema=COLUMNAR_SECTION_SCHEMA)
+    check("nl-crossbeds-distinct-kept", len(m3["cross_beds"]) == 2)
+
+
+def test_abundance_prompt():
+    """Abundance prompt carries its key tokens on both the Python and JS sides."""
+    from rca_core.prompt import ABUNDANCE_DIAGRAM_SYSTEM_PROMPT
+    js_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "js", "prompt.js")
+    with open(js_path, encoding="utf-8") as f:
+        js_src = f.read()
+    m = re.search(
+        r"const ABUNDANCE_DIAGRAM_SYSTEM_PROMPT = \[([\s\S]*?)\]\.join\(['\"]\\n['\"]\)",
+        js_src,
+    )
+    check("ab-prompt-js-present", m is not None)
+    raw = m.group(1) if m else ""
+    # Reverse the JS string-escaping so substrings like "that taxon's
+    # abundance" match what Python sees.
+    js_prompt = raw.replace("\\'", "'").replace('\\"', '"')
+    tokens = [
+        "ABUNDANCE DIAGRAM",
+        "pollen diagram",
+        "abundances",
+        "abundance_unit",
+        "zones",
+        "ONE COLUMN = ONE TAXON",
+        "Return JSON only",
+    ]
+    for kw in tokens:
+        check(f"ab-prompt-py:{kw[:18]}", kw.lower() in ABUNDANCE_DIAGRAM_SYSTEM_PROMPT.lower())
+        check(f"ab-prompt-js:{kw[:18]}", kw.lower() in js_prompt.lower())
+    # Hard parity: "that taxon's abundance" (with the possessive) must be
+    # verbatim in BOTH the Python and JS abundance prompts — the JS side
+    # had silently dropped the "'s" so the two ends disagreed on a key
+    # sentence; this assertion prevents the drift from regressing.
+    check("ab-prompt-taxons-possessive-py",
+          "that taxon's abundance" in ABUNDANCE_DIAGRAM_SYSTEM_PROMPT)
+    check("ab-prompt-taxons-possessive-js",
+          "that taxon's abundance" in js_prompt)
+
+
+def test_t5_looks_columnar_detection():
+    """T5: exporter._looks_columnar correctly classifies result shapes.
+    Heuristic: columnar iff sections[0] has 'id' and not 'name'."""
+    from rca_core.exporter import _looks_columnar
+    check("t5-col-id-only", _looks_columnar({"sections": [{"id": "Ki-1", "group": "L"}]}) is True)
+    check("t5-col-name-only", _looks_columnar({"sections": [{"name": "A"}]}) is False)
+    # "id" is sufficient for columnar classification even when "name" is also present
+    check("t5-col-both", _looks_columnar({"sections": [{"id": "X", "name": "A"}]}) is True)
+
+
+def test_auto_detect_tie_prefers_columnar():
+    """H39 regression: when 2 runs split 1-columnar / 1-abundance, the
+    old version fell through to RANGE_CHART (silent data loss). The
+    fixed version prefers columnar because its shape is more specific."""
+    from rca_core.aggregate import (
+        _auto_detect_schema, ABUNDANCE_DIAGRAM_SCHEMA, COLUMNAR_SECTION_SCHEMA,
+    )
+    col_data = {"sections": [{"id": "Ki-1", "group": "L"}]}
+    ab_data = {"abundances": [{"taxon": "A", "site": "S1"}]}
+    chosen = _auto_detect_schema([col_data, ab_data])
+    check("tie-columnar-preferred", chosen is COLUMNAR_SECTION_SCHEMA)
+    # Symmetric: abundance-tilted tie picks abundance.
+    chosen2 = _auto_detect_schema([ab_data, col_data])
+    # Both equal counts → still columnar (more specific fallback).
+    check("tie-still-columnar", chosen2 is COLUMNAR_SECTION_SCHEMA)
+
+
+def test_auto_detect_majority_unaffected():
+    """When 3/3 runs agree on a shape, the choice should match that shape."""
+    from rca_core.aggregate import (
+        _auto_detect_schema, ABUNDANCE_DIAGRAM_SCHEMA,
+    )
+    ab_data = {"abundances": [{"taxon": "A"}]}
+    chosen = _auto_detect_schema([ab_data, ab_data, ab_data])
+    check("majority-abundance-3-3", chosen is ABUNDANCE_DIAGRAM_SCHEMA)
+
+
+def test_extract_truncated_sets_warning():
+    """M40 regression: when the model hits max_tokens, the ExtractResult
+    must carry a human-readable warning string the UI can show without
+    flipping ok=False."""
+    from rca_core.extractor import ExtractResult
+    e = ExtractResult(ok=True, data={"sections": []}, truncated=True,
+                       warning="Result may be truncated (model hit max_tokens).")
+    check("truncated-warning-non-empty", bool(e.warning))
+    # Non-truncated result: warning should be empty (default).
+    e2 = ExtractResult(ok=True, data={"sections": []})
+    check("not-truncated-warning-empty", e2.warning == "")
+
+
+def test_db_schema_version_set_on_init():
+    """T38 regression: opening a new DB must stamp _schema_version."""
+    import tempfile
+    from rca_core.db import Database
+    td = tempfile.mkdtemp()
+    try:
+        db = Database(os.path.join(td, "fresh.db"))
+        row = db.query_one("SELECT version FROM _schema_version LIMIT 1")
+        check("db-schema-version-present", row is not None)
+        check("db-schema-version-correct",
+              row["version"] == Database._CURRENT_SCHEMA_VERSION)
+    finally:
+        import shutil
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def test_db_schema_upgrade_idempotent():
+    """T38 regression: opening an existing DB must not re-stamp or break."""
+    import tempfile
+    from rca_core.db import Database
+    td = tempfile.mkdtemp()
+    try:
+        path = os.path.join(td, "twice.db")
+        Database(path)
+        # Open again — same version, no errors, _apply_migrations is a no-op.
+        db2 = Database(path)
+        row = db2.query_one("SELECT version FROM _schema_version LIMIT 1")
+        check("db-schema-version-stable", row["version"] == Database._CURRENT_SCHEMA_VERSION)
+    finally:
+        import shutil
+        shutil.rmtree(td, ignore_errors=True)
 if __name__ == "__main__":
     test_json()
     test_normalize()
@@ -775,6 +1093,7 @@ if __name__ == "__main__":
     test_columnar_schema()
     test_columnar_prompt()
     test_extract_dispatches_provider()
+    test_extract_measures_latency()
     test_columnar_multi_run_parity_with_js()
     test_provider_store_set_current_bogus()
     test_gemini_key_in_header()
@@ -791,14 +1110,16 @@ if __name__ == "__main__":
     test_m8_update_returns_bool()
     test_m9_add_preserves_existing_created_at()
     test_l2_translations_init_shape()
-
-def test_t5_looks_columnar_detection():
-    """T5: exporter._looks_columnar correctly classifies result shapes.
-    Heuristic: columnar iff sections[0] has 'id' and not 'name'."""
-    from rca_core.exporter import _looks_columnar
-    check("t5-col-id-only", _looks_columnar({"sections": [{"id": "Ki-1", "group": "L"}]}) is True)
-    check("t5-col-name-only", _looks_columnar({"sections": [{"name": "A"}]}) is False)
-    check("t5-col-both", _looks_columnar({"sections": [{"id": "X", "name": "A"}]}) is False)
+    test_abundance_normalize()
+    test_abundance_schema_and_merge()
+    test_abundance_export_and_detect()
+    test_named_list_no_label_not_dropped()
+    test_abundance_prompt()
+    test_auto_detect_tie_prefers_columnar()
+    test_auto_detect_majority_unaffected()
+    test_extract_truncated_sets_warning()
+    test_db_schema_version_set_on_init()
+    test_db_schema_upgrade_idempotent()
 
 
 def test_t6_build_table_export_pad_and_truncate():
@@ -833,9 +1154,45 @@ def test_t6_build_table_export_pad_and_truncate():
         check("t6-pad-len", len(rows[0]) == len(headers))
     finally:
         X._range_chart_tables = orig
-    test_t12_norm_strips_sp_cf()
-    test_t13_balanced_json_edge_cases()
-    test_t5_looks_columnar_detection()
+
+
+if __name__ == "__main__":
+    test_json()
+    test_normalize()
+    test_export()
+    test_i18n()
+    test_merge()
+    test_prompt()
+    test_columnar_schema()
+    test_columnar_prompt()
+    test_extract_dispatches_provider()
+    test_extract_measures_latency()
+    test_columnar_multi_run_parity_with_js()
+    test_provider_store_set_current_bogus()
+    test_gemini_key_in_header()
+    test_gemini_probe_does_not_leak_key_in_url()
+    test_h6_none_status_maps_to_network()
+    test_h7_error_body_surfaces()
+    test_h8_normalize_preserves_extras()
+    test_c2_columnar_struct_fields_merge()
+    test_h5_auto_detect_columnar()
+    test_h4_mode_tie_break_deterministic()
+    test_m5_clamp_max_tokens()
+    test_m6_quarantine_on_corrupt()
+    test_m7_provider_store_lock()
+    test_m8_update_returns_bool()
+    test_m9_add_preserves_existing_created_at()
+    test_l2_translations_init_shape()
+    test_abundance_normalize()
+    test_abundance_schema_and_merge()
+    test_abundance_export_and_detect()
+    test_named_list_no_label_not_dropped()
+    test_abundance_prompt()
+    test_auto_detect_tie_prefers_columnar()
+    test_auto_detect_majority_unaffected()
+    test_extract_truncated_sets_warning()
+    test_db_schema_version_set_on_init()
+    test_db_schema_upgrade_idempotent()
     test_t6_build_table_export_pad_and_truncate()
     test_be2_safe_json_strips_control_chars()
     test_be1_retry_wrapper_retries_429()

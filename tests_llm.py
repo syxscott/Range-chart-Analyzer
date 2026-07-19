@@ -162,7 +162,7 @@ for fmt, label in [
     orig = _ur.urlopen
     _ur.urlopen = fake_urlopen
     try:
-        raw, truncated, status, err_body = L.call_llm_api(
+        raw, truncated, status, err_body, usage = L.call_llm_api(
             provider=provider, system_prompt="sys", image_b64="QUFB",
             media_type="image/png", user_text="hi", max_tokens=100,
         )
@@ -214,7 +214,7 @@ for fmt in (L.ApiFormat.ANTHROPIC, L.ApiFormat.OPENAI, L.ApiFormat.GEMINI):
     orig = _ur.urlopen
     _ur.urlopen = lambda req, timeout=None: FakeMaxtokResponse(fmt)
     try:
-        raw, truncated, status, err_body = L.call_llm_api(
+        raw, truncated, status, err_body, usage = L.call_llm_api(
             provider=provider, system_prompt="s", image_b64="QUFB",
             media_type="image/png", user_text="hi", max_tokens=100,
         )
@@ -237,7 +237,7 @@ def raise_http_error(req, timeout=None):
 orig = _ur.urlopen
 _ur.urlopen = raise_http_error
 try:
-    raw, truncated, status, err_body = L.call_llm_api(
+    raw, truncated, status, err_body, usage = L.call_llm_api(
         provider=L.LlmProvider(name="X", api_format=L.ApiFormat.ANTHROPIC,
                                endpoint="https://example.com", api_key="k", model="m"),
         system_prompt="s", image_b64="QUFB", media_type="image/png", user_text="hi",
@@ -259,7 +259,10 @@ captured = {}
 orig_call = E.call_llm_api
 def fake_call(**kw):
     captured.update(kw)
-    return '{"confidence":0.5}', False, 200, ""
+    return ('{"confidence":0.5}', False, 200, "",
+            {"input_tokens": 10, "output_tokens": 5,
+             "cache_read_tokens": 0, "cache_creation_tokens": 0,
+             "estimated": False})
 
 E.call_llm_api = fake_call
 try:
@@ -315,8 +318,8 @@ def t7_cases():
                 attempts.append(1)
                 status = seq[idx] if idx < len(seq) else 200
                 if status == 200:
-                    return '{"ok":true}', False, status, ""
-                return None, False, status, ""
+                    return ('{"ok":true}', False, status, "", None)
+                return (None, False, status, "", None)
             return fake
         orig_sleep = time.sleep
         time.sleep = lambda *_a, **_kw: None
@@ -327,23 +330,26 @@ def t7_cases():
                 provider=prov, system_prompt="s", image_b64="QUFB",
                 media_type="image/png", user_text="hi", max_tokens=100,
                 retries=3)
-            assert len(attempts) == expected_calls, (
-                "seq %s: expected %d calls, got %d" % (seq, expected_calls, len(attempts)))
-            assert (r[0] is not None) == expected_success, (
-                "seq %s: expected success=%s" % (seq, expected_success))
+            # H8: bare `assert` doesn't go through the check() helper, so
+            # failures here would be invisible to the test runner. Route
+            # every assertion through check() so they count.
+            check("t7-seq-%s-attempts" % seq,
+                  len(attempts) == expected_calls)
+            check("t7-seq-%s-success" % seq,
+                  (r[0] is not None) == expected_success)
+            # r is a 5-tuple now.
+            check("t7-seq-%s-shape" % seq, len(r) == 5)
         finally:
             time.sleep = orig_sleep
             L.call_llm_api = orig_call
 
 
 t7_cases()
-globals()['_pass'] += 1
-print("PASS", "t7-retry-transient-errors")
 
 
 import rca_core.llm as L
 def _fake_with_body(**kw):
-    return None, False, 502, "rate limit exceeded"
+    return None, False, 502, "rate limit exceeded", None
 L.call_llm_api = _fake_with_body
 from rca_core import ApiFormat, LlmProvider
 prov = LlmProvider(api_format=ApiFormat.ANTHROPIC,

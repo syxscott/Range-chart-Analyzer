@@ -135,32 +135,172 @@ function rcaNormalizeResult(parsed) {
 
 
 // Normalize the parsed columnar-section JSON into the strict result shape.
-// Mirrors rca_core.extractor.normalize_columnar_result.
+// Mirrors rca_core.extractor.normalize_columnar_result (deep nested
+// normalization + _extras carry + confidence fallback to top-level
+// `confidence` when `overall_confidence` is absent).
 function rcaNormalizeColumnarResult(parsed) {
   const asStr = (v) => (v === null || v === undefined ? '' : String(v));
-  const norm = (key) => (Array.isArray(parsed[key]) ? parsed[key] : []);
+  const asInt = (v) => {
+    if (v === null || v === undefined || v === '') return null;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : null;
+  };
+  const normList = (key) => (Array.isArray(parsed[key]) ? parsed[key] : []);
+  const BLOCK_KNOWN = ['pattern', 'range_top_idx', 'range_base_idx'];
+  const UNIT_KNOWN = ['label', 'range_top_idx', 'range_base_idx'];
+  const SAMPLE_KNOWN = ['bed_idx', 'fossil_marker', 'ref'];
+  const LEGEND_KNOWN = ['marker', 'pattern', 'meaning'];
+  const CROSS_KNOWN = ['from_section', 'from_bed_idx', 'to_section', 'to_bed_idx'];
+  const SECTION_KNOWN = ['id', 'group', 'lithology_blocks', 'age_units', 'samples',
+                         'coordinates_text', 'thickness_m', 'confidence_by_section'];
+
+  const normBlocks = (items) => items.filter((x) => x && typeof x === 'object').map((b) => {
+    const row = {
+      pattern: asStr(b.pattern),
+      range_top_idx: asInt(b.range_top_idx),
+      range_base_idx: asInt(b.range_base_idx),
+    };
+    const ex = rcaCarryExtras(b, BLOCK_KNOWN);
+    if (ex) row._extras = ex;
+    return row;
+  });
+  const normUnits = (items) => items.filter((x) => x && typeof x === 'object').map((u) => {
+    const row = {
+      label: asStr(u.label),
+      range_top_idx: asInt(u.range_top_idx),
+      range_base_idx: asInt(u.range_base_idx),
+    };
+    const ex = rcaCarryExtras(u, UNIT_KNOWN);
+    if (ex) row._extras = ex;
+    return row;
+  });
+  const normSamples = (items) => items.filter((x) => x && typeof x === 'object').map((s) => {
+    const row = {
+      bed_idx: asInt(s.bed_idx),
+      fossil_marker: asStr(s.fossil_marker),
+      ref: asStr(s.ref),
+    };
+    const ex = rcaCarryExtras(s, SAMPLE_KNOWN);
+    if (ex) row._extras = ex;
+    return row;
+  });
+  const normLegend = (items) => items.filter((x) => x && typeof x === 'object').map((x) => {
+    const row = {
+      marker: asStr(x.marker),
+      pattern: asStr(x.pattern),
+      meaning: asStr(x.meaning),
+    };
+    const ex = rcaCarryExtras(x, LEGEND_KNOWN);
+    if (ex) row._extras = ex;
+    return row;
+  });
+  const normCross = (items) => items.filter((x) => x && typeof x === 'object').map((x) => {
+    const row = {
+      from_section: asStr(x.from_section),
+      from_bed_idx: asInt(x.from_bed_idx),
+      to_section: asStr(x.to_section),
+      to_bed_idx: asInt(x.to_bed_idx),
+    };
+    const ex = rcaCarryExtras(x, CROSS_KNOWN);
+    if (ex) row._extras = ex;
+    return row;
+  });
+
   const sections = [];
-  for (const sec of norm('sections')) {
+  for (const sec of normList('sections')) {
     if (!sec || typeof sec !== 'object') continue;
-    sections.push({
+    const confSec = Number(sec.confidence_by_section);
+    const row = {
       id: asStr(sec.id),
       group: asStr(sec.group),
-      lithology_blocks: Array.isArray(sec.lithology_blocks) ? sec.lithology_blocks : [],
-      age_units: Array.isArray(sec.age_units) ? sec.age_units : [],
-      samples: Array.isArray(sec.samples) ? sec.samples : [],
+      lithology_blocks: normBlocks(sec.lithology_blocks || []),
+      age_units: normUnits(sec.age_units || []),
+      samples: normSamples(sec.samples || []),
       coordinates_text: asStr(sec.coordinates_text),
       thickness_m: asStr(sec.thickness_m),
-      confidence_by_section: Math.max(0, Math.min(1, Number(sec.confidence_by_section) || 0)),
-    });
+      confidence_by_section: Number.isFinite(confSec) ? Math.max(0, Math.min(1, confSec)) : 0,
+    };
+    const ex = rcaCarryExtras(sec, SECTION_KNOWN);
+    if (ex) row._extras = ex;
+    sections.push(row);
   }
-  const overall = Number(parsed.overall_confidence);
-  return {
+  // Some models emit root `confidence` instead of `overall_confidence`;
+  // fall back so the value isn't silently zeroed.
+  const overall = Number(parsed.overall_confidence != null ? parsed.overall_confidence : parsed.confidence);
+  const ROOT_KNOWN = ['sections', 'fossil_legend', 'lithology_legend', 'cross_beds',
+                     'overall_confidence', 'confidence'];
+  const out = {
     sections,
-    fossil_legend: norm('fossil_legend').filter((x) => x && typeof x === 'object'),
-    lithology_legend: norm('lithology_legend').filter((x) => x && typeof x === 'object'),
-    cross_beds: norm('cross_beds').filter((x) => x && typeof x === 'object'),
+    fossil_legend: normLegend(normList('fossil_legend')),
+    lithology_legend: normLegend(normList('lithology_legend')),
+    cross_beds: normCross(normList('cross_beds')),
     confidence: Number.isFinite(overall) ? Math.max(0, Math.min(1, overall)) : 0,
   };
+  const rootEx = rcaCarryExtras(parsed || {}, ROOT_KNOWN);
+  if (rootEx) out._extras = rootEx;
+  return out;
+}
+
+// Normalize the parsed abundance-diagram JSON into the strict result shape.
+// Mirrors rca_core.extractor.normalize_abundance_result (with _extras carry).
+function rcaNormalizeAbundanceResult(parsed) {
+  const asStr = (v) => (v === null || v === undefined ? '' : String(v));
+  const normList = (key) => (Array.isArray(parsed[key]) ? parsed[key] : []);
+  const SITE_KNOWN = ['name', 'location', 'age_range', 'depth_unit'];
+  const AB_KNOWN = ['taxon', 'site', 'level', 'depth', 'abundance', 'abundance_unit'];
+  const ZONE_KNOWN = ['name', 'age', 'level_range'];
+  const ROOT_KNOWN = ['sites', 'abundances', 'zones', 'confidence'];
+
+  const sites = [];
+  for (const s of normList('sites')) {
+    if (!s || typeof s !== 'object') continue;
+    const row = {
+      name: asStr(s.name),
+      location: asStr(s.location),
+      age_range: asStr(s.age_range),
+      depth_unit: asStr(s.depth_unit),
+    };
+    const ex = rcaCarryExtras(s, SITE_KNOWN);
+    if (ex) row._extras = ex;
+    sites.push(row);
+  }
+  const abundances = [];
+  for (const a of normList('abundances')) {
+    if (!a || typeof a !== 'object') continue;
+    const row = {
+      taxon: asStr(a.taxon),
+      site: asStr(a.site),
+      level: asStr(a.level),
+      depth: asStr(a.depth),
+      abundance: asStr(a.abundance),
+      abundance_unit: asStr(a.abundance_unit),
+    };
+    const ex = rcaCarryExtras(a, AB_KNOWN);
+    if (ex) row._extras = ex;
+    abundances.push(row);
+  }
+  const zones = [];
+  for (const z of normList('zones')) {
+    if (!z || typeof z !== 'object') continue;
+    const row = {
+      name: asStr(z.name),
+      age: asStr(z.age),
+      level_range: asStr(z.level_range),
+    };
+    const ex = rcaCarryExtras(z, ZONE_KNOWN);
+    if (ex) row._extras = ex;
+    zones.push(row);
+  }
+  const conf = Number(parsed.confidence);
+  const out = {
+    sites,
+    abundances,
+    zones,
+    confidence: Number.isFinite(conf) ? Math.max(0, Math.min(1, conf)) : 0,
+  };
+  const rootEx = rcaCarryExtras(parsed || {}, ROOT_KNOWN);
+  if (rootEx) out._extras = rootEx;
+  return out;
 }
 
 // Backend mode: POST to the same-origin Python server, which performs the
@@ -171,6 +311,12 @@ async function rcaCallBackend(opts, base64) {
   // Allow extra time when the server runs the extraction multiple times.
   const runs = Math.max(1, Math.min(parseInt(opts.runs, 10) || 1, 5));
   const timer = setTimeout(() => controller.abort(), RCA_CONFIG.requestTimeoutMs * runs + 5000);
+  // FIX-6: honor a caller-supplied cancel signal (user pressed Cancel).
+  const onExtAbort = () => controller.abort();
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener('abort', onExtAbort);
+  }
   try {
     resp = await fetch('/api/extract', {
       method: 'POST',
@@ -184,16 +330,22 @@ async function rcaCallBackend(opts, base64) {
         endpoint: opts.baseUrl,
         model: opts.model,
         max_tokens: opts.maxTokens,
+        mode: opts.mode || 'range_chart',
         runs: runs,
       }),
       signal: controller.signal,
     });
   } catch (err) {
     clearTimeout(timer);
-    if (err && err.name === 'AbortError') return { ok: false, errorKey: 'err.timeout' };
+    if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
+    // Distinguish a user cancel from a timeout: both surface as AbortError.
+    if (err && err.name === 'AbortError') {
+      return { ok: false, errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout' };
+    }
     return { ok: false, errorKey: 'err.network' };
   }
   clearTimeout(timer);
+  if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
   let payload;
   try {
     payload = await resp.json();
@@ -212,6 +364,9 @@ async function rcaCallBackend(opts, base64) {
     errorBody: payload.error_body || '',
     // M2: how many of the requested runs failed.
     partialFailures: payload.partial_failures || 0,
+    // Usage and latency from the server.
+    usage: payload.usage || null,
+    latencyMs: payload.latency_ms || 0,
   };
 }
 
@@ -255,16 +410,24 @@ async function extractRangeChart(opts) {
   const url = target + '/v1/messages';
 
   const langHint = (CHART_LANG_HINT && CHART_LANG_HINT[chartLang]) || '';
+  let modeInstruction;
+  if (mode === 'columnar_section') {
+    modeInstruction = 'Extract the columnar-section information as the strict JSON contract.';
+  } else if (mode === 'abundance_diagram') {
+    modeInstruction = 'Extract the abundance-diagram information as the strict JSON contract.';
+  } else {
+    modeInstruction = 'Extract the geological information as the strict JSON contract.';
+  }
   const userPrompt =
     'Caption:\n' + (caption && caption.trim() ? caption.trim() : '(no caption)') + '\n\n' +
-    langHint +
-    (mode === 'columnar_section'
-      ? 'Extract the columnar-section information as the strict JSON contract.'
-      : 'Extract the geological information as the strict JSON contract.');
+    langHint + modeInstruction;
 
-  const sysPrompt = mode === 'columnar_section'
-    ? (typeof COLUMNAR_SECTION_SYSTEM_PROMPT !== 'undefined' ? COLUMNAR_SECTION_SYSTEM_PROMPT : RANGE_CHART_SYSTEM_PROMPT)
-    : RANGE_CHART_SYSTEM_PROMPT;
+  let sysPrompt = RANGE_CHART_SYSTEM_PROMPT;
+  if (mode === 'columnar_section' && typeof COLUMNAR_SECTION_SYSTEM_PROMPT !== 'undefined') {
+    sysPrompt = COLUMNAR_SECTION_SYSTEM_PROMPT;
+  } else if (mode === 'abundance_diagram' && typeof ABUNDANCE_DIAGRAM_SYSTEM_PROMPT !== 'undefined') {
+    sysPrompt = ABUNDANCE_DIAGRAM_SYSTEM_PROMPT;
+  }
 
   const body = {
     model: model,
@@ -286,6 +449,12 @@ async function extractRangeChart(opts) {
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), RCA_CONFIG.requestTimeoutMs);
+  // FIX-6: honor a caller-supplied cancel signal (user pressed Cancel).
+  const onExtAbort = () => controller.abort();
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener('abort', onExtAbort);
+  }
 
   let resp;
   try {
@@ -301,13 +470,15 @@ async function extractRangeChart(opts) {
     });
   } catch (err) {
     clearTimeout(timer);
+    if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
     if (err && err.name === 'AbortError') {
-      return { ok: false, errorKey: 'err.timeout' };
+      return { ok: false, errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout' };
     }
     // TypeError from fetch usually means a network/CORS failure.
     return { ok: false, errorKey: 'err.network' };
   }
   clearTimeout(timer);
+  if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
 
   if (!resp.ok) {
     let detail = '';
@@ -359,8 +530,13 @@ async function extractRangeChart(opts) {
     return { ok: false, errorKey: 'err.parse', raw: rawText, truncated };
   }
 
-  const data = (mode === 'columnar_section' && typeof rcaNormalizeColumnarResult === 'function')
-    ? rcaNormalizeColumnarResult(parsed)
-    : rcaNormalizeResult(parsed);
+  let data;
+  if (mode === 'columnar_section' && typeof rcaNormalizeColumnarResult === 'function') {
+    data = rcaNormalizeColumnarResult(parsed);
+  } else if (mode === 'abundance_diagram' && typeof rcaNormalizeAbundanceResult === 'function') {
+    data = rcaNormalizeAbundanceResult(parsed);
+  } else {
+    data = rcaNormalizeResult(parsed);
+  }
   return { ok: true, data, raw: rawText, truncated };
 }

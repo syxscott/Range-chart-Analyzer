@@ -235,10 +235,10 @@ def run_all():
         while win.tr.lang != "zh":
             win._cycle_lang()
         zh_nav = win._nav_settings.text()
-        zh_btn = win.settings_page.btn_save.text()
+        zh_btn = win.settings_page.btn_save_key.text()
         win._cycle_lang()  # -> en
         check("lang-nav-relabels", win._nav_settings.text() != zh_nav)
-        check("lang-page-relabels", win.settings_page.btn_save.text() != zh_btn)
+        check("lang-page-relabels", win.settings_page.btn_save_key.text() != zh_btn)
         # T1: lang button text must reflect the actual current language,
         # not just be one of the three valid options.
         check("lang-btn-shows-current",

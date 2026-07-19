@@ -34,14 +34,14 @@ def _mode(values):
         return ""
     counts = Counter(non_empty)
     top = max(counts.values())
-    if top == 1 and len(counts) == len(non_empty):
-        # H4: all values unique → tie-break deterministically by sorted
-        # order so input order doesn't silently decide the merged string.
-        return sorted(non_empty)[0]
-    for v in non_empty:
-        if counts[v] == top:
-            return v
-    return non_empty[0]
+    top_vals = [v for v in counts if counts[v] == top]
+    if len(top_vals) == 1:
+        return top_vals[0]
+    # H4: tie at the top count - covers BOTH all-unique (top==1) and partial
+    # ties (2v2/3v3). Break deterministically by sorted order so input order
+    # never silently decides the merged string across sessions. (Previously
+    # only all-unique was sorted; partial ties fell to first-seen input order.)
+    return sorted(top_vals, key=str)[0]
 
 
 # Sentinel returned by _merge_field_across_runs to signal "no consensus"
@@ -54,18 +54,32 @@ def _merge_scalar_field(values):
 
     Non-empty values are coerced to str so Counter works uniformly. None,
     empty strings, and structurally non-primitive values are skipped.
+    Booleans are kept as-is (not stringified) so that mode of [F,F,F]
+    returns the bool False, not the string 'False'.
     """
-    coerced = []
+    strs: list[str] = []
+    bools: list[bool] = []
     for v in values:
         if v is None:
             continue
-        if isinstance(v, (str, int, float, bool)):
+        if isinstance(v, bool):
+            bools.append(v)
+        elif isinstance(v, (str, int, float)):
             s = str(v).strip()
             if s:
-                coerced.append(s)
-    if not coerced:
-        return _NO_MERGE
-    return _mode(coerced)
+                strs.append(s)
+    # Prefer the mode of strings; fall back to bool mode if no strings.
+    if strs:
+        return _mode(strs)
+    if bools:
+        # Mode of bools, converted back to the original bool type.
+        # Counter on bools gives the most-common bool; converting that
+        # bool to str gives 'True' or 'False', but callers expect the
+        # original type. We return the bool directly.
+        from collections import Counter
+        mode_bool = Counter(bools).most_common(1)[0][0]
+        return mode_bool
+    return _NO_MERGE
 
 
 def _merge_structured_field(values):
@@ -178,11 +192,37 @@ COLUMNAR_SECTION_SCHEMA = MergeSchema(
     confidence_field="confidence",
 )
 
+# Schema for abundance-diagram (pollen / percentage-diagram) results.
+# Rows are all-string like range-chart, so the majority-vote machinery
+# needs no new branch. The parallel "sites" and "zones" lists are merged
+# as named lists (deduped by their "name" field).
+ABUNDANCE_DIAGRAM_SCHEMA = MergeSchema(
+    primary_list_key="abundances",
+    primary_id_keys=["site", "taxon", "level"],
+    primary_str_mode_fields=[
+        "taxon", "site", "level", "depth", "abundance", "abundance_unit",
+    ],
+    sort_keys=[("agreement_count", "desc"), ("taxon", "asc")],
+    list_keys=["sites", "zones"],
+    confidence_field="confidence",
+)
+
 
 SCHEMA_BY_MODE = {
     "range_chart": RANGE_CHART_SCHEMA,
     "columnar_section": COLUMNAR_SECTION_SCHEMA,
+    "abundance_diagram": ABUNDANCE_DIAGRAM_SCHEMA,
 }
+
+
+def _looks_abundance(data: Optional[dict]) -> bool:
+    """Mirror of rca_core.exporter._looks_abundance. An abundance-diagram
+    result carries a non-empty ``abundances`` list (unique to that mode).
+    Empty list is ignored because it can be an uninitialized placeholder."""
+    if not data:
+        return False
+    ab = data.get("abundances")
+    return isinstance(ab, list) and len(ab) > 0
 
 
 def _looks_columnar(data: Optional[dict]) -> bool:
@@ -195,17 +235,47 @@ def _looks_columnar(data: Optional[dict]) -> bool:
     if not isinstance(sects, list) or not sects:
         return False
     first = sects[0]
-    return isinstance(first, dict) and ("id" in first) and ("name" not in first)
+    return isinstance(first, dict) and ("id" in first)
 
 
 def _auto_detect_schema(results):
-    """H5: pick the schema that matches the majority of inputs. Falls back
-    to the range-chart schema if shapes are inconsistent."""
+    """Pick the schema that matches the majority of inputs.
+
+    Tie-breaking: when two shape-detectors both meet the threshold
+    (or both fall short by the same margin), we apply a deterministic
+    preference order — columnar > abundance > range-chart. Columnar is
+    more specific than abundance (its `sections[].id` field is unique
+    to that mode), so misdetecting it as range-chart is a worse failure
+    than misdetecting abundance as range-chart. The old version fell
+    through to RANGE_CHART for any tie, which silently lost columnar
+    data when 2 runs split evenly.
+    """
     if not results:
         return RANGE_CHART_SCHEMA
+    n = len(results)
+    ab = sum(1 for r in results if _looks_abundance(r))
     col = sum(1 for r in results if _looks_columnar(r))
-    if col >= (len(results) + 1) // 2:
+    half = (n + 1) // 2
+    ab_passes = ab >= half
+    col_passes = col >= half
+    if col_passes and ab_passes:
+        # Both detectors agree there's a majority — prefer the more
+        # specific one. Counts break the tie if they disagree.
+        if col > ab:
+            return COLUMNAR_SECTION_SCHEMA
+        if ab > col:
+            return ABUNDANCE_DIAGRAM_SCHEMA
+        return COLUMNAR_SECTION_SCHEMA  # tie → columnar (more specific)
+    if col_passes:
         return COLUMNAR_SECTION_SCHEMA
+    if ab_passes:
+        return ABUNDANCE_DIAGRAM_SCHEMA
+    # Neither detector hit majority. If they tie on counts, still apply
+    # the same preference so the result is deterministic across runs.
+    if col > ab:
+        return COLUMNAR_SECTION_SCHEMA
+    if ab > col:
+        return ABUNDANCE_DIAGRAM_SCHEMA
     return RANGE_CHART_SCHEMA
 
 
@@ -229,12 +299,20 @@ def _merge_primary_list(runs, schema, n):
     order = []
     for r in runs:
         items = r.get(schema.primary_list_key) or []
+        # Per-run dedup: if a single run emits the same primary row twice
+        # (model hiccup), count it once so agreement_count can't exceed n
+        # (e.g. "3/2"), which would break consensus filters expecting
+        # agreement_count <= total runs.
+        seen_in_run = set()
         for it in items:
             if not isinstance(it, dict):
                 continue
             key = tuple(_norm(it.get(k)) for k in schema.primary_id_keys)
             if not any(key):
                 continue
+            if key in seen_in_run:
+                continue
+            seen_in_run.add(key)
             if key not in groups:
                 groups[key] = []
                 order.append(key)
@@ -249,18 +327,29 @@ def _merge_primary_list(runs, schema, n):
         # `age_units` / `samples`) are merged via _merge_structured_field —
         # calling _mode() on them would either crash (lists are unhashable)
         # or silently drop data (`Counter` keys objects by identity).
-        seen_keys = set()
+        #
+        # BUGFIX: collect (key, values) pairs across the group, then merge
+        # each key once. The previous loop called setdefault on every
+        # iteration, so whichever group item ran first "won" — a key that
+        # was None in the first run but present in later runs was silently
+        # dropped. Iterating outside-in guarantees every value across the
+        # whole group participates in the merge.
+        fields_to_merge: dict[str, list] = {}
         for g in group:
+            if not isinstance(g, dict):
+                continue
             for k, v in g.items():
                 if k in aggr or k in ("agreement_count", "agreement"):
                     continue
                 if v is None:
                     continue
-                merged_v = _merge_field_across_runs([x.get(k) for x in group])
-                if merged_v is _NO_MERGE:
-                    continue
-                aggr.setdefault(k, merged_v)
-                seen_keys.add(k)
+                fields_to_merge.setdefault(k, []).append(v)
+        for k, vals in fields_to_merge.items():
+            per_run_values = [gi.get(k) for gi in group]
+            merged_v = _merge_field_across_runs(per_run_values)
+            if merged_v is _NO_MERGE:
+                continue
+            aggr[k] = merged_v
         # Schema-declared mode fields also get cleanly populated
         # (overrides setdefault above if needed).
         aggr.update(_mode_keys(group, schema.primary_str_mode_fields))
@@ -322,7 +411,27 @@ def _merge_named_lists(runs, schema):
                     or _norm(it.get("meaning"))
                 )
                 if not label:
-                    continue
+                    # No name/marker/meaning field (e.g. abundance-diagram
+                    # single-site with empty name, or columnar cross_beds
+                    # which key on from/to bed indices). Fall back to a
+                    # content signature so identical items across runs still
+                    # collapse to one and distinct items are preserved,
+                    # instead of being silently dropped.
+                    try:
+                        label = "__nolabel__:" + repr(sorted(
+                            (k, "" if v is None else str(v)) for k, v in it.items()
+                        ))
+                    except TypeError:
+                        label = "__nolabel__:" + repr(sorted(it.keys()))
+                # If the item carries a `section` field (biozones, after the
+                # prompt/extractor schema fix), fold it into the dedup label
+                # so the same biozone measured in different sections isn't
+                # collapsed into one row - which would silently lose the
+                # second section's thickness. Items without a section field
+                # (other_fossils, legends, cross_beds) are unaffected.
+                section = _norm(it.get("section"))
+                if section and label and not label.startswith("__nolabel__"):
+                    label = f"{label}@@{section}"
                 if label not in groups:
                     groups[label] = []
                     order.append(label)
@@ -330,15 +439,28 @@ def _merge_named_lists(runs, schema):
         merged = []
         for label in order:
             group = groups[label]
-            # Mode-merge every string-valued field across runs to keep
-            # all custom fields (e.g. "to_bed_idx") and not just a fixed set.
+            # Collect (key, per-run values) across the whole group, then merge
+            # each key ONCE via the safe dispatcher _merge_field_across_runs.
+            # The previous code called raw _mode([x.get(k) for x in group]) on
+            # every field, which crashes (TypeError: unhashable type 'dict')
+            # when a field holds a dict/list - notably the `_extras` bucket the
+            # extractor deliberately preserves on every named-list item. The
+            # primary-list path was already fixed this way; this mirrors it.
             rep = {}
+            fields_to_merge: dict[str, list] = {}
             for g in group:
+                if not isinstance(g, dict):
+                    continue
                 for k, v in g.items():
                     if v is None:
                         continue
-                    if k not in rep:
-                        rep[k] = _mode([x.get(k) for x in group])
+                    fields_to_merge.setdefault(k, []).append(v)
+            for k in fields_to_merge:
+                per_run_values = [gi.get(k) for gi in group]
+                merged_v = _merge_field_across_runs(per_run_values)
+                if merged_v is _NO_MERGE:
+                    continue
+                rep[k] = merged_v
             if not rep and group:
                 rep = dict(group[0])
             merged.append(rep)
@@ -428,6 +550,12 @@ def merge_results(
                 for f in g.get("formations") or []:
                     if f and f not in forms:
                         forms.append(f)
+            # Mirror the primary-list merge: include agreement_count +
+            # agreement on every section so the JS / Python renderers can
+            # flag low-agreement rows. Without these fields, sections
+            # filtering by cross-run consensus isn't possible — and the
+            # asymmetry with species (which DOES expose agreement) is
+            # confusing for users running multi-run extraction.
             merged_sections.append({
                 "name": _mode([g.get("name", "") for g in group]),
                 "age_range": _mode([g.get("age_range", "") for g in group]),
@@ -436,6 +564,8 @@ def merge_results(
                     [g.get("formation_thickness_m", "") for g in group]
                 ),
                 "coordinates": _mode([g.get("coordinates", "") for g in group]),
+                "agreement_count": len(group),
+                "agreement": f"{len(group)}/{n}",
             })
         out["sections"] = merged_sections
         if "runs" not in out:
@@ -459,18 +589,27 @@ def merge_results(
         for key in sec_order:
             group = sec_groups[key]
             aggr: dict[str, Any] = {"agreement_count": len(group), "agreement": f"{len(group)}/{n}"}
-            seen_keys = set()
+            # BUGFIX: same setdefault-first-iteration-wins issue as in
+            # _merge_primary_list. Collect (k, values) across the group,
+            # then merge each key once.
+            fields_to_merge: dict[str, list] = {}
             for g in group:
+                if not isinstance(g, dict):
+                    continue
                 for k, v in g.items():
                     if k in aggr or k in ("agreement_count", "agreement"):
                         continue
                     if v is None:
                         continue
-                    merged_v = _merge_field_across_runs([x.get(k) for x in group])
-                    if merged_v is _NO_MERGE:
-                        continue
-                    aggr.setdefault(k, merged_v)
-                    seen_keys.add(k)
+                    fields_to_merge.setdefault(k, []).append(v)
+            for k, _vals in fields_to_merge.items():
+                # MEDIUM-3: renamed from per_run_values — "group" here already
+                # contains one entry per run, so this is the per-group-item value list.
+                group_item_values = [gi.get(k) for gi in group]
+                merged_v = _merge_field_across_runs(group_item_values)
+                if merged_v is _NO_MERGE:
+                    continue
+                aggr[k] = merged_v
             aggr.update(_mode_keys(group, sch.primary_str_mode_fields))
             merged_sections.append(aggr)
         out["sections"] = merged_sections

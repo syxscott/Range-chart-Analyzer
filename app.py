@@ -52,9 +52,39 @@ def _read_lock():
 
 
 def _pid_alive(pid):
-    """Best-effort check whether a process is still running."""
+    """Best-effort check whether a process is still running.
+
+    POSIX: ``os.kill(pid, 0)`` is the standard "is this pid alive" probe.
+    Windows: ``os.kill`` is implemented via ``TerminateProcess`` and signal 0
+    is not a reliable liveness probe (and historically raised
+    ``PermissionError``/``OSError`` inconsistently depending on ownership,
+    which the previous code treated as "dead" but on some Windows builds
+    could also terminate the previous instance under the wrong path). Use
+    ``OpenProcess`` + ``GetExitCodeProcess`` and check ``STILL_ACTIVE (259)``
+    instead.
+    """
     if pid is None:
         return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            handle = kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, wintypes.DWORD(pid)
+            )
+            if not handle:
+                return False
+            try:
+                code = wintypes.DWORD()
+                ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+                return bool(ok) and code.value == STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return False
     try:
         os.kill(pid, 0)
         return True
@@ -65,7 +95,20 @@ def _pid_alive(pid):
 
 
 def _pick_free_port(preferred=(8000, 8765)) -> int:
-    """Try preferred ports first, then ask the kernel for a free one."""
+    """Try preferred ports first, then ask the kernel for a free one.
+
+    Bug-10 fix: hold a cross-process file lock while probing + binding,
+    so two concurrent ``app.py`` launches don't both pick the same
+    "free" port (TOCTOU between ``bind`` and the actual ``listen``).
+    The lock is released automatically when the process exits or the
+    helper returns. On Windows we use ``msvcrt.locking``; on POSIX we
+    use ``fcntl.flock``; both work through a single sentinel file in
+    the user's home directory.
+    """
+    return _with_port_lock(lambda: _probe_and_bind(preferred))
+
+
+def _probe_and_bind(preferred):
     for p in preferred:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -79,19 +122,83 @@ def _pick_free_port(preferred=(8000, 8765)) -> int:
         return s.getsockname()[1]
 
 
+def _with_port_lock(fn):
+    """Run *fn* under a cross-process advisory lock so two app launches
+    can't simultaneously probe + bind the same port.
+
+    Uses a sentinel file in the user's home directory. The lock is
+    released as soon as ``fn`` returns, so subsequent operations (the
+    actual ``serve_forever``) run without it. This is advisory only —
+    it does not stop a process that ignores the file, but combined with
+    the existing PID-based lock file it covers the realistic two-launch
+    race that the bind-only check misses.
+    """
+    sentinel = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer.portlock")
+    try:
+        fd = os.open(sentinel, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError:
+        # If we can't open the sentinel, fall through without locking —
+        # better than refusing to start.
+        return fn()
+    try:
+        if sys.platform == "win32":
+            try:
+                import msvcrt  # type: ignore
+                # Lock 1 byte at offset 0. Blocks if another process holds it.
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                try:
+                    return fn()
+                finally:
+                    try:
+                        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                    except OSError:
+                        pass
+            except (ImportError, OSError):
+                return fn()
+        else:
+            try:
+                import fcntl  # type: ignore
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                try:
+                    return fn()
+                finally:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+            except (ImportError, OSError):
+                return fn()
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
 def _wait_until_ready(host: str, port: int, timeout: float = 5.0) -> bool:
     """Poll GET / until 200 or timeout. Returns True on success."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        conn = None
         try:
-            with http.client.HTTPConnection(host, port, timeout=0.5) as c:
-                c.request("GET", "/")
-                r = c.getresponse()
-                r.read(64)
-                if r.status == 200:
-                    return True
-        except OSError:
+            conn = http.client.HTTPConnection(host, port, timeout=0.5)
+            conn.request("GET", "/")
+            r = conn.getresponse()
+            r.read(64)
+            if r.status == 200:
+                return True
+        except (OSError, http.client.HTTPException):
             pass
+        finally:
+            # Always close the connection — `with` would do it, but using
+            # try/finally + close() also covers the case where the
+            # constructor itself raises (e.g. socket.error on some
+            # platforms can be raised before `with` enters).
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         time.sleep(0.05)
     return False
 
@@ -101,7 +208,12 @@ def _start_server(host: str, port: int):
     from http.server import ThreadingHTTPServer
     import server  # the existing stdlib backend
 
-    httpd = ThreadingHTTPServer((host, port), server.Handler)
+    try:
+        httpd = ThreadingHTTPServer((host, port), server.Handler)
+    except OSError:
+        # Surface the bind failure so main() can return a non-zero exit code
+        # instead of crashing with an unhandled traceback.
+        raise
     httpd.daemon_threads = True
     t = threading.Thread(target=httpd.serve_forever, name="rca-http", daemon=True)
     t.start()
@@ -118,12 +230,23 @@ def _write_lock(host: str, port: int) -> None:
 
 
 def _clear_lock() -> None:
+    """Remove the lock file if (and only if) it belongs to us.
+
+    Three safety properties:
+      - never delete a lock file owned by a different live PID;
+      - if the recorded PID is dead, the lock is stale and is fair game
+        (so a crashed previous instance doesn't block new launches);
+      - any unexpected I/O error is swallowed: lock cleanup is best-effort
+        and must not mask a real exception on shutdown.
+    """
     try:
         lock = _read_lock()
         if lock:
             _, _, pid = lock
-            if pid is not None and pid != os.getpid():
-                return  # not our lock — leave it alone
+            # If another live process holds the lock, leave it alone.
+            if pid is not None and pid != os.getpid() and _pid_alive(pid):
+                return
+            # Otherwise (our own pid, or a dead pid) we are entitled to remove it.
         if os.path.exists(LOCK_FILE):
             os.remove(LOCK_FILE)
     except OSError:
@@ -157,7 +280,7 @@ def main():
         except Exception:
             pass
         # atexit._run will fire _clear_lock on process exit.
-        return 0
+        return 1
 
     loading_url = f"http://{host}:{port}/app/loading.html?next=/"
     final_url = f"http://{host}:{port}/"

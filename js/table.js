@@ -27,9 +27,42 @@ function rcaEscAttr(value) {
 // "agreement" column showing how many runs produced each row.
 function rcaTableConfigs(data) {
   const multi = data && Number(data.runs) > 1;
+  const hasAbundanceShape = data && Array.isArray(data.abundances);
   const hasColumnarShape = data
     && Array.isArray(data.sections)
-    && !Array.isArray(data.species_ranges);
+    && !Array.isArray(data.species_ranges)
+    && !hasAbundanceShape;
+
+  // -------- abundance-diagram (pollen / percentage) mode --------
+  if (hasAbundanceShape) {
+    const abCols = ['col.taxon', 'col.site', 'col.level', 'col.depth', 'col.abundance', 'col.abundanceUnit'];
+    const abRow = (r) => [r.taxon, r.site, r.level, r.depth, r.abundance, r.abundance_unit];
+    const abColsFinal = multi ? abCols.concat(['col.agreement']) : abCols;
+    const abRowFinal = multi ? (r) => abRow(r).concat([r.agreement || '']) : abRow;
+    return [
+      {
+        id: 'sites',
+        titleKey: 'sec.sites',
+        cols: ['col.name', 'col.location', 'col.ageRange', 'col.depthUnit'],
+        italicCol: -1,
+        row: (s) => [s.name, s.location, s.age_range, s.depth_unit],
+      },
+      {
+        id: 'abundances',
+        titleKey: 'sec.abundances',
+        cols: abColsFinal,
+        italicCol: 0,
+        row: abRowFinal,
+      },
+      {
+        id: 'zones',
+        titleKey: 'sec.zones',
+        cols: ['col.name', 'col.age', 'col.levelRange'],
+        italicCol: -1,
+        row: (z) => [z.name, z.age, z.level_range],
+      },
+    ];
+  }
 
   // -------- columnar-section mode --------
   if (hasColumnarShape) {
@@ -185,10 +218,16 @@ function rcaRenderResults(data, rawText) {
       continue;
     }
 
-    parts.push('<div class="table-wrap"><table class="data-table"><thead><tr>');
-    parts.push('<th>' + rcaEsc(t('col.index')) + '</th>');
+    // FIX-1: give each table an accessible name (section title + row count)
+    // and scoped column headers so screen-reader table navigation announces
+    // context correctly. Native <table> semantics already provide grid-style
+    // cell navigation, so we keep the markup native rather than bolting a
+    // role="grid" roving-tabindex widget onto read-only data.
+    const tblLabel = rcaEscAttr(t(cfg.titleKey) + ' (' + rows.length + ')');
+    parts.push('<div class="table-wrap"><table class="data-table" aria-label="' + tblLabel + '"><thead><tr>');
+    parts.push('<th scope="col">' + rcaEsc(t('col.index')) + '</th>');
     for (const c of cfg.cols) {
-      parts.push('<th>' + rcaEsc(t(c)) + '</th>');
+      parts.push('<th scope="col">' + rcaEsc(t(c)) + '</th>');
     }
     parts.push('</tr></thead><tbody>');
     rows.forEach((item, idx) => {
@@ -201,7 +240,7 @@ function rcaRenderResults(data, rawText) {
         if (ac <= half) rowCls = ' class="row-low-agreement"';
       }
       parts.push('<tr' + rowCls + '>');
-      parts.push('<td class="cell-empty">' + (idx + 1) + '</td>');
+      parts.push('<th class="cell-empty" scope="row">' + (idx + 1) + '</th>');
       const cells = cfg.row(item);
       cells.forEach((cell, ci) => {
         const val = cell === null || cell === undefined ? '' : String(cell);

@@ -39,18 +39,30 @@ function extractBalancedJsonObject(text) {
   return null;
 }
 
-// Lenient JSON object parse. Strips markdown fences, tries strict parse,
-// then falls back to the first balanced {...} object. Throws on failure.
+// Lenient JSON object parse. Strips markdown fences, strips control chars
+// (mirroring rca_core.json_utils.safe_json_loads so both ends survive
+// raw 0x01 bytes in model string values), tries strict parse, then falls
+// back to a top-level array wrapper or the first balanced {...} object.
+// Throws on failure.
 function safeJsonLoads(text) {
   if (!text) throw new Error('empty text');
   let s = String(text).trim();
   // Strip leading/trailing markdown code fences.
   s = s.replace(/^```(?:json)?\s*/gm, '');
   s = s.replace(/\s*```$/gm, '');
+  // Strip the same control chars Python's safe_json_loads strips. Some
+  // model providers emit raw 0x01 bytes inside string values; without
+  // this JSON.parse throws on otherwise-valid JSON.
+  s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
   try {
     const parsed = JSON.parse(s);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       return parsed;
+    }
+    // Top-level array: wrap it so downstream code can use object semantics,
+    // matching Python's {_array_root: [...]} wrapper.
+    if (Array.isArray(parsed)) {
+      return { _array_root: parsed };
     }
   } catch (_e) {
     /* fall through to balanced-object extraction */

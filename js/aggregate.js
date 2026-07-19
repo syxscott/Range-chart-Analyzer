@@ -81,7 +81,11 @@ function mergeStructuredField(values) {
 // Mirrors Python `_merge_field_across_runs` so both ends behave identically.
 function mergeFieldAcrossRuns(values) {
   const nonNull = values.filter((v) => v != null);
-  if (nonNull.length === 0) return '';
+  // BUGFIX: was returning '' here, which let empty runs appear as a
+  // legitimate "" value in the merged row. Mirror the Python side's
+  // NO_MERGE sentinel so callers can drop the key when no run produced
+  // any value at all.
+  if (nonNull.length === 0) return NO_MERGE;
   // All non-null values are lists-of-dicts → structured merge.
   if (nonNull.every((v) => Array.isArray(v) && v.every((x) => x && typeof x === 'object' && !Array.isArray(x)))) {
     return mergeStructuredField(values);
@@ -89,7 +93,7 @@ function mergeFieldAcrossRuns(values) {
   // All non-null values are primitives → scalar merge.
   if (nonNull.every((v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')) {
     const m = mergeScalarField(values);
-    return m === NO_MERGE ? '' : m;
+    return m === NO_MERGE ? NO_MERGE : m;
   }
   // Mixed / unknown → fall back to plain string mode.
   return rcaAggMode(nonNull.map(String));
@@ -118,10 +122,53 @@ const RCA_COLUMNAR_KEYMAP = {
   extraSections: null,
 };
 
+// Keymap for abundance-diagram (pollen / percentage-diagram) results.
+// Rows are all-string like range-chart, so no special-case merge is needed;
+// the parallel "sites" and "zones" lists are merged as named lists.
+const RCA_ABUNDANCE_KEYMAP = {
+  primary: 'abundances',
+  idKeys: ['site', 'taxon', 'level'],
+  strModeFields: ['taxon', 'site', 'level', 'depth', 'abundance', 'abundance_unit'],
+  sortKeys: [['agreement_count', 'desc'], ['taxon', 'asc']],
+  listKeys: ['sites', 'zones'],
+  confidence: 'confidence',
+  extraSections: null,
+};
+
 const RCA_KEYMAP_BY_MODE = {
   range_chart: RCA_DEFAULT_KEYMAP,
   columnar_section: RCA_COLUMNAR_KEYMAP,
+  abundance_diagram: RCA_ABUNDANCE_KEYMAP,
 };
+
+// Detect the appropriate keymap from the shape of the first result object.
+// Mirrors Python _auto_detect_schema so both ends agree on the schema.
+function rcaAutoDetectKeymap(results) {
+  if (!results || !Array.isArray(results) || results.length === 0) {
+    return RCA_DEFAULT_KEYMAP;
+  }
+  let abCount = 0;
+  let colCount = 0;
+  for (const r of results) {
+    if (r && Array.isArray(r.abundances) && r.abundances.length > 0) abCount++;
+    if (r && Array.isArray(r.sections) && r.sections.length > 0 &&
+        r.sections[0] && typeof r.sections[0] === 'object' && 'id' in r.sections[0]) {
+      colCount++;
+    }
+  }
+  const n = results.length;
+  const half = Math.floor((n + 1) / 2);
+  if (colCount >= half && abCount >= half) {
+    // Both detectors meet threshold — prefer the more specific one.
+    return colCount >= abCount ? RCA_COLUMNAR_KEYMAP : RCA_ABUNDANCE_KEYMAP;
+  }
+  if (colCount >= half) return RCA_COLUMNAR_KEYMAP;
+  if (abCount >= half) return RCA_ABUNDANCE_KEYMAP;
+  // Neither detector hit majority.
+  if (colCount > abCount) return RCA_COLUMNAR_KEYMAP;
+  if (abCount > colCount) return RCA_ABUNDANCE_KEYMAP;
+  return RCA_DEFAULT_KEYMAP;  // tie → default to range-chart
+}
 
 function emptyFor(km, n) {
   const out = { [km.primary]: [], runs: n };
@@ -151,20 +198,29 @@ function mergePrimaryList(runs, km, n) {
     for (const f of km.strModeFields) {
       aggr[f] = rcaAggMode(group.map((g) => g[f]));
     }
-    // Second pass: pick up any remaining keys not in strModeFields. For
-    // scalars we still call rcaAggMode; for structured fields (lists of
-    // dicts, e.g. columnar `lithology_blocks` / `samples` / `age_units`)
-    // we union by signature. Calling rcaAggMode on objects would coerce them
-    // to '[object Object]' and silently drop every run past the first — that
-    // was bug C3.
+    // BUGFIX: previous version iterated `for (g of group) for (k of g)`
+    // and used `if (aggr[k] !== undefined) continue;` — the first run
+    // that produced each key "won" and later runs were silently dropped.
+    // Collect (key, all-per-run-values) across the whole group first,
+    // then call mergeFieldAcrossRuns once per key. This also makes the
+    // NO_MERGE sentinel meaningful: a key that every run reported as
+    // null is dropped from the merged row instead of appearing as "".
+    const fieldsToMerge = new Map();
     for (const g of group) {
+      if (!g || typeof g !== 'object') continue;
       for (const k of Object.keys(g)) {
-        if (aggr[k] !== undefined) continue;
         if (k === 'agreement_count' || k === 'agreement') continue;
-        const v = g[k];
-        if (v == null) continue;
-        aggr[k] = mergeFieldAcrossRuns(group.map((x) => x[k]));
+        if (g[k] == null) continue;
+        if (!fieldsToMerge.has(k)) fieldsToMerge.set(k, []);
+        fieldsToMerge.get(k).push(g[k]);
       }
+    }
+    for (const [k, _vals] of fieldsToMerge) {
+      if (aggr[k] !== undefined) continue;  // already filled by strModeFields
+      const perRun = group.map((x) => x ? x[k] : null);
+      const merged_v = mergeFieldAcrossRuns(perRun);
+      if (merged_v === NO_MERGE) continue;  // drop empty key
+      aggr[k] = merged_v;
     }
     merged.push(aggr);
   }
@@ -222,8 +278,21 @@ function mergeNamedLists(runs, km) {
     for (const r of runs) {
       for (const it of r[key] || []) {
         if (!it || typeof it !== 'object') continue;
-        const label = rcaAggNorm(it.name) || rcaAggNorm(it.marker) || rcaAggNorm(it.meaning);
-        if (!label) continue;
+        let label = rcaAggNorm(it.name) || rcaAggNorm(it.marker) || rcaAggNorm(it.meaning);
+        if (!label) {
+          // No name/marker/meaning field (e.g. abundance-diagram single-site
+          // with empty name, or columnar cross_beds which key on bed indices).
+          // Fall back to a content signature so identical items across runs
+          // collapse to one and distinct items are preserved, instead of
+          // being silently dropped. Mirrors the Python _merge_named_lists.
+          try {
+            label = '__nolabel__:' + JSON.stringify(
+              Object.keys(it).sort().map((k) => [k, it[k] == null ? '' : String(it[k])])
+            );
+          } catch (_e) {
+            label = '__nolabel__:' + JSON.stringify(Object.keys(it).sort());
+          }
+        }
         if (!groups.has(label)) { groups.set(label, []); order.push(label); }
         groups.get(label).push(it);
       }
@@ -231,14 +300,23 @@ function mergeNamedLists(runs, km) {
     const merged = [];
     for (const label of order) {
       const group = groups.get(label);
+      // BUGFIX: same first-iteration-wins issue as mergePrimaryList —
+      // collect (k, perRunValues) across the group, then merge once.
       const rep = {};
+      const fieldsToMerge = new Map();
       for (const g of group) {
+        if (!g || typeof g !== 'object') continue;
         for (const k of Object.keys(g)) {
-          if (rep[k] !== undefined) continue;
-          const v = g[k];
-          if (v == null) continue;
-          rep[k] = mergeFieldAcrossRuns(group.map((x) => x[k]));
+          if (g[k] == null) continue;
+          if (!fieldsToMerge.has(k)) fieldsToMerge.set(k, []);
+          fieldsToMerge.get(k).push(g[k]);
         }
+      }
+      for (const [k, _vals] of fieldsToMerge) {
+        const perRun = group.map((x) => x ? x[k] : null);
+        const merged_v = mergeFieldAcrossRuns(perRun);
+        if (merged_v === NO_MERGE) continue;
+        rep[k] = merged_v;
       }
       if (Object.keys(rep).length === 0 && group[0]) Object.assign(rep, group[0]);
       merged.push(rep);
@@ -313,6 +391,12 @@ function rcaMergeResults(results, totalRuns, keymap) {
         formations: forms,
         formation_thickness_m: rcaAggMode(group.map((x) => x.formation_thickness_m || '')),
         coordinates: rcaAggMode(group.map((x) => x.coordinates || '')),
+        // Mirror the species merge: include agreement_count + agreement so
+        // js/table.js's low-agreement highlight (table.js:237) can fire on
+        // the sections list — without these fields the highlight branch
+        // is dead code.
+        agreement_count: group.length,
+        agreement: group.length + '/' + n,
       });
     }
     out[km.extraSections] = merged;

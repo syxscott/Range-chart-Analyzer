@@ -20,3 +20,16 @@ pywebview>=5.0 ; python_version >= "3.8"
 #   Fluent launcher falls back to it automatically if these are missing.
 PySide6>=6.6 ; python_version >= "3.9"
 PySide6-Fluent-Widgets>=1.5 ; python_version >= "3.9"
+# PySide6-Addons — pulls in QtWebEngineWidgets for the History detail
+# dialog (gui_fluent_history_detail.HistoryDetailDialog). Heavy
+# (~+50MB on top of PySide6) but optional: the rest of the Fluent GUI
+# works without it; double-clicking a history row will show a no-engine
+# fallback message instead of the rich result render.
+PySide6-Addons>=6.6 ; python_version >= "3.9"
+# XLSX export — enables the "Export Excel" button in the Fluent GUI and
+#   the `rca_core.exporter.to_xlsx` function. Optional: the rest of the
+#   app (CSV / JSON / TSV) works fine without it.
+openpyxl>=3.1 ; python_version >= "3.8"
+# Token-usage charts — rendered on the Usage page. Falls back to plain
+#   text tables if missing.
+matplotlib>=3.5 ; python_version >= "3.8"

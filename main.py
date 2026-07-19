@@ -59,9 +59,19 @@ def launch_server(host: str, port: int, open_browser: bool) -> int:
 def launch_modern() -> int:
     try:
         import app as _modern
-    except Exception as exc:  # never traceback
-        print(f"[modern-ui] failed to load app.py: {exc}", file=sys.stderr)
-        return 0
+    except Exception as exc:
+        # Previously this silently returned 0, swallowing ImportError on
+        # Windows from pywebview/WebView2 missing. Fail loud with a clear
+        # hint and a non-zero exit so CI/scripts detect it.
+        print(
+            f"[modern-ui] failed to load app.py ({exc.__class__.__name__}): {exc}\n"
+            "Common cause: pywebview is installed but the platform WebView "
+            "engine is unavailable (Windows: install Edge WebView2 Runtime; "
+            "Linux: install webkit2gtk-4.0).\n"
+            "Fallback: run  python main.py gui  for the Tkinter GUI.",
+            file=sys.stderr,
+        )
+        return 2
     return _modern.main()
 
 
