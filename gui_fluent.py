@@ -685,8 +685,7 @@ class ExtractPage(ScrollArea):
         # on some qfluent builds. Clearing here makes _render_result the
         # single source of pivot population and lets retranslate call it
         # alone.
-        if len(self.pivot) > 0:
-            self.pivot.clear()
+        self.pivot.clear()
         for idx, cfg in enumerate(configs):
             items = (self.result or {}).get(cfg["id"], []) or []
             table = TableWidget()
