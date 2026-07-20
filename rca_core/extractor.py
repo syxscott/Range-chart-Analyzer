@@ -65,6 +65,24 @@ def clamp_timeout_sec(value):
     return max(MIN_TIMEOUT_SEC, min(v, MAX_TIMEOUT_SEC))
 
 
+# L-3 fix: explicit bounds for max_edge. Previously max_edge=0 would bypass
+# the resize check entirely (treated as falsy). Now we clamp to a valid range.
+MIN_MAX_EDGE = 0   # 0 means "disabled / no resize"
+MAX_MAX_EDGE = 10000
+
+
+def clamp_max_edge(value):
+    """Coerce a user-supplied max_edge into [MIN_MAX_EDGE, MAX_MAX_EDGE].
+
+    0 disables resize; positive values cap the longest image edge.
+    """
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_EDGE
+    return max(MIN_MAX_EDGE, min(v, MAX_MAX_EDGE))
+
+
 @dataclass
 class ExtractResult:
     ok: bool = False
@@ -227,8 +245,35 @@ _KNOWN_SECTION_KEYS = (
 )
 _KNOWN_SPECIES_KEYS = (
     "species", "section", "range_top", "range_base", "biozone",
+    "author", "year",
 )
 _KNOWN_BIOZONE_KEYS = ("name", "section", "age", "thickness_m")
+
+
+def _classify_array_item(item: dict[str, Any]) -> str | None:
+    """Classify an item from a top-level array to the appropriate key.
+
+    Returns the root key name (e.g. "sections", "species_ranges") or None if
+    the item cannot be classified. Uses distinguishing keys to differentiate
+    between section, species_range, biozone, and other_fossils entries.
+    """
+    if not isinstance(item, dict):
+        return None
+    # Species ranges have "species" (the primary identifier) and range bounds.
+    if "species" in item or ("range_top" in item and "range_base" in item):
+        return "species_ranges"
+    # Biozones have "age" (primary identifier) and optionally "thickness_m".
+    # Sections also have "age" and "name", but not "thickness_m".
+    # Biozones have "thickness_m" which sections don't have.
+    if "thickness_m" in item and "name" in item and "age" in item:
+        return "biozones"
+    # Sections have "name" and typically "age_range" or "formations".
+    if "name" in item and ("age_range" in item or "formations" in item):
+        return "sections"
+    # Fallback: if it has "name" but doesn't match biozone pattern, treat as section.
+    if "name" in item:
+        return "sections"
+    return None
 
 
 def _carry_extras(item: dict[str, Any], known: tuple[str, ...], out: dict[str, Any]) -> None:
@@ -246,6 +291,10 @@ def normalize_result(parsed: dict[str, Any]) -> dict[str, Any]:
     discarded — they're attached under ``_extras`` so the operator sees
     what was extracted. This avoids losing data the caller assumes is
     captured by the schema.
+
+    H3-fix: when safe_json_loads wraps a top-level array as
+    ``{"_array_root": [...]}``, we unwrap it and distribute items to
+    the appropriate keys (sections, species_ranges, biozones, other_fossils).
     """
     def s(v: Any) -> str:
         return "" if v is None else str(v)
@@ -257,14 +306,37 @@ def normalize_result(parsed: dict[str, Any]) -> dict[str, Any]:
         "other_fossils": [],
         "confidence": 0.0,
     }
+
+    # H3-fix: unwrap _array_root wrapper and distribute items to known keys.
+    if "_array_root" in parsed and isinstance(parsed["_array_root"], list):
+        for item in parsed["_array_root"]:
+            if not isinstance(item, dict):
+                # Non-dict items (e.g. bare strings) go to other_fossils.
+                if isinstance(item, str) and item.strip():
+                    out["other_fossils"].append(item.strip())
+                continue
+            key = _classify_array_item(item)
+            if key is None:
+                # Unclassifiable dicts: attach as top-level extras under
+                # a generated key so nothing is silently dropped.
+                out.setdefault("_unclassified", []).append(item)
+            else:
+                out.setdefault(key, []).append(item)
     for sec in parsed.get("sections") or []:
         if not isinstance(sec, dict):
             continue
         formations = sec.get("formations")
+        # Fix B-2: handle case where formations is a string instead of a list.
+        if isinstance(formations, list):
+            formations_out = [s(x) for x in formations if isinstance(x, str) and s(x).strip()]
+        elif isinstance(formations, str) and formations.strip():
+            formations_out = [formations.strip()]
+        else:
+            formations_out = []
         row = {
             "name": s(sec.get("name")),
             "age_range": s(sec.get("age_range")),
-            "formations": [s(x) for x in formations] if isinstance(formations, list) else [],
+            "formations": formations_out,
             "formation_thickness_m": s(sec.get("formation_thickness_m")),
             "coordinates": s(sec.get("coordinates")),
         }
@@ -279,14 +351,23 @@ def normalize_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "range_top": s(sp.get("range_top")),
             "range_base": s(sp.get("range_base")),
             "biozone": s(sp.get("biozone")),
+            "author": s(sp.get("author", "")),
+            "year": s(sp.get("year", "")),
         }
         _carry_extras(sp, _KNOWN_SPECIES_KEYS, row)
         out["species_ranges"].append(row)
     for bz in parsed.get("biozones") or []:
         if not isinstance(bz, dict):
             continue
+        name = s(bz.get("name"))
+        # Detect and append zone-type suffix if not already present, so that
+        # taxon range zone / assemblage zone / interval zone names remain
+        # distinct and are not collapsed into a generic "Zone" label.
+        zone_type = s(bz.get("zone_type", "")).strip().lower()
+        if zone_type and zone_type not in name.lower():
+            name = f"{name} ({zone_type})"
         row = {
-            "name": s(bz.get("name")),
+            "name": name,
             "section": s(bz.get("section")),
             "age": s(bz.get("age")),
             "thickness_m": s(bz.get("thickness_m")),
@@ -294,8 +375,13 @@ def normalize_result(parsed: dict[str, Any]) -> dict[str, Any]:
         _carry_extras(bz, _KNOWN_BIOZONE_KEYS, row)
         out["biozones"].append(row)
     of = parsed.get("other_fossils") or []
+    # Fix B-3: handle case where model returns a string instead of a list.
     if isinstance(of, list):
-        out["other_fossils"] = [s(x) for x in of if s(x).strip()]
+        out["other_fossils"] = [s(x) for x in of if isinstance(x, str) and s(x).strip()]
+    elif isinstance(of, str) and of.strip():
+        out["other_fossils"] = [of.strip()]
+    else:
+        out["other_fossils"] = []
     try:
         conf = float(parsed.get("confidence", 0.0))
     except (TypeError, ValueError):
@@ -450,7 +536,31 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
     """Coerce the parsed columnar-section JSON into the strict result shape.
 
     H8: extra keys the model emits are preserved under ``_extras``.
+
+    H3-fix: when safe_json_loads wraps a top-level array as
+    ``{"_array_root": [...]}``, we unwrap it and distribute items to
+    the appropriate keys (sections, fossil_legend, lithology_legend, cross_beds).
     """
+    # H3-fix: unwrap _array_root wrapper and distribute items to known keys.
+    if "_array_root" in parsed and isinstance(parsed["_array_root"], list):
+        for item in parsed["_array_root"]:
+            if not isinstance(item, dict):
+                continue
+            # Columnar sections have "lithology_blocks" or "age_units" as
+            # distinguishing features.
+            if "lithology_blocks" in item or "age_units" in item or "id" in item:
+                parsed.setdefault("sections", []).append(item)
+            # Legend items have "marker" or "pattern" + "meaning".
+            elif "meaning" in item and ("marker" in item or "pattern" in item):
+                if "marker" in item:
+                    parsed.setdefault("fossil_legend", []).append(item)
+                else:
+                    parsed.setdefault("lithology_legend", []).append(item)
+            # Cross-bed entries have from_section/to_section.
+            elif "from_section" in item or "from_bed_idx" in item:
+                parsed.setdefault("cross_beds", []).append(item)
+            else:
+                parsed.setdefault("_unclassified", []).append(item)
 
     def s(v: Any) -> str:
         return "" if v is None else str(v)
@@ -528,7 +638,16 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
 
     def norm_legend(items):
         out = []
+        warning = None
+        # Fix B-5: if items is a string (not a list), don't iterate over chars.
+        # Issue-1 fix: add _warning flag instead of silently discarding.
+        if isinstance(items, str):
+            warning = "legend_input_is_string"
+            items = []
         for x in items or []:
+            # Fix B-5: skip non-dict items (including strings) explicitly.
+            # Previously strings would be silently skipped; now we explicitly
+            # check and skip non-dict items without iterating over them.
             if not isinstance(x, dict):
                 continue
             # fossil_legend uses marker+meaning; lithology_legend uses
@@ -542,7 +661,7 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
             }
             _carry_extras(x, _KNOWN_LEGEND_KEYS, row)
             out.append(row)
-        return out
+        return out, warning
 
     def norm_cross(items):
         out = []
@@ -589,13 +708,21 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
         overall = 0.0
     overall = max(0.0, min(1.0, overall))
 
+    # Issue-1 fix: unpack tuple return from norm_legend (returns (list, warning))
+    fossil_legend, fossil_legend_warn = norm_legend(parsed.get("fossil_legend"))
+    lithology_legend, lithology_legend_warn = norm_legend(parsed.get("lithology_legend"))
+    # Collect warnings to surface at root level
+    legend_warnings = [w for w in (fossil_legend_warn, lithology_legend_warn) if w]
+
     out: dict[str, Any] = {
         "sections": sections,
-        "fossil_legend": norm_legend(parsed.get("fossil_legend")),
-        "lithology_legend": norm_legend(parsed.get("lithology_legend")),
+        "fossil_legend": fossil_legend,
+        "lithology_legend": lithology_legend,
         "cross_beds": norm_cross(parsed.get("cross_beds")),
         "confidence": overall,
     }
+    if legend_warnings:
+        out["_warnings"] = legend_warnings
     root_extras = {k: v for k, v in parsed.items() if k not in _KNOWN_COLUMNAR_ROOT_KEYS}
     if root_extras:
         out["_extras"] = root_extras
@@ -696,7 +823,28 @@ def normalize_abundance_result(parsed: dict[str, Any]) -> dict[str, Any]:
     H8: extra keys the model emits are preserved under ``_extras``. The shape
     mirrors range-chart (all-string rows) so the majority-vote merge machinery
     in aggregate.py works with no new code path.
+
+    H3-fix: when safe_json_loads wraps a top-level array as
+    ``{"_array_root": [...]}``, we unwrap it and distribute items to
+    the appropriate keys (sites, abundances, zones).
     """
+    # H3-fix: unwrap _array_root wrapper and distribute items to known keys.
+    if "_array_root" in parsed and isinstance(parsed["_array_root"], list):
+        for item in parsed["_array_root"]:
+            if not isinstance(item, dict):
+                continue
+            # Sites have "name" and typically "location" or "depth_unit".
+            if "name" in item and ("location" in item or "depth_unit" in item or "age_range" in item):
+                parsed.setdefault("sites", []).append(item)
+            # Abundances have "taxon", "site", "level", "depth", "abundance".
+            elif "taxon" in item or ("abundance" in item and "level" in item):
+                parsed.setdefault("abundances", []).append(item)
+            # Zones have "name" and "age" (and typically "level_range").
+            elif "age" in item and "name" in item:
+                parsed.setdefault("zones", []).append(item)
+            else:
+                parsed.setdefault("_unclassified", []).append(item)
+
     def s(v: Any) -> str:
         return "" if v is None else str(v)
 

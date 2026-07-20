@@ -132,13 +132,15 @@ function safeJsonLoads(text) {
   // Level 3: strict parse.
   try {
     const parsed = JSON.parse(s);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    // Fix J-1: typeof null === 'object' in JS, but null is not a valid object
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed !== null) {
       return parsed;
     }
     // Top-level array: wrap it so downstream code can use object semantics,
     // matching Python's {_array_root: [...]} wrapper.
     if (Array.isArray(parsed)) {
-      return { _array_root: parsed };
+      // Fix J-2: add _note field to match Python behavior
+      return { _array_root: parsed, _note: 'model returned a top-level array; wrapping for diagnostics' };
     }
   } catch (_e) {
     /* fall through to balanced-object extraction */
@@ -153,7 +155,7 @@ function safeJsonLoads(text) {
   if (arrCandidate !== null) {
     try {
       const parsedArr = JSON.parse(arrCandidate);
-      if (Array.isArray(parsedArr)) return { _array_root: parsedArr };
+      if (Array.isArray(parsedArr)) return { _array_root: parsedArr, _note: 'model returned a top-level array; wrapping for diagnostics' };
     } catch (_e) { /* fall through */ }
   }
   // Level 6: prose-embedded JSON (last resort).
@@ -161,8 +163,8 @@ function safeJsonLoads(text) {
   if (prose !== null) {
     try {
       const parsed = JSON.parse(prose);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-      if (Array.isArray(parsed)) return { _array_root: parsed };
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed !== null) return parsed;
+      if (Array.isArray(parsed)) return { _array_root: parsed, _note: 'model returned a top-level array; wrapping for diagnostics' };
     } catch (_e) { /* fall through */ }
   }
   throw new Error('no JSON object found in: ' + s.slice(0, 120));

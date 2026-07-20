@@ -789,6 +789,9 @@ class ProviderStore:
         with self.lock:
             self.providers = [p for p in self.providers if p.id != provider_id]
             if self.current_id == provider_id:
+                # L-2 fix: clear ALL is_current flags first, then set new one.
+                for p in self.providers:
+                    p.is_current = False
                 self.current_id = self.providers[0].id if self.providers else ""
                 if self.providers:
                     self.providers[0].is_current = True

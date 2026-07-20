@@ -223,17 +223,8 @@ class ExtractWorker(QThread):
         ))
 
 
-class ConnTestWorker(QThread):
-    """Runs test_llm_connection() off the UI thread."""
-    done = Signal(object)  # ConnectionResult
-
-    def __init__(self, provider):
-        super().__init__()
-        self._provider = provider
-
-    # NOTE: a previous ConnTestWorker class lived here but was never used
-# (ProvidersPage defines its own inline _Worker instead). Removed in
-# audit pass to keep the module lean.
+# NOTE: ConnTestWorker was removed — it was dead code (ProvidersPage
+# defines its own inline _Worker instead).
 
 
 class ExtractPage(ScrollArea):
@@ -409,7 +400,7 @@ class ExtractPage(ScrollArea):
 
     def _load_image(self, path):
         try:
-            b64, mime, w, h, resized, decode_error = load_image_b64(path, self.win.max_edge())
+            b64, mime, w, h, resized, decode_error = load_image_b64(path, self.win.max_edge(), enhance=self.win.enhance())
         except Exception:
             InfoBar.error("", self._t("err.imageRead"), parent=self.win,
                           position=InfoBarPosition.TOP)
@@ -1228,6 +1219,11 @@ class SettingsPage(ScrollArea):
         self.sw_remember = SwitchButton()
         self.sw_remember.setChecked(bool(cfg.get("remember", True)))
         g2.addWidget(self.lbl_remember, 5, 0); g2.addWidget(self.sw_remember, 5, 1, Qt.AlignLeft)
+
+        self.lbl_enhance = StrongBodyLabel(self._t("settings.enhance"))
+        self.sw_enhance = SwitchButton()
+        self.sw_enhance.setChecked(bool(cfg.get("enhance", False)))
+        g2.addWidget(self.lbl_enhance, 6, 0); g2.addWidget(self.sw_enhance, 6, 1, Qt.AlignLeft)
         g2.setColumnStretch(1, 1)
         cv.addLayout(g2)
 
@@ -1347,6 +1343,7 @@ class SettingsPage(ScrollArea):
                 "chart_type": self._ctype_codes[ctype_idx],
                 "chart_lang": self._clang_codes[clang_idx],
                 "remember": bool(self.sw_remember.isChecked()),
+                "enhance": bool(self.sw_enhance.isChecked()),
             })
             self.win.save_all()
             InfoBar.success(
@@ -1714,6 +1711,9 @@ class RangeChartFluentWindow(FluentWindow):
         val = self.settings_page.spin_maxedge.value()
         return max(0, int(val)) if val is not None else DEFAULT_MAX_EDGE
 
+    def enhance(self):
+        return bool(self.settings_page.sw_enhance.isChecked())
+
     def runs(self):
         val = self.settings_page.spin_runs.value()
         return max(1, min(int(val), 5)) if val is not None else 1
@@ -1791,6 +1791,7 @@ class RangeChartFluentWindow(FluentWindow):
             "chart_lang": self.chart_lang(),
             "chart_type": self.chart_type(),
             "remember": remember,
+            "enhance": self.enhance(),
             "api_key": s.ipt_key.text().strip() if remember else "",
         })
         save_config(self.cfg)

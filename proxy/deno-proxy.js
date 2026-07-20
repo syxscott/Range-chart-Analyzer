@@ -45,6 +45,31 @@ const FORWARDED_RESPONSE_HEADERS = new Set([
   "retry-after",
 ]);
 
+// --- Sliding-window rate limiter (30 requests / 60 seconds per IP) ---
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX = 30;
+const _rateMap = new Map(); // ip → int[] of timestamps
+
+function rateCheck(ip) {
+  const now = Date.now();
+  const slots = _rateMap.get(ip);
+  if (!slots) {
+    _rateMap.set(ip, [now]);
+    return { allowed: true, remaining: RATE_MAX - 1, resetMs: RATE_WINDOW_MS };
+  }
+  const cutoff = now - RATE_WINDOW_MS;
+  let idx = 0;
+  while (idx < slots.length && slots[idx] < cutoff) idx++;
+  if (idx > 0) slots.splice(0, idx);
+  if (slots.length >= RATE_MAX) {
+    const oldest = slots[0];
+    const resetMs = Math.ceil((oldest + RATE_WINDOW_MS - now) / 1000) + 1;
+    return { allowed: false, remaining: 0, resetMs };
+  }
+  slots.push(now);
+  return { allowed: true, remaining: RATE_MAX - slots.length, resetMs };
+}
+
 const CORS_BASE = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers":
@@ -83,6 +108,17 @@ function pickHeaders(source, whitelist) {
 
 Deno.serve(async (request) => {
   const origin = request.headers.get("Origin") || "";
+  // RATE LIMIT: apply before any other processing.
+  const clientIp = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+                   request.headers.get("cf-connecting-ip") || "unknown";
+  const rl = rateCheck(clientIp);
+  if (!rl.allowed) {
+    return new Response(JSON.stringify({ error: "rate_limit_exceeded", retryAfter: rl.resetMs }), {
+      status: 429,
+      headers: { "content-type": "application/json", ...(cors || {}) },
+    });
+  }
+
   const cors = corsFor(origin);
   const authorized = cors !== null || secretOk(request);
 
@@ -129,6 +165,8 @@ Deno.serve(async (request) => {
 
   const respHeaders = pickHeaders(upstream.headers, FORWARDED_RESPONSE_HEADERS);
   if (cors) for (const [k, v] of Object.entries(cors)) respHeaders.set(k, v);
+  respHeaders.set("x-ratelimit-remaining", String(rl.remaining));
+  respHeaders.set("x-ratelimit-reset-ms", String(rl.resetMs));
   return new Response(upstream.body, {
     status: upstream.status,
     statusText: upstream.statusText,

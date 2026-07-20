@@ -21,11 +21,19 @@ def extract_balanced_json_object(text: str) -> str | None:
             c = text[i]
             if in_string:
                 if escape:
+                    # Fix M-1: any char immediately after backslash is escaped,
+                    # skip normal processing entirely.
                     escape = False
                 elif c == "\\":
                     escape = True
                 elif c == '"':
                     in_string = False
+                # Skip the next character entirely — it is escaped by the
+                # preceding backslash and must not be treated as a structural
+                # marker (e.g. "{\"key\": \"value\"}" must not treat the
+                # inner quotes as string delimiters).
+                if escape:
+                    continue
                 continue
             if c == '"':
                 in_string = True
@@ -58,11 +66,19 @@ def extract_balanced_json_array(text: str) -> str | None:
             c = text[i]
             if in_string:
                 if escape:
+                    # Fix M-1: any char immediately after backslash is escaped,
+                    # skip normal processing entirely.
                     escape = False
                 elif c == "\\":
                     escape = True
                 elif c == '"':
                     in_string = False
+                # Skip the next character entirely — it is escaped by the
+                # preceding backslash and must not be treated as a structural
+                # marker (e.g. "{\"key\": \"value\"}" must not treat the
+                # inner quotes as string delimiters).
+                if escape:
+                    continue
                 continue
             if c == '"':
                 in_string = True

@@ -12,15 +12,18 @@ image downscale); without it the app still works but shows no thumbnail.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
+import socket
 import concurrent.futures
 import queue
 import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from urllib.parse import urlparse
 
 # Bug-12 fix: a module-level logger so the dozens of bare `except
 # Exception:` blocks below have somewhere to report what they swallowed.
@@ -74,6 +77,59 @@ except Exception:
     HAS_PIL = False
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer.json")
+
+# S-1 fix: SSRF endpoint validation — mirrors server.py _validate_endpoint().
+# GUI direct extract() calls bypass server.py, so we validate here too.
+_ALLOW_PRIVATE = os.environ.get("RCA_ALLOW_PRIVATE", "").strip() == "1"
+
+
+def _is_private_host(host: str) -> bool:
+    """Return True if *host* resolves to a non-public IP address."""
+    if not host:
+        return True
+    bare = host.strip("[]")
+    try:
+        ip = ipaddress.ip_address(bare)
+        return not ip.is_global
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(bare, None)
+    except socket.gaierror:
+        return True
+    saw_addr = False
+    for info in infos:
+        try:
+            addr = info[4][0]
+            ip = ipaddress.ip_address(addr)
+        except (ValueError, IndexError):
+            return True
+        saw_addr = True
+        if not ip.is_global:
+            return True
+    return not saw_addr
+
+
+def _validate_endpoint(endpoint: str) -> tuple[bool, str]:
+    """Validate a provider endpoint URL. Returns (ok, error_message)."""
+    if not endpoint:
+        return False, "empty endpoint"
+    try:
+        u = urlparse(endpoint)
+    except ValueError as exc:
+        return False, f"unparseable: {exc}"
+    if u.scheme not in ("http", "https"):
+        return False, f"scheme must be http/https, got {u.scheme!r}"
+    if not u.hostname:
+        return False, "missing host"
+    if u.scheme != "https":
+        return False, "https required (cleartext API keys would leak)"
+    if not _ALLOW_PRIVATE and _is_private_host(u.hostname):
+        return False, (
+            f"host {u.hostname!r} resolves to a non-public address. "
+            "Set RCA_ALLOW_PRIVATE=1 to override (not recommended)."
+        )
+    return True, ""
 
 # UI-Mod-1: 极简现代风 Palette (Morandi / "性冷淡"色系).
 # 深层石板灰主按钮 + 蓝灰点缀 + 冷白背景. 配合 sv_ttk 主题后整体
@@ -216,7 +272,7 @@ class ToastNotification:
                             font=("Segoe UI", 10, "bold"),
                             padx=14, pady=8, anchor="w", justify="left")
         self.lbl.pack(side="left", fill="both", expand=True)
-        btn_x = tk.Label(frame, text="✕", bg=bg, fg=fg,
+        btn_x = tk.Label(frame, text="×", bg=bg, fg=fg,
                           font=("Segoe UI", 10), padx=8, cursor="hand2")
         btn_x.pack(side="right")
         btn_x.bind("<Button-1>", lambda _e: self.dismiss())
@@ -376,6 +432,7 @@ class RangeChartApp:
         self._cmb_chartlang_disp = tk.StringVar(value="Auto")
         self.var_remember = tk.BooleanVar(value=bool(self.cfg.get("remember", True)))
         self.var_show_key = tk.BooleanVar(value=False)
+        self.var_enhance = tk.BooleanVar(value=bool(self.cfg.get("enhance", False)))
         self.var_status = tk.StringVar(value="")
         self.var_lang = tk.StringVar(value=self.tr.lang)
         # Track unsaved changes to provider/settings so the Save button
@@ -773,7 +830,7 @@ class RangeChartApp:
         search_row = ttk.Frame(prov_dash, style="Card.TFrame")
         search_row.pack(fill="x", padx=10, pady=(0, 4))
         self.lbl_provider_search = self._reg(
-            ttk.Label(search_row, text="🔍", style="Muted.TLabel"),
+            ttk.Label(search_row, text="[S]", style="Muted.TLabel"),
             "text", "settings.searchHint")
         self.lbl_provider_search.pack(side="left", padx=(0, 4))
         self.ent_provider_search = ttk.Entry(
@@ -839,6 +896,10 @@ class RangeChartApp:
         self.lbl_maxedge.grid(row=1, column=0, sticky="e", padx=(4, 8), pady=8)
         self.ent_maxedge = ttk.Entry(adv_frame, textvariable=self.var_maxedge, width=12)
         self.ent_maxedge.grid(row=1, column=1, sticky="w", padx=(0, 16), pady=8)
+
+        self.chk_enhance = self._reg(ttk.Checkbutton(adv_frame, variable=self.var_enhance,
+                                      style="Card.TCheckbutton"), "text", "settings.enhance")
+        self.chk_enhance.grid(row=1, column=2, sticky="w", padx=(4, 0), pady=8)
 
         # Chart type and language on a second row.
         self.lbl_chart_type = self._reg(ttk.Label(adv_frame, text="", style="Muted.TLabel"),
@@ -1083,6 +1144,7 @@ class RangeChartApp:
             "chart_lang": self.var_chartlang.get(),
             "chart_type": self.var_chart_type.get(),
             "remember": bool(self.var_remember.get()),
+            "enhance": bool(self.var_enhance.get()),
             "api_key": self.var_key.get().strip() if self.var_remember.get() else "",
         }
 
@@ -1121,7 +1183,7 @@ class RangeChartApp:
         self.image_path = path
         # Load + encode in a thread-free quick step (files are local).
         try:
-            b64, mime, w, h, resized, decode_error = load_image_b64(path, self._max_edge())
+            b64, mime, w, h, resized, decode_error = load_image_b64(path, self._max_edge(), enhance=self.var_enhance.get())
         except Exception:
             self.var_status.set(self._t("err.imageRead"))
             return None
@@ -1184,7 +1246,7 @@ class RangeChartApp:
             self._cleanup_paste_tmp()
             self.image_path = tmp_path
             self._last_paste_tmp = tmp_path
-            b64, mime, w, h, resized, decode_error = load_image_b64(tmp_path, self._max_edge())
+            b64, mime, w, h, resized, decode_error = load_image_b64(tmp_path, self._max_edge(), enhance=self.var_enhance.get())
         except Exception:
             try:
                 os.unlink(tmp_path)
@@ -1418,7 +1480,7 @@ class RangeChartApp:
         click_lbl.bind("<Button-1>",
                        lambda _e, pid=prov.id: self._activate_provider(pid))
 
-        btn_del = tk.Label(row, text="✕", bg=bg, fg=muted,
+        btn_del = tk.Label(row, text="×", bg=bg, fg=muted,
                             cursor="hand2", font=(FONT_FAMILY, 10), padx=6)
         btn_del.bind("<Enter>",
                      lambda _e, b=btn_del: b.config(fg=COLORS["danger"]))
@@ -1550,6 +1612,13 @@ class RangeChartApp:
         if provider is None and not legacy_key:
             messagebox.showwarning("Range Chart Analyzer", self._t("err.noKey"))
             return
+        # S-1 fix: validate endpoint URL to prevent SSRF attacks.
+        endpoint_url = self.var_endpoint.get().strip() or DEFAULT_ENDPOINT
+        ok, why = _validate_endpoint(endpoint_url)
+        if not ok:
+            messagebox.showwarning("Range Chart Analyzer", f"Invalid endpoint: {why}")
+            self._set_busy(False)
+            return
         self._set_busy(True)
         params = {
             "api_key": self.var_key.get().strip(),
@@ -1557,7 +1626,7 @@ class RangeChartApp:
             "media_type": self.media_type or "image/png",
             "caption": self.txt_caption.get("1.0", "end").strip(),
             "chart_lang": self.var_chartlang.get(),
-            "base_url": self.var_endpoint.get().strip() or DEFAULT_ENDPOINT,
+            "base_url": endpoint_url,
             "model": self.var_model.get().strip() or DEFAULT_MODEL,
             "max_tokens": self._max_tokens(),
             "provider": provider,

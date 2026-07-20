@@ -12,16 +12,26 @@ Then open http://127.0.0.1:8000/
 from __future__ import annotations
 
 import argparse
+import base64
+import collections
 import concurrent.futures
 import ipaddress
 import json
 import os
 import re
+import secrets
 import socket
 import sys
 import time
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
+
+# --- Sliding-window rate limiter (30 requests / minute per remote IP) ---
+_RATE_WINDOW_SEC = 60
+_RATE_MAX_REQUESTS = 30
+_rate_history: dict[str, collections.deque] = {}
+_rate_lock = threading.Lock()
 
 
 # S8 fix: redact API-key-like patterns from error_body before echoing to the UI.
@@ -38,6 +48,28 @@ def _redact_error_body(body):
     if not isinstance(body, str):
         return ""
     return _API_KEY_RE.sub(r'\1[REDACTED]', body)
+
+
+# Issue-2 fix: validate base64 format and size for image_b64.
+# Rejects strings that are not valid base64 or decode to more than 10MB.
+_MAX_IMAGE_B64_BYTES = 10_000_000  # 10 MB
+
+
+def _validate_image_b64(data):
+    """Validate image_b64: returns (ok, error_key_or_empty)."""
+    if not data:
+        return False, "err.noImage"
+    # Quick length check: base64 is ~4/3 of raw bytes, so max b64 length ≈ 4/3 * 10MB ≈ 13.4MB
+    if len(data) > 14_000_000:
+        return False, "err.imageTooLarge"
+    try:
+        decoded = base64.b64decode(data, validate=True)
+    except Exception:
+        return False, "err.imageInvalidBase64"
+    if len(decoded) > _MAX_IMAGE_B64_BYTES:
+        return False, "err.imageTooLarge"
+    return True, ""
+
 
 # Allow running as `python server.py` from the project root.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -60,6 +92,48 @@ from rca_core.aggregate import (  # noqa: E402
 from rca_core.llm import ApiFormat, LlmProvider  # noqa: E402
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# CSRF token storage: thread-safe dict mapping session tokens to CSRF tokens.
+# In a production system you'd use a proper session store (Redis, DB, etc.).
+# For this single-server application, an in-memory dict with a lock suffices.
+_csrf_lock = threading.RLock()
+_csrf_store: dict[str, str] = {}  # session_token -> csrf_token
+
+
+def _generate_csrf_token() -> str:
+    """Generate a cryptographically random CSRF token."""
+    return secrets.token_urlsafe(32)
+
+
+def _get_csrf_for_session(session_token: str) -> str | None:
+    """Retrieve the CSRF token for a given session, or None if not found."""
+    with _csrf_lock:
+        return _csrf_store.get(session_token)
+
+
+def _set_csrf_for_session(session_token: str, csrf_token: str) -> None:
+    """Store the CSRF token for a given session."""
+    with _csrf_lock:
+        _csrf_store[session_token] = csrf_token
+
+
+def _check_rate_limit(ip: str) -> tuple[bool, int]:
+    """Return (allowed, seconds_until_reset). Sliding window 30 req / 60 s."""
+    now = time.time()
+    with _rate_lock:
+        window = _rate_history.get(ip)
+        if window is None:
+            _rate_history[ip] = collections.deque([now], maxlen=_RATE_MAX_REQUESTS)
+            return True, 0
+        cutoff = now - _RATE_WINDOW_SEC
+        while window and window[0] < cutoff:
+            window.popleft()
+        if len(window) >= _RATE_MAX_REQUESTS:
+            oldest = window[0]
+            wait = int(oldest + _RATE_WINDOW_SEC - now) + 1
+            return False, max(1, wait)
+        window.append(now)
+        return True, 0
 
 # Static file whitelist: only these extensions are served, and only from
 # within ROOT (path traversal is rejected).
@@ -175,6 +249,10 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -203,6 +281,19 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- routing ---
     def do_GET(self) -> None:
+        # CSRF token endpoint: issue a token for the client to use in subsequent POSTs.
+        if urlparse(self.path).path.rstrip("/") == "/api/extract":
+            session_token = self.headers.get("X-Session-Token", "")
+            if not session_token:
+                # Generate a new session token if none provided.
+                session_token = secrets.token_urlsafe(32)
+            csrf_token = _generate_csrf_token()
+            _set_csrf_for_session(session_token, csrf_token)
+            self._send_json(200, {
+                "csrf_token": csrf_token,
+                "session_token": session_token,
+            })
+            return
         target = self._safe_local_path(self.path)
         if target is None:
             self._send_json(403, {"error": "forbidden"})
@@ -233,6 +324,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", _CONTENT_TYPES[ext])
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.send_header("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -241,6 +335,19 @@ class Handler(BaseHTTPRequestHandler):
         # LOW-2: strip trailing slash so /api/extract/ is also accepted.
         if urlparse(self.path).path.rstrip("/") != "/api/extract":
             self._send_json(404, {"error": "not found"})
+            return
+        # RATE LIMIT: sliding window 30 req / 60 s per remote IP.
+        try:
+            client_ip = self.client_address[0]
+        except Exception:
+            client_ip = "unknown"
+        allowed, wait_sec = _check_rate_limit(client_ip)
+        if not allowed:
+            self._send_json(429, {
+                "ok": False,
+                "error_key": "err.rateLimit",
+                "error_body": f"Rate limit exceeded. Retry after {wait_sec} seconds.",
+            })
             return
         # CSRF / same-origin: require Content-Type=application/json and either
         # an Origin/Referer matching this server's host or a custom header
@@ -317,6 +424,27 @@ class Handler(BaseHTTPRequestHandler):
                 "error_body": "Cross-origin POST rejected (need matching Origin/Referer or X-Requested-With header).",
             })
             return
+
+        # CSRF token validation: require X-CSRF-Token + X-Session-Token headers.
+        # This prevents the same-origin JSON-form bypass where an attacker crafts
+        # a form with Content-Type: application/json - the browser won't forge
+        # these custom headers cross-origin.
+        csrf_token = (self.headers.get("X-CSRF-Token") or "").strip()
+        session_token = (self.headers.get("X-Session-Token") or "").strip()
+        if not csrf_token or not session_token:
+            self._send_json(403, {
+                "ok": False, "error_key": "err.forbidden",
+                "error_body": "Missing CSRF token. Fetch /api/extract (GET) to obtain a valid token.",
+            })
+            return
+        stored_csrf = _get_csrf_for_session(session_token)
+        if stored_csrf is None or not secrets.compare_digest(csrf_token, stored_csrf):
+            self._send_json(403, {
+                "ok": False, "error_key": "err.forbidden",
+                "error_body": "Invalid or expired CSRF token.",
+            })
+            return
+
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -332,19 +460,18 @@ class Handler(BaseHTTPRequestHandler):
             raw = self.rfile.read(length)
             req = json.loads(raw.decode("utf-8"))
         except Exception as exc:
-            # Surface the parse error to the client so the frontend can show
-            # *why* the body was unparseable (truncated upload, non-JSON
-            # content-type, etc.) instead of a silent generic alert.
             self._send_json(400, {
                 "ok": False,
                 "error_key": "err.parse",
-                "error_body": f"{type(exc).__name__}: {exc}",
+                "error_body": "Invalid JSON payload",
             })
             return
 
         image_b64 = req.get("image_b64") or ""
-        if not image_b64:
-            self._send_json(200, {"ok": False, "error_key": "err.noImage"})
+        # Issue-2 fix: validate base64 format and size (10MB limit)
+        ok, err_key = _validate_image_b64(image_b64)
+        if not ok:
+            self._send_json(200, {"ok": False, "error_key": err_key})
             return
 
         # Build the LlmProvider. Prefer the explicit `provider` object if given;

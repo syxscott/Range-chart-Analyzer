@@ -90,6 +90,37 @@ const FORWARDED_RESPONSE_HEADERS = new Set([
   'anthropic-ratelimit-*',
 ]);
 
+// --- Sliding-window rate limiter (30 requests / 60 seconds per IP) ---
+// Uses an in-memory Map; each entry is [timestamp, ...] sorted oldest→newest.
+// The Worker process lives for the duration of a request batch then is
+// destroyed by the runtime, so the memory naturally resets — this is the
+// intended behaviour for a serverless environment.
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX = 30;
+const _rateMap = new Map(); // ip → int[] of timestamps
+
+function rateCheck(ip) {
+  const now = Date.now();
+  const key = ip;
+  const slots = _rateMap.get(key);
+  if (!slots) {
+    _rateMap.set(key, [now]);
+    return { allowed: true, remaining: RATE_MAX - 1, resetMs: RATE_WINDOW_MS };
+  }
+  // Prune entries older than the window.
+  const cutoff = now - RATE_WINDOW_MS;
+  let idx = 0;
+  while (idx < slots.length && slots[idx] < cutoff) idx++;
+  if (idx > 0) slots.splice(0, idx);
+  if (slots.length >= RATE_MAX) {
+    const oldest = slots[0];
+    const resetMs = Math.ceil((oldest + RATE_WINDOW_MS - now) / 1000) + 1;
+    return { allowed: false, remaining: 0, resetMs };
+  }
+  slots.push(now);
+  return { allowed: true, remaining: RATE_MAX - slots.length, resetMs };
+}
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'content-type, x-api-key, anthropic-version, x-proxy-key',
@@ -134,6 +165,18 @@ function pickHeaders(source, whitelist) {
 export default {
   async fetch(request) {
     const origin = request.headers.get('Origin') || '';
+    // RATE LIMIT: apply before any other processing.
+    const clientIp = request.headers.get('CF-Connecting-IP') ||
+                     request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+                     'unknown';
+    const rl = rateCheck(clientIp);
+    if (!rl.allowed) {
+      return new Response(JSON.stringify({ error: 'rate_limit_exceeded', retryAfter: rl.resetMs }), {
+        status: 429,
+        headers: { 'content-type': 'application/json', ...(cors || {}) },
+      });
+    }
+
     // Authorized when the Origin is allowlisted OR a valid secret is
     // presented. With an empty allowlist and no secret, corsFor() returns
     // null here and every request is rejected — this is the deliberate
@@ -197,6 +240,9 @@ export default {
     // Echo back a sanitized subset of the upstream response headers.
     const respHeaders = pickHeaders(upstreamResp.headers, FORWARDED_RESPONSE_HEADERS);
     if (cors) for (const [k, v] of Object.entries(cors)) respHeaders.set(k, v);
+    // Surface rate-limit state so the client can back off appropriately.
+    respHeaders.set('X-RateLimit-Remaining', String(rl.remaining));
+    respHeaders.set('X-RateLimit-Reset-Ms', String(rl.resetMs));
     return new Response(upstreamResp.body, {
       status: upstreamResp.status,
       statusText: upstreamResp.statusText,

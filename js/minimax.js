@@ -317,10 +317,34 @@ async function rcaCallBackend(opts, base64) {
     if (opts.signal.aborted) controller.abort();
     else opts.signal.addEventListener('abort', onExtAbort);
   }
+
+  // Fetch CSRF token before POST. Uses a persistent session token stored
+  // in memory so subsequent requests reuse the same session.
+  let sessionToken = rcaCallBackend._sessionToken || '';
+  try {
+    const csrfResp = await fetch('/api/extract', {
+      method: 'GET',
+      headers: { 'X-Session-Token': sessionToken },
+    });
+    if (csrfResp.ok) {
+      const csrfData = await csrfResp.json();
+      rcaCallBackend._sessionToken = csrfData.session_token;
+      sessionToken = csrfData.session_token;
+      rcaCallBackend._csrfToken = csrfData.csrf_token;
+    }
+  } catch (_e) {
+    // Network error on token fetch — proceed without token; server will reject.
+  }
+
+  const csrfToken = rcaCallBackend._csrfToken || '';
   try {
     resp = await fetch('/api/extract', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        'X-CSRF-Token': csrfToken,
+        'X-Session-Token': sessionToken,
+      },
       body: JSON.stringify({
         api_key: opts.apiKey,
         image_b64: base64,
