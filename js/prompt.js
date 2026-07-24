@@ -7,12 +7,12 @@
 // PROMPT_VERSION: keep in sync with rca_core/prompt.py PROMPT_VERSION. The
 // cache layer includes this in its cache key so old cached results from a
 // previous prompt version are not served after a prompt upgrade.
-const PROMPT_VERSION = 'v2';
+const PROMPT_VERSION = 'v3';
 
 // Teaches the model to degrade gracefully (low confidence + note) instead of
 // hallucinating when a value is ambiguous/unreadable.
 function _degradationClause() {
-  return '- DEGRADE GRACEFULLY. If a species name, range boundary, bed number, or other value is ambiguous or partially unreadable, still emit your best guess BUT lower the `confidence` field (e.g. 0.3–0.5) and append a brief note to the relevant field in parentheses such as "(unclear)" or "(partially obscured)". NEVER invent a plausible-looking value with high confidence — a low-confidence guess is far more useful than a confident fabrication. If a value is completely unreadable, leave the field empty string and lower confidence.';
+  return '- DEGRADE GRACEFULLY. If a species name, range boundary, bed number, or other value is ambiguous or partially unreadable, still emit your best guess but lower the per-row `confidence` field (e.g. 0.3–0.5) AND set the per-row `note` field to a short string such as "unclear" or "partially obscured". NEVER invent a plausible-looking value with high confidence — a low-confidence guess is far more useful than a confident fabrication. NEVER embed the note inside the species name or other structured fields; notes live in the dedicated `note` field only. If a value is completely unreadable, leave the field empty string, lower the row `confidence`, and put "unclear" in the row `note`.';
 }
 
 const RANGE_CHART_SYSTEM_PROMPT = [
@@ -36,11 +36,20 @@ const RANGE_CHART_SYSTEM_PROMPT = [
 '  ],',
 '  "species_ranges": [',
 '    {',
-'      "species": "Neoalbaillella optima" (string, full Latin binomial),',
+'      "species": "Neoalbaillella optima" (string, full Latin binomial; transcribe what is on the chart, never invent a plausible-looking taxon name),',
+'      "author_year": "De Wever & Dumitrica, 2002" (string, the binomial authority + year as printed; empty if not visible),',
 '      "section": "Pingdingshan" (string, must match a section.name),',
-'      "range_top": "Bed 9 (Yinkeng Fm base)" (string, the YOUNG/upper limit),',
-'      "range_base": "Bed 7 (top Talung Fm)" (string, the OLD/lower limit),',
-'      "biozone": "N. optima Zone (latest Changhsingian)" (string, optional)',
+'      "range_top": "Bed 9 (Yinkeng Fm base)" (string, the YOUNG/upper limit; keep concise),',
+'      "range_base": "Bed 7 (top Talung Fm)" (string, the OLD/lower limit; keep concise),',
+'      "range_top_bed": "Bed 9" (string, the YOUNG/upper bed label exactly as printed; empty if no bed label),',
+'      "range_base_bed": "Bed 7" (string, the OLD/lower bed label exactly as printed; empty if no bed label),',
+'      "range_top_idx": 9 (int, the bed index of the young limit, 1-indexed from base; empty if the bed label is not numeric),',
+'      "range_base_idx": 7 (int, the bed index of the old limit, 1-indexed from base; empty if not numeric),',
+'      "endpoint_kind": "observed" (string, one of "observed", "projected", "truncated" — flag inferred rather than directly seen endpoints),',
+'      "reworked": false (bool, true if the chart annotates this occurrence as reworked / redeposited rather than in-situ; false or omitted otherwise),',
+'      "biozone": "N. optima Zone (latest Changhsingian)" (string, optional),',
+'      "confidence": 0.0-1.0 (float, per-row certainty; lower when the row is ambiguous),',
+'      "note": "" (string, short provenance / uncertainty remark such as "unclear" or "partially obscured"; NEVER embedded in `species` or other structured fields)',
 '    }',
 '  ],',
 '  "biozones": [',
@@ -58,18 +67,21 @@ const RANGE_CHART_SYSTEM_PROMPT = [
 '}',
 '',
 'Rules:',
-'- COLUMNS ARE SEPARATE. A range chart has DISTINCT columns: (a) taxon/species columns, where each species is one vertical range line marked with dots or a bar; and (b) a biozone / assemblage-zone column (often labelled with ammonoid or conodont zone names). ONLY the vertical species range lines go into species_ranges. Zone names - including ammonoid/conodont assemblage names and anything ending in Zone / Zonule / assemblage - go into biozones, and NEVER into species_ranges. Do not turn a zone label into a fake species.',
-'- CHRONOSTRATIGRAPHY vs LITHOSTRATIGRAPHY. Distinguish chronostratigraphic units (System / Series / Stage) from lithostratigraphic units (Group / Formation / Member). Put ages and Stage names into age_range; put only Group/Formation/Member names into formations. A Stage is NOT a Formation.',
-'- CHINESE STRATIGRAPHIC TERMS. Translate the Chinese suffixes precisely: 系 = System, 统 = Series, 阶 = Stage, 群 = Group, 组 = Formation, 段 = Member, 带 = Zone. For example 吴家坪阶 is the Wuchiapingian STAGE (goes in age_range), while 大隆组 is the Dalong FORMATION (goes in formations). Do NOT label a 阶 (Stage) as a Formation.',
-'- READ SPECIES NAMES CAREFULLY. Names are small italic Latin binomials, often densely packed and rotated at an angle. OCR can produce slight misreads. When a genus name is ambiguous, prefer a plausible known radiolarian genus and keep the epithet. Do not merge two names, do not split one name, and do not invent names. Preserve open nomenclature qualifiers exactly as printed: sp., cf., aff., ?, spp. are meaningful taxonomic distinctions — do not strip or normalize them.',
+'- COLUMNS ARE SEPARATE. A range chart has DISTINCT columns: (a) taxon/species columns, where each species is one vertical range line marked with dots or a bar; and (b) a biozone / assemblage-zone column (often labelled with ammonoid or conodont zone names). ONLY the vertical species range lines go into `species_ranges`. Zone names — including ammonoid/conodont assemblage names and anything ending in \'Zone\' / \'Zonule\' / \'assemblage\' — go into `biozones`, and NEVER into `species_ranges`. Do not turn a zone label into a fake species.',
+'- CHRONOSTRATIGRAPHY vs LITHOSTRATIGRAPHY. Distinguish chronostratigraphic units (System / Series / Stage) from lithostratigraphic units (Group / Formation / Member). Put ages and Stage names into `age_range`; put only Group/Formation/Member names into `formations`. A Stage is NOT a Formation.',
+'- CHINESE STRATIGRAPHIC TERMS. Translate the Chinese suffixes precisely: 系 = System, 统 = Series, 阶 = Stage, 群 = Group, 组 = Formation, 段 = Member, 带 = Zone. For example \'吴家坪阶\' is the Wuchiapingian STAGE (goes in age_range), while \'大隆组\' is the Dalong FORMATION (goes in formations). Do NOT label a 阶 (Stage) as a Formation.',
+'- JAPANESE STRATIGRAPHIC TERMS. Translate the Japanese suffixes precisely: 系 = System, 統 = Series, 階 = Stage, 群 = Group, 組 = Formation, 段 = Member, 帯 = Zone. For example \'長門階\' is the Nagato STAGE (goes in age_range), while \'日置亜層群\' is the Hioki SUBGROUP (goes in formations). Do NOT label a 階 (Stage) as a Formation.',
+'- RUSSIAN STRATIGRAPHIC TERMS (approximate). Translate the Russian litho-/chronostratigraphic terms as: система (systema) = System, отдел (otdel) = Series, ярус (yarus) = Stage / Age, группа (gruppa) = Group, свита (svita) = Suite (a Formation-rank unit), толща (tolshcha) = Group-rank or thick unit, зона (zona) = Zone. For example \'казанский ярус\' is the Kazanian STAGE (goes in age_range), while \'свита Хосе\' is the Khose SUITE (goes in formations). Note: Russian stratigraphic usage differs from English (svita ≈ Suite ≈ Formation); preserve the Russian proper name but use the English rank.',
+'- READ SPECIES NAMES CAREFULLY. Names are small italic Latin binomials, often densely packed and rotated at an angle. OCR can produce slight misreads. Transcribe ONLY what you can actually read from the chart: if a name is unclear, leave the `species` field empty and put "unclear" in the per-row `note` field — never invent a plausible-looking taxon name to fill a gap. Do not merge two names, do not split one name, and do not invent names. Preserve open nomenclature qualifiers exactly as printed: sp., cf., aff., ?, spp. are meaningful taxonomic distinctions — do not strip or normalize them.',
+'- AUTHOR AND YEAR. When the chart or its caption prints a binomial authority and year (e.g. "De Wever & Dumitrica, 2002"), capture them in the per-row `author_year` string. Leave `author_year` empty when not visible; do not fabricate authorities.',
 '- BE COMPLETE. Extract EVERY visible species range line, including short single-bed ranges and faint lines. Do not skip a line just because its range is short or its text is faint.',
 '- Only extract what you can READ from the chart. Do not invent data that is not present.',
 '- If a species appears in multiple sections, emit one entry per section.',
 '- If a biozone appears in multiple sections with different thicknesses, emit one entry per section (set "section" and that section\'s "thickness_m"), so multi-section thickness data is not lost.',
-'- Preserve bed/level numbers exactly as printed (e.g. Bed 23c, Bed 27a).',
+'- Preserve bed/level numbers exactly as printed (e.g. \'Bed 23c\', \'Bed 27a\').',
 '- If the chart is NOT a stratigraphic range/distribution chart, return all arrays empty and confidence 0.0.',
 '- Return JSON only, no markdown fences, no commentary.',
-_degradationClause()
+'- DEGRADE GRACEFULLY. If a species name, range boundary, bed number, or other value is ambiguous or partially unreadable, still emit your best guess but lower the per-row `confidence` field (e.g. 0.3–0.5) AND set the per-row `note` field to a short string such as "unclear" or "partially obscured". NEVER invent a plausible-looking value with high confidence — a low-confidence guess is far more useful than a confident fabrication. NEVER embed the note inside the species name or other structured fields; notes live in the dedicated `note` field only. If a value is completely unreadable, leave the field empty string, lower the row `confidence`, and put "unclear" in the row `note`.',
 ].join('\n');
 
 // Optional per-chart-language hint appended to the user message.

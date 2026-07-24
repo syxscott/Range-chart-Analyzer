@@ -76,5 +76,6 @@ def test_seen_round_trip():
 test_module_imports_without_pyside6()
 test_marker_path_in_home()
 test_seen_round_trip()
-print("--- %d passed, %d failed ---" % (_pass, _fail))
-sys.exit(1 if _fail else 0)
+if __name__ == "__main__":
+    print("--- %d passed, %d failed ---" % (_pass, _fail))
+    sys.exit(1 if _fail else 0)

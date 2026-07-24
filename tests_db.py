@@ -97,10 +97,85 @@ def test_db_indexes():
             db.close()
 
 
+def test_db_reopen_restores_pragmas():
+    """LOW finding 2026-07-20: the health-probe recovery path used to
+    re-open the connection without re-issuing PRAGMA journal_mode=WAL
+    or PRAGMA foreign_keys=ON, so a connection that survived the probe
+    could run with default journal mode and FK off. After a fresh
+    sqlite3.connect() on the same path, _apply_setup() must restore
+    WAL + FK so the reopened connection is indistinguishable from the
+    first open."""
+    import sqlite3 as _sq
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "test.db")
+        db = Database(path=path)
+        try:
+            # Force a raw reconnect without pragmas (simulates the
+            # pre-fix recovery branch, which simply set row_factory).
+            db._conn.close()
+            db._conn = _sq.connect(path, timeout=30, check_same_thread=False)
+            db._conn.row_factory = _sq.Row
+            # Verify the precondition: pragmas are NOT set yet.
+            pre = db._conn.execute("PRAGMA foreign_keys").fetchone()
+            check("db-reopen-pre-fk-off", int(pre[0]) == 0)
+            # Now apply the fix.
+            db._apply_setup()
+            mode = db._conn.execute("PRAGMA journal_mode").fetchone()
+            fk = db._conn.execute("PRAGMA foreign_keys").fetchone()
+            check("db-reopen-journal-wal", str(mode[0]).lower() == "wal")
+            check("db-reopen-fk-on", int(fk[0]) == 1)
+        finally:
+            db.close()
+
+
+def test_db_reopen_runs_migrations():
+    """Reopened connection must re-run schema + migrations so the
+    application sees its tables immediately. We verify this by opening
+    a brand-new Database (which runs the same _apply_setup path the
+    recovery branch now does) on a fresh file and confirming the
+    tables exist."""
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "test.db")
+        db = Database(path=path)
+        try:
+            # Sanity: tables already exist because __init__ ran _apply_setup.
+            existing = {
+                r[0]
+                for r in db._conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            check("db-reopen-history-table", "history" in existing)
+            check("db-reopen-usage-table", "usage" in existing)
+            # After reopening without setup, tables are still there
+            # (file-level persistence); after _apply_setup is called
+            # again the tables and indices remain — the operation is
+            # idempotent. Verify the second setup doesn't break anything.
+            import sqlite3 as _sq
+            db._conn.close()
+            db._conn = _sq.connect(path, timeout=30, check_same_thread=False)
+            db._conn.row_factory = _sq.Row
+            db._apply_setup()
+            after = {
+                r[0]
+                for r in db._conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            check("db-reopen-history-table-after", "history" in after)
+            check("db-reopen-usage-table-after", "usage" in after)
+            check("db-reopen-idempotent-history", "history" in after)
+        finally:
+            db.close()
+
+
 test_db_init_creates_schema()
 test_db_insert_and_query()
 test_db_executemany()
 test_db_wal_mode()
 test_db_indexes()
-print("--- %d passed, %d failed ---" % (_pass, _fail))
-sys.exit(1 if _fail else 0)
+test_db_reopen_restores_pragmas()
+test_db_reopen_runs_migrations()
+if __name__ == "__main__":
+    print("--- %d passed, %d failed ---" % (_pass, _fail))
+    sys.exit(1 if _fail else 0)

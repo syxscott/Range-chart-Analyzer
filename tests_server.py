@@ -1,6 +1,7 @@
 """T2: tests for server.py routing + safety guards (in-process thread)."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import socket
@@ -44,6 +45,11 @@ def _free_port():
 def _start():
     from http.server import ThreadingHTTPServer
     port = _free_port()
+    # Populate EXPECTED_HOSTS so the CSRF check is anchored to the
+    # actual bind address (mirrors server.main()).
+    srv.EXPECTED_HOSTS.clear()
+    srv.EXPECTED_HOSTS.add(f"127.0.0.1:{port}")
+    srv.EXPECTED_HOSTS.add(f"localhost:{port}")
     httpd = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     httpd.daemon_threads = True
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -68,12 +74,29 @@ def _get(base, path):
     return urllib.request.urlopen(base + path, timeout=5)
 
 
+def _fetch_csrf(base):
+    """GET /api/extract to obtain a CSRF + session token pair."""
+    with urllib.request.urlopen(base + "/api/extract", timeout=5) as r:
+        body = json.loads(r.read().decode("utf-8"))
+    return body["session_token"], body["csrf_token"]
+
+
 def _post(base, path, data, headers=None):
-    h = headers or {"Content-Type": "application/json"}
-    # Default X-Requested-With so requests pass the server's CSRF/origin
-    # check (the real frontend always sends it). Tests that want to assert
-    # on the cross-origin rejection path can override it.
-    h.setdefault("X-Requested-With", "XMLHttpRequest")
+    """POST with CSRF + session token automatically populated.
+
+    The default ``X-Requested-With`` and ``Origin`` headers let the
+    request pass the same-origin guard. Tests that want to assert on
+    the cross-origin rejection path can override them.
+    """
+    session_token, csrf_token = _fetch_csrf(base)
+    h = {
+        "Content-Type": "application/json",
+        "Origin": base,
+        "X-Requested-With": "XMLHttpRequest",
+        "X-CSRF-Token": csrf_token,
+        "X-Session-Token": session_token,
+        **(headers or {}),
+    }
     body = data if isinstance(data, bytes) else data.encode("utf-8")
     req = urllib.request.Request(base + path, data=body, headers=h, method="POST")
     return urllib.request.urlopen(req, timeout=10)
@@ -120,7 +143,7 @@ def test_404_for_missing():
     base, httpd, t = _start()
     try:
         try:
-            _get(base, "/no-such-file.html")
+            _get(base, "/js/no-such-file.js")
             check("404-missing", False)
         except urllib.error.HTTPError as e:
             check("404-missing", e.code == 404)
@@ -128,14 +151,20 @@ def test_404_for_missing():
         _stop(httpd, t)
 
 
-def test_get_to_api_extract_404():
+def test_get_to_api_extract_returns_csrf():
+    """GET /api/extract now issues a CSRF + session token pair.
+
+    The audit finding called out that this endpoint was unauthenticated
+    and un-rate-limited; it now both issues tokens and is gated by the
+    per-IP sliding window rate limit.
+    """
     base, httpd, t = _start()
     try:
-        try:
-            _get(base, "/api/extract")
-            check("get-api-404", False)
-        except urllib.error.HTTPError as e:
-            check("get-api-404", e.code == 404)
+        r = _get(base, "/api/extract")
+        body = json.loads(r.read().decode("utf-8"))
+        check("get-api-200", r.status == 200)
+        check("get-api-csrf", bool(body.get("csrf_token")))
+        check("get-api-session", bool(body.get("session_token")))
     finally:
         _stop(httpd, t)
 
@@ -191,8 +220,13 @@ def test_post_extract_wrong_content_type():
 
 
 def test_large_file_rejected():
-    """Use a real 60 MB PNG file (in whitelist) so the size guard fires."""
-    huge = os.path.join(ROOT, "_huge.png")
+    """Use a real 60 MB PNG file (in an allowed static subdir) so the
+    size guard fires. Files outside the allowed-entries whitelist are
+    rejected with 403 before the size check; we want to test the size
+    guard specifically, so put the huge file in ``assets/``.
+    """
+    huge_dir = os.path.join(ROOT, "assets")
+    huge = os.path.join(huge_dir, "_huge.png")
     try:
         with open(huge, "wb") as f:
             # Header + padding to 60 MB (sparse file is fine — getsize
@@ -201,7 +235,7 @@ def test_large_file_rejected():
         base, httpd, t = _start()
         try:
             try:
-                _get(base, "/_huge.png")
+                _get(base, "/assets/_huge.png")
                 check("large-413", False)
             except urllib.error.HTTPError as e:
                 check("large-413", e.code == 413)

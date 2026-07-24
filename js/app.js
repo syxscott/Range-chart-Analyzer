@@ -47,14 +47,33 @@
     const cap = ($('caption') && $('caption').value || '').toLowerCase();
     const fileName = (state.file && state.file.name || '').toLowerCase();
     const blob = cap + ' ' + fileName;
-    // Abundance / pollen diagram keywords (checked first — most specific).
-    const abKeys = ['pollen', 'abundance', 'percentage diagram', 'palyno', '孢粉', '花粉', '丰度', '百分比'];
-    for (const k of abKeys) {
+    // FIX: split keys into ASCII (word-boundary matched) vs CJK (substring).
+    // Previously a single indexOf(k) loop over ASCII keys like 'pollen' or
+    // 'col' would fire on substrings ('pollenate', 'colour') and silently
+    // misclassify an ordinary range chart as an abundance / columnar chart.
+    // CJK tokens have no whitespace boundaries, so a substring match there
+    // is the correct behavior.
+    const abKeysAscii = ['pollen', 'abundance', 'percentage diagram', 'palyno'];
+    const abKeysCjk = ['孢粉', '花粉', '丰度', '百分比'];
+    const colKeysAscii = ['column', 'columns', 'columnar', 'col_section', 'col_sections'];
+    const colKeysCjk = ['柱状', '柱状図', '柱状图'];
+    const asciiWordBoundary = (haystack, needle) => {
+      // Use \b word boundaries around ASCII tokens so 'col' won't match
+      // 'colour' but 'col_section' (with underscore) still does. The
+      // 'word boundary' semantics treat _ as a word character.
+      const re = new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+      return re.test(haystack);
+    };
+    for (const k of abKeysAscii) {
+      if (asciiWordBoundary(blob, k)) return 'abundance_diagram';
+    }
+    for (const k of abKeysCjk) {
       if (blob.indexOf(k) !== -1) return 'abundance_diagram';
     }
-    // Columnar keywords (English + Japanese / Chinese tokens).
-    const keys = ['column', 'columns', 'columnar', 'col_section', 'col_sections', '柱状', '柱状図', '柱状图'];
-    for (const k of keys) {
+    for (const k of colKeysAscii) {
+      if (asciiWordBoundary(blob, k)) return 'columnar_section';
+    }
+    for (const k of colKeysCjk) {
       if (blob.indexOf(k) !== -1) return 'columnar_section';
     }
     return 'range_chart';
@@ -250,6 +269,12 @@
       return;
     }
     state.file = file;
+    // FIX (handlefile-abort): when the user picks a NEW file mid-extraction,
+    // abort the in-flight request so we don't waste API calls on the
+    // previous image. The token bump below already prevents the stale
+    // result from rendering; aborting just stops the underlying network
+    // work (otherwise a 2-of-3 multi-run still pays for all 3).
+    if (state.abort) state.abort.abort();
     // FR1: claim a load token. If the user picks another file before
     // this one's load promise resolves, the new call bumps the token
     // and our async continuation will see a mismatch and silently drop.
@@ -497,9 +522,12 @@
       // generic truncation alert when some runs failed and others succeeded.
       const pf = res.partialFailures;
       const total = (res.data && res.data.runs) || pf + 1;
+      // FIX: route through t() + {pf,total,succeeded} placeholders so the
+      // alert is localized in zh/en/ja. The previous string-literal was a
+      // hardcoded English sentence that ignored the active language.
       showAlert(
         'warning',
-        `${pf} of ${total} runs failed — only ${total - pf}/${total} succeeded.`
+        t('results.partialFailure', { pf, total, succeeded: total - pf })
       );
     } else if (res.truncated) {
       showAlert('warning', t('err.truncated'));
@@ -546,7 +574,20 @@
   function renderCurrentResult() {
     if (!state.result) return;
     const content = $('results-content');
+    // FIX (viz-host-preserve): capture any existing #viz-host before we
+    // overwrite innerHTML, then re-append it after rendering so the
+    // future-ECharts mount point survives every render. The previous
+    // behavior wiped #viz-host on every render and forced future code
+    // to recreate the container each time — and any cached state inside
+    // an initialized chart instance would be lost.
+    const vizHost = content.querySelector('#viz-host');
     content.innerHTML = rcaRenderResults(state.result, state.rawText);
+    if (vizHost) {
+      // Re-append the original element (preserving any DOM state inside
+      // it — handlers, child nodes, attribute changes — that a fresh
+      // <div id="viz-host" hidden></div> clone would lose).
+      content.appendChild(vizHost);
+    }
     content.classList.remove('hidden');
     // Phase D: cross-fade the result in (skip animation under reduced motion).
     const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;

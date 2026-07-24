@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 from typing import Any, Callable
 
 # Each config: id, i18n title key, list of column i18n keys, and a row
@@ -357,6 +358,13 @@ def apply_table_edits(
     (the first cell is the auto-index column and is ignored). The shape
     of the produced items is inferred from the cfg: dict for everything
     except ``other_fossils`` (plain strings).
+
+    Non-editable per-row fields (``_extras``, per-row ``confidence``,
+    lithology_blocks / age_units / samples on columnar sections, etc.)
+    are preserved: when an existing row at index ``idx`` exists in
+    ``data[table_id]``, the rebuilt dict starts from a shallow copy so
+    unknown keys survive the edit. Without this, every Apply-edits
+    permanently deletes model-emitted auxiliary fields.
     """
     if not isinstance(data, dict):
         return data
@@ -365,6 +373,10 @@ def apply_table_edits(
         return data
     data_keys = cfg.get("data_keys") or cfg["cols"]
     out: list[Any] = []
+    existing_items = data.get(table_id) or []
+    # Iterate by data row index so we can preserve the corresponding
+    # existing row's non-data_keys fields.
+    data_row_idx = 0
     for row in rows:
         # Skip empty placeholder rows (a Qt quirk: rowCount is 1 even
         # when the model is empty, so the last row is a phantom).
@@ -376,8 +388,17 @@ def apply_table_edits(
             txt = str(txt).strip()
             if txt:
                 out.append(txt)
+            data_row_idx += 1
             continue
-        d: dict[str, Any] = {}
+        # Start from a copy of the original row (when available) so
+        # keys not in data_keys — _extras, per-row confidence,
+        # lithology_blocks, age_units, samples, etc. — survive the
+        # rebuild. Falling back to {} preserves the prior behavior for
+        # genuinely-new rows.
+        if data_row_idx < len(existing_items) and isinstance(existing_items[data_row_idx], dict):
+            d: dict[str, Any] = dict(existing_items[data_row_idx])
+        else:
+            d = {}
         for ci, dk in enumerate(data_keys, start=1):
             if dk == "agreement":
                 # agreement is computed at merge time — ignore on edit.
@@ -385,6 +406,7 @@ def apply_table_edits(
             v = row[ci] if ci < len(row) else ""
             d[dk] = _coerce_cell(str(v or ""), dk, table_id)
         out.append(d)
+        data_row_idx += 1
     data[table_id] = out
     return data
 
@@ -404,24 +426,45 @@ def _sanitize_formula_cell(v: Any) -> Any:
     return v
 
 
+def _sanitize_number_cell(v: Any) -> Any:
+    """Replace NaN / +/-Infinity floats with empty string so they don't
+    flow into exports as the literal text ``nan`` / ``inf`` (which is
+    invalid JSON on re-serialization and breaks Excel number coercion).
+
+    Finite floats pass through unchanged. Strings / ints / None are
+    returned as-is — formula-injection mitigation is handled separately
+    by ``_sanitize_formula_cell``.
+    """
+    if isinstance(v, float):
+        if math.isnan(v) or math.isinf(v):
+            return ""
+    return v
+
+
+def _cell_to_export(v: Any) -> Any:
+    """Pipeline: NaN/Inf → empty; then formula-injection prefix."""
+    return _sanitize_formula_cell(_sanitize_number_cell(v))
+
+
 def to_csv(headers: list[str], rows: list[list[str]]) -> str:
     """CSV text with a UTF-8 BOM so Excel reads CJK/Cyrillic correctly."""
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\r\n")
-    writer.writerow([_sanitize_formula_cell(h) for h in headers])
-    writer.writerows([[_sanitize_formula_cell(c) for c in row] for row in rows])
+    writer.writerow([_cell_to_export(h) for h in headers])
+    writer.writerows([[_cell_to_export(c) for c in row] for row in rows])
     return "﻿" + buf.getvalue()
 
 
 def to_tsv(headers: list[str], rows: list[list[str]]) -> str:
     """TSV text; tabs/newlines inside cells collapsed to spaces."""
     def clean(v: Any) -> str:
-        s = "" if v is None else str(v)
+        # Pipeline: NaN/Inf → empty, formula-injection prefix → strip
+        # the leading single-quote inside TSV (TSV is text-only, the
+        # prefix is a CSV/Excel artifact and would render as a stray "'").
+        s = "" if v is None else str(_cell_to_export(v))
         s = " ".join(s.split())
-        # Formula-injection mitigation (tab/CR/LF already collapsed above,
-        # so only the = + - @ triggers remain possible).
-        if s and s[0] in ("=", "+", "-", "@"):
-            s = "'" + s
+        if s and s[0] == "'" and len(s) > 1 and s[1] in ("=", "+", "-", "@"):
+            s = s[1:]
         return s
 
     lines = ["\t".join(clean(h) for h in headers)]
@@ -438,7 +481,7 @@ def result_to_json(data: dict[str, Any], source_file: str | None, timestamp: str
     }
     import json
 
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    return json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False)
 
 
 # ---------------------------------------------------------------------------
@@ -527,7 +570,9 @@ def to_xlsx(
         sheet_name = _xlsx_sheet_name(_t(title_key))
         ws = wb.create_sheet(title=sheet_name)
 
-        headers = (["#"] if include_index else []) + [_t(c) for c in cfg["cols"]]
+        headers = (["#"] if include_index else []) + [
+            _cell_to_export(_t(c)) for c in cfg["cols"]
+        ]
         ws.append(headers)
         for cell in ws[1]:
             cell.font = bold
@@ -547,7 +592,11 @@ def to_xlsx(
                 row_values.append(idx)
             row_values.extend(cfg["row"](item))
             for ci, v in enumerate(row_values):
-                row_values[ci] = "" if v is None else v
+                # Pipeline: NaN/Inf → empty, then formula-injection prefix.
+                # Without this, an attacker-controlled or LLM-emitted value
+                # like "=cmd|'/C calc'!A0" is written by openpyxl as a live
+                # Excel formula (data_type 'f') and executes on open.
+                row_values[ci] = "" if v is None else _cell_to_export(v)
             ws.append(row_values)
             excel_row = idx + 1
             for ci, _ in enumerate(row_values, start=1):

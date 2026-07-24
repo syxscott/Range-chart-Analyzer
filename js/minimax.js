@@ -83,7 +83,12 @@ function rcaNormalizeResult(parsed) {
   const asStr = (v) => (v === null || v === undefined ? '' : String(v));
   const SEC_KNOWN = ['name', 'age_range', 'formations', 'formation_thickness_m', 'coordinates'];
   const SP_KNOWN = ['species', 'section', 'range_top', 'range_base', 'biozone'];
-  const BZ_KNOWN = ['name', 'age', 'thickness_m'];
+  // PARITY (extractor.py:250): biozones row includes `section` so the
+  // aggregation layer can fold section into the row label and prevent two
+  // biozones with the same name in different sections from collapsing into
+  // a single merged row. Without this, browser runs lose the section axis
+  // for biozones and exported tables diverge from the Python export shape.
+  const BZ_KNOWN = ['name', 'section', 'age', 'thickness_m'];
   const ROOT_KNOWN = ['sections', 'species_ranges', 'biozones', 'other_fossils', 'confidence'];
 
   for (const sec of Array.isArray(parsed.sections) ? parsed.sections : []) {
@@ -116,6 +121,10 @@ function rcaNormalizeResult(parsed) {
     if (!bz || typeof bz !== 'object') continue;
     const row = {
       name: asStr(bz.name),
+      // PARITY: section is a top-level field on the biozone row, mirroring
+      // rca_core/extractor.py:371. Demoting it to _extras would hide it
+      // from rcaAggNorm and break the section-folding dedup in aggregate.js.
+      section: asStr(bz.section),
       age: asStr(bz.age),
       thickness_m: asStr(bz.thickness_m),
     };
@@ -320,11 +329,16 @@ async function rcaCallBackend(opts, base64) {
 
   // Fetch CSRF token before POST. Uses a persistent session token stored
   // in memory so subsequent requests reuse the same session.
+  // FIX: pass `signal: controller.signal` so a user cancel or the run-aware
+  // timeout fires for the CSRF GET too. Without it the GET could hang for
+  // minutes on a stalled connection while the POST timeout already fired,
+  // leaving the user staring at a spinner.
   let sessionToken = rcaCallBackend._sessionToken || '';
   try {
     const csrfResp = await fetch('/api/extract', {
       method: 'GET',
       headers: { 'X-Session-Token': sessionToken },
+      signal: controller.signal,
     });
     if (csrfResp.ok) {
       const csrfData = await csrfResp.json();
@@ -356,6 +370,14 @@ async function rcaCallBackend(opts, base64) {
         max_tokens: opts.maxTokens,
         mode: opts.mode || 'range_chart',
         runs: runs,
+        // FIX (force-rerun): forward the user-driven cache bypass. Server
+        // reads this from req.get('force_rerun') in server.py:574/638. Was
+        // silently dropped before, so "Force rerun" was a no-op in browser.
+        force_rerun: !!opts.force_rerun,
+        // FIX (enhance): forward the image-enhancement flag. Server already
+        // accepts `enhance` in the payload; passing it lets the server-side
+        // pre-processor boost OCR on thin lines / small text.
+        enhance: opts.enhance === true,
       }),
       signal: controller.signal,
     });
@@ -391,6 +413,10 @@ async function rcaCallBackend(opts, base64) {
     // Usage and latency from the server.
     usage: payload.usage || null,
     latencyMs: payload.latency_ms || 0,
+    // M40: surface server-side warning (e.g. partial-aggregation notice).
+    // Previously dropped silently so the user never saw "2 of 3 runs
+    // succeeded" style hints from the server's merge layer.
+    warning: payload.warning || '',
   };
 }
 

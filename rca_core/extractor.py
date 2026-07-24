@@ -15,6 +15,7 @@ import base64
 import io
 import json
 import mimetypes
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -246,8 +247,24 @@ _KNOWN_SECTION_KEYS = (
 _KNOWN_SPECIES_KEYS = (
     "species", "section", "range_top", "range_base", "biozone",
     "author", "year",
+    # HIGH fix: missing keys promised by prompt.py
+    "author_year",       # combined "De Wever & Dumitrica, 2002" string
+    "range_top_bed",     # "Bed 9" - exact bed label at top
+    "range_base_bed",    # "Bed 7" - exact bed label at base
+    "endpoint_kind",     # "observed" | "projected" | "truncated"
+    "reworked",          # bool - true if reworked/deposited
 )
-_KNOWN_BIOZONE_KEYS = ("name", "section", "age", "thickness_m")
+_KNOWN_BIOZONE_KEYS = ("name", "section", "age", "thickness_m", "zone_type")
+
+# MEDIUM fix: iron-rule markers for zone labels misclassified as species.
+# Per prompt.py:80, names ending in Zone / Zonule / assemblage go into
+# ``biozones``, NEVER into ``species_ranges``. We post-normalize to flag any
+# slip-through so the operator can see it instead of silently exporting a
+# fabricated FAD/LAD for a non-taxon.
+_IRON_RULE_ZONE_RE = re.compile(
+    r"\b(zone|zonule|assemblage|oppel|interval|lineage|range|acme)\b",
+    re.IGNORECASE,
+)
 
 
 def _classify_array_item(item: dict[str, Any]) -> str | None:
@@ -262,10 +279,13 @@ def _classify_array_item(item: dict[str, Any]) -> str | None:
     # Species ranges have "species" (the primary identifier) and range bounds.
     if "species" in item or ("range_top" in item and "range_base" in item):
         return "species_ranges"
-    # Biozones have "age" (primary identifier) and optionally "thickness_m".
-    # Sections also have "age" and "name", but not "thickness_m".
-    # Biozones have "thickness_m" which sections don't have.
-    if "thickness_m" in item and "name" in item and "age" in item:
+    # HIGH fix: biozone identification. Previously required ALL of
+    # thickness_m + name + age, but the prompt's biozone schema only requires
+    # name + age + (optional thickness_m). Loosen so a thickness-less
+    # {name, age} item is classified as biozone rather than silently dropped
+    # into sections (where it would create a fake locality with no age).
+    # We still require both name AND age — without those it's ambiguous.
+    if "name" in item and "age" in item:
         return "biozones"
     # Sections have "name" and typically "age_range" or "formations".
     if "name" in item and ("age_range" in item or "formations" in item):
@@ -278,34 +298,149 @@ def _classify_array_item(item: dict[str, Any]) -> str | None:
 
 def _carry_extras(item: dict[str, Any], known: tuple[str, ...], out: dict[str, Any]) -> None:
     """H8: any non-known key the model emitted is preserved under a single
-    ``_extras`` dict so downstream consumers (CSV/JSON export) can see it."""
+    ``_extras`` dict so downstream consumers (CSV/JSON export) can see it.
+
+    B-5 MEDIUM fix: when the caller has already pre-populated ``out['_extras']``
+    (e.g. with a ``wrapper_key`` for dict-shaped array unwrap), we MERGE the
+    new extras instead of overwriting, so both the structural hint and the
+    model-emitted unknown keys survive.
+    """
     extras = {k: v for k, v in item.items() if k not in known}
-    if extras:
+    if not extras:
+        return
+    existing = out.get("_extras")
+    if isinstance(existing, dict):
+        # Merge - existing keys (e.g. wrapper_key) win for collisions so
+        # the structural hint from the caller takes precedence.
+        merged = dict(existing)
+        merged.update(extras)
+        out["_extras"] = merged
+    else:
         out["_extras"] = extras
 
 
-def normalize_result(parsed: dict[str, Any]) -> dict[str, Any]:
+def _normalize_section_into(sec: dict[str, Any],
+                             target: list[dict[str, Any]]) -> None:
+    """Build a section row from a raw dict and append it to ``target``.
+
+    MEDIUM fix: the _array_root handler previously appended the raw dict
+    without coercion, so string-where-list-was-expected fields and missing
+    keys slipped through unchanged. Routing every item through this helper
+    (and the sibling species/biozone helpers) guarantees a uniform shape.
+    """
+    def s(v):
+        return "" if v is None else str(v)
+
+    formations = sec.get("formations")
+    if isinstance(formations, list):
+        formations_out = [str(x).strip() for x in formations
+                          if isinstance(x, str) and str(x).strip()]
+    elif isinstance(formations, str) and formations.strip():
+        formations_out = [formations.strip()]
+    else:
+        formations_out = []
+    row = {
+        "name": s(sec.get("name")),
+        "age_range": s(sec.get("age_range")),
+        "formations": formations_out,
+        "formation_thickness_m": s(sec.get("formation_thickness_m")),
+        "coordinates": s(sec.get("coordinates")),
+    }
+    _carry_extras(sec, _KNOWN_SECTION_KEYS, row)
+    target.append(row)
+
+
+def _normalize_species_into(sp: dict[str, Any],
+                            target: list[dict[str, Any]]) -> None:
+    """Build a species_ranges row from a raw dict and append it."""
+    def s(v):
+        return "" if v is None else str(v)
+
+    row = {
+        "species": s(sp.get("species")),
+        "section": s(sp.get("section")),
+        "range_top": s(sp.get("range_top")),
+        "range_base": s(sp.get("range_base")),
+        "biozone": s(sp.get("biozone")),
+        "author": s(sp.get("author", "")),
+        "year": s(sp.get("year", "")),
+        # HIGH fix: author_year is the combined string the prompt requests.
+        "author_year": s(sp.get("author_year") or ""),
+    }
+    _carry_extras(sp, _KNOWN_SPECIES_KEYS, row)
+    target.append(row)
+
+
+def _normalize_biozone_into(bz: dict[str, Any],
+                            target: list[dict[str, Any]]) -> None:
+    """Build a biozones row from a raw dict and append it.
+
+    MEDIUM fix: zone_type was previously handled but the field was never
+    requested by the prompt, making the branch dead. Now the field is
+    included in _KNOWN_BIOZONE_KEYS so it survives into _extras when the
+    model emits it, and the suffix-append logic keeps working uniformly.
+    """
+    def s(v):
+        return "" if v is None else str(v)
+
+    name = s(bz.get("name"))
+    zone_type = s(bz.get("zone_type", "")).strip().lower()
+    if zone_type and zone_type not in name.lower():
+        name = f"{name} ({zone_type})"
+    row = {
+        "name": name,
+        "section": s(bz.get("section")),
+        "age": s(bz.get("age")),
+        "thickness_m": s(bz.get("thickness_m")),
+    }
+    _carry_extras(bz, _KNOWN_BIOZONE_KEYS, row)
+    target.append(row)
+
+
+def normalize_result(parsed):
     """Coerce the parsed JSON into the strict result shape.
 
     H8: extra top-level / row-level keys the model emits are not silently
-    discarded — they're attached under ``_extras`` so the operator sees
+    discarded - they are attached under ``_extras`` so the operator sees
     what was extracted. This avoids losing data the caller assumes is
     captured by the schema.
 
     H3-fix: when safe_json_loads wraps a top-level array as
-    ``{"_array_root": [...]}``, we unwrap it and distribute items to
-    the appropriate keys (sections, species_ranges, biozones, other_fossils).
+    ``{"_array_root": [...]}``, we unwrap it and distribute items to the
+    appropriate keys (sections, species_ranges, biozones, other_fossils).
     """
-    def s(v: Any) -> str:
+    # MEDIUM fix: normalize_result crashes on non-dict input. Guard so callers don't get AttributeError.
+    if not isinstance(parsed, dict):
+        return {
+            "sections": [],
+            "species_ranges": [],
+            "biozones": [],
+            "other_fossils": [],
+            "confidence": 0.0,
+            "_warnings": ["normalize_non_dict_input"],
+        }
+    def s(v):
         return "" if v is None else str(v)
 
-    out: dict[str, Any] = {
+    out = {
         "sections": [],
         "species_ranges": [],
         "biozones": [],
         "other_fossils": [],
         "confidence": 0.0,
     }
+    root_warnings = []
+
+    # MEDIUM fix (truncated rescue): if the JSON parser rescued a partial
+    # / inner object that does not match any of the documented range-chart
+    # root keys, surface a warning so the operator is not silently given
+    # an empty ok=True result.
+    RANGE_CHART_ROOTS = {"sections", "species_ranges", "biozones",
+                         "other_fossils", "confidence"}
+    if (isinstance(parsed, dict) and parsed
+            and not RANGE_CHART_ROOTS.intersection(parsed.keys())
+            and "_array_root" not in parsed):
+        root_warnings.append("truncated_or_unrecognized_payload")
 
     # H3-fix: unwrap _array_root wrapper and distribute items to known keys.
     if "_array_root" in parsed and isinstance(parsed["_array_root"], list):
@@ -321,59 +456,87 @@ def normalize_result(parsed: dict[str, Any]) -> dict[str, Any]:
                 # a generated key so nothing is silently dropped.
                 out.setdefault("_unclassified", []).append(item)
             else:
-                out.setdefault(key, []).append(item)
-    for sec in parsed.get("sections") or []:
-        if not isinstance(sec, dict):
-            continue
-        formations = sec.get("formations")
-        # Fix B-2: handle case where formations is a string instead of a list.
-        if isinstance(formations, list):
-            formations_out = [s(x) for x in formations if isinstance(x, str) and s(x).strip()]
-        elif isinstance(formations, str) and formations.strip():
-            formations_out = [formations.strip()]
-        else:
-            formations_out = []
-        row = {
-            "name": s(sec.get("name")),
-            "age_range": s(sec.get("age_range")),
-            "formations": formations_out,
-            "formation_thickness_m": s(sec.get("formation_thickness_m")),
-            "coordinates": s(sec.get("coordinates")),
-        }
-        _carry_extras(sec, _KNOWN_SECTION_KEYS, row)
-        out["sections"].append(row)
-    for sp in parsed.get("species_ranges") or []:
-        if not isinstance(sp, dict):
-            continue
-        row = {
-            "species": s(sp.get("species")),
-            "section": s(sp.get("section")),
-            "range_top": s(sp.get("range_top")),
-            "range_base": s(sp.get("range_base")),
-            "biozone": s(sp.get("biozone")),
-            "author": s(sp.get("author", "")),
-            "year": s(sp.get("year", "")),
-        }
-        _carry_extras(sp, _KNOWN_SPECIES_KEYS, row)
-        out["species_ranges"].append(row)
-    for bz in parsed.get("biozones") or []:
-        if not isinstance(bz, dict):
-            continue
-        name = s(bz.get("name"))
-        # Detect and append zone-type suffix if not already present, so that
-        # taxon range zone / assemblage zone / interval zone names remain
-        # distinct and are not collapsed into a generic "Zone" label.
-        zone_type = s(bz.get("zone_type", "")).strip().lower()
-        if zone_type and zone_type not in name.lower():
-            name = f"{name} ({zone_type})"
-        row = {
-            "name": name,
-            "section": s(bz.get("section")),
-            "age": s(bz.get("age")),
-            "thickness_m": s(bz.get("thickness_m")),
-        }
-        _carry_extras(bz, _KNOWN_BIOZONE_KEYS, row)
-        out["biozones"].append(row)
+                # MEDIUM fix: normalize the unwrapped item using the same
+                # shape as the regular list, so string-instead-of-list
+                # fields (formations, etc.) and missing keys are handled
+                # uniformly.
+                if key == "sections":
+                    _normalize_section_into(item, out["sections"])
+                elif key == "species_ranges":
+                    _normalize_species_into(item, out["species_ranges"])
+                elif key == "biozones":
+                    _normalize_biozone_into(item, out["biozones"])
+                else:
+                    out.setdefault(key, []).append(item)
+
+    # MEDIUM fix (dict-shaped arrays): if a named array is actually a dict
+    # (single-object model emission), iterate the values instead of string
+    # keys so the record is not silently lost. The wrapper key is preserved
+    # under _extras.wrapper_key for traceability.
+    def _coerce_list_or_dict(raw, kind):
+        if isinstance(raw, dict):
+            for wrapper_key, inner in raw.items():
+                if not isinstance(inner, dict):
+                    continue
+                inner2 = dict(inner)
+                # Fall back: when the inner record has no primary identifier
+                # for its kind (no ``name`` for sections/biozones, no
+                # ``species`` for species_ranges), use the wrapper key as the
+                # primary identifier. This recovers the most common
+                # dict-shaped payload (``{'Pingdingshan': {...}}``) without
+                # losing the record.
+                if kind in ("sections", "biozones") and not inner2.get("name"):
+                    inner2["name"] = wrapper_key
+                elif kind == "species_ranges" and not inner2.get("species"):
+                    inner2["species"] = wrapper_key
+                # Drop any pre-existing _extras before re-running the
+                # normalizer so we don't end up with a nested ``_extras``
+                # field. The normalizer will rebuild it cleanly with
+                # ``wrapper_key`` preserved via the _carry_extras merge.
+                inner2.pop("_extras", None)
+                if kind == "sections":
+                    _normalize_section_into(inner2, out["sections"])
+                elif kind == "species_ranges":
+                    _normalize_species_into(inner2, out["species_ranges"])
+                elif kind == "biozones":
+                    _normalize_biozone_into(inner2, out["biozones"])
+                # After normalization, attach wrapper_key to the LAST
+                # appended row. We can't put it on the source dict (it's a
+                # 'known' marker the normalizer would treat as unknown-key
+                # extras and re-attach), so we add it to the row directly.
+                if out[kind]:
+                    row = out[kind][-1]
+                    extras = row.get("_extras")
+                    if not isinstance(extras, dict):
+                        extras = {}
+                        row["_extras"] = extras
+                    extras["wrapper_key"] = wrapper_key
+        elif isinstance(raw, list):
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                if kind == "sections":
+                    _normalize_section_into(item, out["sections"])
+                elif kind == "species_ranges":
+                    _normalize_species_into(item, out["species_ranges"])
+                elif kind == "biozones":
+                    _normalize_biozone_into(item, out["biozones"])
+
+    _coerce_list_or_dict(parsed.get("sections"), "sections")
+    _coerce_list_or_dict(parsed.get("species_ranges"), "species_ranges")
+    _coerce_list_or_dict(parsed.get("biozones"), "biozones")
+
+    # MEDIUM fix (iron rule): post-normalize pass that flags any species
+    # whose name reads like a zone label. We do not MOVE the row (which
+    # would be silently destructive) - we flag it so the operator sees
+    # the slip-through and decides.
+    for sp in out["species_ranges"]:
+        name = (sp.get("species") or "").strip()
+        if name and _IRON_RULE_ZONE_RE.search(name):
+            sp["_warning"] = "iron_rule_zone_label"
+            if "iron_rule_zone_label" not in root_warnings:
+                root_warnings.append("iron_rule_zone_label")
+
     of = parsed.get("other_fossils") or []
     # Fix B-3: handle case where model returns a string instead of a list.
     if isinstance(of, list):
@@ -387,10 +550,17 @@ def normalize_result(parsed: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         conf = 0.0
     out["confidence"] = max(0.0, min(1.0, conf))
-    # H8: top-level extras (anything outside the named lists + confidence).
-    top_extras = {k: v for k, v in parsed.items() if k not in _KNOWN_RANGE_CHART_KEYS}
-    if top_extras:
-        out["_extras"] = top_extras
+    # LOW fix: drop _array_root (and its _note companion) from top-level
+    # extras - the per-item rows are already distributed, so the raw
+    # payload would be a duplicate.
+    extras_src = {k: v for k, v in parsed.items()
+                  if k not in _KNOWN_RANGE_CHART_KEYS}
+    extras_src.pop("_array_root", None)
+    extras_src.pop("_note", None)
+    if extras_src:
+        out["_extras"] = extras_src
+    if root_warnings:
+        out["_warnings"] = root_warnings
     return out
 
 
@@ -432,16 +602,29 @@ def extract_range_chart(
         + "Extract the geological information as the strict JSON contract."
     )
     t0 = time.perf_counter()
-    raw_text, truncated, status, err_body, usage = call_llm_api(
-        provider=p,
-        system_prompt=RANGE_CHART_SYSTEM_PROMPT,
-        image_b64=image_b64,
-        media_type=media_type,
-        user_text=user_prompt,
-        max_tokens=max_tokens,
-        timeout_sec=timeout_sec,
-        capture_error_body=True,
-    )
+    # LOW fix: honor the never-raises contract even when the provider has a
+    # malformed extra_body / extra_headers (which raises TypeError/ValueError
+    # inside llm.py's body.update / headers.update). Without this guard a
+    # hand-edited providers.json would propagate out of extract_range_chart
+    # and break the server's single-run path (server.py:606 has no try/except).
+    try:
+        raw_text, truncated, status, err_body, usage = call_llm_api(
+            provider=p,
+            system_prompt=RANGE_CHART_SYSTEM_PROMPT,
+            image_b64=image_b64,
+            media_type=media_type,
+            user_text=user_prompt,
+            max_tokens=max_tokens,
+            timeout_sec=timeout_sec,
+            capture_error_body=True,
+        )
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw="", latency_ms=latency_ms,
+            warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+        )
     latency_ms = int((time.perf_counter() - t0) * 1000)
     # Truncation is partial-success — the model returned something but
     # the JSON may be cut off mid-structure. Surface as `warning` (and
@@ -475,6 +658,19 @@ def extract_range_chart(
             ok=False, error_key="err.extract",
             raw=raw_text, truncated=truncated, usage=usage or {},
             latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+        )
+    # MEDIUM fix: truncated VLM output rescued as an inner object produces
+    # ok=True with empty arrays (no recognizable root keys). When the
+    # normalizer surfaced a ``truncated_or_unrecognized_payload`` warning we
+    # flip ok=False so the operator isn't silently given an empty extraction.
+    if (data.get("_warnings")
+            and "truncated_or_unrecognized_payload" in data["_warnings"]):
+        return ExtractResult(
+            ok=False, error_key="err.parse",
+            raw=raw_text, truncated=truncated,
+            latency_ms=latency_ms, usage=usage or {},
+            warning=warning + " | rescued inner object: unusable",
+            data=data,
         )
     return ExtractResult(
         ok=True, data=data, raw=raw_text,
@@ -566,10 +762,29 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
         return "" if v is None else str(v)
 
     def fi(v: Any) -> int | None:
+        """Convert a bed-index field to int, or return None if unparseable.
+
+        LOW fix: previously a numeric string like ``"8.0"`` or a float
+        ``8.5`` was silently nulled (resp. floored to 8) without warning.
+        We now try int(v) first and fall back to float→int truncation with
+        a row-level ``_warning`` attached by the caller, so the operator
+        sees a flagged value instead of a silent data loss.
+        """
+        if v is None or v == "":
+            return None
+        if isinstance(v, bool):
+            # bool is an int subclass — treat True/False as 1/0 is
+            # surprising; return None instead so the caller can flag it.
+            return None
+        if isinstance(v, int):
+            return v
         try:
-            if v is None or v == "":
-                return None
             return int(v)
+        except (TypeError, ValueError):
+            pass
+        # Fall back to float coercion (handles "8.5" -> 8, 8.5 -> 8).
+        try:
+            return int(float(v))
         except (TypeError, ValueError):
             return None
 
@@ -578,8 +793,10 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
         for b in items or []:
             if not isinstance(b, dict):
                 continue
-            top_idx = fi(b.get("range_top_idx"))
-            base_idx = fi(b.get("range_base_idx"))
+            raw_top = b.get("range_top_idx")
+            raw_base = b.get("range_base_idx")
+            top_idx = fi(raw_top)
+            base_idx = fi(raw_base)
             # B-3 fix: enforce top (younger/higher) >= base (older/lower).
             # The prompt says "1-indexed from bottom (oldest=1), top >= base".
             # If the model emitted them reversed, swap and flag so the UI
@@ -593,8 +810,18 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
                 "range_top_idx": top_idx,
                 "range_base_idx": base_idx,
             }
+            warnings: list[str] = []
+            # LOW fix: flag when fi() silently coerced (numeric-string or
+            # float) so the operator can audit the conversion instead of
+            # seeing a clean None or floored integer.
+            if top_idx is None and raw_top not in (None, ""):
+                warnings.append("range_top_idx_unparseable")
+            if base_idx is None and raw_base not in (None, ""):
+                warnings.append("range_base_idx_unparseable")
             if swapped:
-                row["_warning"] = "index_order_swap"
+                warnings.append("index_order_swap")
+            if warnings:
+                row["_warning"] = warnings[0] if len(warnings) == 1 else warnings
             _carry_extras(b, _KNOWN_BLOCK_KEYS, row)
             out.append(row)
         return out
@@ -761,16 +988,26 @@ def extract_columnar_section(
         + "Extract the columnar-section information as the strict JSON contract."
     )
     t0 = time.perf_counter()
-    raw_text, truncated, status, err_body, usage = call_llm_api(
-        provider=p,
-        system_prompt=COLUMNAR_SECTION_SYSTEM_PROMPT,
-        image_b64=image_b64,
-        media_type=media_type,
-        user_text=user_prompt,
-        max_tokens=max_tokens,
-        timeout_sec=timeout_sec,
-        capture_error_body=True,
-    )
+    # LOW fix: never-raises contract - guard call_llm_api against malformed
+    # provider config (extra_body / extra_headers may not be dicts).
+    try:
+        raw_text, truncated, status, err_body, usage = call_llm_api(
+            provider=p,
+            system_prompt=COLUMNAR_SECTION_SYSTEM_PROMPT,
+            image_b64=image_b64,
+            media_type=media_type,
+            user_text=user_prompt,
+            max_tokens=max_tokens,
+            timeout_sec=timeout_sec,
+            capture_error_body=True,
+        )
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw="", latency_ms=latency_ms,
+            warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+        )
     latency_ms = int((time.perf_counter() - t0) * 1000)
     warning = ("Result may be truncated (model hit max_tokens). "
                "Try raising the max_tokens setting and re-running.")
@@ -931,16 +1168,26 @@ def extract_abundance_diagram(
         + "Extract the abundance-diagram information as the strict JSON contract."
     )
     t0 = time.perf_counter()
-    raw_text, truncated, status, err_body, usage = call_llm_api(
-        provider=p,
-        system_prompt=ABUNDANCE_DIAGRAM_SYSTEM_PROMPT,
-        image_b64=image_b64,
-        media_type=media_type,
-        user_text=user_prompt,
-        max_tokens=max_tokens,
-        timeout_sec=timeout_sec,
-        capture_error_body=True,
-    )
+    # LOW fix: never-raises contract - guard call_llm_api against malformed
+    # provider config (extra_body / extra_headers may not be dicts).
+    try:
+        raw_text, truncated, status, err_body, usage = call_llm_api(
+            provider=p,
+            system_prompt=ABUNDANCE_DIAGRAM_SYSTEM_PROMPT,
+            image_b64=image_b64,
+            media_type=media_type,
+            user_text=user_prompt,
+            max_tokens=max_tokens,
+            timeout_sec=timeout_sec,
+            capture_error_body=True,
+        )
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw="", latency_ms=latency_ms,
+            warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+        )
     latency_ms = int((time.perf_counter() - t0) * 1000)
     warning = ("Result may be truncated (model hit max_tokens). "
                "Try raising the max_tokens setting and re-running.")

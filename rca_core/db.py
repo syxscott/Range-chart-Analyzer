@@ -101,18 +101,7 @@ class Database:
         # transactions must be wrapped in ``self.transaction()``.
         self._conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        # WAL gives concurrent readers + a single writer without locking
-        # the whole file. safe even on Windows for our access pattern.
-        try:
-            self._conn.execute("PRAGMA journal_mode=WAL;")
-        except sqlite3.DatabaseError:
-            pass
-        self._conn.execute("PRAGMA foreign_keys=ON;")
-        # Schema + migrations run inside the lock because they issue
-        # multi-statement transactions via executescript().
-        with self.transaction() as conn:
-            conn.executescript(SCHEMA)
-            self._apply_migrations(conn)
+        self._apply_setup()
         # Run a quick health probe so we fail fast on corrupt files
         # instead of the first real query.
         try:
@@ -125,6 +114,38 @@ class Database:
                 self.path, timeout=30, check_same_thread=False
             )
             self._conn.row_factory = sqlite3.Row
+            # LOW finding 2026-07-20: every reopen path must re-apply
+            # PRAGMAs and re-run SCHEMA / migrations so the recovered
+            # connection behaves identically to the first open (WAL for
+            # concurrent readers, FK enforcement on, app tables visible).
+            # Without this, a fallback reopen ran with default journal
+            # mode and FK off — directly undermining the Bug-5 fix the
+            # same file introduced.
+            self._apply_setup()
+
+    def _apply_setup(self) -> None:
+        """Idempotent connection setup: pragmas + schema + migrations.
+
+        Called both on initial open and on every recovery reopen so the
+        reopened connection is indistinguishable from the first one.
+        Idempotency is preserved by SQLite (PRAGMA journal_mode=WAL on a
+        WAL file is a no-op; CREATE TABLE IF NOT EXISTS / executescript
+        are no-ops on existing tables).
+        """
+        # WAL gives concurrent readers + a single writer without locking
+        # the whole file. safe even on Windows for our access pattern.
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL;")
+        except sqlite3.DatabaseError:
+            pass
+        # FK enforcement is per-connection and defaults off, so it must
+        # be re-issued on every (re)open.
+        self._conn.execute("PRAGMA foreign_keys=ON;")
+        # Schema + migrations run inside the lock because they issue
+        # multi-statement transactions via executescript().
+        with self.transaction() as conn:
+            conn.executescript(SCHEMA)
+            self._apply_migrations(conn)
 
     def close(self) -> None:
         """Close the underlying connection. Idempotent."""

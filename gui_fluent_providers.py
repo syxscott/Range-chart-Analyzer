@@ -16,6 +16,10 @@ add button, threaded connection-test, i18n live switch, config persist.
 
 from __future__ import annotations
 
+import logging
+
+log = logging.getLogger("rca.gui_fluent_providers")
+
 from PySide6.QtCore import (
     Qt, QMimeData, QPoint, QSize, Signal, QTimer,
 )
@@ -37,6 +41,7 @@ from rca_core import (
 )
 from rca_core.extractor import DEFAULT_ENDPOINT, DEFAULT_MODEL
 from rca_core.llm import test_llm_connection
+from rca_core.ssrf import validate_endpoint as _validate_endpoint
 
 
 def _icon_char(name: str) -> str:
@@ -944,6 +949,33 @@ class ProvidersPage(ScrollArea):
                 self._p = p
             def run(self):
                 from rca_core.llm import test_llm_connection
+                # Audit fix (MEDIUM parity gap): validate the provider's
+                # endpoint before issuing any authenticated request. The
+                # extract path was hardened against SSRF + cleartext-key
+                # leak via _validate_endpoint, but this probe path was
+                # not, so clicking Test on a provider pointing at an
+                # internal host or http:// would dial the target with
+                # the API key in the clear.
+                try:
+                    if self._p is not None:
+                        from rca_core.ssrf import validate_endpoint
+                        ok, why = validate_endpoint(self._p.endpoint)
+                        if not ok:
+                            # Match the shape returned by test_llm_connection
+                            # so _on_test_done renders a graceful failure
+                            # instead of a crash.
+                            self.done.emit({
+                                "ok": False,
+                                "error": f"bad endpoint: {why}",
+                            })
+                            return
+                except Exception as e:
+                    log.exception("connection-test endpoint validation failed")
+                    self.done.emit({
+                        "ok": False,
+                        "error": f"endpoint validation error: {e}",
+                    })
+                    return
                 self.done.emit(test_llm_connection(self._p, timeout_sec=8))
 
         # FIX (H1): do NOT disconnect/quit any in-flight worker. Each test

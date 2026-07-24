@@ -133,6 +133,7 @@ test_to_xlsx_to_file()
 test_to_xlsx_sheet_name_sanitization()
 test_body_too_large_key_present()
 test_missing_dependency_error()
-print("--- %d passed, %d failed ---" % (_pass, _fail))
-sys.exit(1 if _fail else 0)
+if __name__ == "__main__":
+    print("--- %d passed, %d failed ---" % (_pass, _fail))
+    sys.exit(1 if _fail else 0)
 

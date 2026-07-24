@@ -10,6 +10,7 @@ Run:  QT_QPA_PLATFORM=offscreen python tests_gui_fluent.py
 from __future__ import annotations
 
 import os
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -54,10 +55,14 @@ def test_extract_worker_emits_on_success():
         from rca_core.extractor import ExtractResult
         return ExtractResult(ok=True, data={"confidence": 0.5}, raw="{}", truncated=False)
 
-    # Stub the module-level extract() so the worker calls our fake.
+    # Stub both bindings: gui_fluent.py did `from rca_core import extract` which
+    # created an independent module-level binding in gui_fluent, so patching
+    # rca_core.extractor.extract alone does NOT intercept the call site.
     import rca_core.extractor as E
-    orig = E.extract
+    orig_ext = E.extract
+    orig_gf = gui_fluent.extract
     E.extract = fake_extract
+    gui_fluent.extract = fake_extract
     try:
         w = gui_fluent.ExtractWorker(
             params={"api_key": "k", "image_b64": "QUFB", "media_type": "image/png"},
@@ -65,13 +70,20 @@ def test_extract_worker_emits_on_success():
         results = []
         w.finished_ok.connect(lambda r: results.append(r))
         w.start()
-        # Wait for thread to finish (max 5s).
+        # Wait for thread to finish (max 5s) AND pump Qt event loop so the
+        # cross-thread queued signal gets delivered to the main thread.
+        import time as _time
+        deadline = _time.time() + 5
+        while (not results) and _time.time() < deadline:
+            app.processEvents()
+            _time.sleep(0.05)
         assert w.wait(5000), "worker did not finish in 5s"
         assert len(results) == 1, f"expected 1 result, got {len(results)}"
         assert results[0].ok
         assert captured.get("image_b64") == "QUFB"
     finally:
-        E.extract = orig
+        E.extract = orig_ext
+        gui_fluent.extract = orig_gf
 
 
 def test_extract_worker_emits_on_failure():
@@ -86,8 +98,10 @@ def test_extract_worker_emits_on_failure():
         return ExtractResult(ok=False, error_key="err.network", raw="")
 
     import rca_core.extractor as E
-    orig = E.extract
+    orig_ext = E.extract
+    orig_gf = gui_fluent.extract
     E.extract = fake_extract
+    gui_fluent.extract = fake_extract
     try:
         w = gui_fluent.ExtractWorker(
             params={"api_key": "k", "image_b64": "QUFB", "media_type": "image/png"},
@@ -108,7 +122,8 @@ def test_extract_worker_emits_on_failure():
         w.quit()
         w.wait(500)
     finally:
-        E.extract = orig
+        E.extract = orig_ext
+        gui_fluent.extract = orig_gf
 
 
 # ---- T5 + T6: exporter unit tests ----
@@ -252,7 +267,13 @@ def run_all():
         # Extract worker class exists and is a QThread.
         from PySide6.QtCore import QThread
         check("extract-worker-is-qthread", issubclass(gui_fluent.ExtractWorker, QThread))
-        check("conntest-worker-is-qthread", issubclass(gui_fluent.ConnTestWorker, QThread))
+        # Audit fix: gui_fluent.ConnTestWorker was removed (it was dead
+        # code; ProvidersPage defines its own inline _Worker instead). The
+        # test should no longer check for the removed module-level class —
+        # verify that the providers page actually defines the inline worker.
+        # _test_workers is set in __init__ (it's an instance attribute).
+        check("providers-has-test-workers",
+              isinstance(getattr(win.providers_page, "_test_workers", None), dict))
     finally:
         win.close()
         win.deleteLater()

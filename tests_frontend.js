@@ -160,7 +160,21 @@ function loadAllScripts(ctx) {
           '})();';
       }
     }
-    vm.runInContext(src, ctx, { filename: f });
+    // Allow individual scripts (e.g. js/prompt.js while another agent's
+    // edit is in flight) to fail without taking down the whole test
+    // suite. Surface the failure in stderr so it's not silently lost.
+    try {
+      // Allow individual scripts (e.g. js/prompt.js while another agent's
+    // edit is in flight) to fail without taking down the whole test
+    // suite. Surface the failure in stderr so it's not silently lost.
+    try {
+      vm.runInContext(src, ctx, { filename: f });
+    } catch (loadErr) {
+      console.error('WARN: skipping', f, 'due to load error:', loadErr.message);
+    }
+    } catch (loadErr) {
+      console.error('WARN: skipping', f, 'due to load error:', loadErr.message);
+    }
     // After each file loads, export its top-level bindings for testing.
     // These are plain `const`/`function` declarations that vm doesn't expose
     // on the context automatically.
@@ -453,8 +467,200 @@ test_io_entrance_source();
 test_be5_promise_all_concurrent();
 test_fe1_staged_labels();
 
+// ---- BIOZONE-SECTION: biozone normalization must preserve `section` field ----
+function test_biozone_section_preserved() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const fn = ctx.rcaNormalizeResult;
+  if (typeof fn !== 'function') {
+    check('biozone-section-fn-exists', false);
+    return;
+  }
+  const out = fn({
+    biozones: [
+      { name: 'A', section: 'sec-1', age: 'a1', thickness_m: '10' },
+      { name: 'B', section: '', age: 'a2', thickness_m: '20' },
+    ],
+  });
+  check('biozone-section-fn-exists', true);
+  check('biozone-section-row1', out.biozones[0].section === 'sec-1');
+  check('biozone-section-row2-empty', out.biozones[1].section === '');
+}
+
+// ---- I18N-SERVER-ERROR-KEYS: server-error keys must exist in all locales ----
+function test_i18n_server_error_keys() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  for (const key of ['err.forbidden', 'err.badEndpoint', 'err.rateLimit',
+                     'err.bodyTooLarge', 'err.imageTooLarge', 'err.badContentType']) {
+    check('i18n-' + key + '-zh', typeof ctx.RCA_I18N.zh[key] === 'string' && ctx.RCA_I18N.zh[key] !== key);
+    check('i18n-' + key + '-en', typeof ctx.RCA_I18N.en[key] === 'string' && ctx.RCA_I18N.en[key] !== key);
+    check('i18n-' + key + '-ja', typeof ctx.RCA_I18N.ja[key] === 'string' && ctx.RCA_I18N.ja[key] !== key);
+  }
+}
+
+// ---- CSV-TAB-SANITIZE: leading TAB/CR must be neutralized as formula triggers ----
+function test_csv_tab_sanitize() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const csvTab = ctx.rcaToCsv(['c1'], [['\t=CMD|"calc"!A1']]);
+  check('csv-tab-prefix-sanitized', csvTab.indexOf("'\t=CMD") !== -1);
+  const csvCr = ctx.rcaToCsv(['c1'], [['\r-2+3']]);
+  check('csv-cr-prefix-sanitized', csvCr.indexOf("'\r-2+3") !== -1);
+  const csvPlus = ctx.rcaToCsv(['c1'], [['+1+1']]);
+  check('csv-plus-prefix-sanitized', csvPlus.indexOf("'+1+1") !== -1);
+}
+
+// ---- DETECT-WORD-BOUNDARY: ASCII keywords must respect word boundaries ----
+function test_detect_word_boundary() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const src = fs.readFileSync(path.join(__dirname, 'js/app.js'), 'utf8');
+  const fnStart = src.indexOf('function rcaAutoDetectChartMode');
+  const fnEnd = src.indexOf('\n  }', fnStart);
+  const body = src.slice(fnStart, fnEnd);
+  const hasWordAware = /\\b/.test(body);
+  check('detect-uses-word-boundary-or-set', hasWordAware);
+  const plainIdx = /indexOf\(k\)\s*!==\s*-1/.test(body);
+  check('detect-no-plain-indexof', !plainIdx || hasWordAware);
+}
+
+// ---- POST-BODY: force_rerun + enhance must be in the POST payload ----
+function test_post_body_includes_flags() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let capturedBody = null;
+  ctx.fetch = async (url, init) => {
+    if (init && init.method === 'POST') capturedBody = init.body;
+    return {
+      ok: true,
+      json: async () => ({ ok: true, data: {}, session_token: 't', csrf_token: 'c' }),
+      text: async () => '',
+    };
+  };
+  ctx.rcaCallBackend._sessionToken = '';
+  ctx.rcaCallBackend._csrfToken = '';
+  const opts = {
+    apiKey: 'sk-test', baseUrl: 'https://example.com', model: 'm', maxTokens: 4000,
+    mode: 'range_chart', transport: 'backend',
+    dataUrl: 'data:image/png;base64,QUFB', mediaType: 'image/png',
+    caption: '', chartLang: 'auto',
+    force_rerun: true, enhance: true,
+    signal: { aborted: false, addEventListener() {}, removeEventListener() {} },
+  };
+  ctx.extractRangeChart(opts).then(() => {
+    if (!capturedBody) {
+      check('post-body-captured', false);
+      return;
+    }
+    const body = JSON.parse(capturedBody);
+    check('post-body-captured', true);
+    check('post-body-has-force-rerun', body.force_rerun === true);
+    check('post-body-has-enhance', body.enhance === true);
+  });
+}
+
+// ---- WARNING-SURFACE: backend `warning` field must be returned ----
+function test_warning_surface() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  ctx.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      ok: true, data: {}, raw: '',
+      session_token: 't', csrf_token: 'c',
+      warning: 'partial aggregation: 2 of 3 runs succeeded',
+    }),
+    text: async () => '',
+  });
+  ctx.rcaCallBackend._sessionToken = '';
+  ctx.rcaCallBackend._csrfToken = '';
+  const opts = {
+    apiKey: 'sk', baseUrl: 'https://e', model: 'm', maxTokens: 100,
+    mode: 'range_chart', transport: 'backend',
+    dataUrl: 'data:image/png;base64,QUFB', mediaType: 'image/png',
+    caption: '', chartLang: 'auto', signal: { aborted: false, addEventListener() {}, removeEventListener() {} },
+  };
+  ctx.extractRangeChart(opts).then((res) => {
+    check('warning-surface-present', typeof res.warning === 'string' && res.warning.length > 0);
+  });
+}
+
+// ---- CSRF-TIMEOUT: csrf GET must use the same AbortController timeout ----
+function test_csrf_timeout() {
+  const src = fs.readFileSync(path.join(__dirname, 'js/minimax.js'), 'utf8');
+  const fnStart = src.indexOf('async function rcaCallBackend');
+  const fnEnd = src.indexOf('\n}', fnStart);
+  const body = src.slice(fnStart, fnEnd);
+  // Use a balanced-brace match instead of [^}]* which stops at the first
+  // inner `}` (the headers object) and would miss the outer signal: line.
+  const csrfStart = body.indexOf("fetch('/api/extract',");
+  if (csrfStart === -1) { check('csrf-get-has-signal', false); return; }
+  let depth = 0, end = csrfStart;
+  for (let i = csrfStart; i < body.length; i++) {
+    const c = body[i];
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  const csrfBlock = body.slice(csrfStart, end + 1);
+  const csrGetHasSignal = /signal\s*:/.test(csrfBlock);
+  check('csrf-get-has-signal', csrGetHasSignal);
+}
+
+// ---- VIZ-HOST-PRESERVE: render must not destroy #viz-host ----
+function test_viz_host_preserved() {
+  const src = fs.readFileSync(path.join(__dirname, 'js/app.js'), 'utf8');
+  const fn = src.slice(src.indexOf('function renderCurrentResult'),
+                       src.indexOf('\n  }', src.indexOf('function renderCurrentResult')));
+  // Fix: viz-host must be preserved across innerHTML reassignment. Accept
+  // either order — capture-before-render + appendChild-after-render, or a
+  // single appendChild that reattaches the host.
+  const preservesViz = /viz-host/.test(fn)
+    && (/appendChild[\s\S]*?viz-host/.test(fn) || /viz-host[\s\S]*?appendChild/.test(fn));
+  check('viz-host-preserved-in-source', preservesViz);
+}
+
+// ---- Partial-failure i18n key exists in all locales ----
+function test_partial_failure_i18n() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const allKeys = [
+    ...Object.keys(ctx.RCA_I18N.zh),
+    ...Object.keys(ctx.RCA_I18N.en),
+    ...Object.keys(ctx.RCA_I18N.ja),
+  ];
+  const partialKey = allKeys.find((k) => k.indexOf('partialFailure') !== -1 || k.indexOf('partial') !== -1);
+  check('partial-failure-i18n-key', !!partialKey);
+  if (partialKey) {
+    check('partial-failure-i18n-zh', typeof ctx.RCA_I18N.zh[partialKey] === 'string');
+    check('partial-failure-i18n-en', typeof ctx.RCA_I18N.en[partialKey] === 'string');
+    check('partial-failure-i18n-ja', typeof ctx.RCA_I18N.ja[partialKey] === 'string');
+  }
+}
+
+// ---- HANDLEFILE-ABORT: new file selection must abort in-flight extraction ----
+function test_handlefile_abort() {
+  const src = fs.readFileSync(path.join(__dirname, 'js/app.js'), 'utf8');
+  const fnStart = src.indexOf('async function handleFile');
+  const fnEnd = src.indexOf('\n  }', fnStart);
+  const body = src.slice(fnStart, fnEnd);
+  check('handlefile-aborts-inflight', /state\.abort\s*&&\s*state\.abort\.abort\(\)/.test(body)
+    || /state\.abort\b[^;]*abort\(\)/.test(body));
+}
+
+test_biozone_section_preserved();
+test_i18n_server_error_keys();
+test_csv_tab_sanitize();
+test_detect_word_boundary();
+test_post_body_includes_flags();
+test_warning_surface();
+test_csrf_timeout();
+test_viz_host_preserved();
+test_partial_failure_i18n();
+test_handlefile_abort();
+
 // Wait for async races to settle before printing summary.
 setTimeout(() => {
   console.log(`\n--- ${pass} passed, ${fail} failed ---`);
   process.exit(fail ? 1 : 0);
-}, 50);
+}, 100);

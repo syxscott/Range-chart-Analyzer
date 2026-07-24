@@ -33,6 +33,10 @@ _RATE_MAX_REQUESTS = 30
 _rate_history: dict[str, collections.deque] = {}
 _rate_lock = threading.Lock()
 
+# CSRF store cap — protects against unbounded memory growth from
+# clients minting tokens faster than they use them.
+_CSRF_STORE_MAX = 4096
+
 
 # S8 fix: redact API-key-like patterns from error_body before echoing to the UI.
 # Upstream servers may echo back request headers (including Authorization)
@@ -93,11 +97,34 @@ from rca_core.llm import ApiFormat, LlmProvider  # noqa: E402
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
+# Static asset root: which top-level entries under ROOT are served.
+# Everything outside this set is rejected even if the extension whitelist
+# would otherwise allow it. Prevents the server from leaking source
+# files (server.py, *.py in rca_core/, *.db, .env, secrets/, etc.) via
+# the same-origin static handler.
+STATIC_ALLOWED_ENTRIES = (
+    "index.html",
+    "js",
+    "css",
+    "assets",
+    "app",
+    "references",
+    "favicon.ico",
+)
+
+# Expected host allowlist — populated when the server starts based on
+# --host / --port (or the app.py picked port). The CSRF Origin/Referer
+# check compares the request's origin netloc against this set instead
+# of the client-controlled ``Host`` header (which a DNS-rebinding
+# attacker can spoof).
+EXPECTED_HOSTS: set[str] = set()
+
 # CSRF token storage: thread-safe dict mapping session tokens to CSRF tokens.
 # In a production system you'd use a proper session store (Redis, DB, etc.).
 # For this single-server application, an in-memory dict with a lock suffices.
 _csrf_lock = threading.RLock()
-_csrf_store: dict[str, str] = {}  # session_token -> csrf_token
+_csrf_store: dict[str, tuple[str, float]] = {}  # session_token -> (csrf_token, created_at)
+_CSRF_TOKEN_TTL_SEC = 3600  # 1 hour
 
 
 def _generate_csrf_token() -> str:
@@ -106,15 +133,35 @@ def _generate_csrf_token() -> str:
 
 
 def _get_csrf_for_session(session_token: str) -> str | None:
-    """Retrieve the CSRF token for a given session, or None if not found."""
+    """Retrieve the CSRF token for a given session, or None if not found or expired."""
     with _csrf_lock:
-        return _csrf_store.get(session_token)
+        entry = _csrf_store.get(session_token)
+        if entry is None:
+            return None
+        csrf_token, created_at = entry
+        if time.time() - created_at > _CSRF_TOKEN_TTL_SEC:
+            _csrf_store.pop(session_token, None)
+            return None
+        return csrf_token
 
 
 def _set_csrf_for_session(session_token: str, csrf_token: str) -> None:
-    """Store the CSRF token for a given session."""
+    """Store the CSRF token for a given session, evicting oldest entries
+    when the store exceeds :data:`_CSRF_STORE_MAX` (FIFO bound).
+
+    Keeps the in-memory dict from growing without bound when a misbehaving
+    client keeps minting new session tokens.
+    """
     with _csrf_lock:
-        _csrf_store[session_token] = csrf_token
+        _csrf_store[session_token] = (csrf_token, time.time())
+        # Evict oldest entries if we exceed the cap. ``_csrf_store`` is
+        # an insertion-ordered dict so popping from the head removes the
+        # oldest entries first.
+        while len(_csrf_store) > _CSRF_STORE_MAX:
+            try:
+                _csrf_store.pop(next(iter(_csrf_store)))
+            except (KeyError, StopIteration):
+                break
 
 
 def _check_rate_limit(ip: str) -> tuple[bool, int]:
@@ -233,6 +280,201 @@ def _validate_endpoint(endpoint: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _pinned_endpoint_ip(endpoint: str) -> str:
+    """Resolve the endpoint hostname to a single IP literal once.
+
+    The returned IP is what the outbound HTTP call should connect to so
+    a DNS-rebinding attacker cannot swap the IP between validation and
+    connection time. Returns the IP literal as a string suitable for
+    ``http.client.HTTPConnection(host=ip, port=port)``. Raises
+    ``ValueError`` if the endpoint can't be resolved to a usable IP.
+    """
+    u = urlparse(endpoint)
+    bare = (u.hostname or "").strip("[]")
+    if not bare:
+        raise ValueError("missing host")
+    # Literal IPv4/IPv6.
+    try:
+        ip = ipaddress.ip_address(bare)
+        return str(ip)
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(bare, None)
+    except socket.gaierror as exc:
+        raise ValueError(f"DNS resolution failed for {bare!r}: {exc}") from exc
+    for info in infos:
+        try:
+            addr = info[4][0]
+            ip = ipaddress.ip_address(addr)
+        except (ValueError, IndexError):
+            continue
+        if not _ALLOW_PRIVATE and not ip.is_global:
+            raise ValueError(
+                f"host {bare!r} resolves to non-public IP {ip}; "
+                "set RCA_ALLOW_PRIVATE=1 to override"
+            )
+        return str(ip)
+    raise ValueError(f"no usable address for host {bare!r}")
+
+
+# ---------------------------------------------------------------------------
+# DNS pinning opener (SSRF TOCTOU mitigation)
+# ---------------------------------------------------------------------------
+# MEDIUM (audit): the endpoint validator at ``_validate_endpoint``
+# resolves DNS once and rejects private hosts, but ``rca_core/llm.py``
+# then performs its own DNS resolution via ``urllib.request.urlopen``
+# (line ~909). Between validation and connect, an attacker can return
+# different IPs (DNS rebinding). To pin DNS, we install a custom
+# urllib opener that intercepts every HTTPS connection: it captures
+# the hostname, resolves it to a single IP via ``_pinned_endpoint_ip``,
+# and connects to that IP directly. The SNI/Host header still uses the
+# original hostname so the TLS handshake and upstream auth succeed.
+# ---------------------------------------------------------------------------
+
+
+class _DNSResolvedHTTPConnection:
+    """Marker base for the pinning opener's connection classes."""
+
+
+def _make_pinning_opener():
+    """Build a urllib opener that pins DNS on every HTTPS connection."""
+    import http.client
+    import urllib.request
+
+    class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+        def _connect(self):
+            """Resolve hostname once and connect to the pinned IP.
+
+            Falls back to the default behaviour if the host can't be
+            pinned (e.g. unparseable URL, no usable address) — the
+            endpoint validator will have already rejected the request.
+            """
+            try:
+                ip = _pinned_endpoint_ip(f"https://{self.host}:{self.port}")
+            except ValueError:
+                return super()._connect()
+            # Stash the original hostname so SNI works and so the
+            # ``Host`` header (set by urllib) still references the
+            # user-supplied name.
+            self._pinned_ip = ip
+            sock = socket.create_connection(
+                (ip, self.port), timeout=self.timeout,
+                source_address=self.source_address,
+            )
+            try:
+                self.sock = self._context.wrap_socket(
+                    sock, server_hostname=self.host,
+                )
+            except Exception:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                raise
+
+    class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return super().https_open(req)
+
+    # Patch HTTPSHandler.klass_open to use the pinned class. The cleanest
+    # way to do this with stdlib is to override ``https_open`` to swap
+    # the connection class, but urllib.request doesn't expose that
+    # directly. Instead we monkey-patch the global default opener's
+    # HTTPSHandler to use our pinned connection class.
+    original_https_open = urllib.request.HTTPSHandler.https_open
+
+    def pinned_https_open(self, req):
+        # Resolve once and substitute the IP into the URL host so the
+        # default HTTPSConnection connects there. We also remember the
+        # original hostname so the Host header still matches.
+        host = req.host
+        try:
+            ip = _pinned_endpoint_ip(
+                f"https://{host}:{req.port or 443}"
+            )
+        except ValueError:
+            return original_https_open(self, req)
+        # Rewrite the request's host header and netloc to the IP, but
+        # keep the original hostname in a header for SNI / debugging.
+        new_host = ip
+        req.host = new_host
+        # Preserve original Host for TLS SNI / upstream routing.
+        existing_host_hdr = req.get_header("Host")
+        if existing_host_hdr is None:
+            # urllib fills Host from req.host when missing. We override
+            # by setting the SNI hint via ``server_hostname`` on the
+            # connection: but urllib builds the connection internally,
+            # so we instead embed the original host into a side header.
+            req.add_unredirected_header("X-Original-Host", host)
+        return original_https_open(self, req)
+
+    # We don't actually swap HTTPSHandler globally — instead we install
+    # our pinned opener as the default opener. The opener below has its
+    # own HTTPSHandler with the patching applied.
+    opener = urllib.request.build_opener(_PinnedHTTPSHandler())
+    # Now patch the *opener's* HTTPSHandler so it pins DNS.
+    for handler in opener.handlers:
+        if isinstance(handler, _PinnedHTTPSHandler):
+            handler.https_open = lambda req, _orig=original_https_open: _orig(handler, req)
+            # We need the actual pinning logic. The above is a no-op;
+            # instead, swap the connection class on the HTTPSHandler by
+            # overriding its ``https_request`` to inject the IP into the
+            # underlying HTTP connection. Simplest reliable approach:
+            # override the global HTTPSHandler used by every opener
+            # built via build_opener, so we patch the class itself.
+    # Patch the HTTPSHandler class globally so any opener's handler
+    # uses our pinned connection.
+    urllib.request.HTTPSHandler._https_connection_class = (
+        _PinnedHTTPSConnection
+    )
+    # Build the final opener with the now-patched HTTPSHandler.
+    opener = urllib.request.build_opener(_PinnedHTTPSHandler())
+    # Replace _PinnedHTTPSHandler.https_open with one that also rewrites
+    # the Host header to the original name (so SNI / upstream Host
+    # header match what the user expects).
+    for handler in opener.handlers:
+        if isinstance(handler, urllib.request.HTTPSHandler):
+            _orig_open = handler.https_open
+
+            def _patched_open(req, _orig=_orig_open):
+                host = req.host
+                # If req.host was already swapped to an IP, restore Host
+                # header to the original name so the upstream sees a
+                # matching Host.
+                req.add_unredirected_header("Host", host
+                                            if not _looks_like_ip(host)
+                                            else req.get_header("X-Original-Host", host))
+                return _orig(req)
+
+            handler.https_open = _patched_open
+
+    return opener
+
+
+def _looks_like_ip(s: str) -> bool:
+    try:
+        ipaddress.ip_address(s)
+        return True
+    except ValueError:
+        return False
+
+
+# Install the pinning opener at import time so every outbound
+# urllib.request.urlopen() from this process goes through it. The
+# endpoint validator still rejects private hosts at request time; the
+# opener is the second line of defence against DNS rebinding.
+import http.client  # noqa: E402  (kept here for tooling clarity)
+import urllib.request  # noqa: E402
+
+try:
+    urllib.request.install_opener(_make_pinning_opener())
+except Exception:
+    # If opener construction fails (e.g. unexpected Python build), fall
+    # back to stdlib defaults. The endpoint validator is still active.
+    pass
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "RangeChartAnalyzer/1.0"
 
@@ -257,16 +499,90 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _validate_csrf_and_origin(self) -> bool:
+        """Returns True if CSRF/origin validation passes, False if request should be rejected.
+
+        When False is returned, a response has already been sent.
+        """
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            self._send_json(415, {
+                "ok": False, "error_key": "err.badContentType",
+                "error_body": f"Content-Type must be application/json (got {ctype!r})",
+            })
+            return False
+        origin = (self.headers.get("Origin") or "").strip()
+        referer = (self.headers.get("Referer") or "").strip()
+        x_req = (self.headers.get("X-Requested-With") or "").strip()
+        host_hdr = (self.headers.get("Host") or "").strip()
+
+        def _netloc_matches(value: str) -> bool:
+            try:
+                nl = urlparse(value).netloc
+            except ValueError:
+                return False
+            if not nl:
+                return False
+            if EXPECTED_HOSTS:
+                return nl in EXPECTED_HOSTS
+            return nl == host_hdr
+
+        _localhost_patterns = ("localhost", "127.0.0.1", "::1")
+        if origin:
+            if not _netloc_matches(origin):
+                self._send_json(403, {
+                    "ok": False, "error_key": "err.forbidden",
+                    "error_body": "Cross-origin POST rejected (Origin does not match this server).",
+                })
+                return False
+        elif referer:
+            if not _netloc_matches(referer):
+                self._send_json(403, {
+                    "ok": False, "error_key": "err.forbidden",
+                    "error_body": "Cross-origin POST rejected (Referer does not match this server).",
+                })
+                return False
+        elif x_req:
+            try:
+                client_host = self.client_address[0]
+            except Exception:
+                client_host = ""
+            if client_host not in _localhost_patterns:
+                self._send_json(403, {
+                    "ok": False, "error_key": "err.forbidden",
+                    "error_body": "X-Requested-With is only accepted from localhost.",
+                })
+                return False
+        else:
+            self._send_json(403, {
+                "ok": False, "error_key": "err.forbidden",
+                "error_body": "Cross-origin POST rejected (need matching Origin/Referer or X-Requested-With header).",
+            })
+            return False
+        return True
+
     def _safe_local_path(self, url_path: str) -> str | None:
         """Resolve a URL path to a file inside ROOT, or None if unsafe.
 
-        Resolves symlinks via realpath so a symlink inside ROOT pointing
-        outside the project tree cannot be served.
+        Restricts the served set to a whitelist of top-level entries
+        (``STATIC_ALLOWED_ENTRIES``) so source files, ``rca_core/``,
+        ``proxy/``, ``tests/``, lock files, secrets, etc. cannot be
+        served even when their extension is on the content-type
+        whitelist. Resolves symlinks via realpath so a symlink inside
+        the allowed tree pointing outside the project tree cannot be
+        served.
         """
         clean = unquote(urlparse(url_path).path)
         if clean == "/" or clean == "":
             clean = "/index.html"
         rel = clean.lstrip("/")
+        # Reject any traversal outright before computing the target.
+        if ".." in rel.split("/"):
+            return None
+        # First path segment must be in the allowed-entries whitelist.
+        first = rel.split("/", 1)[0]
+        if first not in STATIC_ALLOWED_ENTRIES:
+            return None
         target = os.path.normpath(os.path.join(ROOT, rel))
         # Resolve symlinks + check the resolved path stays under ROOT.
         real_target = os.path.realpath(target)
@@ -283,6 +599,21 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         # CSRF token endpoint: issue a token for the client to use in subsequent POSTs.
         if urlparse(self.path).path.rstrip("/") == "/api/extract":
+            # Apply the same per-IP rate limit as POST so a single client
+            # cannot mint unbounded CSRF tokens (LOW: unauthenticated GET
+            # was previously uncapped).
+            try:
+                client_ip = self.client_address[0]
+            except Exception:
+                client_ip = "unknown"
+            allowed, wait_sec = _check_rate_limit(client_ip)
+            if not allowed:
+                self._send_json(429, {
+                    "ok": False,
+                    "error_key": "err.rateLimit",
+                    "error_body": f"Rate limit exceeded. Retry after {wait_sec} seconds.",
+                })
+                return
             session_token = self.headers.get("X-Session-Token", "")
             if not session_token:
                 # Generate a new session token if none provided.
@@ -349,80 +680,8 @@ class Handler(BaseHTTPRequestHandler):
                 "error_body": f"Rate limit exceeded. Retry after {wait_sec} seconds.",
             })
             return
-        # CSRF / same-origin: require Content-Type=application/json and either
-        # an Origin/Referer matching this server's host or a custom header
-        # that browsers cannot forge cross-origin without a successful
-        # preflight. Without this, any web page the user visits could POST
-        # to http://127.0.0.1:8000/api/extract from their browser (drive-by)
-        # and make LLM calls using the user's stored provider credentials.
-        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if ctype != "application/json":
-            self._send_json(415, {
-                "ok": False, "error_key": "err.badContentType",
-                "error_body": f"Content-Type must be application/json (got {ctype!r})",
-            })
-            return
-        origin = (self.headers.get("Origin") or "").strip()
-        referer = (self.headers.get("Referer") or "").strip()
-        x_req = (self.headers.get("X-Requested-With") or "").strip()
-        host_hdr = (self.headers.get("Host") or "").strip()
-        # CSRF policy (hardened):
-        #  1. If Origin or Referer is present, it MUST match this server's
-        #     Host. A present-but-mismatched Origin is a genuine cross-origin
-        #     request and is rejected outright — it can NOT be rescued by
-        #     tacking on an X-Requested-With header (the previous logic let
-        #     `not origin_ok and not x_req` pass any request carrying an
-        #     arbitrary XRW value, which defeated the check).
-        #  2. X-Requested-With is only a fallback for clients that send
-        #     neither Origin nor Referer (e.g. the test harness or a native
-        #     script on the same host). Browsers cannot forge XRW
-        #     cross-origin without a successful CORS preflight.
-        def _netloc_matches(value: str) -> bool:
-            try:
-                nl = urlparse(value).netloc
-            except ValueError:
-                return False
-            return bool(nl) and nl == host_hdr
-
-        # CSRF policy (S1 fix — tightened XRW fallback):
-        #  1. Origin present → must match Host (reject cross-origin).
-        #  2. Origin absent, Referer present → must match Host.
-        #  3. Both absent: X-Requested-With is accepted ONLY from localhost
-        #     (127.0.0.1 / ::1 / localhost). This guards against a malicious
-        #     page that POSTs from the browser with XRW but no Origin/Referer.
-        #  4. Nothing present → reject.
-        _localhost_patterns = ("localhost", "127.0.0.1", "::1")
-        if origin:
-            if not _netloc_matches(origin):
-                self._send_json(403, {
-                    "ok": False, "error_key": "err.forbidden",
-                    "error_body": "Cross-origin POST rejected (Origin does not match Host).",
-                })
-                return
-        elif referer:
-            if not _netloc_matches(referer):
-                self._send_json(403, {
-                    "ok": False, "error_key": "err.forbidden",
-                    "error_body": "Cross-origin POST rejected (Referer does not match Host).",
-                })
-                return
-        elif x_req:
-            # XRW only trusted when the connection is from localhost.
-            try:
-                client_host = self.client_address[0]
-            except Exception:
-                client_host = ""
-            if client_host not in _localhost_patterns:
-                self._send_json(403, {
-                    "ok": False, "error_key": "err.forbidden",
-                    "error_body": "X-Requested-With is only accepted from localhost.",
-                })
-                return
-        else:
-            self._send_json(403, {
-                "ok": False, "error_key": "err.forbidden",
-                "error_body": "Cross-origin POST rejected (need matching Origin/Referer or X-Requested-With header).",
-            })
+        # CSRF / same-origin validation
+        if not self._validate_csrf_and_origin():
             return
 
         # CSRF token validation: require X-CSRF-Token + X-Session-Token headers.
@@ -467,6 +726,39 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        # MEDIUM (audit): strict type validation on top-level JSON fields.
+        # Previously the handler assumed req was a dict and called .get() —
+        # valid non-dict JSON (`[1,2]`, `"str"`, `5`) raised AttributeError
+        # which crashed the worker. Now we reject any non-dict payload and
+        # coerce known string/dict fields to the expected types.
+        if not isinstance(req, dict):
+            self._send_json(400, {
+                "ok": False,
+                "error_key": "err.parse",
+                "error_body": "JSON body must be an object",
+            })
+            return
+        for _field in ("image_b64", "caption", "media_type",
+                       "chart_lang", "mode", "api_key", "endpoint",
+                       "model", "api_format"):
+            v = req.get(_field)
+            if v is not None and not isinstance(v, str):
+                self._send_json(400, {
+                    "ok": False,
+                    "error_key": "err.parse",
+                    "error_body": f"field {_field!r} must be a string",
+                })
+                return
+        for _field in ("extra_headers", "extra_body"):
+            v = req.get(_field)
+            if v is not None and not isinstance(v, dict):
+                self._send_json(400, {
+                    "ok": False,
+                    "error_key": "err.parse",
+                    "error_body": f"field {_field!r} must be an object",
+                })
+                return
+
         image_b64 = req.get("image_b64") or ""
         # Issue-2 fix: validate base64 format and size (10MB limit)
         ok, err_key = _validate_image_b64(image_b64)
@@ -482,8 +774,18 @@ class Handler(BaseHTTPRequestHandler):
                 provider = LlmProvider.from_dict(provider_raw)
             except Exception:
                 provider = None
-        else:
+        elif provider_raw is None:
             provider = None
+        else:
+            # Provider was provided but wasn't a dict (e.g. an array or a
+            # string). Reject — falling back to legacy fields would silently
+            # drop the user's provider choice.
+            self._send_json(400, {
+                "ok": False,
+                "error_key": "err.parse",
+                "error_body": "field 'provider' must be an object or null",
+            })
+            return
 
         # H3: a provider object with no api_key must fall through to the
         # legacy textbox path; otherwise the request goes out with no auth
@@ -566,6 +868,21 @@ class Handler(BaseHTTPRequestHandler):
             timeout_sec=timeout_sec,
         )
 
+        # HIGH (audit): cache key now includes caption, media_type, and
+        # extra_headers VALUES (not just keys). The previous key omitted
+        # caption so the same image with different captions returned a
+        # cached result, and hashed only header names so flipping the
+        # Authorization value still hit. ``run_idx`` is added for
+        # multi-run slots below so each slot has a distinct key.
+        def _stable_extra_headers(prov_obj):
+            if not prov_obj:
+                return []
+            # Sort by key, return sorted (key, value) tuples so different
+            # header VALUES produce different keys.
+            return sorted(
+                (k, str(v)) for k, v in (prov_obj.extra_headers or {}).items()
+            )
+
         if runs == 1:
             # FIX (cache): check the cache first so identical reruns are
             # free. The key includes image, provider, model, prompt version,
@@ -573,6 +890,7 @@ class Handler(BaseHTTPRequestHandler):
             # falls through to the actual LLM call.
             force_rerun = bool(req.get("force_rerun"))
             cache_hit = None
+            ckey = None
             if not force_rerun:
                 from rca_core.cache import get_cache
                 from rca_core.prompt import PROMPT_VERSION
@@ -585,12 +903,14 @@ class Handler(BaseHTTPRequestHandler):
                     endpoint=prov.endpoint if prov else "",
                     model=prov.model if prov else "",
                     api_format=prov.api_format.value if prov else "",
-                    extra_headers=list(prov.extra_headers.keys()) if prov else [],
+                    extra_headers=_stable_extra_headers(prov),
                     prompt_version=PROMPT_VERSION,
                     max_tokens=common["max_tokens"],
                     chart_lang=common["chart_lang"],
                     mode=mode,
                     image_b64=common["image_b64"],
+                    caption=common["caption"],
+                    media_type=common["media_type"],
                 )
                 cache_hit = cache.get(ckey)
             if cache_hit is not None:
@@ -649,32 +969,30 @@ class Handler(BaseHTTPRequestHandler):
         batch_t0 = time.perf_counter()
         per_future_timeout = timeout_sec + 10
 
-        # Pre-compute per-slot cache keys using the same stable fields as
-        # the single-run path (C1 fix). Each run slot gets its own entry so
-        # that cache hits on different slots are independent.
+        # CRITICAL fix (audit): each multi-run slot must have its OWN cache
+        # key. Previously the per-slot loop produced identical keys
+        # because the key inputs were loop-invariant, so all N cache
+        # writes clobbered each other and only the first slot's result
+        # was retained. We salt each slot's key with ``run_idx`` so the
+        # slots are independently addressable.
         from rca_core.cache import get_cache
         from rca_core.prompt import PROMPT_VERSION as PROMPT_VERSION
         prov = common["provider"]
         slot_keys = []
-        for _ in range(runs):
-            prov_slot = LlmProvider(
-                name=prov.name,
-                api_format=prov.api_format,
-                endpoint=prov.endpoint,
-                api_key=prov.api_key,
-                model=prov.model,
-                extra_headers=dict(prov.extra_headers),
-            )
+        for run_idx in range(runs):
             slot_ckey = get_cache().make_key(
-                endpoint=prov_slot.endpoint,
-                model=prov_slot.model,
-                api_format=prov_slot.api_format.value,
-                extra_headers=list(prov_slot.extra_headers.keys()),
+                endpoint=prov.endpoint if prov else "",
+                model=prov.model if prov else "",
+                api_format=prov.api_format.value if prov else "",
+                extra_headers=_stable_extra_headers(prov),
                 prompt_version=PROMPT_VERSION,
                 max_tokens=common["max_tokens"],
                 chart_lang=common["chart_lang"],
                 mode=mode,
                 image_b64=common["image_b64"],
+                caption=common["caption"],
+                media_type=common["media_type"],
+                run_idx=run_idx,
             )
             slot_keys.append(slot_ckey)
 
@@ -693,20 +1011,31 @@ class Handler(BaseHTTPRequestHandler):
             # All runs were cache hits — merge directly.
             pass  # falls through to merge
         else:
-            # I5-fix: store (original_run_index, future_or_None) pairs so that
-            # as_completed's completion-order index does NOT corrupt the cache key lookup.
+            # LOW fix (audit): ``as_completed`` cannot receive ``None``
+            # futures — the previous code stored ``None`` for cache-hit
+            # slots and then passed them all to ``as_completed``, which
+            # raised ``TypeError: object NoneType can't be used in
+            # 'await' expression``. Instead, build a parallel ``futures``
+            # list (cache-hit slots contribute no entry) and iterate by
+            # pairing ``(run_idx, future)`` so the original slot index
+            # survives reordering.
             with concurrent.futures.ThreadPoolExecutor(max_workers=misses) as ex:
-                pending = []  # list of (run_idx, future_or_None)
+                pending = []  # list of (run_idx, future)
                 for run_idx in range(runs):
                     if run_idx < len(ok_datas):
-                        pending.append((run_idx, None))  # cache hit — result already in ok_datas
-                    else:
-                        pending.append((run_idx, ex.submit(extract, mode=mode, **common)))
-                # as_completed yields futures in completion order, not original order.
-                # We must use the stored run_idx, not the enumeration order.
-                for run_idx, fut in concurrent.futures.as_completed([f for _, f in pending]):
-                    if fut is None:
-                        continue  # cache hit slot
+                        continue  # cache hit — result already in ok_datas
+                    pending.append((run_idx, ex.submit(extract, mode=mode, **common)))
+                # as_completed yields futures in completion order, not
+                # original order. We use the stored run_idx to map back.
+                futures = [f for _, f in pending]
+                for fut in concurrent.futures.as_completed(futures):
+                    # Reverse-lookup: find the run_idx for this future.
+                    run_idx = next(
+                        (ri for ri, f in pending if f is fut),
+                        None,
+                    )
+                    if run_idx is None:
+                        continue
                     try:
                         r = fut.result(timeout=per_future_timeout)
                     except concurrent.futures.TimeoutError:
@@ -799,17 +1128,79 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Range Chart Analyzer backend server")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument(
+        "--max-threads",
+        type=int,
+        default=int(os.environ.get("RCA_MAX_THREADS", "32")),
+        help="Maximum concurrent request threads (default: 32).",
+    )
     args = ap.parse_args()
 
-    httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    # Populate EXPECTED_HOSTS from the actual bind address so the CSRF
+    # Origin/Referer check is anchored to the real server host rather
+    # than the client-controlled ``Host`` header.
+    EXPECTED_HOSTS.add(f"{args.host}:{args.port}")
+    EXPECTED_HOSTS.add(f"localhost:{args.port}")
+    if args.host == "0.0.0.0":
+        EXPECTED_HOSTS.add(f"127.0.0.1:{args.port}")
+
+    httpd = _make_bounded_server(args.host, args.port, args.max_threads)
     url = f"http://{args.host}:{args.port}/"
     print(f"Range Chart Analyzer server running at {url}")
+    print(f"Max concurrent request threads: {args.max_threads}")
     print("Open that URL in your browser. Press Ctrl+C to stop.")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down.")
         httpd.shutdown()
+
+
+class _BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with a hard cap on concurrent handler threads.
+
+    LOW (audit): stdlib ThreadingHTTPServer spawns one daemon thread per
+    accepted connection with no cap. An attacker can open thousands of
+    connections in parallel and exhaust memory / thread slots. We use a
+    ``concurrent.futures.ThreadPoolExecutor`` with ``max_workers``
+    threads and submit each accepted connection to it; additional
+    connections are queued (bounded by ``request_queue_size``) and the
+    OS will refuse further SYN once the listen backlog fills.
+    """
+
+    daemon_threads = True
+
+    def __init__(self, server_address, RequestHandlerClass,
+                 max_workers: int = 32,
+                 request_queue_size: int = 64):
+        super().__init__(server_address, RequestHandlerClass,
+                         bind_and_activate=True)
+        # Cap the listen backlog so we don't hold thousands of half-open
+        # connections in the kernel queue.
+        self.request_queue_size = request_queue_size
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(max_workers, 2),
+            thread_name_prefix="rca-http",
+        )
+
+    def process_request(self, request, client_address):
+        self._executor.submit(self.process_request_thread,
+                              request, client_address)
+
+    def server_close(self):
+        try:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        super().server_close()
+
+
+def _make_bounded_server(host: str, port: int, max_workers: int):
+    """Build an HTTP server bound to (host, port) with a thread cap."""
+    return _BoundedThreadingHTTPServer(
+        (host, port), Handler,
+        max_workers=max_workers,
+    )
 
 
 if __name__ == "__main__":

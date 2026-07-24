@@ -150,9 +150,13 @@ function rcaTableConfigs(data) {
     {
       id: 'biozones',
       titleKey: 'sec.biozones',
-      cols: ['col.name', 'col.age', 'col.thickness'],
+      // PARITY (exporter.py:97-99): include col.section so the browser's
+      // CSV/TSV/JSON export matches the Python exporter's 4-column shape.
+      // Without it the two modes exported divergent tables for the same
+      // payload, even though the in-memory normalization was equivalent.
+      cols: ['col.name', 'col.section', 'col.age', 'col.thickness'],
       italicCol: -1,
-      row: (b) => [b.name, b.age, b.thickness_m],
+      row: (b) => [b.name, b.section, b.age, b.thickness_m],
     },
     {
       id: 'other_fossils',

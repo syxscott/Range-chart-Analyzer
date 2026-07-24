@@ -61,6 +61,52 @@ def test_capture_new_row():
     check("cap-new-row-shape", e["species_ranges"]["new_1"]["species"] == "B")
 
 
+def test_capture_string_row_edit():
+    """Bug-2 finding (LOW): other_fossils is a list of plain strings,
+    not dicts. Editing a string row was silently dropped — both bi and
+    ai defaulted to {} so no diff was produced and is_dirty stayed False."""
+    before = {"other_fossils": ["Ammonite: X", "Conodont: Y", "Brachiopod: Z"]}
+    after = {"other_fossils": ["Ammonite: X2", "Conodont: Y", "Brachiopod: Z"]}
+    e = capture_edits(before, after)
+    check("cap-string-row-not-empty", "other_fossils" in e)
+    check("cap-string-row-edit-list", isinstance(e["other_fossils"].get("_replaced"), list))
+    check("cap-string-row-edit-value",
+          e["other_fossils"]["_replaced"] == ["Ammonite: X2", "Conodont: Y", "Brachiopod: Z"])
+
+
+def test_capture_string_row_no_change():
+    """No edits -> no payload, even when rows are strings."""
+    before = {"other_fossils": ["Ammonite: X"]}
+    after = {"other_fossils": ["Ammonite: X"]}
+    check("cap-string-row-no-change", capture_edits(before, after) == {})
+
+
+def test_capture_string_row_is_dirty():
+    """is_dirty must be True after editing a string row."""
+    before = {"other_fossils": ["Ammonite: X"]}
+    after = {"other_fossils": ["Ammonite: Y"]}
+    check("cap-string-row-is-dirty", is_dirty(before, after))
+
+
+def test_apply_string_row_replaced():
+    """apply_edits must rebuild scalar rows from the _replaced payload."""
+    result = {"other_fossils": ["Ammonite: X", "Conodont: Y"]}
+    apply_edits(result, {"other_fossils": {"_replaced": ["Ammonite: Z", "Conodont: Y", "Brachiopod: W"]}})
+    check("apply-string-row-len", len(result["other_fossils"]) == 3)
+    check("apply-string-row-types", all(isinstance(x, str) for x in result["other_fossils"]))
+    check("apply-string-row-content", result["other_fossils"] == ["Ammonite: Z", "Conodont: Y", "Brachiopod: W"])
+
+
+def test_capture_string_row_mixed_dict_scalar():
+    """Mixed row types: some dicts, some scalars — must not crash."""
+    before = {"sections": [{"name": "A"}, "Bare string"]}
+    after = {"sections": [{"name": "A2"}, "Bare string edited"]}
+    e = capture_edits(before, after)
+    check("cap-mix-dict-row", 0 in e.get("sections", {}))
+    check("cap-mix-dict-row-val", e["sections"][0].get("name") == "A2")
+    check("cap-mix-scalar-replaced", "_replaced" in e.get("sections", {}))
+
+
 def test_capture_strip_whitespace():
     before = {"species_ranges": [{"species": "A", "section": "S1"}]}
     after = {"species_ranges": [{"species": "  A  ", "section": " S1"}]}
@@ -189,6 +235,11 @@ test_capture_no_changes()
 test_capture_single_cell()
 test_capture_multiple_rows()
 test_capture_new_row()
+test_capture_string_row_edit()
+test_capture_string_row_no_change()
+test_capture_string_row_is_dirty()
+test_apply_string_row_replaced()
+test_capture_string_row_mixed_dict_scalar()
 test_capture_strip_whitespace()
 test_apply_existing()
 test_apply_new_row()
@@ -201,7 +252,8 @@ test_apply_table_edits_cross_beds_int()
 test_apply_table_edits_other_fossils_strings()
 test_apply_table_edits_skip_placeholder()
 test_apply_table_edits_ignores_agreement_col()
-print("--- %d passed, %d failed ---" % (_pass, _fail))
-sys.exit(1 if _fail else 0)
+if __name__ == "__main__":
+    print("--- %d passed, %d failed ---" % (_pass, _fail))
+    sys.exit(1 if _fail else 0)
 
 

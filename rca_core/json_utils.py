@@ -47,6 +47,135 @@ def extract_balanced_json_object(text: str) -> str | None:
     return None
 
 
+# --- Strict JSON parser (rejects NaN / Infinity, NaN / Infinity constants)
+# Python's json.loads accepts NaN, Infinity, -Infinity by default (and even
+# serializes them back as the same tokens) which is convenient for `eval`
+# but is NOT valid JSON per RFC 8259 and is rejected by every standard
+# JSON parser (including `JSON.parse` in the browser). To keep Python and
+# JS on the same page we pass `parse_constant` so any non-standard
+# numeric constant raises ValueError rather than being silently accepted.
+def _strict_parse_constant(_const: str):  # pragma: no cover - exercised via safe_json_loads
+    raise ValueError(
+        f"non-standard JSON constant {_const!r} rejected (use null instead)"
+    )
+
+
+def _strict_json_loads(s: str) -> Any:
+    """json.loads with strict reject for NaN / Infinity / -Infinity constants.
+
+    This is the canonical parse used by safe_json_loads at every level so
+    the Python and JS engines make identical accept/reject decisions for
+    numeric constants. Mirrors `JSON.parse` semantics in js/json-utils.js.
+    """
+    return json.loads(s, parse_constant=_strict_parse_constant)
+
+
+# --- F-1 HIGH: enumerate ALL balanced JSON objects, score, pick best
+# Keys whose presence (at any level of nesting) marks an object as a
+# "real payload" rather than a schema/example the model restated in prose.
+# Adding to this list is safe; the scorer is strictly additive.
+_PAYLOAD_KEYS: frozenset[str] = frozenset({
+    "species_ranges",
+    "sections",
+    "biozones",
+    "other_fossils",
+    "confidence",
+    "format",  # not a payload key, but a schema-key giveaway
+    "schema_version",
+    "$schema",
+    "required",  # JSON-Schema's "required" array
+    "properties",
+    "example",
+})
+
+
+def _payload_score(parsed: Any) -> int:
+    """Score a parsed JSON object on how payload-like it looks.
+
+    Higher = more likely to be the real record. Schema/example objects
+    have negative contributions so the real payload wins even when the
+    schema is the larger object.
+    """
+    score = 0
+    if not isinstance(parsed, dict):
+        # Arrays are scored purely on key-recognition in their dict items.
+        if isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, dict):
+                    score += _payload_score(item)
+        return score
+    keys = set(parsed.keys())
+    payload_hits = keys & _PAYLOAD_KEYS
+    # Real payload keys carry positive weight, schema-ish keys carry
+    # negative weight (so a bare schema like {"format", "required"} loses
+    # to {"species_ranges"}).
+    score += len(payload_hits & {
+        "species_ranges", "sections", "biozones",
+        "other_fossils", "confidence",
+    }) * 100
+    score -= len(payload_hits & {
+        "format", "schema_version", "$schema", "required", "properties", "example",
+    }) * 50
+    # Nesting: scan dict/list values for payload keys.
+    for v in parsed.values():
+        if isinstance(v, (dict, list)):
+            score += max(0, _payload_score(v)) // 4
+    return score
+
+
+def _try_parse_object(s: str) -> Any | None:
+    """Try strict parsing; return parsed dict/list, or None on any failure."""
+    try:
+        return _strict_json_loads(s)
+    except Exception:
+        return None
+
+
+def extract_all_balanced_json_objects(text: str) -> list[str]:
+    """Return every balanced ``{...}`` JSON object substring in order.
+
+    Used by ``safe_json_loads`` to score candidates and pick the most
+    payload-like when the model left multiple JSON objects in its reply
+    (e.g. a schema example in prose followed by the actual data).
+
+    Adjacent balanced objects (no whitespace between them) are not merged.
+    Invalid JSON substrings (e.g. unmatched braces) are skipped.
+    """
+    if not text:
+        return []
+    results: list[str] = []
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            c = text[i]
+            if in_string:
+                if escape:
+                    escape = False
+                elif c == "\\":
+                    escape = True
+                elif c == '"':
+                    in_string = False
+                if escape:
+                    continue
+                continue
+            if c == '"':
+                in_string = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start: i + 1]
+                    if _try_parse_object(candidate) is not None:
+                        results.append(candidate)
+                    break
+        start = text.find("{", start + 1)
+    return results
+
+
 def extract_balanced_json_array(text: str) -> str | None:
     """Mirror of `extract_balanced_json_object` for top-level arrays.
 
@@ -157,7 +286,14 @@ def safe_json_loads(text: str) -> dict[str, Any]:
       1. Strip markdown fences (```json ... ```).
       2. Strip raw control characters (0x00-0x1F except \\t\\r\\n).
       3. Strict ``json.loads`` — handles clean JSON and top-level arrays.
-      4. Balanced-brace object extraction (first ``{...}``).
+         Non-standard numeric constants (NaN/Infinity) are rejected to
+         keep behaviour identical to JS ``JSON.parse``.
+      4. Balanced-object scoring: enumerate ALL balanced ``{...}``
+         substrings, parse each, score on payload-key hits vs.
+         schema/example markers, and pick the highest-scored (tie:
+         prefer the LARGER object, then the LAST one). Fixes the case
+         where the model restates a JSON-Schema example in prose before
+         returning the real payload.
       5. Balanced-bracket array extraction (first ``[...]``) → wrapped.
       6. Prose-embedded JSON (``extract_json_like``) — last resort.
 
@@ -174,9 +310,9 @@ def safe_json_loads(text: str) -> dict[str, Any]:
     _ctrl_re = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
     s = _ctrl_re.sub("", s)
 
-    # Level 3: strict parse.
+    # Level 3: strict parse (rejects NaN/Infinity to match JSON.parse).
     try:
-        parsed = json.loads(s)
+        parsed = _strict_json_loads(s)
         if isinstance(parsed, dict):
             return parsed
         # H3: a top-level array IS valid JSON; json.loads accepted it.
@@ -190,19 +326,42 @@ def safe_json_loads(text: str) -> dict[str, Any]:
     except Exception:
         pass
 
-    # Level 4: balanced-brace object extraction.
-    candidate = extract_balanced_json_object(s)
-    if candidate is not None:
-        try:
-            return json.loads(candidate)
-        except Exception:
-            pass
+    # Level 4: balanced-object enumeration + scoring (HIGH FIX).
+    candidates = extract_all_balanced_json_objects(s)
+    if candidates:
+        # Parse each and keep only dicts (arrays are surfaced by Level 5).
+        parsed_objects = []
+        for c in candidates:
+            p = _try_parse_object(c)
+            if isinstance(p, dict):
+                parsed_objects.append((p, c))
+        if parsed_objects:
+            # Score: payload keys heavily, schema/example keys negatively,
+            # size as a small tiebreaker. Stable sort by score descending,
+            # then size descending, then position descending (prefer last).
+            scored = []
+            for idx, (p, src) in enumerate(parsed_objects):
+                score = _payload_score(p) * 10 + len(src)
+                scored.append((score, idx, p, src))
+            # Sort by score asc, idx asc — we want the highest score & last,
+            # so reverse after picking on score, ties on idx descending.
+            scored.sort(key=lambda t: (t[0], t[1]))
+            # Pick the maximum-score entry; among ties prefer LATER (higher
+            # idx) and LONGER source (already baked into `score` via len).
+            best_score, _, best_parsed, best_src = scored[-1]
+            # Among equals-on-score, prefer the LAST occurrence (most
+            # often the actual payload written after prose/schema).
+            equal_max = [t for t in scored if t[0] == best_score]
+            if len(equal_max) > 1:
+                # Pick the last one (highest original index).
+                best_parsed = equal_max[-1][2]
+            return best_parsed
 
     # Level 5: balanced-bracket array extraction → wrapped.
     candidate = extract_balanced_json_array(s)
     if candidate is not None:
         try:
-            parsed = json.loads(candidate)
+            parsed = _strict_json_loads(candidate)
             if isinstance(parsed, list):
                 return {"_array_root": parsed,
                         "_note": "model returned a top-level array; wrapping for diagnostics"}
@@ -213,7 +372,7 @@ def safe_json_loads(text: str) -> dict[str, Any]:
     candidate = extract_json_like(s)
     if candidate is not None:
         try:
-            parsed = json.loads(candidate)
+            parsed = _strict_json_loads(candidate)
             if isinstance(parsed, dict):
                 return parsed
             if isinstance(parsed, list):

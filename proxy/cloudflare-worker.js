@@ -114,17 +114,23 @@ function rateCheck(ip) {
   if (idx > 0) slots.splice(0, idx);
   if (slots.length >= RATE_MAX) {
     const oldest = slots[0];
-    const resetMs = Math.ceil((oldest + RATE_WINDOW_MS - now) / 1000) + 1;
-    return { allowed: false, remaining: 0, resetMs };
+    return {
+      allowed: false,
+      remaining: 0,
+      resetMs: Math.ceil((oldest + RATE_WINDOW_MS - now) / 1000) + 1,
+    };
   }
   slots.push(now);
-  return { allowed: true, remaining: RATE_MAX - slots.length, resetMs };
+  return { allowed: true, remaining: RATE_MAX - slots.length, resetMs: RATE_WINDOW_MS };
 }
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'content-type, x-api-key, anthropic-version, x-proxy-key',
   'Access-Control-Max-Age': '86400',
+  // Always advertise that we key on Origin when we reflect it, so caches
+  // (and CF itself) don't hand origin A's response to origin B.
+  'Vary': 'Origin',
 };
 
 // Decide whether an inbound request is authorized to use this proxy, and
@@ -146,9 +152,44 @@ function corsFor(origin) {
 
 // True when the request carries the correct shared secret. Always returns
 // false when no secret is configured (an empty secret is treated as "off").
+// Comparison is constant-time to prevent timing-side-channel discovery of
+// the secret length / prefix by an attacker who can probe the Worker.
 function secretOk(request) {
   if (!PROXY_SHARED_SECRET) return false;
-  return (request.headers.get('X-Proxy-Key') || '') === PROXY_SHARED_SECRET;
+  const provided = request.headers.get('X-Proxy-Key') || '';
+  return timingSafeEqual(provided, PROXY_SHARED_SECRET);
+}
+
+// Constant-time string compare (length-mismatch is not constant but
+// length is itself public; this matches what the rest of the codebase
+// calls timingSafeEqual).
+function timingSafeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length !== b.length) {
+    // Still consume the same time as a max-length compare.
+    let acc = 0;
+    for (let i = 0; i < a.length; i++) acc |= a.charCodeAt(i);
+    return false;
+  }
+  let acc = 0;
+  for (let i = 0; i < a.length; i++) {
+    acc |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return acc === 0;
+}
+
+// Build the CORS headers we want to echo for an authorized caller.
+// In secret-only mode (origin NOT allowlisted but secretOk() returned true),
+// we still need to emit CORS so the browser can read the response. We
+// reflect the request's Origin and always include Vary: Origin so caches
+// cannot poison. The shared secret is what actually authenticates the
+// caller in this branch — Origin alone is not trusted (it's trivially
+// spoofable by any non-browser client).
+function corsHeadersForAuthorized(request, cors) {
+  if (cors) return cors;          // origin matched allowlist
+  const o = request.headers.get('Origin');
+  if (!o) return null;            // non-browser caller without CORS need
+  return { 'Access-Control-Allow-Origin': o, ...CORS_HEADERS };
 }
 
 function pickHeaders(source, whitelist) {
@@ -162,12 +203,52 @@ function pickHeaders(source, whitelist) {
   return out;
 }
 
+// Accumulate the request body in chunks and enforce a hard byte cap that
+// does NOT trust the client's Content-Length header (which any non-browser
+// caller can lie about). We stream-read until either EOF or the cap is
+// exceeded, then return null (cap exceeded) or a Uint8Array.
+async function readBoundedBody(request, maxBytes) {
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      try { reader.cancel(); } catch (_e) { /* ignore */ }
+      return null;
+    }
+    chunks.push(value);
+  }
+  // Concat
+  const total = chunks.reduce((n, c) => n + c.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) { out.set(c, offset); offset += c.byteLength; }
+  return out;
+}
+
 export default {
   async fetch(request) {
     const origin = request.headers.get('Origin') || '';
-    // RATE LIMIT: apply before any other processing.
+    // Compute cors + authorization FIRST so the rate-limit 429 branch can
+    // safely reference them (TDZ fix: previously `cors` was declared later,
+    // so any rate-limited request threw ReferenceError before this 429
+    // could be returned with proper CORS headers).
+    const cors = corsFor(origin);
+    const authorized = cors !== null || secretOk(request);
+
+    // RATE LIMIT: apply after computing cors/authorized so 429 can echo
+    // CORS. The rate-limit key is CF-Connecting-IP when available (set by
+    // CF and not client-spoofable) and falls back to the rightmost
+    // X-Forwarded-For when behind another trusted proxy (the leftmost is
+    // client-controlled and trivially rotatable).
+    const fwd = request.headers.get('x-forwarded-for');
+    const rightmostFwd = fwd ? fwd.split(',').slice(-1)[0].trim() : '';
     const clientIp = request.headers.get('CF-Connecting-IP') ||
-                     request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+                     rightmostFwd ||
                      'unknown';
     const rl = rateCheck(clientIp);
     if (!rl.allowed) {
@@ -183,32 +264,34 @@ export default {
     // closure of the open-relay footgun. The outbound target is still the
     // hardcoded MiniMax endpoint, so even an authorized caller can only
     // reach MiniMax, never an arbitrary URL.
-    const cors = corsFor(origin);
-    const authorized = cors !== null || secretOk(request);
-
-    // Preflight
-    if (request.method === 'OPTIONS') {
-      if (!authorized) return new Response('Forbidden', { status: 403 });
-      return new Response(null, { status: 204, headers: cors || {} });
-    }
-    if (request.method !== 'POST') {
-      return new Response('Method Not Allowed', { status: 405, headers: (cors || {}) });
-    }
     if (!authorized) {
       return new Response('Forbidden', { status: 403 });
     }
 
-    // Body size cap
-    const lenHeader = request.headers.get('Content-Length');
-    const declaredLen = lenHeader ? parseInt(lenHeader, 10) : 0;
-    if (declaredLen > MAX_BODY_BYTES) {
-      return new Response('Payload Too Large', { status: 413, headers: cors || {} });
+    // For secret-only mode we still need CORS so the browser can use the
+    // proxy. This reflects the request's Origin with Vary: Origin.
+    const corsEcho = corsHeadersForAuthorized(request, cors) || {};
+
+    // Preflight
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsEcho });
+    }
+    if (request.method !== 'POST') {
+      return new Response('Method Not Allowed', { status: 405, headers: corsEcho });
+    }
+
+    // Body size cap — enforce by streaming the body, NOT by trusting
+    // Content-Length. Clients can lie about Content-Length; they cannot
+    // lie about the bytes they actually send.
+    const bounded = await readBoundedBody(request, MAX_BODY_BYTES);
+    if (bounded === null) {
+      return new Response('Payload Too Large', { status: 413, headers: corsEcho });
     }
 
     // Path allowlist
     const url = new URL(request.url);
     if (!ALLOWED_PATH_PREFIXES.some((p) => url.pathname === p || url.pathname.startsWith(p + '/'))) {
-      return new Response('Not Found', { status: 404, headers: cors || {} });
+      return new Response('Not Found', { status: 404, headers: corsEcho });
     }
 
     const target = UPSTREAM.replace(/\/+$/, '') + url.pathname + url.search;
@@ -224,7 +307,7 @@ export default {
       upstreamResp = await fetch(target, {
         method: 'POST',
         headers: reqHeaders,
-        body: request.body,
+        body: bounded,
       });
     } catch (_e) {
       // Upstream network error (DNS, refused, TLS) — return a real 502 with
@@ -233,13 +316,13 @@ export default {
       // omits CORS, defeating the proxy's primary purpose).
       return new Response(JSON.stringify({ error: 'upstream_unreachable' }), {
         status: 502,
-        headers: { 'content-type': 'application/json', ...(cors || {}) },
+        headers: { 'content-type': 'application/json', ...corsEcho },
       });
     }
 
     // Echo back a sanitized subset of the upstream response headers.
     const respHeaders = pickHeaders(upstreamResp.headers, FORWARDED_RESPONSE_HEADERS);
-    if (cors) for (const [k, v] of Object.entries(cors)) respHeaders.set(k, v);
+    for (const [k, v] of Object.entries(corsEcho)) respHeaders.set(k, v);
     // Surface rate-limit state so the client can back off appropriately.
     respHeaders.set('X-RateLimit-Remaining', String(rl.remaining));
     respHeaders.set('X-RateLimit-Reset-Ms', String(rl.resetMs));

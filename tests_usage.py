@@ -217,6 +217,7 @@ test_summary_cache_hit_rate()
 test_summary_estimated_flag()
 test_summary_time_range()
 test_list_ordering()
-print("--- %d passed, %d failed ---" % (_pass, _fail))
-sys.exit(1 if _fail else 0)
+if __name__ == "__main__":
+    print("--- %d passed, %d failed ---" % (_pass, _fail))
+    sys.exit(1 if _fail else 0)
 

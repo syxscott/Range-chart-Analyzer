@@ -66,9 +66,25 @@ def capture_edits(before: dict[str, Any], after: dict[str, Any]) -> dict[str, An
             continue
         edits: dict[str, Any] = {}
         n = min(len(b), len(a))
+        # Capture scalar-row edits via _replaced so lists like
+        # other_fossils (a list of plain strings) are not silently
+        # dropped. Per-cell diffing is impossible for non-dict rows
+        # (bi/ai both default to {} and the diff loop never fires),
+        # so a list-level replacement is the correct edit encoding.
+        scalar_changed = False
         for i in range(n):
             bi = b[i] if isinstance(b[i], dict) else {}
             ai = a[i] if isinstance(a[i], dict) else {}
+            # Row-type mismatch (dict vs scalar): cannot merge cell
+            # edits; fall through to list-replacement semantics.
+            if isinstance(b[i], dict) != isinstance(a[i], dict):
+                scalar_changed = True
+                continue
+            if not isinstance(a[i], dict):
+                # Both rows are scalars — compare values directly.
+                if _coerce(a[i]) != _coerce(b[i]):
+                    scalar_changed = True
+                continue
             cell_edits: dict[str, Any] = {}
             for col, av in ai.items():
                 if col == "_extras":
@@ -78,6 +94,9 @@ def capture_edits(before: dict[str, Any], after: dict[str, Any]) -> dict[str, An
                     cell_edits[col] = av
             if cell_edits:
                 edits[i] = cell_edits
+        if scalar_changed:
+            # Copy the entire 'after' list so apply_edits can replay it.
+            edits["_replaced"] = copy.deepcopy(a)
         # Newly appended rows: encode the whole dict so they can be
         # reconstructed verbatim.
         for i in range(n, len(a)):

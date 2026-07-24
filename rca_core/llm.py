@@ -710,24 +710,32 @@ class ProviderStore:
         return self
 
     def save(self) -> None:
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        data = {
-            "version": 1,
-            "current_id": self.current_id,
-            "providers": [p.to_dict() for p in self.providers],
-        }
-        tmp = self.path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        # Bug-9 fix: tighten permissions on POSIX *before* the rename so
-        # the final file is never readable by other users. On Windows
-        # this is a no-op (the ACL model differs); the worst case is
-        # readable only to the current user via the inherited DACL.
-        _chmod_user_only(tmp)
-        os.replace(tmp, self.path)
-        _chmod_user_only(self.path)
+        # Process-level guard around the tmp+rename. Even with a per-instance
+        # RLock, two ProviderStore instances pointing at the same file can
+        # race the tmp+rename sequence (each writes a fixed ``<path>.tmp``
+        # name, so the second writer clobbers the first writer's tmp before
+        # it can ``os.replace``). A module-level lock serializes *all*
+        # concurrent saves across instances; the per-instance RLock still
+        # serializes nested CRUD within a single store.
+        with _PROVIDER_STORE_SAVE_LOCK:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            data = {
+                "version": 1,
+                "current_id": self.current_id,
+                "providers": [p.to_dict() for p in self.providers],
+            }
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            # Bug-9 fix: tighten permissions on POSIX *before* the rename so
+            # the final file is never readable by other users. On Windows
+            # this is a no-op (the ACL model differs); the worst case is
+            # readable only to the current user via the inherited DACL.
+            _chmod_user_only(tmp)
+            os.replace(tmp, self.path)
+            _chmod_user_only(self.path)
 
     # -- defaults --------------------------------------------------------
 
@@ -873,6 +881,15 @@ class ProviderStore:
 # ---------------------------------------------------------------------------
 
 
+# Process-level lock guarding ProviderStore.save() across all instances.
+# A single fixed ``<path>.tmp`` is shared across every store pointing at
+# the same file, so two concurrent saves can race the tmp+rename sequence
+# (each writer overwrites the other's tmp before the other's rename).
+# Pairing the per-instance RLock (above) with this module-level lock
+# guarantees mutual exclusion for the write step itself.
+_PROVIDER_STORE_SAVE_LOCK = threading.Lock()
+
+
 def _decode_err_body(err_body: bytes) -> str:
     """Best-effort decode of the upstream error bytes for surfacing in the UI.
 
@@ -934,6 +951,39 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
         return None, None, f"[network] {type(e).__name__}: {e}".encode("utf-8")
 
 
+def _get_json(url: str, headers: dict[str, str], timeout_sec: int):
+    """Fire a GET and return (payload_bytes, status_code, err_body). Never raises.
+
+    Mirrors ``_post_json`` but uses HTTP GET, the only method that real
+    OpenAI / Anthropic / Gemini ``/models`` listing endpoints accept.
+    POSTing to those endpoints returns 405 (Method Not Allowed) on the
+    official gateways and the connection test incorrectly reports the
+    endpoint as broken.
+
+    The return shape matches ``_post_json`` so callers can swap one for the
+    other transparently.
+    """
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            return resp.read(), resp.status, b""
+    except urllib.error.HTTPError as e:
+        err_body = b""
+        try:
+            err_body = e.read() or b""
+        except Exception:
+            err_body = b""
+        return None, e.code, err_body
+    except TimeoutError as e:
+        return None, None, f"[network] timeout: {e}".encode("utf-8")
+    except urllib.error.URLError as e:
+        reason = getattr(e, "reason", None)
+        msg = f"[network] {type(reason).__name__ if reason else 'URLError'}: {reason or e}"
+        return None, None, msg.encode("utf-8")
+    except Exception as e:
+        return None, None, f"[network] {type(e).__name__}: {e}".encode("utf-8")
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Refuse all 3xx redirects on outbound LLM calls.
 
@@ -962,22 +1012,24 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 urllib.request.install_opener(urllib.request.build_opener(_NoRedirect()))
 
 
-_VERSION_TAIL = re.compile(r"/v\d+(?:beta)?/?$", re.IGNORECASE)
+# Only ``/v1`` is stripped — never ``/v1beta`` (Google's Gemini endpoint is
+# /v1beta/... and the Gemini path appends ``:generateContent`` directly).
+# The OpenAI/Anthropic callers both add their own canonical ``/v1/...`` so
+# stripping a redundant ``/v1`` suffix avoids the ``/v1/v1`` double-path bug
+# that 404'd ~48 OpenAI presets. Non-version trailing segments
+# (``/anthropic``, ``/compatible-mode``, ``/openai``) are preserved.
+_V1_TAIL = re.compile(r"/v1/?$", re.IGNORECASE)
 
 
 def _api_base(endpoint: str) -> str:
-    """Normalize an endpoint by stripping a trailing API-version segment
-    (``/v1``, ``/v1beta``) so per-format callers can append their canonical
-    path without producing ``/v1/v1`` double paths.
+    """Normalize an endpoint by stripping a trailing ``/v1`` segment so
+    per-format callers can append their canonical ``/v1/...`` path without
+    producing a ``/v1/v1`` double-path.
 
-    Presets historically embed ``/v1`` in the endpoint (e.g.
-    ``https://api.openai.com/v1``); the per-format callers also append
-    ``/v1/...``, which doubled the segment and 404'd ~48 OpenAI presets
-    plus the official Google Gemini endpoint (``/v1beta/v1beta``). Non-version
-    trailing segments (``/anthropic``, ``/compatible-mode``, ``/openai``)
-    are preserved.
+    The Gemini endpoint ``/v1beta`` and any other ``/vN`` segment are
+    preserved — only ``/v1`` is treated as a duplicate suffix.
     """
-    return _VERSION_TAIL.sub("", (endpoint or "").rstrip("/"))
+    return _V1_TAIL.sub("", (endpoint or "").rstrip("/"))
 
 
 def _call_anthropic(
@@ -1038,28 +1090,34 @@ def _call_openai(
     target = _api_base(provider.endpoint) + "/v1/chat/completions"
     # OpenAI reasoning models (o1/o3/o4-mini) reject `max_tokens` and require
     # `max_completion_tokens`; sending the legacy name 400s the request.
+    # They ALSO reject `role:system` (must be `developer` or merged into the
+    # user message) and `response_format={"type":"json_object"}` (must rely on
+    # native structured-output / json_schema). Without these adjustments the
+    # reasoning path 400s every call.
     model = provider.model
     is_reasoning = bool(model and re.match(r"^o\d", model))
+    messages: list[dict[str, Any]] = []
+    if not is_reasoning and system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    user_msg: dict[str, Any] = {
+        "role": "user",
+        "content": [
+            {"type": "image_url", "image_url": {"url": f"data:{media_type or 'image/png'};base64,{image_b64}"}},
+            {"type": "text", "text": user_text},
+        ],
+    }
+    messages.append(user_msg)
     body: dict[str, Any] = {
         "model": model,
         ("max_completion_tokens" if is_reasoning else "max_tokens"): max_tokens or 4000,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:{media_type or 'image/png'};base64,{image_b64}"}},
-                    {"type": "text", "text": user_text},
-                ],
-            },
-        ],
+        "messages": messages,
+    }
+    if not is_reasoning:
         # FIX (json-object): ask OpenAI-compatible APIs to emit only valid JSON.
         # This single field eliminates the vast majority of markdown-fence /
         # prose-wrapped / truncated outputs that the fallback chain otherwise
-        # has to clean up. No effect on providers that ignore it (Anthropic /
-        # Gemini paths don't reach this function).
-        "response_format": {"type": "json_object"},
-    }
+        # has to clean up. Reasoning models reject this field — see above.
+        body["response_format"] = {"type": "json_object"}
     body.update(provider.extra_body)
     headers = {
         "Authorization": f"Bearer {provider.api_key}",
@@ -1116,7 +1174,11 @@ def _call_gemini(
     # format callers. Callers can override via provider.extra_headers.
     model = provider.model or "gemini-2.5-pro"
     base = _api_base(provider.endpoint)
-    target = f"{base}/v1beta/models/{model}:generateContent"
+    # URL-encode the model name so tuned models like ``tunedModels/foo``
+    # (and any future model id that contains a reserved char) don't break
+    # the URL parser or accidentally introduce an extra path segment.
+    safe_model = urllib.parse.quote(model, safe="")
+    target = f"{base}/v1beta/models/{safe_model}:generateContent"
     body: dict[str, Any] = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [
@@ -1128,7 +1190,15 @@ def _call_gemini(
                 ],
             }
         ],
-        "generation_config": {"max_output_tokens": max_tokens or 4000},
+        "generation_config": {
+            "max_output_tokens": max_tokens or 4000,
+            # Force Gemini to emit JSON directly. Without this, Gemini
+            # sometimes wraps its output in markdown fences or free-form
+            # prose, and the model's own internal chain-of-thought ("thought")
+            # parts leak into the response. ``response_mime_type`` cleanly
+            # separates the two output streams downstream.
+            "response_mime_type": "application/json",
+        },
     }
     body.update(provider.extra_body)
     headers = {
@@ -1155,7 +1225,15 @@ def _call_gemini(
         content = candidates[0].get("content") or {}
         parts = content.get("parts") or []
         for part in parts:
-            if isinstance(part, dict) and "text" in part:
+            if not isinstance(part, dict):
+                continue
+            # Gemini 2.5+ emits a separate ``thought`` part alongside the
+            # real output — chain-of-thought / planning that the model
+            # surfaces as text. Skip it: the JSON downstream parser would
+            # otherwise see e.g. ``internal reasoning...{"answer":42}``.
+            if part.get("thought"):
+                continue
+            if "text" in part:
                 raw_text += part["text"]
     finish = candidates[0].get("finishReason") if candidates and isinstance(candidates[0], dict) else None
     truncated = finish in ("MAX_TOKENS", "LENGTH")
@@ -1182,8 +1260,11 @@ def _read_response(
     raw_text = ""
     for c in payload.get("content", []) or []:
         if isinstance(c, dict) and c.get("type") == "text":
-            raw_text = c.get("text", "")
-            break
+            # Concatenate ALL text blocks, not just the first. Anthropic
+            # can legitimately split a long response across multiple
+            # content blocks (e.g. ``{"text":"{..."} + {"text":"...}"}``),
+            # and the previous ``break`` discarded the tail.
+            raw_text += c.get("text", "")
     truncated = payload.get("stop_reason") == "max_tokens"
     return raw_text, truncated, status, err_str, payload
 
@@ -1232,8 +1313,17 @@ def call_llm_api(
         err_body = ""
     # When the API didn't return a usage block but we got text back, fall
     # back to local estimation. Flag the row so the UI can label it.
+    # Include an image token estimate so vision calls aren't under-counted
+    # by ~85-1100 tokens (the typical range for a single image input at
+    # current model pricings).
     if usage is None and raw_text:
         est_in = estimate_tokens(user_text + " " + system_prompt)
+        if image_b64:
+            # ~170 tokens for low-res / ~85 per 512px tile (Anthropic / OpenAI
+            # vision pricing, rounded up). Using 170 keeps us in the same
+            # ballpark as the API's actual charge for a typical chart image
+            # without needing a real tokenizer.
+            est_in += 170
         est_out = estimate_tokens(raw_text)
         usage = {
             "input_tokens": est_in,
@@ -1374,38 +1464,46 @@ def _extract_models(payload: dict[str, Any], fmt: ApiFormat) -> list[str]:
 
 
 def _probe_openai_models(provider: LlmProvider, timeout_sec: int) -> ConnectionResult:
+    # /v1/models is a GET-only listing endpoint on the OpenAI-compatible API.
+    # The previous implementation POSTed to it (via _post_json), which the
+    # official gateways reject with 405 Method Not Allowed — the connection
+    # test then falsely reports a working endpoint as broken. Use GET; on a
+    # 405 / 404 / non-2xx response, fall back to a 1-token generation probe
+    # so we still verify the key works end-to-end.
     target = _api_base(provider.endpoint) + "/v1/models"
     headers = {
         "Authorization": f"Bearer {provider.api_key}",
-        "content-type": "application/json",
     }
     headers.update(provider.extra_headers)
-    body: dict[str, Any] = {}
-    body.update(provider.extra_body or {})
     t0 = _now_ms()
-    payload_bytes, status, err_body = _post_json(target, body, headers, timeout_sec)
+    payload_bytes, status, err_body = _get_json(target, headers, timeout_sec)
     res = ConnectionResult(ok=False, latency_ms=_now_ms() - t0, status=status)
-    if payload_bytes is None:
-        if status == 401:
-            res.error_key = "err.401"
-        elif status == 403:
-            res.error_key = "err.403"
-        elif status is not None:
-            res.error_key = "err.http"
-        else:
-            res.error_key = "err.network"
+    # /models returned a usable listing — done.
+    if payload_bytes is not None:
+        try:
+            payload = json.loads(payload_bytes.decode("utf-8"))
+        except Exception:
+            res.error_key = "err.parse"
+            return res
+        res.ok = True
+        res.models_sample = _extract_models(payload, ApiFormat.OPENAI)
+        # If /models is empty or absent, fall back to a 1-token generate probe.
+        if not res.models_sample:
+            return _probe_minimal_generate(provider, timeout_sec, ApiFormat.OPENAI)
         return res
-    try:
-        payload = json.loads(payload_bytes.decode("utf-8"))
-    except Exception:
-        res.error_key = "err.parse"
+    # /models failed — could be 401 (bad key), 405/404 (gateway doesn't list
+    # models), or network. Distinguish auth failures (return early) from
+    # "no listing endpoint" (fall through to generate-probe).
+    if status in (401, 403):
+        res.error_key = "err.401" if status == 401 else "err.403"
         return res
-    res.ok = True
-    res.models_sample = _extract_models(payload, ApiFormat.OPENAI)
-    # If /models is empty or absent, fall back to a 1-token generate probe.
-    if not res.models_sample:
-        return _probe_minimal_generate(provider, timeout_sec, ApiFormat.OPENAI)
-    return res
+    # Any other non-2xx: try the minimal generate probe so the user still
+    # gets a green checkmark when the endpoint is actually reachable.
+    fallback = _probe_minimal_generate(provider, timeout_sec, ApiFormat.OPENAI)
+    # If fallback also failed, surface its status / error_key for context.
+    if not fallback.ok:
+        return fallback
+    return fallback
 
 
 def _probe_anthropic_models(provider: LlmProvider, timeout_sec: int) -> ConnectionResult:
@@ -1415,6 +1513,9 @@ def _probe_anthropic_models(provider: LlmProvider, timeout_sec: int) -> Connecti
 
 
 def _probe_gemini_models(provider: LlmProvider, timeout_sec: int) -> ConnectionResult:
+    # /v1beta/models is a GET-only listing endpoint. Same fix as the OpenAI
+    # probe: the previous POST implementation 405'd against the official
+    # Google Generative Language gateway.
     model = provider.model or "gemini-2.5-pro"
     base = _api_base(provider.endpoint)
     # C4: put API key in x-api-key header (same as _call_gemini). Earlier
@@ -1423,34 +1524,33 @@ def _probe_gemini_models(provider: LlmProvider, timeout_sec: int) -> ConnectionR
     # `extra_headers={"X-Use-Url-Key": "1"}` (gate detected via the body shape).
     target = f"{base}/v1beta/models"
     headers = {
-        "content-type": "application/json",
         "x-goog-api-key": provider.api_key,
         "x-api-key": provider.api_key,
     }
     headers.update(provider.extra_headers)
     t0 = _now_ms()
-    payload_bytes, status, err_body = _post_json(target, {}, headers, timeout_sec)
+    payload_bytes, status, err_body = _get_json(target, headers, timeout_sec)
     res = ConnectionResult(ok=False, latency_ms=_now_ms() - t0, status=status)
-    if payload_bytes is None:
-        if status == 401:
-            res.error_key = "err.401"
-        elif status == 403:
-            res.error_key = "err.403"
-        elif status is not None:
-            res.error_key = "err.http"
-        else:
-            res.error_key = "err.network"
+    if payload_bytes is not None:
+        try:
+            payload = json.loads(payload_bytes.decode("utf-8"))
+        except Exception:
+            res.error_key = "err.parse"
+            return res
+        res.ok = True
+        res.models_sample = _extract_models(payload, ApiFormat.GEMINI)
+        if not res.models_sample:
+            return _probe_minimal_generate(provider, timeout_sec, ApiFormat.GEMINI)
         return res
-    try:
-        payload = json.loads(payload_bytes.decode("utf-8"))
-    except Exception:
-        res.error_key = "err.parse"
+    if status in (401, 403):
+        res.error_key = "err.401" if status == 401 else "err.403"
         return res
-    res.ok = True
-    res.models_sample = _extract_models(payload, ApiFormat.GEMINI)
-    if not res.models_sample:
-        return _probe_minimal_generate(provider, timeout_sec, ApiFormat.GEMINI)
-    return res
+    # /models endpoint not available (405/404/etc.) — fall back to generate
+    # probe so a working key on a third-party Gemini proxy still passes.
+    fallback = _probe_minimal_generate(provider, timeout_sec, ApiFormat.GEMINI)
+    if not fallback.ok:
+        return fallback
+    return fallback
 
 
 def _probe_minimal_generate(

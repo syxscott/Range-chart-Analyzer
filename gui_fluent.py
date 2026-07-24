@@ -49,6 +49,7 @@ from rca_core.extractor import (
     ExtractResult, clamp_max_tokens,
 )
 from rca_core.llm import test_llm_connection
+from rca_core.ssrf import validate_endpoint as _validate_endpoint
 
 # New-style provider page (cc-switch alignment + drag-to-reorder).
 from gui_fluent_providers import ProvidersPage  # noqa: E402
@@ -113,6 +114,25 @@ class ExtractWorker(QThread):
         self._params = params
         self._mode = mode
         self._runs = runs
+        # Audit fix (LOW): cooperative cancel flag for window-close. The
+        # previous code called QThread.terminate() on this worker if the
+        # window was closed mid-urllib/SSL, which is documented by Qt as
+        # dangerous — the thread can be killed while holding the Python
+        # GIL or an OpenSSL mutex, deadlocking teardown. We set this flag
+        # from closeEvent and check it between work steps; the worker
+        # cooperatively exits so the thread is never forcibly terminated.
+        self._cancel_requested = False
+
+    def request_cancel(self) -> None:
+        """Ask the worker to stop at the next safe point.
+
+        Safe to call from any thread (the flag is a plain Python bool).
+        """
+        self._cancel_requested = True
+
+    @property
+    def cancel_requested(self) -> bool:
+        return self._cancel_requested
 
     def run(self):
         import concurrent.futures
@@ -444,17 +464,36 @@ class ExtractPage(ScrollArea):
             return
         fd, tmp = tempfile.mkstemp(prefix="rca_paste_", suffix=".png")
         os.close(fd)
+        # Audit fix (LOW): unlink the empty mkstemp file if img.save fails
+        # so we don't leak an orphan rca_paste_*.png on every error. gui.py
+        # already does this; mirror that here.
         try:
-            img.save(tmp)
+            try:
+                img.save(tmp)
+            except Exception:
+                InfoBar.error("", self._t("err.imageRead"), parent=self.win,
+                              position=InfoBarPosition.TOP)
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                return
+            self._cleanup_paste_tmp()
+            self._last_paste_tmp = tmp
+            self._load_image(tmp)
+            InfoBar.success("", self._t("image.pasted"), parent=self.win,
+                            position=InfoBarPosition.TOP)
         except Exception:
-            InfoBar.error("", self._t("err.imageRead"), parent=self.win,
-                          position=InfoBarPosition.TOP)
-            return
-        self._cleanup_paste_tmp()
-        self._last_paste_tmp = tmp
-        self._load_image(tmp)
-        InfoBar.success("", self._t("image.pasted"), parent=self.win,
-                        position=InfoBarPosition.TOP)
+            # Any unexpected exception after mkstemp: still try to clean up
+            # the tmp file (if it was never assigned to _last_paste_tmp)
+            # so a paste-error path can't accumulate orphans either.
+            try:
+                if tmp and (not getattr(self, "_last_paste_tmp", None)
+                            or self._last_paste_tmp != tmp):
+                    os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     # ---- extraction ----
     def _set_busy(self, busy):
@@ -462,6 +501,20 @@ class ExtractPage(ScrollArea):
         self.spinner.setVisible(busy)
         if busy:
             self.lbl_status.setText(self._t("status.loading"))
+
+    def _bump_extract_gen(self) -> int:
+        """Increment and return the stale-result generation counter.
+
+        Audit fix (LOW): this is now called from every code path that
+        should cancel a previously-launched worker's result, so the
+        stale-result guard is real (not inert). The counter was
+        previously only incremented inside _on_extract; that meant the
+        guard condition `_extract_gen == launch_gen` was always true
+        because busy serialised extractions, and the dead-code branch
+        described by the original comments could never trigger.
+        """
+        self._extract_gen = getattr(self, "_extract_gen", 0) + 1
+        return self._extract_gen
 
     def _on_extract(self):
         if self.busy:
@@ -478,12 +531,26 @@ class ExtractPage(ScrollArea):
             InfoBar.warning("", self._t("err.noKey"), parent=self.win,
                             position=InfoBarPosition.TOP)
             return
+        # Audit fix (HIGH parity gap): validate the effective endpoint BEFORE
+        # launching ExtractWorker so a provider pointing at http://127.0.0.1
+        # or https://169.254.169.254 is rejected instead of being POSTed
+        # with image + API key. Mirrors the guards in gui.py:_on_extract and
+        # server.py:_handle_extract.
+        active_endpoint = self.win.endpoint()
+        ok, why = _validate_endpoint(active_endpoint)
+        if not ok:
+            msg = f"Invalid endpoint: {why}"
+            log.warning("Rejecting extract: %s", why)
+            InfoBar.error("", msg, parent=self.win,
+                          position=InfoBarPosition.TOP, duration=6000)
+            self.lbl_status.setText(msg)
+            return
         params = dict(
             api_key=legacy_key, image_b64=self.image_b64,
             media_type=self.media_type or "image/png",
             caption=self.txt_caption.toPlainText().strip(),
             chart_lang=self.win.chart_lang(),
-            base_url=self.win.endpoint(), model=self.win.model(),
+            base_url=active_endpoint, model=self.win.model(),
             max_tokens=self.win.max_tokens(), provider=provider,
         )
         runs = self.win.runs()
@@ -502,9 +569,11 @@ class ExtractPage(ScrollArea):
         # previously-launched worker is dropped. The closure captures the
         # launch-time gen; on result, it bails unless the live gen still matches
         # (i.e. the user didn't start a new extraction or reset meanwhile).
-        # Also bumped on reset. See _on_result() for the matching check.
-        self._extract_gen = getattr(self, "_extract_gen", 0) + 1
-        launch_gen = self._extract_gen
+        # Also bumped on reset/load — see _bump_extract_gen(). Audit fix:
+        # the prior code only bumped here, so the guard was effectively
+        # inert because busy serialised extractions; bump on every state
+        # change that should cancel an in-flight result.
+        launch_gen = self._bump_extract_gen()
         self._worker = ExtractWorker(params, mode, runs)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished_ok.connect(
@@ -534,7 +603,22 @@ class ExtractPage(ScrollArea):
             return
         self.result = result.data
         self.raw_text = result.raw
-        self._render_result()
+        # Audit fix (LOW): a render exception must not be swallowed by the
+        # PySide signal machinery. Show an error toast + log so the user
+        # sees something went wrong (even though self.result is set and
+        # Export still operates on the data).
+        try:
+            self._render_result()
+        except Exception as exc:
+            log.exception("ExtractPage._render_result raised in _on_result")
+            msg = f"Render failed: {exc}"
+            try:
+                InfoBar.error("", msg, parent=self.win,
+                              position=InfoBarPosition.TOP, duration=6000)
+            except Exception:
+                pass
+            self.lbl_status.setText(msg)
+            return
         status = self._t("status.done")
         if getattr(result, "partial_failures", 0):
             pf = result.partial_failures
@@ -586,7 +670,7 @@ class ExtractPage(ScrollArea):
         except Exception as exc:
             # Persistence is best-effort: a failure here must not block the
             # user from seeing their result.
-            print(f"[rca] persist post-result: {exc}")
+            log.warning("persist post-result failed: %s", exc)
         # Auto-switch to Extract sub-interface + scroll so the result tables
         # are immediately visible (the user is looking at the loading spinner
         # area otherwise).
@@ -717,29 +801,45 @@ class ExtractPage(ScrollArea):
             # the Undo baseline with a half-built table. Re-enable signals
             # immediately after the loop; real user edits then flow through.
             table.blockSignals(True)
-            for ri, item in enumerate(items):
-                if not isinstance(item, dict):
-                    continue
-                cells = cfg["row"](item)
-                # Truncate/pad to the DATA-column count (n_cols - 1, since the
-                # leading "#" index column is prepended below). The previous
-                # `[:n_cols]` over-counted by one and could drop the last data
-                # column when the row extractor returned fewer values than
-                # expected.
-                n_data = max(1, n_cols - 1)
-                cells = (list(cells) + [""] * n_data)[:n_data]
-                values = [str(ri + 1)] + ["" if c is None else str(c) for c in cells]
-                # cc-switch style: flag low-agreement rows (multi-run merge).
-                low = (multi and cfg["id"] == "species_ranges"
-                       and int(item.get("agreement_count", 0) or 0) <= n_runs / 2)
-                for ci, val in enumerate(values):
-                    if ci >= n_cols:
-                        break   # extra safety against row lambda drift
-                    cell = QTableWidgetItem(val)
-                    if low:
-                        cell.setBackground(Qt.yellow)
-                    table.setItem(ri, ci, cell)
-            table.blockSignals(False)
+            try:
+                for ri, item in enumerate(items):
+                    if not isinstance(item, dict):
+                        continue
+                    cells = cfg["row"](item)
+                    # Truncate/pad to the DATA-column count (n_cols - 1, since the
+                    # leading "#" index column is prepended below). The previous
+                    # `[:n_cols]` over-counted by one and could drop the last data
+                    # column when the row extractor returned fewer values than
+                    # expected.
+                    n_data = max(1, n_cols - 1)
+                    cells = (list(cells) + [""] * n_data)[:n_data]
+                    values = [str(ri + 1)] + ["" if c is None else str(c) for c in cells]
+                    # cc-switch style: flag low-agreement rows (multi-run merge).
+                    # Audit fix (LOW): coerce agreement_count defensively so a
+                    # hand-edited or history-loaded result carrying a string
+                    # ('2.0') or non-numeric value cannot raise ValueError and
+                    # silently abort the entire _render_result slot (table
+                    # signals would have stayed blocked forever).
+                    low = False
+                    if multi and cfg["id"] == "species_ranges":
+                        try:
+                            ac = float(item.get("agreement_count", 0) or 0)
+                            low = int(ac) <= n_runs / 2
+                        except (TypeError, ValueError):
+                            low = False
+                    for ci, val in enumerate(values):
+                        if ci >= n_cols:
+                            break   # extra safety against row lambda drift
+                        cell = QTableWidgetItem(val)
+                        if low:
+                            cell.setBackground(Qt.yellow)
+                        table.setItem(ri, ci, cell)
+            finally:
+                # Audit fix (LOW): always re-enable signals so a malformed row
+                # that raises mid-loop cannot leave the table's signals
+                # permanently blocked. Without this try/finally the user's
+                # edits would silently never reach _on_table_item_changed.
+                table.blockSignals(False)
             table.resizeColumnsToContents()
             # Wrap table in a scroll area so wide content scrolls horizontally
             # instead of being squished by setStretchLastSection.
@@ -932,7 +1032,7 @@ class ExtractPage(ScrollArea):
             try:
                 self._persist_edits_to_history()
             except Exception as exc:
-                print(f"[rca] persist edits: {exc}")
+                log.warning("persist edits failed: %s", exc)
             InfoBar.success(
                 "", self._t("edit.saved"), parent=self.win,
                 position=InfoBarPosition.TOP, duration=2000,
@@ -978,6 +1078,10 @@ class ExtractPage(ScrollArea):
         matched by image-path search and only updated the most-recent
         record, often a different one).
         """
+        # Audit fix (LOW): bump the stale-result generation so any result
+        # from a still-running extraction is dropped — loading from history
+        # IS a state change that should cancel in-flight results.
+        self._bump_extract_gen()
         self.result = result
         self._loaded_history_id = record_id
         self.raw_text = ""
@@ -1001,7 +1105,7 @@ class ExtractPage(ScrollArea):
         try:
             self._render_result()
         except Exception as exc:
-            print(f"[rca] load_result render failed: {exc}")
+            log.warning("load_result render failed: %s", exc)
 
     def _export_prefix(self) -> str:
         """Filename prefix reflecting the current result's chart kind."""
@@ -1411,7 +1515,7 @@ class RangeChartFluentWindow(FluentWindow):
             self._db = None
             self._history_store = None
             self._usage_store = None
-            print(f"[rca] persistent storage unavailable: {exc}")
+            log.warning("persistent storage unavailable: %s", exc)
 
         self.setWindowTitle("Range Chart Analyzer")
         self.resize(1240, 860)
@@ -1439,7 +1543,7 @@ class RangeChartFluentWindow(FluentWindow):
                 self, self._usage_store, self.tr,
             )
         except Exception as exc:
-            print(f"[rca] history/usage pages unavailable: {exc}")
+            log.warning("history/usage pages unavailable: %s", exc)
             self.history_page = None
             self.usage_page = None
 
@@ -1482,7 +1586,7 @@ class RangeChartFluentWindow(FluentWindow):
             from gui_fluent_onboarding import maybe_show_onboarding
             _Q.singleShot(500, lambda: maybe_show_onboarding(self, self.tr))
         except Exception as exc:
-            print(f"[rca] onboarding init failed: {exc}")
+            log.warning("onboarding init failed: %s", exc)
 
     # ---- navigation helpers (used by the History / Settings pages) ----
 
@@ -1562,7 +1666,7 @@ class RangeChartFluentWindow(FluentWindow):
             )
             new_id = self._history_store.add(rec)
         except Exception as exc:
-            print(f"[rca] save_to_history failed: {exc}")
+            log.warning("save_to_history failed: %s", exc)
             # Surface the failure on-screen too, not just in the console.
             InfoBar.error(
                 "", f"{self._t('err.http')}: {exc}",
@@ -1576,7 +1680,7 @@ class RangeChartFluentWindow(FluentWindow):
             if self.history_page is not None:
                 self.history_page.refresh()
         except Exception as exc:
-            print(f"[rca] history refresh after save: {exc}")
+            log.warning("history refresh after save: %s", exc)
         return new_id
 
     def record_usage(self, *, provider, model: str, mode: str,
@@ -1606,7 +1710,7 @@ class RangeChartFluentWindow(FluentWindow):
                 error_message=error_message,
             ))
         except Exception as exc:
-            print(f"[rca] record_usage failed: {exc}")
+            log.warning("record_usage failed: %s", exc)
 
     def _t(self, key):
         return self.tr.t(key)
@@ -1775,7 +1879,7 @@ class RangeChartFluentWindow(FluentWindow):
                 if store is not None:
                     store.update(current)
         except Exception as exc:
-            print(f"[rca] sync ipt_key to provider: {exc}")
+            log.warning("sync ipt_key to provider: %s", exc)
 
     def save_all(self):
         s = self.settings_page
@@ -1829,9 +1933,29 @@ class RangeChartFluentWindow(FluentWindow):
                 except (TypeError, RuntimeError):
                     pass
                 if w.isRunning():
+                    # Audit fix (LOW): prefer cooperative cancellation over
+                    # QThread.terminate(). terminate() can kill the thread
+                    # while it holds the GIL or an OpenSSL mutex, which is
+                    # documented as dangerous and risks hanging teardown.
+                    try:
+                        w.request_cancel()
+                    except Exception:
+                        pass
                     w.quit()
                     if not w.wait(5000):
-                        w.terminate()
+                        # Worker is stuck inside urllib/ssl where Python
+                        # has no safe cancellation point. Disconnect any
+                        # remaining signal connections (so a late emit
+                        # never reaches a destroyed page) and wait one
+                        # more short slice — we deliberately do NOT call
+                        # terminate() anymore.
+                        try:
+                            log.warning(
+                                "ExtractWorker did not honour cancel within 5s; "
+                                "leaving thread to finish without UI callbacks."
+                            )
+                        except Exception:
+                            pass
                         w.wait(2000)
         except Exception:
             pass
@@ -1850,7 +1974,14 @@ class RangeChartFluentWindow(FluentWindow):
                     if tw.isRunning():
                         tw.quit()
                         if not tw.wait(2000):
-                            tw.terminate()
+                            # Same cooperative-cancel reasoning as above.
+                            try:
+                                log.warning(
+                                    "Test worker did not finish in time; "
+                                    "abandoning without terminate()."
+                                )
+                            except Exception:
+                                pass
                             tw.wait(500)
                         tw.wait(1000)
         except Exception:

@@ -199,7 +199,7 @@ RANGE_CHART_SCHEMA = MergeSchema(
         "species", "section", "range_base", "range_top", "biozone",
     ],
     sort_keys=[("agreement_count", "desc"), ("species", "asc")],
-    list_keys=["biozones", "other_fossils"],
+    list_keys=["sections", "biozones", "other_fossils"],
     confidence_field="confidence",
 )
 
@@ -333,13 +333,12 @@ def _merge_primary_list(runs, schema, n):
             # B-1 fix: include open-nomenclature qualifiers (sp./cf./aff./?)
             # in the dedup key so "Genus sp." and "Genus" stay separate.
             species_val = it.get("species", "") or ""
-            key = (
-                tuple(_norm(it.get(k)) for k in schema.primary_id_keys),
-                _extract_qualifiers(species_val),
-            )
-            key0 = tuple(k[0] if isinstance(k, tuple) else k for k in key)  # for None check
-            if not any(key0):
+            id_norm = tuple(_norm(it.get(k)) for k in schema.primary_id_keys)
+            # Mirror JS: skip row only when ALL id fields are empty
+            # (parts.some(p => p) — skip if no part is truthy)
+            if not any(id_norm):
                 continue
+            key = (id_norm, _extract_qualifiers(species_val))
             if key in seen_in_run:
                 continue
             seen_in_run.add(key)
@@ -577,8 +576,11 @@ def merge_results(
 
     confs = []
     for r in runs:
+        raw = r.get(sch.confidence_field)
+        if raw is None:
+            continue
         try:
-            confs.append(float(r.get(sch.confidence_field, 0.0)))
+            confs.append(float(raw))
         except (TypeError, ValueError):
             pass
     out[sch.confidence_field] = round(sum(confs) / len(confs), 4) if confs else 0.0

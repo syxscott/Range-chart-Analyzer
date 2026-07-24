@@ -325,6 +325,7 @@ test_history_detail_i18n_keys_present()
 test_history_detail_translator_exposes_translations()
 test_history_detail_record_to_dict_fields()
 test_history_detail_html_contains_bootstrap()
-print("--- %d passed, %d failed ---" % (_pass, _fail))
-sys.exit(1 if _fail else 0)
+if __name__ == "__main__":
+    print("--- %d passed, %d failed ---" % (_pass, _fail))
+    sys.exit(1 if _fail else 0)
 

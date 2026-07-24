@@ -167,6 +167,13 @@ const RCA_I18N = {
     'err.truncated': '结果可能被截断（达到 max_tokens）。可在设置中调高「最大输出 Token」后重试。',
     'err.imageRead': '无法读取图片文件。',
     'err.fileTooBig': '图片过大（上限 20 MB），请先压缩后再上传。',
+    'err.forbidden': '访问被拒绝（403）。请确认来源 / CSRF 令牌是否有效。',
+    'err.badEndpoint': '端点无效或不可达。请检查 API 设置中的 endpoint 与代理地址。',
+    'err.rateLimit': '请求过于频繁（429）。请稍后再试或降低运行次数。',
+    'err.bodyTooLarge': '请求体过大（> 服务器限制）。请压缩图片或降低分辨率后重试。',
+    'err.imageTooLarge': '图片过大（> 服务器限制）。请降低「图像分辨率上限」后重试。',
+    'err.badContentType': '请求 Content-Type 不被接受，请使用 application/json 重试。',
+    'results.partialFailure': '{pf} 次（共 {total} 次）运行失败 — 仅 {succeeded}/{total} 次成功。可在设置中调低「运行次数」或换用更稳定的端点。',
     'footer.clientSide': '100% 客户端运行',
     'footer.backend': '通过同源后端代理',
     'quality.label': '提取质量',
@@ -350,6 +357,13 @@ RCA_I18N.en = {
   'err.truncated': 'The result may be truncated (hit max_tokens). Increase "Max output tokens" in settings and retry.',
   'err.imageRead': 'Could not read the image file.',
   'err.fileTooBig': 'Image is too large (max 20 MB); please compress it first.',
+  'err.forbidden': 'Access denied (403). Verify the origin / CSRF token are valid.',
+  'err.badEndpoint': 'Endpoint is invalid or unreachable. Check the endpoint / proxy URL in API Settings.',
+  'err.rateLimit': 'Too many requests (429). Please retry later or reduce the runs count.',
+  'err.bodyTooLarge': 'Request body is too large (exceeds the server limit). Compress the image or lower the resolution and retry.',
+  'err.imageTooLarge': 'Image is too large (exceeds the server limit). Lower "Max image resolution" in settings and retry.',
+  'err.badContentType': 'Content-Type not accepted. Retry with application/json.',
+  'results.partialFailure': '{pf} of {total} runs failed — only {succeeded}/{total} succeeded. Reduce the runs count in settings or try a more stable endpoint.',
   'footer.clientSide': '100% client-side',
   'footer.backend': 'Via same-origin backend',
   'quality.label': 'Extraction quality',
@@ -532,6 +546,13 @@ RCA_I18N.ja = {
   'err.truncated': '結果が途切れている可能性があります（max_tokens に到達）。設定で「最大出力トークン」を上げて再試行してください。',
   'err.imageRead': '画像ファイルを読み込めませんでした。',
   'err.fileTooBig': '画像が大きすぎます（上限 20 MB）。圧縮してからアップロードしてください。',
+  'err.forbidden': 'アクセスが拒否されました（403）。オリジン / CSRF トークンが有効か確認してください。',
+  'err.badEndpoint': 'エンドポイントが無効または到達できません。API 設定の endpoint / プロキシ URL を確認してください。',
+  'err.rateLimit': 'リクエスト過多です（429）。しばらくしてから再試行するか、実行回数を減らしてください。',
+  'err.bodyTooLarge': 'リクエストボディが大きすぎます（サーバー上限超過）。画像を圧縮するか解像度を下げて再試行してください。',
+  'err.imageTooLarge': '画像が大きすぎます（サーバー上限超過）。設定の「画像解像度の上限」を下げて再試行してください。',
+  'err.badContentType': 'Content-Type が受け付けられません。application/json で再試行してください。',
+  'results.partialFailure': '{total} 回中 {pf} 回が失敗しました — {succeeded}/{total} 回のみ成功です。設定で実行回数を減らすか、より安定したエンドポイントをお試しください。',
   'footer.clientSide': '100% クライアントサイド',
   'footer.backend': '同オリジン経由で実行',
   'quality.label': '抽出品質',
@@ -560,11 +581,22 @@ function rcaSetLang(lang) {
 }
 
 // Translate a key. Falls back to English, then to the key itself.
-function t(key) {
+// Optional second arg is a { placeholder: value } map for simple {name}
+// substitution. Missing placeholders are left literal so a translator can
+// notice the miss instead of silently rendering empty strings.
+function t(key, params) {
+  let s;
   const dict = RCA_I18N[RCA_LANG] || {};
-  if (key in dict) return dict[key];
-  if (RCA_I18N.en && key in RCA_I18N.en) return RCA_I18N.en[key];
-  return key;
+  if (key in dict) s = dict[key];
+  else if (RCA_I18N.en && key in RCA_I18N.en) s = RCA_I18N.en[key];
+  else s = key;
+  if (params && typeof params === 'object') {
+    for (const k of Object.keys(params)) {
+      const v = String(params[k]);
+      s = s.split('{' + k + '}').join(v);
+    }
+  }
+  return s;
 }
 
 // Apply translations to all [data-i18n] / [data-i18n-ph] / [data-i18n-title]

@@ -4,9 +4,15 @@
 // Sanitize one CSV/TSV cell against formula injection (OWASP): prefix a
 // single quote when the cell starts with a formula trigger (= + - @) so
 // Excel/LibreOffice treats it as text instead of executing =CMD(...) etc.
+// FIX: also neutralize leading TAB (\t) and CR (\r). Some spreadsheet
+// engines treat TAB as a separator reset, and a leading CR can hide the
+// trigger from a plain equals/plus check while still being interpreted
+// as a formula when pasted into Excel's formula bar.
 function rcaFormulaSafe(value) {
   const s = value === null || value === undefined ? '' : String(value);
-  if (s && (s[0] === '=' || s[0] === '+' || s[0] === '-' || s[0] === '@')) {
+  if (!s) return s;
+  const c = s[0];
+  if (c === '=' || c === '+' || c === '-' || c === '@' || c === '\t' || c === '\r') {
     return "'" + s;
   }
   return s;

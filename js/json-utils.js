@@ -2,6 +2,75 @@
 // range_chart_extractor._extract_balanced_json_object / _safe_json_loads.
 'use strict';
 
+// Extract ALL balanced {...} JSON objects (not just the first).
+function extractAllBalancedJsonObjects(text) {
+  const results = [];
+  let start = text.indexOf('{');
+  while (start !== -1) {
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = start; i < text.length; i++) {
+      const c = text[i];
+      if (inString) {
+        if (escape) {
+          escape = false;
+        } else if (c === '\\') {
+          escape = true;
+        } else if (c === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (c === '"') {
+        inString = true;
+      } else if (c === '{') {
+        depth += 1;
+      } else if (c === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          const candidate = text.slice(start, i + 1);
+          // Only add if it's valid JSON
+          try {
+            JSON.parse(candidate);
+            results.push(candidate);
+          } catch (_e) {
+            // skip
+          }
+          break;
+        }
+      }
+    }
+    start = text.indexOf('{', start + 1);
+  }
+  return results;
+}
+
+// Score a parsed JSON object on how payload-like it is.
+const _PAYLOAD_KEYS = new Set([
+  'species_ranges', 'sections', 'biozones', 'other_fossils', 'confidence',
+  'format', 'schema_version', '$schema', 'required', 'properties', 'example',
+]);
+
+function _payloadScore(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 0;
+  const keys = Object.keys(parsed);
+  let score = 0;
+  // Real payload keys carry positive weight
+  const realHits = keys.filter(k => ['species_ranges', 'sections', 'biozones', 'other_fossils', 'confidence'].includes(k)).length;
+  score += realHits * 100;
+  // Schema keys carry negative weight
+  const schemaHits = keys.filter(k => ['format', 'schema_version', '$schema', 'required', 'properties', 'example'].includes(k)).length;
+  score -= schemaHits * 50;
+  // Nesting: scan dict/list values
+  for (const v of Object.values(parsed)) {
+    if (v && typeof v === 'object') {
+      score += Math.max(0, _payloadScore(v)) / 4;
+    }
+  }
+  return score;
+}
+
 // Return the first balanced {...} JSON object substring of `text`, or null.
 // Handles nested braces and braces inside string literals correctly.
 function extractBalancedJsonObject(text) {
@@ -145,10 +214,27 @@ function safeJsonLoads(text) {
   } catch (_e) {
     /* fall through to balanced-object extraction */
   }
-  // Level 4: balanced-brace object extraction.
-  const candidate = extractBalancedJsonObject(s);
-  if (candidate !== null) {
-    try { return JSON.parse(candidate); } catch (_e) { /* fall through */ }
+  // Level 4: enumerate ALL balanced {...} objects, score each, pick best.
+  // This is the key parity fix with Python's safe_json_loads Level 4.
+  const allCandidates = extractAllBalancedJsonObjects(s);
+  if (allCandidates.length > 0) {
+    let best = null;
+    let bestScore = -Infinity;
+    for (const candidate of allCandidates) {
+      try {
+        const p = JSON.parse(candidate);
+        if (p && typeof p === 'object' && !Array.isArray(p)) {
+          const sc = _payloadScore(p) * 10 + candidate.length;
+          if (sc > bestScore) {
+            bestScore = sc;
+            best = p;
+          }
+        }
+      } catch (_e) {
+        // skip invalid
+      }
+    }
+    if (best !== null) return best;
   }
   // Level 5: balanced-bracket array extraction → wrapped.
   const arrCandidate = extractBalancedJsonArray(s);

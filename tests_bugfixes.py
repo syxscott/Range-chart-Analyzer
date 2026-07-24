@@ -350,5 +350,6 @@ test_bug9_chmod_user_only()
 test_bug15_decode_error_flag()
 test_bug18_clamp_timeout()
 test_bug14_schema_version_derives_from_migrations()
-print("--- %d passed, %d failed ---" % (_pass, _fail))
-sys.exit(1 if _fail else 0)
+if __name__ == "__main__":
+    print("--- %d passed, %d failed ---" % (_pass, _fail))
+    sys.exit(1 if _fail else 0)

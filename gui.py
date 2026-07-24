@@ -12,18 +12,15 @@ image downscale); without it the app still works but shows no thumbnail.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import logging
 import os
-import socket
 import concurrent.futures
 import queue
 import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from urllib.parse import urlparse
 
 # Bug-12 fix: a module-level logger so the dozens of bare `except
 # Exception:` blocks below have somewhere to report what they swallowed.
@@ -31,6 +28,16 @@ from urllib.parse import urlparse
 # has no idea why "nothing happened". The logger writes to stderr by
 # default; redirect via the standard logging config if you want a file.
 log = logging.getLogger("rca.gui")
+
+# SSRF / endpoint validation. gui.py previously inlined a duplicate
+# validator; it now imports the canonical one from rca_core.ssrf so
+# every entry point (legacy textbox, full provider dict, connection
+# probe, web backend) speaks the same language.
+from rca_core.ssrf import (  # noqa: E402
+    _ALLOW_PRIVATE,           # re-exported for legacy tests
+    is_private_host as _is_private_host,
+    validate_endpoint as _validate_endpoint,
+)
 
 # UI-Mod-2: optional Windows 11 Fluent theme (sv_ttk). If unavailable,
 # fall back to ttk's default clam theme.
@@ -77,59 +84,6 @@ except Exception:
     HAS_PIL = False
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer.json")
-
-# S-1 fix: SSRF endpoint validation — mirrors server.py _validate_endpoint().
-# GUI direct extract() calls bypass server.py, so we validate here too.
-_ALLOW_PRIVATE = os.environ.get("RCA_ALLOW_PRIVATE", "").strip() == "1"
-
-
-def _is_private_host(host: str) -> bool:
-    """Return True if *host* resolves to a non-public IP address."""
-    if not host:
-        return True
-    bare = host.strip("[]")
-    try:
-        ip = ipaddress.ip_address(bare)
-        return not ip.is_global
-    except ValueError:
-        pass
-    try:
-        infos = socket.getaddrinfo(bare, None)
-    except socket.gaierror:
-        return True
-    saw_addr = False
-    for info in infos:
-        try:
-            addr = info[4][0]
-            ip = ipaddress.ip_address(addr)
-        except (ValueError, IndexError):
-            return True
-        saw_addr = True
-        if not ip.is_global:
-            return True
-    return not saw_addr
-
-
-def _validate_endpoint(endpoint: str) -> tuple[bool, str]:
-    """Validate a provider endpoint URL. Returns (ok, error_message)."""
-    if not endpoint:
-        return False, "empty endpoint"
-    try:
-        u = urlparse(endpoint)
-    except ValueError as exc:
-        return False, f"unparseable: {exc}"
-    if u.scheme not in ("http", "https"):
-        return False, f"scheme must be http/https, got {u.scheme!r}"
-    if not u.hostname:
-        return False, "missing host"
-    if u.scheme != "https":
-        return False, "https required (cleartext API keys would leak)"
-    if not _ALLOW_PRIVATE and _is_private_host(u.hostname):
-        return False, (
-            f"host {u.hostname!r} resolves to a non-public address. "
-            "Set RCA_ALLOW_PRIVATE=1 to override (not recommended)."
-        )
-    return True, ""
 
 # UI-Mod-1: 极简现代风 Palette (Morandi / "性冷淡"色系).
 # 深层石板灰主按钮 + 蓝灰点缀 + 冷白背景. 配合 sv_ttk 主题后整体
