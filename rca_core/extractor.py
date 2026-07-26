@@ -1080,6 +1080,7 @@ _MODE_DISPATCH = {
     "range_chart": extract_range_chart,
     "columnar_section": extract_columnar_section,
     "abundance_diagram": None,  # bound below after the function is defined
+    "phylogenetic_tree": None,  # bound below after the function is defined
 }
 
 
@@ -1343,6 +1344,7 @@ def extract_phylogenetic_tree(
 
 
 _MODE_DISPATCH["abundance_diagram"] = extract_abundance_diagram
+_MODE_DISPATCH["phylogenetic_tree"] = extract_phylogenetic_tree
 
 
 def extract(
@@ -1364,7 +1366,7 @@ def extract(
     progress_callback=None,
 ) -> ExtractResult:
     """Unified entry point. mode ∈ {"range_chart", "columnar_section",
-    "abundance_diagram"}.
+    "abundance_diagram", "phylogenetic_tree"}.
 
     When ``provider`` is given it drives the API format / auth / endpoint and
     the flat legacy kwargs (``base_url`` / ``api_key`` / ``model``) are ignored
