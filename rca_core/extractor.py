@@ -26,6 +26,7 @@ from .prompt import (
     ABUNDANCE_DIAGRAM_SYSTEM_PROMPT,
     CHART_LANG_HINT,
     COLUMNAR_SECTION_SYSTEM_PROMPT,
+    PHYLOGENETIC_TREE_SYSTEM_PROMPT,
     RANGE_CHART_SYSTEM_PROMPT,
 )
 
@@ -35,7 +36,7 @@ DEFAULT_MAX_TOKENS = 4000
 # M5: explicit min/max bounds for clamp_max_tokens — defends against
 # user typing absurd values (negative, millions) in the GUI / API.
 MIN_MAX_TOKENS = 1
-MAX_MAX_TOKENS = 32000
+MAX_MAX_TOKENS = 100000
 DEFAULT_TIMEOUT_SEC = 120
 DEFAULT_MAX_EDGE = 4000
 
@@ -247,12 +248,16 @@ _KNOWN_SECTION_KEYS = (
 _KNOWN_SPECIES_KEYS = (
     "species", "section", "range_top", "range_base", "biozone",
     "author", "year",
-    # HIGH fix: missing keys promised by prompt.py
-    "author_year",       # combined "De Wever & Dumitrica, 2002" string
-    "range_top_bed",     # "Bed 9" - exact bed label at top
-    "range_base_bed",    # "Bed 7" - exact bed label at base
-    "endpoint_kind",     # "observed" | "projected" | "truncated"
-    "reworked",          # bool - true if reworked/deposited
+    # HIGH fix: author_year is the combined string the prompt requests.
+    "author_year",
+    # P0-3 (REVIEW-2026-07-25): the four fields below are NOW first-class
+    # row keys written explicitly by _normalize_species_into, so they must
+    # NOT be in _KNOWN_SPECIES_KEYS — otherwise _carry_extras would treat
+    # any same-named dict keys emitted by the LLM as known and skip them
+    # in the merge field pass (causing double-write via _extras).
+    # Note: any leftover occurrences in the source dict are still captured
+    # by _carry_extras through the "in _extras" branch — but since they are
+    # also written to row[...] explicitly above, the row value wins.
 )
 _KNOWN_BIOZONE_KEYS = ("name", "section", "age", "thickness_m", "zone_type")
 
@@ -279,16 +284,26 @@ def _classify_array_item(item: dict[str, Any]) -> str | None:
     # Species ranges have "species" (the primary identifier) and range bounds.
     if "species" in item or ("range_top" in item and "range_base" in item):
         return "species_ranges"
-    # HIGH fix: biozone identification. Previously required ALL of
-    # thickness_m + name + age, but the prompt's biozone schema only requires
-    # name + age + (optional thickness_m). Loosen so a thickness-less
-    # {name, age} item is classified as biozone rather than silently dropped
-    # into sections (where it would create a fake locality with no age).
-    # We still require both name AND age — without those it's ambiguous.
-    if "name" in item and "age" in item:
+    # P1-8 (REVIEW-2026-07-25): biozone identification now requires the
+    # NAME to look like a zone/assemblage label (per prompt.py:80, 195
+    # iron-rule markers) OR the item to declare ``zone_type``. Otherwise
+    # a {name, age} item is likely a SECTION whose model confused
+    # ``age_range`` with ``age`` — misclassifying it would silently move
+    # a stratigraphic section into the biozones table, breaking all
+    # biozone/range coupling validation downstream.
+    name_str = (item.get("name") or "").strip()
+    is_zone_label = bool(
+        _IRON_RULE_ZONE_RE.search(name_str)
+        or "zone_type" in item
+    )
+    if "name" in item and "age" in item and is_zone_label:
         return "biozones"
     # Sections have "name" and typically "age_range" or "formations".
-    if "name" in item and ("age_range" in item or "formations" in item):
+    # ``age`` (without the ``_range`` suffix) is also accepted as a section
+    # age signal — the prompt asks for ``age_range`` but lenient parsing
+    # is the safer default.
+    if "name" in item and ("age_range" in item or "formations" in item
+                           or "age" in item):
         return "sections"
     # Fallback: if it has "name" but doesn't match biozone pattern, treat as section.
     if "name" in item:
@@ -366,8 +381,26 @@ def _normalize_species_into(sp: dict[str, Any],
         "year": s(sp.get("year", "")),
         # HIGH fix: author_year is the combined string the prompt requests.
         "author_year": s(sp.get("author_year") or ""),
+        # P0-3 (REVIEW-2026-07-25): prompt.py asks for these four scientific
+        # metadata fields per species row. They were previously listed in
+        # _KNOWN_SPECIES_KEYS so _carry_extras would skip them — silently
+        # dropping observed/projected/truncated endpoint classification,
+        # reworked flag, and exact bed labels. Promote them to first-class
+        # row keys and ALSO drop them from _KNOWN_SPECIES_KEYS so _carry_extras
+        # does not double-write them.
+        "range_top_bed": s(sp.get("range_top_bed", "")),
+        "range_base_bed": s(sp.get("range_base_bed", "")),
+        "endpoint_kind": s(sp.get("endpoint_kind") if str(sp.get("endpoint_kind")) in ("observed", "projected", "truncated") else "observed"),
+        "reworked": sp.get("reworked"),
+        # H-8 fix: prompt explicitly asks for a note field for degraded
+        # determinations; it was never written to the output row.
+        "note": s(sp.get("note", "")),
     }
     _carry_extras(sp, _KNOWN_SPECIES_KEYS, row)
+    # If reworked is None / missing, normalize to False for downstream
+    # consumers that expect a boolean.
+    if row.get("reworked") is None:
+        row["reworked"] = False
     target.append(row)
 
 
@@ -576,6 +609,7 @@ def extract_range_chart(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
     provider: LlmProvider | None = None,
+    progress_callback=None,
 ) -> ExtractResult:
     """Range-chart extraction. Never raises.
 
@@ -617,6 +651,7 @@ def extract_range_chart(
             max_tokens=max_tokens,
             timeout_sec=timeout_sec,
             capture_error_body=True,
+            progress_callback=progress_callback,
         )
     except Exception as exc:
         latency_ms = int((time.perf_counter() - t0) * 1000)
@@ -968,6 +1003,7 @@ def extract_columnar_section(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
     provider: LlmProvider | None = None,
+    progress_callback=None,
 ) -> ExtractResult:
     """Columnar-section extraction. Same contract as extract_range_chart."""
     if not image_b64:
@@ -1000,6 +1036,7 @@ def extract_columnar_section(
             max_tokens=max_tokens,
             timeout_sec=timeout_sec,
             capture_error_body=True,
+            progress_callback=progress_callback,
         )
     except Exception as exc:
         latency_ms = int((time.perf_counter() - t0) * 1000)
@@ -1148,6 +1185,7 @@ def extract_abundance_diagram(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
     provider: LlmProvider | None = None,
+    progress_callback=None,
 ) -> ExtractResult:
     """Abundance-diagram extraction. Same contract as extract_range_chart."""
     if not image_b64:
@@ -1180,6 +1218,7 @@ def extract_abundance_diagram(
             max_tokens=max_tokens,
             timeout_sec=timeout_sec,
             capture_error_body=True,
+            progress_callback=progress_callback,
         )
     except Exception as exc:
         latency_ms = int((time.perf_counter() - t0) * 1000)
@@ -1218,6 +1257,91 @@ def extract_abundance_diagram(
     )
 
 
+def extract_phylogenetic_tree(
+    *,
+    api_key: str,
+    image_b64: str,
+    media_type: str,
+    caption: str = "",
+    chart_lang: str = "auto",
+    base_url: str = DEFAULT_ENDPOINT,
+    model: str = DEFAULT_MODEL,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    provider: LlmProvider | None = None,
+    progress_callback=None,
+) -> ExtractResult:
+    """Phylogenetic-tree extraction. Same contract as extract_range_chart."""
+    if not image_b64:
+        return ExtractResult(ok=False, error_key="err.imageRead")
+    p = provider or LlmProvider(
+        name="Legacy Anthropic-compatible",
+        api_format=ApiFormat.ANTHROPIC,
+        endpoint=base_url,
+        api_key=api_key,
+        model=model,
+    )
+    lang_hint = CHART_LANG_HINT.get(chart_lang, "")
+    user_prompt = (
+        "Caption:\n"
+        + (caption.strip() if caption and caption.strip() else "(no caption)")
+        + "\n\n"
+        + lang_hint
+        + "Extract the phylogenetic-tree information as the strict JSON contract."
+    )
+    t0 = time.perf_counter()
+    # Never-raises contract: guard call_llm_api against malformed provider
+    # config (extra_body / extra_headers may not be dicts).
+    try:
+        raw_text, truncated, status, err_body, usage = call_llm_api(
+            provider=p,
+            system_prompt=PHYLOGENETIC_TREE_SYSTEM_PROMPT,
+            image_b64=image_b64,
+            media_type=media_type,
+            user_text=user_prompt,
+            max_tokens=max_tokens,
+            timeout_sec=timeout_sec,
+            capture_error_body=True,
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw="", latency_ms=latency_ms,
+            warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+        )
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    warning = ("Result may be truncated (model hit max_tokens). "
+               "Try raising the max_tokens setting and re-running.")
+    if raw_text is None:
+        return _error_from_status(status, err_body, latency_ms)
+    try:
+        parsed = safe_json_loads(raw_text)
+    except ValueError:
+        return ExtractResult(
+            ok=False, error_key="err.parse", raw=raw_text,
+            truncated=truncated, latency_ms=latency_ms,
+            usage=usage or {},
+            warning=warning if truncated else "",
+        )
+    # Never-raises contract: a defensive guard so any future regression in
+    # downstream normalization (or unexpected type from the model) cannot
+    # propagate up to a caller that relies on the promise.
+    if not isinstance(parsed, dict):
+        return ExtractResult(
+            ok=False, error_key="err.parse", raw=raw_text,
+            truncated=truncated, usage=usage or {},
+            latency_ms=latency_ms,
+            warning=warning if truncated else "",
+        )
+    return ExtractResult(
+        ok=True, data=parsed, raw=raw_text,
+        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
+        warning=warning if truncated else "",
+    )
+
+
 _MODE_DISPATCH["abundance_diagram"] = extract_abundance_diagram
 
 
@@ -1237,6 +1361,7 @@ def extract(
     api_key: str = "",
     base_url: str = DEFAULT_ENDPOINT,
     model: str = DEFAULT_MODEL,
+    progress_callback=None,
 ) -> ExtractResult:
     """Unified entry point. mode ∈ {"range_chart", "columnar_section",
     "abundance_diagram"}.
@@ -1248,6 +1373,10 @@ def extract(
 
     All flat kwargs now have defaults so callers using only the provider
     path (e.g. server.py) don't have to send sentinel empty values.
+
+    ``progress_callback``, if given, is called with stage strings
+    ``"submitting"``, ``"uploading"``, ``"thinking"`` to allow the UI to
+    show granular extraction progress.
     """
     fn = _MODE_DISPATCH.get(mode)
     if fn is None:
@@ -1263,4 +1392,5 @@ def extract(
         max_tokens=max_tokens,
         timeout_sec=timeout_sec,
         provider=provider,
+        progress_callback=progress_callback,
     )
