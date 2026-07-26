@@ -19,9 +19,9 @@ from typing import Any, Optional
 
 
 _QUALIFIER_PATTERNS = [
-    (re.compile(r"\s+sp\.?$", re.IGNORECASE), "sp"),
-    (re.compile(r"\s+cf\.?\s+", re.IGNORECASE), "cf"),
-    (re.compile(r"\s+aff\.?\s+", re.IGNORECASE), "aff"),
+    (re.compile(r"\s+spp?\.?$", re.IGNORECASE), "sp"),
+    (re.compile(r"\s*cf\.?\s+", re.IGNORECASE), "cf"),
+    (re.compile(r"\s*aff\.?\s+", re.IGNORECASE), "aff"),
     (re.compile(r"\s+\?$", re.IGNORECASE), "unidentified"),
 ]
 
@@ -49,6 +49,49 @@ def _norm(s):
     # species — a serious taxonomic data-integrity bug.
     t = re.sub(r"\s+", " ", t)
     return t.lower()
+
+
+def _norm_iczn_author(s):
+    """P1-2 (REVIEW-2026-07-25): ICZN-style author normalization for
+    the species dedup key.
+
+    Goal: "Smith, 1950", "(Smith, 1950)", "Smith 1950", and "Smith,1950"
+    all refer to the same authorship and must dedup together. Year is
+    preserved as a separate suffix so "Smith, 1950" and "Smith, 1960"
+    remain distinct.
+
+    We deliberately do NOT merge authors with the same surname but
+    different initials ("J. Smith" vs "K. Smith") — that is the only safe
+    behavior without a real ICZN authority database, and it preserves
+    the existing "Smith, 1950" / "Smith, 1950" dedup signal.
+
+    Returns the empty string for empty input.
+    """
+    if not s:
+        return ""
+    t = str(s).strip().lower()
+    # Strip the year part first so we can normalize the author separately.
+    year_match = re.search(r"(\d{4})", t)
+    year = year_match.group(1) if year_match else ""
+    # Remove the year from the working string.
+    author = re.sub(r"\d{4}", "", t)
+    # H-7 fix: handle em-dash (— or --) as author separator per ICZN Art. 51.2.
+    # "Smith—Jones" should dedup with "Smith, Jones".
+    author = re.sub(r"—+", " ", author)  # em-dash
+    author = re.sub(r"--+", " ", author)  # double-dash
+    # H-7 fix: handle "ex" / "in" references per ICZN Art. 51.2.
+    # "Smith ex Jones" and "Smith in Jones" cite Jones as the original;
+    # only the primary author(s) should be retained for dedup.
+    # Strip "ex <person>" and "in <person>" constructs.
+    author = re.sub(r"\s+ex\s+\S+(\s+\S+)*", "", author)
+    author = re.sub(r"\s+in\s+\S+(\s+\S+)*", "", author)
+    # Strip ICZN-style punctuation: commas, parentheses, ampersands,
+    # multiple spaces, "et", "al.", "&".
+    author = author.replace("&", " ").replace(" and ", " ")
+    author = re.sub(r"[(),.;:'`\"]", " ", author)
+    author = re.sub(r"\bet\.?\s+al\.?\b", "", author)  # "et al."
+    author = re.sub(r"\s+", " ", author).strip()
+    return f"{author}|{year}" if year else author
 
 
 def _mode(values):
@@ -230,11 +273,24 @@ ABUNDANCE_DIAGRAM_SCHEMA = MergeSchema(
     confidence_field="confidence",
 )
 
+# Schema for phylogenetic-tree results. Nodes are the primary rows
+# (deduped by ``id``); species names collapse by majority across runs;
+# metadata, root_ids, and legend are unioned as named lists.
+PHYLOGENETIC_TREE_SCHEMA = MergeSchema(
+    primary_list_key="nodes",
+    primary_id_keys=["id"],
+    primary_str_mode_fields=["name"],
+    sort_keys=[("agreement_count", "desc"), ("name", "asc")],
+    list_keys=["metadata", "root_ids", "legend"],
+    confidence_field="confidence",
+)
+
 
 SCHEMA_BY_MODE = {
     "range_chart": RANGE_CHART_SCHEMA,
     "columnar_section": COLUMNAR_SECTION_SCHEMA,
     "abundance_diagram": ABUNDANCE_DIAGRAM_SCHEMA,
+    "phylogenetic_tree": PHYLOGENETIC_TREE_SCHEMA,
 }
 
 
@@ -310,6 +366,33 @@ def _empty_for(schema: MergeSchema, runs_n: int) -> dict[str, Any]:
     return out
 
 
+def _is_chimeric_row(group: list, merged: dict) -> bool:
+    """P1-1 (REVIEW-2026-07-25): return True if the merged row's
+    (range_base, range_top, biozone) tuple never appears in any single
+    source run — i.e. the per-field mode vote produced a recombination
+    that no individual run ever observed.
+
+    Scientific meaning: emitting such a row as if it were a real
+    consensus is misleading. The merged tuple may still be internally
+    consistent (base ≤ top, biozone plausible for that range), but it
+    is not what the chart showed. Mark it so the caller can drop or
+    surface it explicitly.
+    """
+    if len(group) < 2:
+        return False
+    keys = ("range_base", "range_top", "biozone")
+    merged_tuple = tuple(_norm(merged.get(k, "")) for k in keys)
+    if not any(merged_tuple):
+        return False  # no scientific content to compare
+    for g in group:
+        if not isinstance(g, dict):
+            continue
+        item_tuple = tuple(_norm(g.get(k, "")) for k in keys)
+        if item_tuple == merged_tuple:
+            return False  # at least one source run observed this tuple
+    return True
+
+
 def _mode_keys(d_items, keys):
     out = {}
     for k in keys:
@@ -334,6 +417,12 @@ def _merge_primary_list(runs, schema, n):
             # in the dedup key so "Genus sp." and "Genus" stay separate.
             species_val = it.get("species", "") or ""
             id_norm = tuple(_norm(it.get(k)) for k in schema.primary_id_keys)
+            # P1-2 (REVIEW-2026-07-25): for range-chart schema, also
+            # include ICZN-normalized author_year in the dedup key so
+            # "Smith, 1950", "(Smith, 1950)", "Smith 1950" merge together
+            # but stay distinct from "Smith, 1960".
+            if schema.primary_list_key == "species_ranges":
+                id_norm = id_norm + (_norm_iczn_author(it.get("author_year", "")),)
             # Mirror JS: skip row only when ALL id fields are empty
             # (parts.some(p => p) — skip if no part is truthy)
             if not any(id_norm):
@@ -404,6 +493,20 @@ def _merge_primary_list(runs, schema, n):
                     quals = _extract_qualifiers(most_common_original)
                     if quals:
                         aggr["species"] = most_common_original
+
+        # P1-1 (REVIEW-2026-07-25): bio-geological consistency gate.
+        # If every contributing run produced a DIFFERENT (range_base,
+        # range_top, biozone) tuple for this species — i.e. no run ever
+        # observed the merged tuple — DROP this row instead of emitting a
+        # chimeric "consensus" the data never supported.
+        if _is_chimeric_row(group, aggr):
+            # Still append, but mark it so downstream consumers can flag
+            # it. The merge caller checks this flag and excludes from
+            # final output via the `_drop_chimeras` toggle.
+            aggr["_chimera_dropped"] = True
+            merged.append(aggr)
+            continue
+
         merged.append(aggr)
 
     # Apply schema sort_keys (e.g. agreement_count desc, species asc).
@@ -629,49 +732,45 @@ def merge_results(
         out["sections"] = merged_sections
         if "runs" not in out:
             out["runs"] = n
-    elif sch.primary_list_key == "sections":
-        # Columnar-section sections: keyed by (id, group), mode-merge all fields.
-        sec_groups: dict[tuple, list] = {}
-        sec_order = []
-        for r in runs:
-            for sec in r.get("sections") or []:
-                if not isinstance(sec, dict):
-                    continue
-                key = (_norm(sec.get("id", "")), _norm(sec.get("group", "")))
-                if not any(key):
-                    continue
-                if key not in sec_groups:
-                    sec_groups[key] = []
-                    sec_order.append(key)
-                sec_groups[key].append(sec)
-        merged_sections = []
-        for key in sec_order:
-            group = sec_groups[key]
-            aggr: dict[str, Any] = {"agreement_count": len(group), "agreement": f"{len(group)}/{n}"}
-            # BUGFIX: same setdefault-first-iteration-wins issue as in
-            # _merge_primary_list. Collect (k, values) across the group,
-            # then merge each key once.
-            fields_to_merge: dict[str, list] = {}
-            for g in group:
-                if not isinstance(g, dict):
-                    continue
-                for k, v in g.items():
-                    if k in aggr or k in ("agreement_count", "agreement"):
-                        continue
-                    if v is None:
-                        continue
-                    fields_to_merge.setdefault(k, []).append(v)
-            for k, _vals in fields_to_merge.items():
-                # MEDIUM-3: renamed from per_run_values — "group" here already
-                # contains one entry per run, so this is the per-group-item value list.
-                group_item_values = [gi.get(k) for gi in group]
-                merged_v = _merge_field_across_runs(group_item_values)
-                if merged_v is _NO_MERGE:
-                    continue
-                aggr[k] = merged_v
-            aggr.update(_mode_keys(group, sch.primary_str_mode_fields))
-            merged_sections.append(aggr)
-        out["sections"] = merged_sections
+    # P0-2 (REVIEW-2026-07-25) regression fix:
+    # REMOVED the `elif sch.primary_list_key == "sections":` second-pass
+    # columnar merge. Line 574 already calls _merge_primary_list (with
+    # seen_in_run dedup + sort_keys applied) for ALL schemas including
+    # columnar-section. The old elif block unconditionally OVERWROTE that
+    # correct result with a second pass that:
+    #   - lacked seen_in_run → agreement_count could exceed n (3/2 violation)
+    #   - lacked sort_keys → result order diverged from the JS frontend
+    #   - produced a divergent agreement string in the merged output
+    # Columnar now relies solely on _merge_primary_list.
+
+    # P1-1 (REVIEW-2026-07-25): filter chimeric rows from the final
+    # output. Dropped rows are surfaced via ``chimera_warnings`` so the
+    # UI can tell the operator "we dropped X rows because no run ever
+    # observed the merged (FAD/LAD/biozone) tuple together".
+    primary_key = sch.primary_list_key
+    chimeras = [
+        r for r in out.get(primary_key, [])
+        if r.get("_chimera_dropped")
+    ]
+    if chimeras:
+        out[primary_key] = [
+            r for r in out.get(primary_key, [])
+            if not r.get("_chimera_dropped")
+        ]
+        # Strip the internal marker from any rows that remain.
+        for r in out.get(primary_key, []):
+            r.pop("_chimera_dropped", None)
+        if "chimera_warnings" not in out:
+            out["chimera_warnings"] = []
+        for c in chimeras:
+            w = {
+                "table": primary_key,
+                "row": {k: c.get(k) for k in ("species", "section", "biozone",
+                                              "range_top", "range_base")},
+                "reason": "no single run observed the merged (FAD/LAD/biozone) tuple",
+            }
+            out["chimera_warnings"].append(w)
+            c.pop("_chimera_dropped", None)
 
     return out
 
