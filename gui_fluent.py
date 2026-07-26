@@ -539,7 +539,12 @@ class ExtractPage(ScrollArea):
         self.btn_apply_edits = PrimaryPushButton(FIF.SAVE, self._t("edit.apply"))
         self.btn_apply_edits.clicked.connect(self._on_apply_edits)
         edit_row.addWidget(self.btn_apply_edits)
-        right_lay.addLayout(edit_row)
+        # Wrap edit_row in a QWidget so the entire row can be hidden in
+        # one setVisible() call when switching to a non-tabular mode
+        # (e.g. phylogenetic_tree, which has no row-level edits).
+        self.edit_row_widget = QWidget()
+        self.edit_row_widget.setLayout(edit_row)
+        right_lay.addWidget(self.edit_row_widget)
 
         # Storage for the inner TableWidget per table id (so apply edits
         # can read the cells back). The scroll area is also kept in
@@ -557,6 +562,18 @@ class ExtractPage(ScrollArea):
         self.stack_lay.setContentsMargins(0, 0, 0, 0)
         self.tables = {}
         right_lay.addWidget(self.stack, 1)
+
+        # Phylogenetic tree renderer: replaces the table stack when the
+        # current mode is ``phylogenetic_tree``. The widget is created
+        # once and reused across extractions; set_data() on the widget
+        # buffers payloads until the WebEngine page finishes loading.
+        # If WebEngine isn't available (slim Qt build), the widget is
+        # None and the tree mode falls back to the empty-state page.
+        self.phylotree: object | None = None
+        if HAS_PHYLO_TREE_WIDGET:
+            self.phylotree = PhyloTreeWidget()
+            self.phylotree.setVisible(False)
+            right_lay.addWidget(self.phylotree, 1)
 
         self._split.addWidget(right_panel)
 
@@ -776,6 +793,15 @@ class ExtractPage(ScrollArea):
             return
         self.result = result.data
         self.raw_text = result.raw
+        # Push the new payload into the phylogenetic-tree widget so the
+        # embeds the result as soon as the WebEngine page is ready (the
+        # widget buffers the payload across the page-load race). This
+        # is the "Task 9 step 4" entry point — _render_result() also
+        # calls set_data() in the tree branch, but pushing here means
+        # a reload via load_result() (which doesn't go through
+        # _on_result()) still gets the latest data on the next render.
+        if self.phylotree is not None:
+            self.phylotree.set_data(self.result)
         # Step 0 (8.0→9.5): surface chimera_warnings as a visible warning
         # so the operator knows when a merged row was not observed in any single run.
         chimera_warnings = (self.result or {}).get("chimera_warnings") or []
@@ -882,10 +908,17 @@ class ExtractPage(ScrollArea):
             ct = self.win.cfg.get("chart_type", "auto")
         except Exception:
             ct = "auto"
-        if ct in ("range_chart", "columnar_section", "abundance_diagram"):
+        if ct in ("range_chart", "columnar_section", "abundance_diagram",
+                  "phylogenetic_tree"):
             return ct
-        # Auto-detect by result shape.
+        # Auto-detect by result shape. Phylogenetic-tree results carry a
+        # ``nodes`` list (the primary list_key for PHYLOGENETIC_TREE_SCHEMA);
+        # detect that before the columnar/abundance fallbacks so the tree
+        # renderer is used when the user runs an "auto" extraction on a
+        # tree image.
         if isinstance(self.result, dict):
+            if isinstance(self.result.get("nodes"), list):
+                return "phylogenetic_tree"
             if isinstance(self.result.get("abundances"), list):
                 return "abundance_diagram"
             sects = self.result.get("sections") or []
@@ -919,6 +952,13 @@ class ExtractPage(ScrollArea):
         multi = self.result and int(self.result.get("runs", 1) or 1) > 1
         n_runs = int((self.result or {}).get("runs", 1) or 1)
         configs = get_configs_for_result(self.result)
+        # Trees: the PhyloTreeWidget replaces the table stack & pivot
+        # because the phylogenetic-tree data shape (nodes + root_ids +
+        # legend + metadata) doesn't map to row/column tables. The
+        # widget is reused across extractions; set_data() buffers the
+        # payload if the WebEngine page hasn't finished initial load.
+        is_tree_mode = (self._current_mode() == "phylogenetic_tree"
+                        and self.phylotree is not None)
         for w in list(self.tables.values()):
             w.setParent(None)
             w.deleteLater()
@@ -931,6 +971,12 @@ class ExtractPage(ScrollArea):
         # Friendly empty state when the model returned no data at all.
         total_rows = sum(len((self.result or {}).get(c["id"], []) or []) for c in configs)
         if total_rows == 0:
+            # In tree mode the empty-state guard doesn't apply (the tree
+            # widget can render even with zero nodes — it just shows an
+            # empty graph). Skip directly to the tree branch.
+            if is_tree_mode:
+                self._show_phylotree()
+                return
             self.pivot.addItem(
                 routeKey="empty",
                 text=self._t("results.empty"),
@@ -960,6 +1006,19 @@ class ExtractPage(ScrollArea):
         # on some qfluent builds. Clearing here makes _render_result the
         # single source of pivot population and lets retranslate call it
         # alone.
+        if is_tree_mode:
+            # Table content is irrelevant for the tree — render the tree
+            # and bail out before building any pivots/scroll areas.
+            self._show_phylotree()
+            return
+        # Table mode: ensure the tree is hidden and the table UI is
+        # visible. (If we just switched from tree mode, the tree widget
+        # would still be visible otherwise.)
+        if self.phylotree is not None:
+            self.phylotree.setVisible(False)
+        self.pivot.setVisible(True)
+        self.edit_row_widget.setVisible(True)
+        self.stack.setVisible(True)
         self.pivot.clear()
         for idx, cfg in enumerate(configs):
             items = (self.result or {}).get(cfg["id"], []) or []
@@ -1069,6 +1128,37 @@ class ExtractPage(ScrollArea):
         if w is not None:
             self.stack_lay.setCurrentWidget(w)
         self._active_table_id = key or ""
+
+    def _show_phylotree(self) -> None:
+        """Switch the right panel to the phylogenetic-tree renderer.
+
+        Hides the table-specific UI (pivot + edit row + table stack) and
+        pushes ``self.result`` into the PhyloTreeWidget. The widget buffers
+        the payload if the embedded WebEngine page hasn't finished loading
+        yet (Task 8 design), so it's safe to call this immediately after
+        construction; the tree will render as soon as the template is ready.
+        """
+        if self.phylotree is None:
+            # WebEngine unavailable — the user sees whatever the right
+            # panel currently shows. Fall through silently rather than
+            # crashing in slim Qt builds.
+            log.warning("PhyloTreeWidget unavailable; skipping tree render")
+            self._refresh_conf()
+            return
+        self.pivot.setVisible(False)
+        self.edit_row_widget.setVisible(False)
+        self.stack.setVisible(False)
+        self.phylotree.setVisible(True)
+        # Tree has no row-level edits; drop any stale snapshot / dirty
+        # badge so a later switch back to a table mode doesn't replay
+        # an edit against the wrong baseline.
+        self._last_snapshot = None
+        try:
+            self.lbl_dirty.setText("")
+        except Exception:
+            pass
+        self.phylotree.set_data(self.result)
+        self._refresh_conf()
 
     def _rebuild_pivot(self) -> None:
         """Rebuild pivot tab labels from the current result's configs.
