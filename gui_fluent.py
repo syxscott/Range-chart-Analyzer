@@ -28,7 +28,7 @@ from PySide6.QtCore import Qt, QThread, Signal, QSize
 from PySide6.QtGui import QPixmap, QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFileDialog,
-    QTableWidgetItem, QHeaderView, QFrame, QSizePolicy, QStackedLayout,
+    QTableWidgetItem, QHeaderView, QFrame, QSizePolicy, QStackedLayout, QSplitter,
 )
 
 from qfluentwidgets import (
@@ -137,6 +137,12 @@ class ExtractWorker(QThread):
     def run(self):
         import concurrent.futures
         params, mode, runs = self._params, self._mode, self._runs
+
+        def prog(stage):
+            self.progress.emit(stage)
+
+        params["progress_callback"] = prog
+
         try:
             if runs <= 1:
                 self.progress.emit("analyzing")
@@ -273,10 +279,13 @@ class ExtractPage(ScrollArea):
         root = QWidget()
         self.setWidget(root)
 
-        # Root: horizontal split — left = input, right = results
-        root_lay = QHBoxLayout(root)
-        root_lay.setContentsMargins(20, 16, 20, 16)
-        root_lay.setSpacing(16)
+        # Root: horizontal split via QSplitter so the user can drag the
+        # divider. qfluentwidgets CardWidget + QVBoxLayout for each side.
+        self._split = QSplitter(Qt.Horizontal)
+        self._split.setContentsMargins(20, 16, 20, 16)
+        self._split.setHandleWidth(6)
+        self._split.setStretchFactor(0, 1)  # left: input panel
+        self._split.setStretchFactor(1, 2)  # right: results panel (wider)
 
         # ---- Left panel: title + image + caption + run controls ----
         left_panel = QWidget()
@@ -343,7 +352,7 @@ class ExtractPage(ScrollArea):
         left_lay.addLayout(run_row)
         left_lay.addStretch(1)
 
-        root_lay.addWidget(left_panel, 1)   # left takes 1 share
+        self._split.addWidget(left_panel)
 
         # ---- Right panel: confidence + pivot + results ----
         right_panel = QWidget()
@@ -406,7 +415,12 @@ class ExtractPage(ScrollArea):
         self.tables = {}
         right_lay.addWidget(self.stack, 1)
 
-        root_lay.addWidget(right_panel, 2)   # right takes 2 shares (wider)
+        self._split.addWidget(right_panel)
+
+        # Mount the splitter as the sole child of root
+        root_lay = QHBoxLayout(root)
+        root_lay.setContentsMargins(0, 0, 0, 0)
+        root_lay.addWidget(self._split)
 
     # ---- image ----
     def _cleanup_paste_tmp(self):
@@ -498,9 +512,15 @@ class ExtractPage(ScrollArea):
     # ---- extraction ----
     def _set_busy(self, busy):
         self.btn_extract.setEnabled(not busy)
+        self._sync_export_buttons(busy)
         self.spinner.setVisible(busy)
         if busy:
             self.lbl_status.setText(self._t("status.loading"))
+
+    def _sync_export_buttons(self, busy):
+        enabled = self.result is not None and not busy
+        self.btn_export.setEnabled(enabled)
+        self.btn_export_xlsx.setEnabled(enabled)
 
     def _bump_extract_gen(self) -> int:
         """Increment and return the stale-result generation counter.
@@ -582,7 +602,16 @@ class ExtractPage(ScrollArea):
         self._worker.start()
 
     def _on_progress(self, text):
-        if text.startswith("analyzing:"):
+        # Granular stages: submitting → uploading → thinking → parsing
+        STAGE_KEYS = {
+            "submitting": "status.submitting",
+            "uploading":   "status.uploading",
+            "thinking":    "status.thinking",
+            "parsing":     "status.parsing",
+        }
+        if text in STAGE_KEYS:
+            self.lbl_status.setText(self._t(STAGE_KEYS[text]))
+        elif text.startswith("analyzing:"):
             self.lbl_status.setText(self._t("status.loading") + " (" + text.split(":", 1)[1] + ")")
         else:
             self.lbl_status.setText(self._t("status.loading"))
@@ -590,6 +619,7 @@ class ExtractPage(ScrollArea):
     def _on_result(self, result):
         self.busy = False
         self._set_busy(False)
+        self.lbl_status.setText(self._t("status.parsing"))
         # Stale-result guard lives in the worker connection closure in
         # run_extraction() — it drops results whose generation no longer matches
         # the live one. Nothing to check here; just render.
@@ -603,6 +633,18 @@ class ExtractPage(ScrollArea):
             return
         self.result = result.data
         self.raw_text = result.raw
+        # Step 0 (8.0→9.5): surface chimera_warnings as a visible warning
+        # so the operator knows when a merged row was not observed in any single run.
+        chimera_warnings = (self.result or {}).get("chimera_warnings") or []
+        if chimera_warnings:
+            n = len(chimera_warnings)
+            msg = (self._t("results.chimera_warning")
+                   .replace("{n}", str(n)))
+            InfoBar.warning(
+                "", msg,
+                parent=self.win,
+                position=InfoBarPosition.TOP, duration=8000,
+            )
         # Audit fix (LOW): a render exception must not be swallowed by the
         # PySide signal machinery. Show an error toast + log so the user
         # sees something went wrong (even though self.result is set and
@@ -753,11 +795,17 @@ class ExtractPage(ScrollArea):
             )
             empty = BodyLabel(self._t("results.empty"))
             empty.setAlignment(Qt.AlignCenter)
-            self.stack_lay.addSpacing(20)
-            self.stack_lay.addWidget(empty)
             hint = CaptionLabel(self._t("results.emptyHint"))
             hint.setAlignment(Qt.AlignCenter)
-            self.stack_lay.addWidget(hint)
+            # QStackedLayout has no addSpacing/addStretch; use a VBox widget
+            # as the empty-state page so we can add spacing between the two
+            # labels.
+            empty_page = QWidget()
+            ep = QVBoxLayout(empty_page)
+            ep.setContentsMargins(0, 20, 0, 0)
+            ep.addWidget(empty)
+            ep.addWidget(hint)
+            self.stack_lay.addWidget(empty_page)
             self._refresh_conf()
             return
         # FIX (HIGH-1): clear the pivot before repopulating. Previously this
@@ -1051,14 +1099,28 @@ class ExtractPage(ScrollArea):
             return
         loaded_id = getattr(self, "_loaded_history_id", None)
         if loaded_id is not None:
-            hs.update_result(loaded_id, self.result)
+            try:
+                hs.update_result(loaded_id, self.result)
+            except Exception as exc:
+                InfoBar.error(
+                    "", f"保存历史记录失败: {exc}",
+                    parent=self.win,
+                    position=InfoBarPosition.TOP, duration=5000,
+                )
             return
         if not self.image_path:
             return
         records = hs.list(limit=20, search=os.path.basename(self.image_path))
         if not records:
             return
-        hs.update_result(records[0].id, self.result)
+        try:
+            hs.update_result(records[0].id, self.result)
+        except Exception as exc:
+            InfoBar.error(
+                "", f"保存历史记录失败: {exc}",
+                parent=self.win,
+                position=InfoBarPosition.TOP, duration=5000,
+            )
 
     def _refresh_conf(self):
         if not self.result:
@@ -1281,7 +1343,7 @@ class SettingsPage(ScrollArea):
 
         self.lbl_maxtok = StrongBodyLabel(self._t("settings.maxTokens"))
         self.spin_maxtok = SpinBox()
-        self.spin_maxtok.setRange(1, 32000)
+        self.spin_maxtok.setRange(1, 100000)
         self.spin_maxtok.setValue(int(cfg.get("max_tokens", DEFAULT_MAX_TOKENS)))
         g2.addWidget(self.lbl_maxtok, 0, 0); g2.addWidget(self.spin_maxtok, 0, 1)
 
@@ -1299,11 +1361,12 @@ class SettingsPage(ScrollArea):
 
         self.lbl_ctype = StrongBodyLabel(self._t("settings.chartType"))
         self.cmb_ctype = ComboBox()
-        self._ctype_codes = ["auto", "range_chart", "columnar_section", "abundance_diagram"]
+        self._ctype_codes = ["auto", "range_chart", "columnar_section", "abundance_diagram", "phylogenetic_tree"]
         self._ctype_keys = ["settings.chartType.auto",
                             "settings.chartType.rangeChart",
                             "settings.chartType.columnarSection",
-                            "settings.chartType.abundanceDiagram"]
+                            "settings.chartType.abundanceDiagram",
+                            "settings.chartType.phylogeneticTree"]
         self.cmb_ctype.addItems([self._t(k) for k in self._ctype_keys])
         cur = cfg.get("chart_type", "auto")
         self.cmb_ctype.setCurrentIndex(self._ctype_codes.index(cur) if cur in self._ctype_codes else 0)
@@ -1550,11 +1613,11 @@ class RangeChartFluentWindow(FluentWindow):
         # Keep references to the nav items so the sidebar labels can be
         # re-translated live on language switch.
         self._nav_extract = self.addSubInterface(
-            self.extract_page, FIF.PHOTO, self._nav_text("tab.extract", "Extract"))
+            self.extract_page, FIF.PHOTO, self._nav_text("tab.extract", ""))
         if self.history_page is not None:
             self._nav_history = self.addSubInterface(
                 self.history_page, FIF.HISTORY,
-                self._nav_text("tab.history", "History"),
+                self._nav_text("tab.history", ""),
             )
         if self.usage_page is not None:
             self._nav_usage = self.addSubInterface(
@@ -1566,7 +1629,7 @@ class RangeChartFluentWindow(FluentWindow):
         self._nav_settings = self.addSubInterface(
             self.settings_page, FIF.SETTING, self._t("menu.settings"))
         self._nav_about = self.addSubInterface(
-            self.about_page, FIF.INFO, self._nav_text("tab.about", "About"),
+            self.about_page, FIF.INFO, self._nav_text("tab.about", ""),
             position=NavigationItemPosition.BOTTOM)
 
         # Language switcher at the bottom of the nav.
@@ -1768,7 +1831,7 @@ class RangeChartFluentWindow(FluentWindow):
             self._nav_usage.setText(self._nav_text("tab.usage", "Usage"))
         self._nav_providers.setText(self._t("settings.llmProvider"))
         self._nav_settings.setText(self._t("menu.settings"))
-        self._nav_about.setText(self._nav_text("tab.about", "About"))
+        self._nav_about.setText(self._nav_text("tab.about", ""))
         self._lang_btn.setText(self._lang_label())
         # Re-translate the About page.
         # The about page is only set up when the legacy fallback runs;
