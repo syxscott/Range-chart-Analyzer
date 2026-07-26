@@ -1409,6 +1409,8 @@ class ExtractPage(ScrollArea):
             return "abundance_diagram_"
         if mode == "columnar_section":
             return "columnar_section_"
+        if mode == "phylogenetic_tree":
+            return "phylogenetic_tree_"
         return "range_chart_"
 
     def _export_xlsx(self) -> None:
@@ -1443,6 +1445,26 @@ class ExtractPage(ScrollArea):
         if not self.result:
             return
         import json
+        # Phylogenetic-tree branch: timestamped filename, dump self.result
+        # directly as formatted JSON (no extra wrapper) so the output is a
+        # drop-in for downstream tree consumers.
+        if self._current_mode() == "phylogenetic_tree":
+            ts = time.strftime("%Y%m%dT%H%M%S")
+            default_name = f"phylogenetic_tree_{ts}.json"
+            path, _ = QFileDialog.getSaveFileName(
+                self, self._t("dialog.saveJson"), default_name,
+                "JSON (*.json)")
+            if not path:
+                return
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(self.result, f, ensure_ascii=False, indent=2)
+                InfoBar.success("", self._t("status.saved"), parent=self.win,
+                                position=InfoBarPosition.TOP)
+            except Exception as exc:
+                InfoBar.error("", str(exc), parent=self.win,
+                              position=InfoBarPosition.TOP, duration=5000)
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, self._t("dialog.saveJson"), self._export_prefix() + "result.json",
             "JSON (*.json)")
