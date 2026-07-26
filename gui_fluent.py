@@ -24,12 +24,24 @@ log = logging.getLogger("rca.gui_fluent")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from PySide6.QtCore import Qt, QThread, Signal, QSize
+from PySide6.QtCore import Qt, QThread, Signal, QSize, QUrl
 from PySide6.QtGui import QPixmap, QIcon
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFileDialog,
     QTableWidgetItem, QHeaderView, QFrame, QSizePolicy, QStackedLayout, QSplitter,
 )
+# Phylogenetic tree renderer: the D3.js template lives in
+# rca_core/resources/phylogenetic_tree.html and is hosted inside an
+# embedded QWebEngineView. Both modules ship with PySide6 (the
+# QtWebEngine subpackage) but we import them defensively so the GUI
+# still loads on slim Qt builds where WebEngine was stripped — the
+# widget class exposes HAS_PHYLO_TREE_WIDGET for callers to skip.
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView  # type: ignore
+    from PySide6.QtWebEngineCore import QWebEngineSettings  # type: ignore
+    HAS_PHYLO_TREE_WIDGET = True
+except Exception:  # pragma: no cover - Qt build without WebEngine
+    HAS_PHYLO_TREE_WIDGET = False
 
 from qfluentwidgets import (
     FluentWindow, NavigationItemPosition, FluentIcon as FIF,
@@ -251,6 +263,137 @@ class ExtractWorker(QThread):
 
 # NOTE: ConnTestWorker was removed — it was dead code (ProvidersPage
 # defines its own inline _Worker instead).
+
+
+# ---------------------------------------------------------------------------
+# Phylogenetic tree renderer
+# ---------------------------------------------------------------------------
+if HAS_PHYLO_TREE_WIDGET:
+    class PhyloTreeWidget(QWebEngineView):
+        """Embeds rca_core/resources/phylogenetic_tree.html in a WebEngine view.
+
+        The HTML template exposes ``window.setTreeData(jsonData)`` which the
+        D3.js renderer consumes to draw an interactive phylogenetic tree.
+        ``set_data(data)`` serialises the Python payload to JSON and invokes
+        that function via ``runJavaScript()`` — no Python <-> JS bridging
+        beyond the JSON wire format.
+
+        The widget is fully independent from the table-based renderers used
+        for range charts; the two share no state. The HTML is loaded as a
+        ``file://`` URL resolved through ``importlib.resources`` so the
+        template works the same in dev (``python main.py --ui fluent``) and
+        when the project is installed as a wheel.
+
+        Defensive notes:
+          * Local content can load the D3.js CDN script because we leave
+            ``LocalContentCanAccessRemoteUrls`` allowed (otherwise the
+            tree renders blank with a CSP error in the dev console).
+          * ``loadFinished`` is used to defer ``set_data()`` until after the
+            template's window globals are bound; calling ``setTreeData`` on
+            a half-loaded page silently no-ops.
+        """
+
+        _TEMPLATE_NAME = "phylogenetic_tree.html"
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            # Keep a reference to the latest payload so a set_data() call
+            # made before the page finishes loading is replayed once the
+            # HTML template is ready — without this, the first extraction
+            # result after window-open would be silently dropped.
+            self._pending_data = None
+            self._page_ready = False
+            # Enable the minimum features the D3.js template needs. We do
+            # NOT enable JS navigation guards or anything that would let the
+            # embedded page reach the host filesystem beyond the template.
+            settings = self.settings()
+            settings.setAttribute(
+                QWebEngineSettings.JavascriptEnabled, True)
+            settings.setAttribute(
+                QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
+            settings.setAttribute(
+                QWebEngineSettings.LocalContentCanAccessLocalResources, True)
+            self.loadFinished.connect(self._on_load_finished)
+            self._load_template()
+
+        # -- template loading -------------------------------------------------
+        def _resolve_template_url(self) -> QUrl:
+            """Return a file:// URL pointing at the bundled HTML template.
+
+            Uses ``importlib.resources.files()`` so the lookup works both
+            when running from a source checkout and when rca_core is
+            installed as a package. Falls back to a direct path lookup for
+            editable installs that don't expose the data through the loader.
+            """
+            import importlib.resources as _resources
+            try:
+                resource = _resources.files("rca_core.resources").joinpath(
+                    self._TEMPLATE_NAME)
+                # Traversable.as_file() gives a real path on disk for
+                # file:// loading; on Python 3.12+ files() returns a
+                # MultiplexedPath that already exposes .read_text().
+                with _resources.as_file(resource) as on_disk:
+                    return QUrl.fromLocalFile(str(on_disk))
+            except Exception as exc:
+                # Bug-12 fix: surface the lookup failure so a missing
+                # template doesn't produce a blank tree with no trace.
+                log.warning(
+                    "PhyloTreeWidget template lookup via importlib failed "
+                    "(%s); falling back to relative path", exc)
+                here = os.path.dirname(os.path.abspath(__file__))
+                return QUrl.fromLocalFile(os.path.join(
+                    here, "rca_core", "resources", self._TEMPLATE_NAME))
+
+        def _load_template(self) -> None:
+            self.setUrl(self._resolve_template_url())
+
+        def _on_load_finished(self, ok: bool) -> None:
+            self._page_ready = bool(ok)
+            if ok and self._pending_data is not None:
+                self._dispatch_data(self._pending_data)
+                self._pending_data = None
+
+        # -- public API -------------------------------------------------------
+        def set_data(self, data: object) -> None:
+            """Render ``data`` (a JSON-serialisable Python object).
+
+            If the underlying page hasn't finished loading yet, the payload
+            is stashed and dispatched on ``loadFinished``. This makes the
+            widget safe to call immediately after construction.
+            """
+            if self._page_ready:
+                self._dispatch_data(data)
+            else:
+                self._pending_data = data
+
+        def clear(self) -> None:
+            """Reset the pending queue; the rendered tree keeps its last
+            state until the next ``set_data()`` call. Provided so callers
+            can drop a stale result without triggering a render."""
+            self._pending_data = None
+
+        # -- internals --------------------------------------------------------
+        def _dispatch_data(self, data: object) -> None:
+            # json.dumps with default=str defends against odd datetime /
+            # Decimal values slipping in from upstream; the HTML side
+            # treats it as opaque JSON.
+            import json as _json
+            try:
+                payload = _json.dumps(data, ensure_ascii=False, default=str)
+            except (TypeError, ValueError) as exc:
+                log.error("PhyloTreeWidget: payload not JSON-serialisable: %s", exc)
+                return
+            # Wrap in an IIFE so any exception inside setTreeData is
+            # surfaced as a console error rather than silently swallowed
+            # by runJavaScript's promise chain.
+            script = (
+                "(function(){try{if(typeof window.setTreeData==='function')"
+                f"{{window.setTreeData({payload});}}else{{console.error("
+                "'PhyloTreeWidget: window.setTreeData is not defined');"
+                "}}return null;}}catch(e){{console.error("
+                f"'PhyloTreeWidget setTreeData threw:',e);return null;}})()"
+            )
+            self.page().runJavaScript(script)
 
 
 class ExtractPage(ScrollArea):
