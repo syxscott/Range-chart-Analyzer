@@ -274,14 +274,16 @@ ABUNDANCE_DIAGRAM_SCHEMA = MergeSchema(
 )
 
 # Schema for phylogenetic-tree results. Nodes are the primary rows
-# (deduped by ``id``); species names collapse by majority across runs;
-# metadata, root_ids, and legend are unioned as named lists.
+# (deduped by ``id``); species names collapse by majority across runs.
+# metadata and legend are single dicts (not lists) and must NOT be in
+# list_keys — _merge_named_lists iterates dict keys via .extend() which
+# would destroy their values. root_ids is a genuine list and is safe.
 PHYLOGENETIC_TREE_SCHEMA = MergeSchema(
     primary_list_key="nodes",
     primary_id_keys=["id"],
     primary_str_mode_fields=["name"],
     sort_keys=[("agreement_count", "desc"), ("name", "asc")],
-    list_keys=["metadata", "root_ids", "legend"],
+    list_keys=["root_ids"],
     confidence_field="confidence",
 )
 
@@ -676,6 +678,14 @@ def merge_results(
     out = {"runs": n}
     out[sch.primary_list_key] = _merge_primary_list(runs, sch, n)
     out.update(_merge_named_lists(runs, sch))
+
+    # For phylogenetic tree, metadata and legend are single dicts (not
+    # lists). They are identical across runs for the same image; preserve
+    # from the first run to keep them in the merged output.
+    if sch.primary_list_key == "nodes" and sch is not RANGE_CHART_SCHEMA:
+        for key in ("metadata", "legend"):
+            if runs and isinstance(runs[0], dict) and key in runs[0]:
+                out[key] = runs[0][key]
 
     confs = []
     for r in runs:
