@@ -1,5 +1,12 @@
-// config.js - default API settings and localStorage helpers
+// config.js - default API settings and localStorage / sessionStorage helpers
 'use strict';
+
+// F-22 FIX: apiKey is stored in sessionStorage only — it is NEVER persisted
+// to localStorage.  sessionStorage is cleared when the browser tab closes,
+// so the key never survives across sessions on shared computers.
+// On shared computers: do NOT check "remember" (it controls other settings
+// persistence only); close the tab when done; prefer a private/incognito
+// window so other tabs are isolated too.
 
 const RCA_CONFIG = {
   defaultEndpoint: 'https://api.minimaxi.com/anthropic',
@@ -40,9 +47,16 @@ const RCA_STORE = {
   rememberKey: 'rca.rememberKey',
 };
 
+// F-22 FIX: apiKey ALWAYS uses sessionStorage — never localStorage.
+// All other keys continue to use localStorage.
+function _storageFor(key) {
+  return key === RCA_STORE.apiKey ? sessionStorage : localStorage;
+}
+
 function rcaStoreGet(key, fallback) {
   try {
-    const v = localStorage.getItem(key);
+    const store = _storageFor(key);
+    const v = store.getItem(key);
     return v === null ? (fallback ?? '') : v;
   } catch (_e) {
     return fallback ?? '';
@@ -54,10 +68,11 @@ function rcaStoreSet(key, value) {
   // (quota exceeded, security-restricted context, etc.). Callers can
   // surface a real error instead of an optimistic toast that lies.
   try {
+    const store = _storageFor(key);
     if (value === null || value === undefined || value === '') {
-      localStorage.removeItem(key);
+      store.removeItem(key);
     } else {
-      localStorage.setItem(key, String(value));
+      store.setItem(key, String(value));
     }
     return true;
   } catch (_e) {

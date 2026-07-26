@@ -1,0 +1,54 @@
+{
+  "version": "1.0.0",
+  "description": "Gold-standard test set index",
+  "cases": [
+    {
+      "type": "range_chart",
+      "id": "rc_synth_001",
+      "synthetic": true,
+      "seed": 0
+    },
+    {
+      "type": "range_chart",
+      "id": "rc_synth_002",
+      "synthetic": true,
+      "seed": 1
+    },
+    {
+      "type": "range_chart",
+      "id": "rc_synth_003",
+      "synthetic": true,
+      "seed": 2
+    },
+    {
+      "type": "columnar_section",
+      "id": "cs_synth_001",
+      "synthetic": true,
+      "seed": 10
+    },
+    {
+      "type": "columnar_section",
+      "id": "cs_synth_002",
+      "synthetic": true,
+      "seed": 11
+    },
+    {
+      "type": "abundance",
+      "id": "ab_synth_001",
+      "synthetic": true,
+      "seed": 20
+    },
+    {
+      "type": "abundance",
+      "id": "ab_synth_002",
+      "synthetic": true,
+      "seed": 21
+    },
+    {
+      "type": "phylogenetic_tree",
+      "id": "pt_synth_001",
+      "synthetic": true,
+      "seed": 30
+    }
+  ]
+}

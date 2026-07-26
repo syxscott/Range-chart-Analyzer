@@ -18,11 +18,23 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
+# P0-6: 10 common ICZN open-nomenclature markers.
+# Long-pattern forms must appear before shorter sub-patterns (e.g. ex gr.
+# before gr., s.str. before s., comb. nov. before nov.).
 _QUALIFIER_PATTERNS = [
-    (re.compile(r"\s+spp?\.?$", re.IGNORECASE), "sp"),
-    (re.compile(r"\s*cf\.?\s+", re.IGNORECASE), "cf"),
-    (re.compile(r"\s*aff\.?\s+", re.IGNORECASE), "aff"),
-    (re.compile(r"\s+\?$", re.IGNORECASE), "unidentified"),
+    (re.compile(r"\bex\s+gr(?:oup)?\.?\b", re.IGNORECASE), "ex gr."),
+    (re.compile(r"\bs\.?\s*l\.?\b", re.IGNORECASE), "s.l."),
+    (re.compile(r"\bs\.?\s*str\.?\b", re.IGNORECASE), "s.str."),
+    (re.compile(r"\bsp\.?\b", re.IGNORECASE), "sp."),
+    (re.compile(r"\bspp\.?\b", re.IGNORECASE), "spp."),
+    (re.compile(r"\bcf\.?\s+", re.IGNORECASE), "cf."),
+    (re.compile(r"\baff\.?\s+", re.IGNORECASE), "aff."),
+    (re.compile(r"\?\s*$"), "?"),
+    (re.compile(r"\bnom\.?\s+(dub|nud|nov|cons|obl|rej|van)\b", re.IGNORECASE), "nom. \\1"),
+    (re.compile(r"\bcomb\.?\s+nov\.?\b", re.IGNORECASE), "comb. nov."),
+    (re.compile(r"\bstat\.?\s+nov\.?\b", re.IGNORECASE), "stat. nov."),
+    (re.compile(r"\bsubsp\.?\b", re.IGNORECASE), "subsp."),
+    (re.compile(r"\bvar\.?\b", re.IGNORECASE), "var."),
 ]
 
 
@@ -32,7 +44,13 @@ def _extract_qualifiers(s: str) -> frozenset:
         return frozenset()
     quals = set()
     for pattern, name in _QUALIFIER_PATTERNS:
-        if pattern.search(s):
+        m = pattern.search(s)
+        if not m:
+            continue
+        if '\\1' in name:
+            # Pattern has a backreference placeholder: resolve it from m.group(1)
+            quals.add(name.replace('\\1', m.group(1)))
+        else:
             quals.add(name)
     return frozenset(quals)
 
@@ -164,14 +182,13 @@ def _merge_structured_field(values):
         for item in v:
             if not isinstance(item, dict):
                 continue
-            # Signature is a sorted frozenset of values. Stable across dict
-            # iteration but only catches values that compare equal; that
-            # is the best we can do without a domain-specific schema.
+            # P1-11 fix: coerce all values to str before repr so that
+            # {"a": 8} and {"a": "8"} produce the same signature and merge.
             try:
-                sig = repr(sorted(item.items()))
-            except TypeError:
-                # Mixed-type dict value; fall back to a coerced signature.
                 sig = repr(sorted(((k, str(val)) for k, val in item.items())))
+            except TypeError:
+                # Fall back to bare repr for truly unhashable values.
+                sig = repr(sorted(item.items()))
             if sig in seen:
                 continue
             seen.add(sig)
@@ -370,9 +387,14 @@ def _empty_for(schema: MergeSchema, runs_n: int) -> dict[str, Any]:
 
 def _is_chimeric_row(group: list, merged: dict) -> bool:
     """P1-1 (REVIEW-2026-07-25): return True if the merged row's
-    (range_base, range_top, biozone) tuple never appears in any single
-    source run — i.e. the per-field mode vote produced a recombination
-    that no individual run ever observed.
+    (range_base, range_top, biozone, section) tuple never appears in any
+    single source run — i.e. the per-field mode vote produced a
+    recombination that no individual run ever observed.
+
+    P0-5 fix: include section in the chimera detection key. Same species
+    in DIFFERENT sections is NOT a chimera — it's a legitimate multi-section
+    observation. Without section in the key, two runs of the same species
+    in two different sections would falsely look like a chimeric consensus.
 
     Scientific meaning: emitting such a row as if it were a real
     consensus is misleading. The merged tuple may still be internally
@@ -382,7 +404,9 @@ def _is_chimeric_row(group: list, merged: dict) -> bool:
     """
     if len(group) < 2:
         return False
-    keys = ("range_base", "range_top", "biozone")
+    # P0-5 fix: include section so same species across different sections
+    # are NOT flagged as chimeras (they are legitimate multi-section obs).
+    keys = ("range_base", "range_top", "biozone", "section")
     merged_tuple = tuple(_norm(merged.get(k, "")) for k in keys)
     if not any(merged_tuple):
         return False  # no scientific content to compare

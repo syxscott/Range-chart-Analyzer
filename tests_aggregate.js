@@ -201,5 +201,51 @@ function assert(name, got, want) {
   check('nl-crossbeds-distinct-kept', m3.cross_beds.length === 2);
 }
 
+// ---------------------------------------------------------------------------
+// P2-3 (REVIEW-2026-07-25): golden e2e fixture — a single known
+// extraction input produces a stable, known-good aggregated output.
+// Locks in the cross-Python-JS behavior of the merge + classify +
+// quality pipeline against future regressions.
+// ---------------------------------------------------------------------------
+function test_golden_e2e_range_chart() {
+  // Construct two normalized range-chart payloads directly (this file
+  // doesn't load minimax.js — it focuses on the merge layer).
+  const norm1 = {
+    sections: [{name:'Sec-A', age_range:'Albian-Cen', formations:['Fm A'],
+                formation_thickness_m:'10', coordinates:''}],
+    species_ranges: [
+      {species:'Genus alpha sp.', section:'Sec-A',
+       range_top:'Bed 9', range_base:'Bed 7', biozone:'Zone B',
+       author:'Smith', year:'1950', author_year:'Smith, 1950',
+       endpoint_kind:'observed', reworked:false},
+      {species:'Genus beta sp.', section:'Sec-A',
+       range_top:'Bed 11', range_base:'Bed 8', biozone:'Zone C',
+       author:'Jones', year:'1970', author_year:'Jones, 1970',
+       endpoint_kind:'projected', reworked:false},
+    ],
+    biozones: [
+      {name:'Zone B', section:'Sec-A', age:'Albian', thickness_m:'3'},
+      {name:'Zone C', section:'Sec-A', age:'Albian-Cen', thickness_m:'3'},
+    ],
+    other_fossils: [], confidence: 0.9,
+  };
+  const norm2 = JSON.parse(JSON.stringify(norm1));
+  const merged = rcaMergeResults([norm1, norm2], 2);
+  check('p2-3: golden species_ranges length=2',
+        merged.species_ranges && merged.species_ranges.length === 2);
+  const a = merged.species_ranges.find(s => s.species && s.species.indexOf('alpha') >= 0);
+  const b = merged.species_ranges.find(s => s.species && s.species.indexOf('beta') >= 0);
+  check('p2-3: golden alpha range_base=Bed 7',  a && a.range_base === 'Bed 7');
+  check('p2-3: golden alpha range_top=Bed 9',   a && a.range_top === 'Bed 9');
+  check('p2-3: golden alpha biozone=Zone B',    a && a.biozone === 'Zone B');
+  check('p2-3: golden alpha author_year=Smith, 1950',
+        a && a.author_year === 'Smith, 1950');
+  check('p2-3: golden beta range_top=Bed 11',   b && b.range_top === 'Bed 11');
+  check('p2-3: golden agreement_count=2 for alpha',
+        a && a.agreement_count === 2);
+  check('p2-3: golden agreement=2/2', a && a.agreement === '2/2');
+}
+test_golden_e2e_range_chart();
+
 console.log('---', pass, 'passed,', fail, 'failed ---');
 process.exit(fail ? 1 : 0);

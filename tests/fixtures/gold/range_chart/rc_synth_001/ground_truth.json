@@ -1,0 +1,113 @@
+{
+  "metadata": {
+    "chart_type": "range_chart",
+    "extraction_version": "1.0.0",
+    "synthetic": true,
+    "seed": 0
+  },
+  "sections": [
+    {
+      "name": "Section X",
+      "age_range": "Late Jurassic",
+      "formations": [
+        "Corallian"
+      ],
+      "coordinates": "N52.45° W0.12°"
+    },
+    {
+      "name": "Section Y",
+      "age_range": "Middle Jurassic",
+      "formations": [
+        "Oxford Clay"
+      ],
+      "coordinates": "N51.51° W0.51°"
+    }
+  ],
+  "species_ranges": [
+    {
+      "species": "Gryphaea arcuata",
+      "section": "Section Y",
+      "range_top": "13",
+      "range_base": "8",
+      "biozone": "Koslovites Biozone",
+      "author": "Jones",
+      "year": "1954",
+      "author_year": "Smith, 1944",
+      "range_top_bed": "Bed 13",
+      "range_base_bed": "Bed 8",
+      "endpoint_kind": "observed",
+      "occurrence_mode": "in_situ"
+    },
+    {
+      "species": "Dactylioceras commune",
+      "section": "Section X",
+      "range_top": "8",
+      "range_base": "3",
+      "biozone": "Aspidoceras Zone",
+      "author": "Brown",
+      "year": "1982",
+      "author_year": "Jones, 1948",
+      "range_top_bed": "Bed 8",
+      "range_base_bed": "Bed 3",
+      "endpoint_kind": "observed",
+      "occurrence_mode": "in_situ"
+    },
+    {
+      "species": "Ammonites ? koslovensis",
+      "section": "Section X",
+      "range_top": "13",
+      "range_base": "10",
+      "biozone": "Aspidoceras Zone",
+      "author": "Brown",
+      "year": "1922",
+      "author_year": "Jones, 1951",
+      "range_top_bed": "Bed 13",
+      "range_base_bed": "Bed 10",
+      "endpoint_kind": "observed",
+      "occurrence_mode": "in_situ"
+    },
+    {
+      "species": "Orthoceros regulare",
+      "section": "Section Y",
+      "range_top": "6",
+      "range_base": "2",
+      "biozone": "Oxynotes Zone",
+      "author": "Brown",
+      "year": "1961",
+      "author_year": "Smith, 1950",
+      "range_top_bed": "Bed 6",
+      "range_base_bed": "Bed 2",
+      "endpoint_kind": "observed",
+      "occurrence_mode": "in_situ"
+    },
+    {
+      "species": "Inoceramus elongatus",
+      "section": "Section Y",
+      "range_top": "13",
+      "range_base": "8",
+      "biozone": "Aspidoceras Zone",
+      "author": "Brown",
+      "year": "1881",
+      "author_year": "Smith, 1972",
+      "range_top_bed": "Bed 13",
+      "range_base_bed": "Bed 8",
+      "endpoint_kind": "observed",
+      "occurrence_mode": "in_situ"
+    }
+  ],
+  "biozones": [
+    {
+      "name": "Koslovites Biozone",
+      "section": "Section X",
+      "age": "Middle Jurassic",
+      "zone_type": "assemblage_zone"
+    },
+    {
+      "name": "Oxynotes Zone",
+      "section": "Section Y",
+      "age": "Early Cretaceous",
+      "zone_type": "assemblage_zone"
+    }
+  ],
+  "confidence": 0.95
+}

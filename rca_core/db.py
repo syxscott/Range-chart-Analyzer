@@ -52,8 +52,45 @@ CREATE TABLE IF NOT EXISTS history (
     partial_failures INTEGER DEFAULT 0,
     duration_ms INTEGER DEFAULT 0,
     status_code INTEGER,
-    notes TEXT DEFAULT ''
+    notes TEXT DEFAULT '',
+    -- P1-5 (REVIEW-2026-07-25): provenance fields for edit tracking
+    last_edited_at TEXT,
+    last_editor TEXT,
+    edit_count INTEGER DEFAULT 0,
+    edit_provenance TEXT,
+    -- P1-1 (REVIEW-2026-07-27): mandatory image fingerprint for 5-year audits
+    image_sha256 TEXT,
+    -- P1-2 (REVIEW-2026-07-27): per-request metadata (model, max_tokens, etc.)
+    request_meta TEXT
 );
+
+-- P2 (REVIEW-2026-07-27): raw_responses — full LLM responses per run, no truncation
+CREATE TABLE IF NOT EXISTS raw_responses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    record_id INTEGER NOT NULL,
+    run_idx INTEGER NOT NULL DEFAULT 0,
+    raw_text TEXT,
+    prompt_text TEXT,
+    request_meta TEXT,
+    timestamp INTEGER,
+    FOREIGN KEY (record_id) REFERENCES history(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_raw_responses_record ON raw_responses(record_id, run_idx);
+
+-- P3 (REVIEW-2026-07-27): record_edits — immutable audit trail of all edits
+CREATE TABLE IF NOT EXISTS record_edits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    record_id INTEGER NOT NULL,
+    timestamp INTEGER NOT NULL,
+    editor TEXT,
+    edit_type TEXT NOT NULL,
+    row_idx INTEGER,
+    col_name TEXT,
+    before JSON,
+    after JSON,
+    FOREIGN KEY (record_id) REFERENCES history(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_record_edits_record ON record_edits(record_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_history_ts ON history(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_history_mode ON history(mode);
 
@@ -146,6 +183,42 @@ class Database:
         with self.transaction() as conn:
             conn.executescript(SCHEMA)
             self._apply_migrations(conn)
+            # P1-5 (REVIEW-2026-07-25): add edit-provenance columns to
+            # pre-existing databases that predate this schema. Idempotent
+            # — silent no-op if columns already exist.
+            self._add_provenance_columns(conn)
+
+    def _add_provenance_columns(self, conn: sqlite3.Connection) -> None:
+        """Add edit_provenance columns to existing history table.
+
+        SQLite has no IF NOT EXISTS for ALTER TABLE ADD COLUMN in older
+        versions; we work around by inspecting pragma_table_info.
+        """
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(history)").fetchall()
+        }
+        additions = []
+        for col, decl in (
+            ("last_edited_at", "TEXT"),
+            ("last_editor", "TEXT"),
+            ("edit_provenance", "TEXT"),
+            ("image_sha256", "TEXT"),
+            ("request_meta", "TEXT"),
+        ):
+            if col not in existing:
+                additions.append(f"ALTER TABLE history ADD COLUMN {col} {decl}")
+        if "edit_count" not in existing:
+            additions.append(
+                "ALTER TABLE history ADD COLUMN edit_count INTEGER DEFAULT 0"
+            )
+        for stmt in additions:
+            try:
+                conn.execute(stmt)
+            except sqlite3.DatabaseError:
+                # Defensive: pragma above should have caught this; if not,
+                # the user can re-create by renaming the DB.
+                pass
 
     def close(self) -> None:
         """Close the underlying connection. Idempotent."""
@@ -274,6 +347,40 @@ class Database:
             cur = self._conn.execute(sql, params)
             return cur.fetchone()
 
+
+# P2/P3 migrations (REVIEW-2026-07-27): add raw_responses and record_edits tables.
+# Note: image_sha256 and request_meta columns are added by _add_provenance_columns
+# (called before _apply_migrations in _apply_setup), so we don't ADD them here.
+Database._MIGRATIONS.append((
+    0, 1,
+    """
+    CREATE TABLE IF NOT EXISTS raw_responses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id INTEGER NOT NULL,
+        run_idx INTEGER NOT NULL DEFAULT 0,
+        raw_text TEXT,
+        prompt_text TEXT,
+        request_meta TEXT,
+        timestamp INTEGER,
+        FOREIGN KEY (record_id) REFERENCES history(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_raw_responses_record ON raw_responses(record_id, run_idx);
+
+    CREATE TABLE IF NOT EXISTS record_edits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id INTEGER NOT NULL,
+        timestamp INTEGER NOT NULL,
+        editor TEXT,
+        edit_type TEXT NOT NULL,
+        row_idx INTEGER,
+        col_name TEXT,
+        before JSON,
+        after JSON,
+        FOREIGN KEY (record_id) REFERENCES history(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_record_edits_record ON record_edits(record_id, timestamp);
+    """
+))
 
 # Bug-14 fix: auto-derive the target schema version from the migration
 # list. Empty list → 0 (initial SCHEMA above is the baseline). Each

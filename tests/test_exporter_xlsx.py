@@ -74,8 +74,11 @@ class TestToXlsxFormulaInjection(unittest.TestCase):
                  "formation_thickness_m": "10m", "coordinates": ""},
             ],
             "species_ranges": [
+                # F-1 fix: added biozone="B Zone" to satisfy
+                # has_biozone_or_age invariant; without it to_xlsx
+                # raises ValueError before reaching the formula guard.
                 {"species": "=cmd|'/C calc'!A0", "section": "S1",
-                 "range_base": "B1", "range_top": "B2", "biozone": ""},
+                 "range_base": "B1", "range_top": "B2", "biozone": "B Zone"},
             ],
             "biozones": [],
             "other_fossils": [],
@@ -97,8 +100,11 @@ class TestToXlsxFormulaInjection(unittest.TestCase):
             "sections": [{"name": "S1", "age_range": "", "formations": [],
                           "formation_thickness_m": "", "coordinates": ""}],
             "species_ranges": [
+                # F-1 fix: added biozone + non-empty range_base/range_top
+                # to satisfy has_biozone_or_age and required-field invariants.
                 {"species": "=HYPERLINK(\"http://evil/\")",
-                 "section": "S1", "range_base": "", "range_top": "", "biozone": ""},
+                 "section": "S1", "range_base": "B1", "range_top": "B2",
+                 "biozone": "B Zone"},
             ],
             "biozones": [],
             "other_fossils": [],
@@ -250,7 +256,7 @@ class TestApplyTableEditsPreservesExtras(unittest.TestCase):
                           "formation_thickness_m": "", "coordinates": ""}],
             "species_ranges": [
                 {"species": "A", "section": "S1", "range_base": "B1",
-                 "range_top": "B2", "biozone": "",
+                 "range_top": "B2", "biozone": "Zone A",
                  "_extras": {"k": 1}},
             ],
             "biozones": [{"name": "Z", "section": "S1", "age": "", "thickness_m": ""}],
@@ -350,8 +356,9 @@ class TestNaNSanitization(unittest.TestCase):
             "species_ranges": [
                 # NaN slips in via a float field; verify it doesn't
                 # end up in the XLSX as the literal text "nan".
+                # F-1 fix: added biozone to satisfy has_biozone_or_age invariant.
                 {"species": "A", "section": "S1", "range_base": float("nan"),
-                 "range_top": float("inf"), "biozone": ""},
+                 "range_top": float("inf"), "biozone": "Zone A"},
             ],
             "biozones": [],
             "other_fossils": [],

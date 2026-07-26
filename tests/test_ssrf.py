@@ -142,3 +142,75 @@ class TestSSRF:
                 assert 'refused' in str(e).lower() or e.code == 302
         finally:
             httpd.shutdown()
+
+    # ---- Regression: server.py opener must NOT overwrite llm's _NoRedirect ----
+    def test_server_opener_includes_no_redirect(self):
+        """Regression for P0-1 (REVIEW-2026-07-25): server.py's
+        _make_pinning_opener() must register a _NoRedirect handler so the
+        final opener still refuses 3xx redirects.
+
+        Without this, server.py would silently follow 302 Location:
+        http://169.254.169.254/... after the LLM API itself returned one,
+        bypassing the endpoint validator.
+        """
+        from rca_core.llm import _NoRedirect
+        from server import _make_pinning_opener
+        opener = _make_pinning_opener()
+        has_no_redirect = any(isinstance(h, _NoRedirect) for h in opener.handlers)
+        assert has_no_redirect, (
+            "_make_pinning_opener() did not register a _NoRedirect handler; "
+            "outbound calls would follow 3xx and bypass SSRF guards. "
+            "Fix: build_opener(_PinnedHTTPSHandler(), _NoRedirect())."
+        )
+
+    def test_server_opener_blocks_3xx_e2e(self):
+        """End-to-end: install server's opener, send GET to local 302 server,
+        assert urllib.request.urlopen raises HTTPError rather than following.
+        """
+        from rca_core.llm import _NoRedirect
+        from server import _make_pinning_opener
+        import urllib.request
+
+        opener = _make_pinning_opener()
+        # Save and restore the global opener around the test.
+        prev_opener = getattr(urllib.request, '_opener', None)
+        urllib.request.install_opener(opener)
+        try:
+            class _RH(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    self.send_response(302)
+                    self.send_header('Location', 'http://169.254.169.254/latest/meta-data/')
+                    self.end_headers()
+                def log_message(self, *a, **k):
+                    pass
+
+            for _ in range(10):
+                try:
+                    sock = socket.socket()
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    sock.bind(('127.0.0.1', 0))
+                    port = sock.getsockname()[1]
+                    sock.close()
+                    break
+                except OSError:
+                    continue
+
+            httpd = ThreadingHTTPServer(('127.0.0.1', port), _RH)
+            t = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t.start()
+            try:
+                req = urllib.request.Request(f'http://127.0.0.1:{port}/')
+                try:
+                    urllib.request.urlopen(req, timeout=3)
+                    raise AssertionError(
+                        "server.py opener followed 3xx — _NoRedirect missing"
+                    )
+                except urllib.error.HTTPError as e:
+                    assert 'refused' in str(e).lower() or e.code == 302, (
+                        f"unexpected HTTPError: {e.code} {e.reason}"
+                    )
+            finally:
+                httpd.shutdown()
+        finally:
+            if prev_opener is not None:
+                urllib.request.install_opener(prev_opener)

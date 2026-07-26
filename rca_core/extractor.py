@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from .image_hash import compute_image_sha256_from_b64
 from .json_utils import safe_json_loads
 from .llm import ApiFormat, LlmProvider, call_llm_api
 from .prompt import (
@@ -85,6 +86,20 @@ def clamp_max_edge(value):
     return max(MIN_MAX_EDGE, min(v, MAX_MAX_EDGE))
 
 
+# P1-5 (REVIEW-2026-07-25): occurrence mode enum for species rows.
+# Replaces the old boolean `reworked` field with a string classification
+# of how the taxon occurred in the section.
+VALID_OCCURRENCE_MODES = frozenset({
+    "in_situ",
+    "reworked",
+    "transported",
+    "cavity_fill",
+    "bioturbated",
+    "derived",
+    "lag_deposit",
+})
+
+
 @dataclass
 class ExtractResult:
     ok: bool = False
@@ -110,6 +125,16 @@ class ExtractResult:
     # a clear "result may be incomplete" banner without flipping `ok`
     # to False (which would discard otherwise-usable data).
     warning: str = ""
+    # P1-1/P1-2 (REVIEW-2026-07-27): mandatory image fingerprint and per-request
+    # metadata. image_sha256 survives clipboard-paste / no-source-path cases
+    # so a 5-year audit can prove "this record came from THAT image".
+    image_sha256: str = ""
+    request_meta: dict[str, Any] = field(default_factory=dict)
+    # P1-1 (REVIEW-2026-07-27): SHA-256 image fingerprint for 5-year audits.
+    # Stored even when source_path is missing (clipboard paste, re-upload).
+    image_sha256: str = ""
+    # P1-2 (REVIEW-2026-07-27): per-request metadata (model, max_tokens, etc.)
+    request_meta: dict[str, Any] = field(default_factory=dict)
 
 
 def _enhance_image_pil(img: "Image.Image") -> "Image.Image":
@@ -281,6 +306,18 @@ def _classify_array_item(item: dict[str, Any]) -> str | None:
     """
     if not isinstance(item, dict):
         return None
+    # P0-4: explicit zone_type wins over all heuristics.
+    zt = item.get("zone_type")
+    if isinstance(zt, str):
+        zt_lower = zt.strip().lower()
+        if zt_lower in {"biozone", "zone", "assemblage_zone", "interval_zone",
+                       "lineage_zone", "acme_zone", "oppel_zone", "range_zone",
+                       "subzone", "zonule"}:
+            return "biozones"
+        if zt_lower in {"species_range", "taxon_range", "fad_lad"}:
+            return "species_ranges"
+        if zt_lower in {"section", "measured_section", "locality"}:
+            return "sections"
     # Species ranges have "species" (the primary identifier) and range bounds.
     if "species" in item or ("range_top" in item and "range_base" in item):
         return "species_ranges"
@@ -292,10 +329,7 @@ def _classify_array_item(item: dict[str, Any]) -> str | None:
     # a stratigraphic section into the biozones table, breaking all
     # biozone/range coupling validation downstream.
     name_str = (item.get("name") or "").strip()
-    is_zone_label = bool(
-        _IRON_RULE_ZONE_RE.search(name_str)
-        or "zone_type" in item
-    )
+    is_zone_label = bool(_IRON_RULE_ZONE_RE.search(name_str))
     if "name" in item and "age" in item and is_zone_label:
         return "biozones"
     # Sections have "name" and typically "age_range" or "formations".
@@ -315,12 +349,12 @@ def _carry_extras(item: dict[str, Any], known: tuple[str, ...], out: dict[str, A
     """H8: any non-known key the model emitted is preserved under a single
     ``_extras`` dict so downstream consumers (CSV/JSON export) can see it.
 
-    B-5 MEDIUM fix: when the caller has already pre-populated ``out['_extras']``
-    (e.g. with a ``wrapper_key`` for dict-shaped array unwrap), we MERGE the
-    new extras instead of overwriting, so both the structural hint and the
-    model-emitted unknown keys survive.
+    P0-3 fix: also skip keys that are already top-level fields in ``out``.
+    When the caller pre-populates ``out`` with explicit keys (e.g. endpoint_kind,
+    occurrence_mode, range_top_bed), those fields must NOT also appear in
+    _extras even if the raw item also carries them.
     """
-    extras = {k: v for k, v in item.items() if k not in known}
+    extras = {k: v for k, v in item.items() if k not in known and k not in out}
     if not extras:
         return
     existing = out.get("_extras")
@@ -365,6 +399,29 @@ def _normalize_section_into(sec: dict[str, Any],
     target.append(row)
 
 
+def _normalize_occurrence_mode(sp: dict[str, Any]) -> str:
+    """Extract occurrence_mode from a species row dict.
+
+    P1-5: replaces the old boolean `reworked` field with a string
+    `occurrence_mode` field. Valid values: in_situ | reworked | transported
+    | cavity_fill | bioturbated | derived | lag_deposit.
+
+    Backward compatibility: if the source dict still uses the old
+    ``reworked: bool`` field, map True → "reworked" and False → "in_situ".
+    If ``occurrence_mode`` is already a valid string, use it as-is.
+    """
+    raw = sp.get("occurrence_mode")
+    if isinstance(raw, str) and raw in VALID_OCCURRENCE_MODES:
+        return raw
+    # Fallback: check old boolean `reworked` field.
+    reworked = sp.get("reworked")
+    if isinstance(reworked, bool):
+        return "reworked" if reworked else "in_situ"
+    # Default
+    return "in_situ"
+
+
+
 def _normalize_species_into(sp: dict[str, Any],
                             target: list[dict[str, Any]]) -> None:
     """Build a species_ranges row from a raw dict and append it."""
@@ -391,16 +448,20 @@ def _normalize_species_into(sp: dict[str, Any],
         "range_top_bed": s(sp.get("range_top_bed", "")),
         "range_base_bed": s(sp.get("range_base_bed", "")),
         "endpoint_kind": s(sp.get("endpoint_kind") if str(sp.get("endpoint_kind")) in ("observed", "projected", "truncated") else "observed"),
-        "reworked": sp.get("reworked"),
+        # P1-5 fix: replace boolean `reworked` with string `occurrence_mode`.
+        # Accepts: in_situ | reworked | transported | cavity_fill | bioturbated |
+        # derived | lag_deposit. Backward-compat: old `reworked` bool maps to
+        # "reworked" (True) or "in_situ" (False).
+        "occurrence_mode": _normalize_occurrence_mode(sp),
         # H-8 fix: prompt explicitly asks for a note field for degraded
         # determinations; it was never written to the output row.
         "note": s(sp.get("note", "")),
     }
     _carry_extras(sp, _KNOWN_SPECIES_KEYS, row)
-    # If reworked is None / missing, normalize to False for downstream
-    # consumers that expect a boolean.
-    if row.get("reworked") is None:
-        row["reworked"] = False
+    # P0-4: defensive — if species name looks like a zone, flag & strip.
+    sp_name = row["species"]
+    if sp_name and _IRON_RULE_ZONE_RE.search(sp_name):
+        row["note"] = (row["note"] + " [zone-mislabel-warning]").strip()
     target.append(row)
 
 
@@ -408,23 +469,39 @@ def _normalize_biozone_into(bz: dict[str, Any],
                             target: list[dict[str, Any]]) -> None:
     """Build a biozones row from a raw dict and append it.
 
-    MEDIUM fix: zone_type was previously handled but the field was never
-    requested by the prompt, making the branch dead. Now the field is
-    included in _KNOWN_BIOZONE_KEYS so it survives into _extras when the
-    model emits it, and the suffix-append logic keeps working uniformly.
+    P0-4: enforces zone_type field. Infers zone_type from name keywords
+    when not explicitly provided: assemblage, acme, lineage, interval, zonule,
+    subzone, oppel, range zone.
     """
     def s(v):
         return "" if v is None else str(v)
 
-    name = s(bz.get("name"))
-    zone_type = s(bz.get("zone_type", "")).strip().lower()
-    if zone_type and zone_type not in name.lower():
-        name = f"{name} ({zone_type})"
+    name = s(bz.get("name")).strip()
+    # P0-4: infer zone_type from name keywords when not explicitly provided.
+    inferred_zt = "biozone"
+    nl = name.lower()
+    if "assemblage" in nl or "ass." in nl:
+        inferred_zt = "assemblage_zone"
+    elif "acme" in nl:
+        inferred_zt = "acme_zone"
+    elif "lineage" in nl:
+        inferred_zt = "lineage_zone"
+    elif "interval" in nl:
+        inferred_zt = "interval_zone"
+    elif re.search(r"\bzonule\b", nl):
+        inferred_zt = "zonule"
+    elif re.search(r"\bsubzone\b", nl):
+        inferred_zt = "subzone"
+    elif "oppel" in nl:
+        inferred_zt = "oppel_zone"
+    elif "range zone" in nl or "taxon-range" in nl:
+        inferred_zt = "range_zone"
     row = {
         "name": name,
-        "section": s(bz.get("section")),
-        "age": s(bz.get("age")),
-        "thickness_m": s(bz.get("thickness_m")),
+        "section": s(bz.get("section", "")),
+        "age": s(bz.get("age", "")),
+        "thickness_m": s(bz.get("thickness_m", "")),
+        "zone_type": s(bz.get("zone_type") or inferred_zt),
     }
     _carry_extras(bz, _KNOWN_BIOZONE_KEYS, row)
     target.append(row)
@@ -620,6 +697,10 @@ def extract_range_chart(
     """
     if not image_b64:
         return ExtractResult(ok=False, error_key="err.imageRead")
+    # P1-1 (REVIEW-2026-07-27): compute image fingerprint early, before any
+    # processing, so clipboard paste / canvas-extracted / re-uploaded images
+    # have a verifiable bytes-level identity even when source_path is absent.
+    image_sha256 = compute_image_sha256_from_b64(image_b64)
     p = provider or LlmProvider(
         name="Legacy Anthropic-compatible",
         api_format=ApiFormat.ANTHROPIC,
@@ -659,6 +740,7 @@ def extract_range_chart(
             ok=False, error_key="err.extract",
             raw="", latency_ms=latency_ms,
             warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+            image_sha256=image_sha256,
         )
     latency_ms = int((time.perf_counter() - t0) * 1000)
     # Truncation is partial-success — the model returned something but
@@ -714,7 +796,8 @@ def extract_range_chart(
     )
 
 
-def _error_from_status(status: int | None, err_body: str = "", latency_ms: int = 0) -> ExtractResult:
+def _error_from_status(status: int | None, err_body: str = "", latency_ms: int = 0,
+                       *, image_sha256: str = "") -> ExtractResult:
     """Translate an HTTP status code into an ExtractResult.
 
     H6: when ``call_llm_api`` returns ``status=None`` it means the request
@@ -728,7 +811,7 @@ def _error_from_status(status: int | None, err_body: str = "", latency_ms: int =
     if status is None:
         return ExtractResult(
             ok=False, error_key="err.network", status=None, error_body=err_body,
-            latency_ms=latency_ms,
+            latency_ms=latency_ms, image_sha256=image_sha256,
         )
     key = "err.http"
     if status == 401:
@@ -739,7 +822,7 @@ def _error_from_status(status: int | None, err_body: str = "", latency_ms: int =
         key = "err.429"
     return ExtractResult(
         ok=False, error_key=key, status=status, error_body=err_body,
-        latency_ms=latency_ms,
+        latency_ms=latency_ms, image_sha256=image_sha256,
     )
 
 
@@ -1008,6 +1091,8 @@ def extract_columnar_section(
     """Columnar-section extraction. Same contract as extract_range_chart."""
     if not image_b64:
         return ExtractResult(ok=False, error_key="err.imageRead")
+    # P1-1 (REVIEW-2026-07-27): mandatory image fingerprint.
+    image_sha256 = compute_image_sha256_from_b64(image_b64)
     p = provider or LlmProvider(
         name="Legacy Anthropic-compatible",
         api_format=ApiFormat.ANTHROPIC,
@@ -1044,12 +1129,13 @@ def extract_columnar_section(
             ok=False, error_key="err.extract",
             raw="", latency_ms=latency_ms,
             warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+            image_sha256=image_sha256,
         )
     latency_ms = int((time.perf_counter() - t0) * 1000)
     warning = ("Result may be truncated (model hit max_tokens). "
                "Try raising the max_tokens setting and re-running.")
     if raw_text is None:
-        return _error_from_status(status, err_body, latency_ms)
+        return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
     try:
         parsed = safe_json_loads(raw_text)
     except ValueError:
@@ -1058,6 +1144,7 @@ def extract_columnar_section(
             truncated=truncated, latency_ms=latency_ms,
             usage=usage or {},
             warning=warning if truncated else "",
+            image_sha256=image_sha256,
         )
     try:
         data = normalize_columnar_result(parsed)
@@ -1067,11 +1154,13 @@ def extract_columnar_section(
             ok=False, error_key="err.extract",
             raw=raw_text, truncated=truncated, usage=usage or {},
             latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+            image_sha256=image_sha256,
         )
     return ExtractResult(
         ok=True, data=data, raw=raw_text,
         truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
         warning=warning if truncated else "",
+        image_sha256=image_sha256,
     )
 
 
@@ -1191,6 +1280,8 @@ def extract_abundance_diagram(
     """Abundance-diagram extraction. Same contract as extract_range_chart."""
     if not image_b64:
         return ExtractResult(ok=False, error_key="err.imageRead")
+    # P1-1 (REVIEW-2026-07-27): mandatory image fingerprint.
+    image_sha256 = compute_image_sha256_from_b64(image_b64)
     p = provider or LlmProvider(
         name="Legacy Anthropic-compatible",
         api_format=ApiFormat.ANTHROPIC,
@@ -1227,12 +1318,13 @@ def extract_abundance_diagram(
             ok=False, error_key="err.extract",
             raw="", latency_ms=latency_ms,
             warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+            image_sha256=image_sha256,
         )
     latency_ms = int((time.perf_counter() - t0) * 1000)
     warning = ("Result may be truncated (model hit max_tokens). "
                "Try raising the max_tokens setting and re-running.")
     if raw_text is None:
-        return _error_from_status(status, err_body, latency_ms)
+        return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
     try:
         parsed = safe_json_loads(raw_text)
     except ValueError:
@@ -1241,6 +1333,7 @@ def extract_abundance_diagram(
             truncated=truncated, latency_ms=latency_ms,
             usage=usage or {},
             warning=warning if truncated else "",
+            image_sha256=image_sha256,
         )
     try:
         data = normalize_abundance_result(parsed)
@@ -1250,12 +1343,262 @@ def extract_abundance_diagram(
             ok=False, error_key="err.extract",
             raw=raw_text, truncated=truncated, usage=usage or {},
             latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+            image_sha256=image_sha256,
         )
     return ExtractResult(
         ok=True, data=data, raw=raw_text,
         truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
         warning=warning if truncated else "",
+        image_sha256=image_sha256,
     )
+
+
+def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a phylogenetic tree response.
+
+    Schema:
+      {
+        "metadata": {
+          "title": str,
+          "extraction_timestamp": str,  # ISO 8601
+          "tree_type": str,  # "cladogram" | "phylogram" | "dendrogram"
+          "scale": str,  # e.g. "Ma" / "substitutions/site"
+          "rooted": bool,
+          "source": str
+        },
+        "root_ids": list[str],
+        "nodes": [{
+          "id": str,
+          "parent": str | None,  # null for roots
+          "name": str,           # taxon or internal node label
+          "is_leaf": bool,
+          "branch_length": float | None,
+          "node_age_ma": float | None,  # optional, for time-calibrated trees
+          "support": float | None,      # bootstrap 0..100
+          "metadata": dict  # any extra fields (preserved)
+        }],
+        "confidence": float
+      }
+
+    Invariants enforced:
+      - root_ids is non-empty
+      - Every non-root node's parent is in node ids
+      - Each root's parent is None (not just the first)
+      - is_leaf == (children_count == 0) by reverse check
+      - support in [0, 100] or None
+    """
+    # H3-fix pattern: unwrap _array_root wrapper (top-level array from
+    # safe_json_loads wrapped as {_array_root:[...]}).
+    if "_array_root" in raw and isinstance(raw["_array_root"], list):
+        for item in raw["_array_root"]:
+            if not isinstance(item, dict):
+                continue
+            if isinstance(item.get("nodes"), list):
+                raw = item
+                break
+
+    def s(v):
+        return "" if v is None else str(v)
+
+    def fv(v):
+        """Coerce to float or None."""
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    nodes_in = raw.get("nodes") or []
+    if not isinstance(nodes_in, list):
+        nodes_in = []
+
+    # Build id→node lookup and compute children counts (reverse check for is_leaf).
+    id_to_node: dict[str, dict[str, Any]] = {}
+    children_count: dict[str, int] = {}
+    for n in nodes_in:
+        if not isinstance(n, dict):
+            continue
+        nid = str(n.get("id") or "")
+        if nid:
+            id_to_node[nid] = n
+            children_count[nid] = 0
+
+    for n in nodes_in:
+        if not isinstance(n, dict):
+            continue
+        parent = n.get("parent")
+        if parent is not None:
+            pid = str(parent)
+            if pid in children_count:
+                children_count[pid] = children_count.get(pid, 0) + 1
+
+    root_ids = raw.get("root_ids") or []
+    if not root_ids:
+        raise ValueError("root_ids is empty")
+
+    # Validate all root_ids reference actual nodes.
+    for rid in root_ids:
+        if str(rid) not in id_to_node:
+            raise ValueError(f"root_ids contains unknown node id: {rid}")
+
+    nodes_out = []
+    for n in nodes_in:
+        if not isinstance(n, dict):
+            continue
+        nid = str(n.get("id") or "")
+        if not nid:
+            continue
+
+        parent_val = n.get("parent")
+
+        # Invariant: non-root nodes must have a parent in node ids.
+        if nid not in root_ids:
+            if parent_val is None:
+                raise ValueError(f"Non-root node {nid} must have a parent")
+            if str(parent_val) not in id_to_node:
+                raise ValueError(f"Node {nid} references parent {parent_val} not in node ids")
+        else:
+            # Root nodes must have parent == None.
+            if parent_val is not None:
+                raise ValueError(f"Root node {nid} must have parent == None, got {parent_val}")
+
+        # Reverse-check is_leaf: a node is_leaf iff it has no children.
+        is_leaf_input = bool(n.get("is_leaf"))
+        actual_is_leaf = children_count.get(nid, 0) == 0
+        if is_leaf_input != actual_is_leaf:
+            # Override with the correct value; flag the mismatch.
+            is_leaf = actual_is_leaf
+            extra_flag = f"_is_leaf_corrected"
+        else:
+            is_leaf = is_leaf_input
+
+        support_raw = n.get("support")
+        support = fv(support_raw)
+        if support is not None and not (0.0 <= support <= 100.0):
+            raise ValueError(f"support must be in [0, 100] or None, got {support}")
+
+        row = {
+            "id": nid,
+            "parent": str(parent_val) if parent_val is not None else None,
+            "name": s(n.get("name")),
+            "is_leaf": is_leaf,
+            "branch_length": fv(n.get("branch_length")),
+            "node_age_ma": fv(n.get("node_age_ma")),
+            "support": support,
+        }
+        # Carry extras for unknown keys (preserve depth_range_m, sequence_count,
+        # support_confidence, depth_confidence, etc.)
+        extras = {k: v for k, v in n.items()
+                   if k not in ("id", "parent", "name", "is_leaf",
+                                "branch_length", "node_age_ma", "support")}
+        if extras:
+            row["metadata"] = extras
+        nodes_out.append(row)
+
+    metadata_raw = raw.get("metadata") or {}
+    # Preserve raw fields not in the new schema (taxon_group, root_name,
+    # total_nodes) so existing tests and downstream consumers that read
+    # those fields continue to work.
+    NEW_META_KEYS = {"title", "extraction_timestamp", "tree_type", "scale",
+                     "rooted", "source"}
+    metadata: dict[str, Any] = {
+        "title": s(metadata_raw.get("title", "")),
+        "extraction_timestamp": s(metadata_raw.get("extraction_timestamp", "")),
+        "tree_type": s(metadata_raw.get("tree_type", "")),
+        "scale": s(metadata_raw.get("scale", "")),
+        "rooted": bool(metadata_raw.get("rooted", True)),
+        "source": s(metadata_raw.get("source", metadata_raw.get("image_source", ""))),
+    }
+    for k, v in metadata_raw.items():
+        if k not in NEW_META_KEYS:
+            metadata[k] = v
+
+    legend_raw = raw.get("legend")
+    legend = dict(legend_raw) if isinstance(legend_raw, dict) else {}
+
+    try:
+        conf = float(raw.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        conf = 0.0
+    conf = max(0.0, min(1.0, conf))
+
+    root_extras = {k: v for k, v in raw.items()
+                   if k not in ("metadata", "nodes", "root_ids", "legend",
+                                "confidence", "_array_root")}
+    out: dict[str, Any] = {
+        "metadata": metadata,
+        "root_ids": [str(r) for r in root_ids],
+        "nodes": nodes_out,
+        "legend": legend,
+        "confidence": conf,
+    }
+    if root_extras:
+        out["_extras"] = root_extras
+    return out
+
+
+# Public alias.
+normalize_phylogenetic_tree_result = _normalize_phylogenetic_tree_into
+
+
+def _build_newick_node(node_id: str, id_to_children: dict[str, list[str]],
+                       nodes_dict: dict[str, dict[str, Any]]) -> str:
+    """Recursively build the Newick subtree for ``node_id``."""
+    children = id_to_children.get(node_id, [])
+    if not children:
+        # Leaf: name:branch_length
+        n = nodes_dict.get(node_id, {})
+        name = n.get("name", "")
+        bl = n.get("branch_length")
+        bl_str = f":{bl}" if bl is not None else ""
+        # Escape parentheses and colons in taxon names
+        safe_name = name.replace("(", "_").replace(")", "_").replace(":", "_")
+        return f"{safe_name}{bl_str}"
+    else:
+        # Internal node: (children)support:branch_length
+        child_parts = [_build_newick_node(cid, id_to_children, nodes_dict) for cid in children]
+        support = nodes_dict.get(node_id, {}).get("support")
+        support_str = f"{support}" if support is not None else ""
+        bl = nodes_dict.get(node_id, {}).get("branch_length")
+        bl_str = f":{bl}" if bl is not None else ""
+        child_newick = ",".join(child_parts)
+        return f"({child_newick}){support_str}{bl_str}"
+
+
+def to_newick(tree: dict[str, Any]) -> str:
+    """Convert a normalized phylogenetic tree to Newick format.
+
+    Newick spec: ((A:0.1,B:0.2)95:0.5,C:0.3);
+    - Internal nodes: (children)support:branch_length
+    - Leaf nodes: name:branch_length
+    - support omitted if None; branch_length omitted if None
+    - Multiple roots joined by commas (forest) at top level
+    """
+    nodes = tree.get("nodes") or []
+    root_ids = tree.get("root_ids") or []
+
+    # Build id→dict lookup and parent→children map.
+    nodes_dict: dict[str, dict[str, Any]] = {}
+    for n in nodes:
+        if isinstance(n, dict):
+            nid = str(n.get("id") or "")
+            if nid:
+                nodes_dict[nid] = n
+
+    id_to_children: dict[str, list[str]] = {rid: [] for rid in root_ids}
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        pid = n.get("parent")
+        if pid is not None:
+            pid_str = str(pid)
+            if pid_str not in id_to_children:
+                id_to_children[pid_str] = []
+            id_to_children[pid_str].append(str(n.get("id") or ""))
+
+    parts = [_build_newick_node(rid, id_to_children, nodes_dict) for rid in root_ids]
+    return "({});".format(",".join(parts))
 
 
 def extract_phylogenetic_tree(
@@ -1275,6 +1618,8 @@ def extract_phylogenetic_tree(
     """Phylogenetic-tree extraction. Same contract as extract_range_chart."""
     if not image_b64:
         return ExtractResult(ok=False, error_key="err.imageRead")
+    # P1-1 (REVIEW-2026-07-27): mandatory image fingerprint.
+    image_sha256 = compute_image_sha256_from_b64(image_b64)
     p = provider or LlmProvider(
         name="Legacy Anthropic-compatible",
         api_format=ApiFormat.ANTHROPIC,
@@ -1311,12 +1656,13 @@ def extract_phylogenetic_tree(
             ok=False, error_key="err.extract",
             raw="", latency_ms=latency_ms,
             warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+            image_sha256=image_sha256,
         )
     latency_ms = int((time.perf_counter() - t0) * 1000)
     warning = ("Result may be truncated (model hit max_tokens). "
                "Try raising the max_tokens setting and re-running.")
     if raw_text is None:
-        return _error_from_status(status, err_body, latency_ms)
+        return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
     try:
         parsed = safe_json_loads(raw_text)
     except ValueError:
@@ -1325,6 +1671,7 @@ def extract_phylogenetic_tree(
             truncated=truncated, latency_ms=latency_ms,
             usage=usage or {},
             warning=warning if truncated else "",
+            image_sha256=image_sha256,
         )
     # Never-raises contract: a defensive guard so any future regression in
     # downstream normalization (or unexpected type from the model) cannot
@@ -1335,11 +1682,22 @@ def extract_phylogenetic_tree(
             truncated=truncated, usage=usage or {},
             latency_ms=latency_ms,
             warning=warning if truncated else "",
+            image_sha256=image_sha256,
+        )
+    try:
+        data = _normalize_phylogenetic_tree_into(parsed)
+    except Exception as exc:
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw=raw_text, truncated=truncated, usage=usage or {},
+            latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+            image_sha256=image_sha256,
         )
     return ExtractResult(
-        ok=True, data=parsed, raw=raw_text,
+        ok=True, data=data, raw=raw_text,
         truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
         warning=warning if truncated else "",
+        image_sha256=image_sha256,
     )
 
 

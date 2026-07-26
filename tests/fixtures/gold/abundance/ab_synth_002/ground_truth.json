@@ -1,0 +1,415 @@
+{
+  "metadata": {
+    "chart_type": "abundance",
+    "extraction_version": "1.0.0",
+    "synthetic": true,
+    "seed": 21
+  },
+  "sites": [
+    {
+      "name": "Synthetic Core",
+      "location": "Laboratory",
+      "age_range": "Pliocene",
+      "depth_unit": "m"
+    }
+  ],
+  "abundances": [
+    {
+      "taxon": "N. pachyderma",
+      "site": "Synthetic Core",
+      "level": "1",
+      "depth": "10",
+      "abundance": "9.9",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. ruber",
+      "site": "Synthetic Core",
+      "level": "1",
+      "depth": "10",
+      "abundance": "19.3",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "O. universa",
+      "site": "Synthetic Core",
+      "level": "1",
+      "depth": "10",
+      "abundance": "20.4",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "P. obliquiloculata",
+      "site": "Synthetic Core",
+      "level": "1",
+      "depth": "10",
+      "abundance": "8.8",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "S. universa",
+      "site": "Synthetic Core",
+      "level": "1",
+      "depth": "10",
+      "abundance": "20.4",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. bulloides",
+      "site": "Synthetic Core",
+      "level": "1",
+      "depth": "10",
+      "abundance": "21.0",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "N. pachyderma",
+      "site": "Synthetic Core",
+      "level": "2",
+      "depth": "20",
+      "abundance": "20.2",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. ruber",
+      "site": "Synthetic Core",
+      "level": "2",
+      "depth": "20",
+      "abundance": "5.1",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "O. universa",
+      "site": "Synthetic Core",
+      "level": "2",
+      "depth": "20",
+      "abundance": "5.1",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "P. obliquiloculata",
+      "site": "Synthetic Core",
+      "level": "2",
+      "depth": "20",
+      "abundance": "28.3",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "S. universa",
+      "site": "Synthetic Core",
+      "level": "2",
+      "depth": "20",
+      "abundance": "32.3",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. bulloides",
+      "site": "Synthetic Core",
+      "level": "2",
+      "depth": "20",
+      "abundance": "9.1",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "N. pachyderma",
+      "site": "Synthetic Core",
+      "level": "3",
+      "depth": "30",
+      "abundance": "11.5",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. ruber",
+      "site": "Synthetic Core",
+      "level": "3",
+      "depth": "30",
+      "abundance": "15.6",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "O. universa",
+      "site": "Synthetic Core",
+      "level": "3",
+      "depth": "30",
+      "abundance": "15.6",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "P. obliquiloculata",
+      "site": "Synthetic Core",
+      "level": "3",
+      "depth": "30",
+      "abundance": "5.7",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "S. universa",
+      "site": "Synthetic Core",
+      "level": "3",
+      "depth": "30",
+      "abundance": "26.2",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. bulloides",
+      "site": "Synthetic Core",
+      "level": "3",
+      "depth": "30",
+      "abundance": "25.4",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "N. pachyderma",
+      "site": "Synthetic Core",
+      "level": "4",
+      "depth": "40",
+      "abundance": "21.6",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. ruber",
+      "site": "Synthetic Core",
+      "level": "4",
+      "depth": "40",
+      "abundance": "4.6",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "O. universa",
+      "site": "Synthetic Core",
+      "level": "4",
+      "depth": "40",
+      "abundance": "17.0",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "P. obliquiloculata",
+      "site": "Synthetic Core",
+      "level": "4",
+      "depth": "40",
+      "abundance": "25.5",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "S. universa",
+      "site": "Synthetic Core",
+      "level": "4",
+      "depth": "40",
+      "abundance": "23.5",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. bulloides",
+      "site": "Synthetic Core",
+      "level": "4",
+      "depth": "40",
+      "abundance": "7.8",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "N. pachyderma",
+      "site": "Synthetic Core",
+      "level": "5",
+      "depth": "50",
+      "abundance": "36.8",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. ruber",
+      "site": "Synthetic Core",
+      "level": "5",
+      "depth": "50",
+      "abundance": "7.9",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "O. universa",
+      "site": "Synthetic Core",
+      "level": "5",
+      "depth": "50",
+      "abundance": "18.4",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "P. obliquiloculata",
+      "site": "Synthetic Core",
+      "level": "5",
+      "depth": "50",
+      "abundance": "13.2",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "S. universa",
+      "site": "Synthetic Core",
+      "level": "5",
+      "depth": "50",
+      "abundance": "15.8",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. bulloides",
+      "site": "Synthetic Core",
+      "level": "5",
+      "depth": "50",
+      "abundance": "7.9",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "N. pachyderma",
+      "site": "Synthetic Core",
+      "level": "6",
+      "depth": "60",
+      "abundance": "18.8",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. ruber",
+      "site": "Synthetic Core",
+      "level": "6",
+      "depth": "60",
+      "abundance": "8.3",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "O. universa",
+      "site": "Synthetic Core",
+      "level": "6",
+      "depth": "60",
+      "abundance": "22.1",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "P. obliquiloculata",
+      "site": "Synthetic Core",
+      "level": "6",
+      "depth": "60",
+      "abundance": "14.4",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "S. universa",
+      "site": "Synthetic Core",
+      "level": "6",
+      "depth": "60",
+      "abundance": "16.6",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. bulloides",
+      "site": "Synthetic Core",
+      "level": "6",
+      "depth": "60",
+      "abundance": "19.9",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "N. pachyderma",
+      "site": "Synthetic Core",
+      "level": "7",
+      "depth": "70",
+      "abundance": "13.9",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. ruber",
+      "site": "Synthetic Core",
+      "level": "7",
+      "depth": "70",
+      "abundance": "15.8",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "O. universa",
+      "site": "Synthetic Core",
+      "level": "7",
+      "depth": "70",
+      "abundance": "6.9",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "P. obliquiloculata",
+      "site": "Synthetic Core",
+      "level": "7",
+      "depth": "70",
+      "abundance": "34.7",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "S. universa",
+      "site": "Synthetic Core",
+      "level": "7",
+      "depth": "70",
+      "abundance": "19.8",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. bulloides",
+      "site": "Synthetic Core",
+      "level": "7",
+      "depth": "70",
+      "abundance": "8.9",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "N. pachyderma",
+      "site": "Synthetic Core",
+      "level": "8",
+      "depth": "80",
+      "abundance": "13.0",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. ruber",
+      "site": "Synthetic Core",
+      "level": "8",
+      "depth": "80",
+      "abundance": "13.7",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "O. universa",
+      "site": "Synthetic Core",
+      "level": "8",
+      "depth": "80",
+      "abundance": "6.9",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "P. obliquiloculata",
+      "site": "Synthetic Core",
+      "level": "8",
+      "depth": "80",
+      "abundance": "9.2",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "S. universa",
+      "site": "Synthetic Core",
+      "level": "8",
+      "depth": "80",
+      "abundance": "30.5",
+      "abundance_unit": "%"
+    },
+    {
+      "taxon": "G. bulloides",
+      "site": "Synthetic Core",
+      "level": "8",
+      "depth": "80",
+      "abundance": "26.7",
+      "abundance_unit": "%"
+    }
+  ],
+  "zones": [
+    {
+      "name": "M Biozone",
+      "age": "Early Pliocene",
+      "level_range": "1-4"
+    },
+    {
+      "name": "N Biozone",
+      "age": "Late Pliocene",
+      "level_range": "5-8"
+    }
+  ],
+  "confidence": 0.92
+}

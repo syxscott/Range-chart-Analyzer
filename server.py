@@ -398,15 +398,14 @@ def _make_pinning_opener():
         # Rewrite the request's host header and netloc to the IP, but
         # keep the original hostname in a header for SNI / debugging.
         new_host = ip
+        # CRITICAL FIX (C-4): Always preserve original hostname in X-Original-Host
+        # BEFORE setting req.host to the pinned IP. The previous conditional
+        # (existing_host_hdr is None) was wrong because urllib may have already
+        # populated the Host header from the original hostname before this check.
+        # We must ALWAYS set X-Original-Host so _patched_open can always use the
+        # original hostname for the Host header (SNI requires hostname, not IP).
+        req.add_unredirected_header("X-Original-Host", host)
         req.host = new_host
-        # Preserve original Host for TLS SNI / upstream routing.
-        existing_host_hdr = req.get_header("Host")
-        if existing_host_hdr is None:
-            # urllib fills Host from req.host when missing. We override
-            # by setting the SNI hint via ``server_hostname`` on the
-            # connection: but urllib builds the connection internally,
-            # so we instead embed the original host into a side header.
-            req.add_unredirected_header("X-Original-Host", host)
         return original_https_open(self, req)
 
     # We don't actually swap HTTPSHandler globally — instead we install
@@ -429,7 +428,14 @@ def _make_pinning_opener():
         _PinnedHTTPSConnection
     )
     # Build the final opener with the now-patched HTTPSHandler.
-    opener = urllib.request.build_opener(_PinnedHTTPSHandler())
+    # P0-1 (REVIEW-2026-07-25) regression fix: also register _NoRedirect
+    # so 3xx redirects are refused on every outbound urllib.request.urlopen().
+    # Without this, this opener would silently follow a 302 Location:
+    # http://169.254.169.254/... (cloud metadata) and bypass the endpoint
+    # validator. rca_core.llm already installs a _NoRedirect opener, but
+    # server.py replaces it via install_opener() at import time.
+    from rca_core.llm import _NoRedirect  # noqa: E402  (imported lazily)
+    opener = urllib.request.build_opener(_PinnedHTTPSHandler(), _NoRedirect())
     # Replace _PinnedHTTPSHandler.https_open with one that also rewrites
     # the Host header to the original name (so SNI / upstream Host
     # header match what the user expects).
@@ -625,6 +631,37 @@ class Handler(BaseHTTPRequestHandler):
                 "session_token": session_token,
             })
             return
+        # P2-4 (REVIEW-2026-07-25): PROV-O JSON-LD provenance export endpoint.
+        # Pattern: GET /api/history/<id>/provenance
+        from urllib.parse import urlparse as _urlparse
+        from rca_core import Database, HistoryStore
+        _parsed_path = _urlparse(self.path).path
+        _prov_match = re.match(r"^/api/history/(\d+)/provenance$", _parsed_path)
+        if _prov_match:
+            record_id = int(_prov_match.group(1))
+            db = Database()
+            store = HistoryStore(db=db)
+            rec = store.get(record_id)
+            if rec is None:
+                self._send_json(404, {"error": "not found"})
+                return
+            try:
+                prov_jsonld = store.to_prov_jsonld(record_id)
+            except Exception:
+                self._send_json(500, {"error": "provenance generation failed"})
+                return
+            body = json.dumps(prov_jsonld, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/ld+json; charset=utf-8")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+            self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         target = self._safe_local_path(self.path)
         if target is None:
             self._send_json(403, {"error": "forbidden"})
@@ -883,6 +920,17 @@ class Handler(BaseHTTPRequestHandler):
                 (k, str(v)) for k, v in (prov_obj.extra_headers or {}).items()
             )
 
+        def _stable_extra_body(prov_obj):
+            """P1-4 (REVIEW-2026-07-25): extra_body is a provider field
+            that changes the LLM request shape (e.g. Anthropic prompt
+            caching toggles, custom sampling parameters). Two requests
+            with different extra_body MUST NOT share a cache entry."""
+            if not prov_obj:
+                return []
+            return sorted(
+                (k, str(v)) for k, v in (prov_obj.extra_body or {}).items()
+            )
+
         if runs == 1:
             # FIX (cache): check the cache first so identical reruns are
             # free. The key includes image, provider, model, prompt version,
@@ -893,7 +941,7 @@ class Handler(BaseHTTPRequestHandler):
             ckey = None
             if not force_rerun:
                 from rca_core.cache import get_cache
-                from rca_core.prompt import PROMPT_VERSION
+                from rca_core.prompt import prompt_version_for_mode
                 cache = get_cache()
                 # C1 fix: use stable business fields only — never repr(provider)
                 # (repr includes uuid4 id + time.time() which change on every
@@ -904,7 +952,8 @@ class Handler(BaseHTTPRequestHandler):
                     model=prov.model if prov else "",
                     api_format=prov.api_format.value if prov else "",
                     extra_headers=_stable_extra_headers(prov),
-                    prompt_version=PROMPT_VERSION,
+                    extra_body=_stable_extra_body(prov),
+                    prompt_version=prompt_version_for_mode(mode),
                     max_tokens=common["max_tokens"],
                     chart_lang=common["chart_lang"],
                     mode=mode,
@@ -957,6 +1006,9 @@ class Handler(BaseHTTPRequestHandler):
         # parameters (e.g. tweaking caption and re-running).
         force_rerun = bool(req.get("force_rerun"))
         ok_datas = []
+        # P0-4 (REVIEW-2026-07-25): slot-keyed result map so non-contiguous
+        # cache hits do not cause the submission loop to skip the true miss.
+        slot_results: dict[int, dict] = {}
         last_fail = None
         any_truncated = False
         partial_fails = 0  # M2
@@ -976,7 +1028,7 @@ class Handler(BaseHTTPRequestHandler):
         # was retained. We salt each slot's key with ``run_idx`` so the
         # slots are independently addressable.
         from rca_core.cache import get_cache
-        from rca_core.prompt import PROMPT_VERSION as PROMPT_VERSION
+        from rca_core.prompt import prompt_version_for_mode
         prov = common["provider"]
         slot_keys = []
         for run_idx in range(runs):
@@ -985,7 +1037,8 @@ class Handler(BaseHTTPRequestHandler):
                 model=prov.model if prov else "",
                 api_format=prov.api_format.value if prov else "",
                 extra_headers=_stable_extra_headers(prov),
-                prompt_version=PROMPT_VERSION,
+                extra_body=_stable_extra_body(prov),
+                prompt_version=prompt_version_for_mode(mode),
                 max_tokens=common["max_tokens"],
                 chart_lang=common["chart_lang"],
                 mode=mode,
@@ -998,15 +1051,22 @@ class Handler(BaseHTTPRequestHandler):
 
         if not force_rerun:
             cache = get_cache()
-            for ckey in slot_keys:
+            for run_idx, ckey in enumerate(slot_keys):
                 cached = cache.get(ckey)
                 if cached is not None:
                     if isinstance(cached, dict) and "quality" not in cached:
                         from rca_core.quality import score_range_chart
                         cached["quality"] = score_range_chart(cached)
-                    ok_datas.append(cached)
+                    # P0-4 (REVIEW-2026-07-25): KEYED BY SLOT INDEX so
+                    # non-contiguous cache hits do not cause the
+                    # submission loop to skip the true miss or re-run
+                    # an already-hit slot.
+                    slot_results[run_idx] = cached
 
-        misses = runs - len(ok_datas)
+        # Build ok_datas in slot order for the merge call.
+        ok_datas = [slot_results[i] for i in range(runs) if i in slot_results]
+
+        misses = runs - len(slot_results)
         if misses <= 0:
             # All runs were cache hits — merge directly.
             pass  # falls through to merge
@@ -1019,11 +1079,16 @@ class Handler(BaseHTTPRequestHandler):
             # list (cache-hit slots contribute no entry) and iterate by
             # pairing ``(run_idx, future)`` so the original slot index
             # survives reordering.
+            #
+            # P0-4 (REVIEW-2026-07-25): ``if run_idx < len(ok_datas)`` was
+            # incorrectly skipping true misses whenever cache hits were
+            # non-contiguous (e.g. hits at slot 0 + 2 but miss at slot 1).
+            # Now we check slot_results membership directly.
             with concurrent.futures.ThreadPoolExecutor(max_workers=misses) as ex:
                 pending = []  # list of (run_idx, future)
                 for run_idx in range(runs):
-                    if run_idx < len(ok_datas):
-                        continue  # cache hit — result already in ok_datas
+                    if run_idx in slot_results:
+                        continue  # cache hit — already in slot_results
                     pending.append((run_idx, ex.submit(extract, mode=mode, **common)))
                 # as_completed yields futures in completion order, not
                 # original order. We use the stored run_idx to map back.
@@ -1045,10 +1110,17 @@ class Handler(BaseHTTPRequestHandler):
                         )
                     except Exception as exc:
                         r = ExtractResult(ok=False, error_key="err.http", raw=str(exc))
+                    # H-1 fix: update max_run_latency regardless of r.ok — only
+                    # skip when latency_ms is None/0 (no request was made).
+                    if r.latency_ms not in (None, 0):
+                        max_run_latency = max(max_run_latency, int(r.latency_ms))
                     if r.ok and r.data is not None:
                         if not force_rerun:
                             get_cache().put(slot_keys[run_idx], r.data)
-                        ok_datas.append(r.data)
+                        # P0-4 (REVIEW-2026-07-25): store under slot index.
+                        # ok_datas is rebuilt in slot order before merge.
+                        slot_results[run_idx] = r.data
+                        ok_datas = [slot_results[i] for i in range(runs) if i in slot_results]
                         any_truncated = any_truncated or bool(r.truncated)
                         if r.raw:
                             raws.append(r.raw)
@@ -1059,7 +1131,6 @@ class Handler(BaseHTTPRequestHandler):
                         total_cc += int(u.get("cache_creation_tokens") or 0)
                         est_in = est_in or bool(u.get("estimated"))
                         est_out = est_out or bool(u.get("estimated"))
-                        max_run_latency = max(max_run_latency, int(r.latency_ms or 0))
                         if not merged_warning and getattr(r, "warning", ""):
                             merged_warning = r.warning
                     else:

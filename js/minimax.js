@@ -72,7 +72,75 @@ function rcaCarryExtras(item, known) {
 }
 
 // Normalize the parsed JSON into the strict result shape.
+// P0-5 (REVIEW-2026-07-25): If the model returned a top-level JSON array
+// (already wrapped by json-utils.extractBalancedJsonArray as {_array_root:[...]}),
+// distribute items into the correct tables by structural key, mirroring
+// Python rca_core/extractor.py:440-470 (_classify_array_item).
+function rcaUnwrapArrayRoot(parsed) {
+  if (!parsed || typeof parsed !== 'object') return parsed;
+  if (!Array.isArray(parsed._array_root)) return parsed;
+  const dist = {
+    sections: [], species_ranges: [], biozones: [], other_fossils: [],
+  };
+  for (const item of parsed._array_root) {
+    if (!item || typeof item !== 'object') continue;
+    const key = rcaClassifyArrayItem(item);
+    if (key && dist[key]) dist[key].push(item);
+  }
+  // Preserve any other top-level fields the wrapper may have carried.
+  const out = { ...dist };
+  for (const k of Object.keys(parsed)) {
+    if (k === '_array_root') continue;
+    if (k in out) continue;  // already populated from array items
+    out[k] = parsed[k];
+  }
+  return out;
+}
+
+// Lightweight re-implementation of Python _classify_array_item for the
+// JS normalizers. Used only when unwrapping _array_root payloads.
+// P0-4: explicit zone_type wins over all heuristics.
+function rcaClassifyArrayItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  // P0-4: explicit zone_type wins over all heuristics.
+  const zt = item.zone_type;
+  if (typeof zt === 'string') {
+    const ztl = zt.trim().toLowerCase();
+    if (['biozone', 'zone', 'assemblage_zone', 'interval_zone', 'lineage_zone',
+         'acme_zone', 'oppel_zone', 'range_zone', 'subzone', 'zonule'].includes(ztl)) {
+      return 'biozones';
+    }
+    if (['species_range', 'taxon_range', 'fad_lad'].includes(ztl)) {
+      return 'species_ranges';
+    }
+    if (['section', 'measured_section', 'locality'].includes(ztl)) {
+      return 'sections';
+    }
+  }
+  // species: has species OR (range_top AND range_base together) — C-3 parity with Python
+  if (item.species || (item.range_top && item.range_base)) {
+    return 'species_ranges';
+  }
+  // biozone: requires name passes zone-label pattern AND age is present (H-3 parity)
+  const biozoneText = String(item.name || item.label || '');
+  const isZoneLabel = /\b(zone|zonule|assemblage|oppel|interval|lineage|range|acme)\b/i.test(biozoneText);
+  if (item.name && item.age && isZoneLabel) {
+    return 'biozones';
+  }
+  // section: has formations list or id+group or thickness_m only
+  if (Array.isArray(item.formations) || item.id || item.thickness_m) {
+    return 'sections';
+  }
+  // other_fossils (str or dict)
+  if (item.label || item.species || item.taxon) {
+    return 'other_fossils';
+  }
+  return null;
+}
+
 function rcaNormalizeResult(parsed) {
+  // P0-5 (REVIEW-2026-07-25): unwrap top-level array wrappers.
+  parsed = rcaUnwrapArrayRoot(parsed) || parsed;
   const out = {
     sections: [],
     species_ranges: [],
@@ -82,13 +150,23 @@ function rcaNormalizeResult(parsed) {
   };
   const asStr = (v) => (v === null || v === undefined ? '' : String(v));
   const SEC_KNOWN = ['name', 'age_range', 'formations', 'formation_thickness_m', 'coordinates'];
-  const SP_KNOWN = ['species', 'section', 'range_top', 'range_base', 'biozone'];
+  // P1-6 (REVIEW-2026-07-25): align SP_KNOWN with rca_core/extractor.py
+  // _KNOWN_SPECIES_KEYS (13 fields). The previous 5-field list silently
+  // dropped author, year, author_year, range_top_bed, range_base_bed,
+  // endpoint_kind, reworked into row._extras as a dict — which would
+  // be coerced to "[object Object]" by the JS merge multi-run fallback.
+  const SP_KNOWN = [
+    'species', 'section', 'range_top', 'range_base', 'biozone',
+    'author', 'year', 'author_year',
+    'range_top_bed', 'range_base_bed',
+    'endpoint_kind', 'reworked',
+  ];
   // PARITY (extractor.py:250): biozones row includes `section` so the
   // aggregation layer can fold section into the row label and prevent two
   // biozones with the same name in different sections from collapsing into
   // a single merged row. Without this, browser runs lose the section axis
   // for biozones and exported tables diverge from the Python export shape.
-  const BZ_KNOWN = ['name', 'section', 'age', 'thickness_m'];
+  const BZ_KNOWN = ['name', 'section', 'age', 'thickness_m', 'zone_type'];
   const ROOT_KNOWN = ['sections', 'species_ranges', 'biozones', 'other_fossils', 'confidence'];
 
   for (const sec of Array.isArray(parsed.sections) ? parsed.sections : []) {
@@ -112,21 +190,59 @@ function rcaNormalizeResult(parsed) {
       range_top: asStr(sp.range_top),
       range_base: asStr(sp.range_base),
       biozone: asStr(sp.biozone),
+      // P1-6 (REVIEW-2026-07-25): promote the 8 long-standing prompt
+      // fields to first-class row keys so the JS↔Python parity test,
+      // merge function, and exported CSV/JSON all see them.
+      author: asStr(sp.author),
+      year: asStr(sp.year),
+      author_year: asStr(sp.author_year),
+      range_top_bed: asStr(sp.range_top_bed),
+      range_base_bed: asStr(sp.range_base_bed),
+      endpoint_kind: asStr(sp.endpoint_kind),
+      reworked: sp.reworked === true,
     };
     const extras = rcaCarryExtras(sp, SP_KNOWN);
     if (extras) row._extras = extras;
+    // P0-4: defensive — if species name looks like a zone, flag & strip.
+    const spName = row.species;
+    if (spName && /\b(zone|zonule|assemblage|oppel|interval|lineage|range|acme)\b/i.test(spName)) {
+      row.note = ((row.note && row.note !== 'null' ? row.note : '') + ' [zone-mislabel-warning]').trim();
+    }
     out.species_ranges.push(row);
   }
   for (const bz of Array.isArray(parsed.biozones) ? parsed.biozones : []) {
     if (!bz || typeof bz !== 'object') continue;
+    // P0-4: infer zone_type from name keywords when not explicitly provided.
+    const bzName = asStr(bz.name).trim();
+    let inferredZt = 'biozone';
+    const bzNameLower = bzName.toLowerCase();
+    if (bzNameLower.includes('assemblage') || bzNameLower.includes('ass.')) {
+      inferredZt = 'assemblage_zone';
+    } else if (bzNameLower.includes('acme')) {
+      inferredZt = 'acme_zone';
+    } else if (bzNameLower.includes('lineage')) {
+      inferredZt = 'lineage_zone';
+    } else if (/\bzonule\b/.test(bzNameLower)) {
+      inferredZt = 'zonule';
+    } else if (/\bsubzone\b/.test(bzNameLower)) {
+      inferredZt = 'subzone';
+    } else if (bzNameLower.includes('oppel')) {
+      inferredZt = 'oppel_zone';
+    } else if (bzNameLower.includes('interval')) {
+      inferredZt = 'interval_zone';
+    } else if (bzNameLower.includes('range zone') || bzNameLower.includes('taxon-range')) {
+      inferredZt = 'range_zone';
+    }
     const row = {
-      name: asStr(bz.name),
+      name: bzName,
       // PARITY: section is a top-level field on the biozone row, mirroring
       // rca_core/extractor.py:371. Demoting it to _extras would hide it
       // from rcaAggNorm and break the section-folding dedup in aggregate.js.
       section: asStr(bz.section),
       age: asStr(bz.age),
       thickness_m: asStr(bz.thickness_m),
+      // P0-4: enforce zone_type field.
+      zone_type: asStr(bz.zone_type) || inferredZt,
     };
     const extras = rcaCarryExtras(bz, BZ_KNOWN);
     if (extras) row._extras = extras;
@@ -148,6 +264,34 @@ function rcaNormalizeResult(parsed) {
 // normalization + _extras carry + confidence fallback to top-level
 // `confidence` when `overall_confidence` is absent).
 function rcaNormalizeColumnarResult(parsed) {
+  // P0-5 (REVIEW-2026-07-25): unwrap top-level array wrappers. For columnar
+  // we distribute only items whose structural keys look like section rows
+  // (id/group/lithology_blocks/...) into sections; other items are merged
+  // into the appropriate legend/cross_beds buckets.
+  if (parsed && Array.isArray(parsed._array_root)) {
+    const items = parsed._array_root;
+    const dist = {
+      sections: [], fossil_legend: [], lithology_legend: [], cross_beds: [],
+    };
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      if (item.id || item.group || item.lithology_blocks || item.age_units || item.samples) {
+        dist.sections.push(item);
+      } else if (item.fossil || item.marker) {
+        dist.fossil_legend.push(item);
+      } else if (item.pattern) {
+        dist.lithology_legend.push(item);
+      } else if (item.from_section || item.to_section) {
+        dist.cross_beds.push(item);
+      }
+    }
+    parsed = { ...dist };
+    for (const k of Object.keys(parsed || {})) {
+      if (k === '_array_root') continue;
+      if (k in dist) continue;
+      parsed[k] = (arguments[0] || {})[k];
+    }
+  }
   const asStr = (v) => (v === null || v === undefined ? '' : String(v));
   const asInt = (v) => {
     if (v === null || v === undefined || v === '') return null;
@@ -253,6 +397,23 @@ function rcaNormalizeColumnarResult(parsed) {
 // Normalize the parsed abundance-diagram JSON into the strict result shape.
 // Mirrors rca_core.extractor.normalize_abundance_result (with _extras carry).
 function rcaNormalizeAbundanceResult(parsed) {
+  // P0-5 (REVIEW-2026-07-25): unwrap top-level array wrappers.
+  if (parsed && Array.isArray(parsed._array_root)) {
+    const items = parsed._array_root;
+    const dist = { sites: [], abundances: [], zones: [] };
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      if (item.site_id || item.site_name || item.location) {
+        dist.sites.push(item);
+      } else if (item.abundance || item.count || item.percentage) {
+        dist.abundances.push(item);
+      } else if (item.zone || item.assemblage) {
+        dist.zones.push(item);
+      }
+    }
+    parsed = { ...dist };
+  }
+  // original body follows
   const asStr = (v) => (v === null || v === undefined ? '' : String(v));
   const normList = (key) => (Array.isArray(parsed[key]) ? parsed[key] : []);
   const SITE_KNOWN = ['name', 'location', 'age_range', 'depth_unit'];
@@ -310,6 +471,173 @@ function rcaNormalizeAbundanceResult(parsed) {
   const rootEx = rcaCarryExtras(parsed || {}, ROOT_KNOWN);
   if (rootEx) out._extras = rootEx;
   return out;
+}
+
+// P0-3: phylogenetic tree normalizer — mirrors Python
+// rca_core.extractor._normalize_phylogenetic_tree_into().
+function rcaUnwrapArrayRootPhylo(parsed) {
+  if (!parsed || typeof parsed !== 'object') return parsed;
+  if (!Array.isArray(parsed._array_root)) return parsed;
+  for (const item of parsed._array_root) {
+    if (item && typeof item === 'object' && Array.isArray(item.nodes)) {
+      return item;
+    }
+  }
+  return parsed;
+}
+
+function rcaNormalizePhylogeneticTreeResult(parsed) {
+  parsed = rcaUnwrapArrayRootPhylo(parsed);
+  const asStr = (v) => (v === null || v === undefined ? '' : String(v));
+  const asFloat = (v) => {
+    if (v === null || v === undefined) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const nodesIn = Array.isArray(parsed.nodes) ? parsed.nodes : [];
+  // Build id→node lookup and children counts.
+  const idToNode = {};
+  const childrenCount = {};
+  for (const n of nodesIn) {
+    if (!n || typeof n !== 'object') continue;
+    const nid = String(n.id || '');
+    if (nid) {
+      idToNode[nid] = n;
+      childrenCount[nid] = 0;
+    }
+  }
+  for (const n of nodesIn) {
+    if (!n || typeof n !== 'object') continue;
+    const parent = n.parent;
+    if (parent != null) {
+      const pid = String(parent);
+      if (pid in childrenCount) childrenCount[pid] = (childrenCount[pid] || 0) + 1;
+    }
+  }
+
+  const rootIdsRaw = parsed.root_ids || [];
+  if (!rootIdsRaw.length) throw new Error('root_ids is empty');
+  for (const rid of rootIdsRaw) {
+    if (!(String(rid) in idToNode)) throw new Error('root_ids contains unknown node id: ' + rid);
+  }
+
+  const nodesOut = [];
+  for (const n of nodesIn) {
+    if (!n || typeof n !== 'object') continue;
+    const nid = String(n.id || '');
+    if (!nid) continue;
+
+    const parentVal = n.parent;
+    if (rootIdsRaw.indexOf(nid) === -1) {
+      // Non-root
+      if (parentVal == null) throw new Error('Non-root node ' + nid + ' must have a parent');
+      if (!(String(parentVal) in idToNode)) throw new Error('Node ' + nid + ' references parent not in node ids');
+    } else {
+      // Root
+      if (parentVal != null) throw new Error('Root node ' + nid + ' must have parent == null');
+    }
+
+    const isLeafInput = Boolean(n.is_leaf);
+    const actualIsLeaf = (childrenCount[nid] || 0) === 0;
+    const isLeaf = isLeafInput !== actualIsLeaf ? actualIsLeaf : isLeafInput;
+
+    const supportRaw = n.support;
+    const support = asFloat(supportRaw);
+    if (support !== null && (support < 0 || support > 100)) {
+      throw new Error('support must be in [0, 100] or null, got ' + support);
+    }
+
+    const row = {
+      id: nid,
+      parent: parentVal != null ? String(parentVal) : null,
+      name: asStr(n.name),
+      is_leaf: isLeaf,
+      branch_length: asFloat(n.branch_length),
+      node_age_ma: asFloat(n.node_age_ma),
+      support: support,
+    };
+    // Carry extras (depth_range_m, sequence_count, support_confidence, etc.)
+    const KNOWN = ['id', 'parent', 'name', 'is_leaf', 'branch_length', 'node_age_ma', 'support'];
+    const extras = {};
+    let hasExtras = false;
+    for (const k of Object.keys(n)) {
+      if (!KNOWN.includes(k)) {
+        extras[k] = n[k];
+        hasExtras = true;
+      }
+    }
+    if (hasExtras) row.metadata = extras;
+    nodesOut.push(row);
+  }
+
+  const metaRaw = parsed.metadata || {};
+  const legendRaw = parsed.legend;
+  const conf = Number(parsed.confidence);
+  return {
+    metadata: {
+      title: asStr(metaRaw.title || ''),
+      extraction_timestamp: asStr(metaRaw.extraction_timestamp || ''),
+      tree_type: asStr(metaRaw.tree_type || ''),
+      scale: asStr(metaRaw.scale || ''),
+      rooted: Boolean(metaRaw.rooted !== false),
+      source: asStr(metaRaw.source || metaRaw.image_source || ''),
+    },
+    root_ids: rootIdsRaw.map(String),
+    nodes: nodesOut,
+    legend: (legendRaw && typeof legendRaw === 'object') ? legendRaw : {},
+    confidence: Number.isFinite(conf) ? Math.max(0, Math.min(1, conf)) : 0,
+  };
+}
+
+// Build a Newick string from a normalized phylogenetic tree.
+// Mirrors Python rca_core.extractor.to_newick().
+function rcaBuildNewickNode(nodeId, idToChildren, nodesDict) {
+  const children = idToChildren[nodeId] || [];
+  if (!children.length) {
+    const n = nodesDict[nodeId] || {};
+    const name = n.name || '';
+    const bl = n.branch_length;
+    const blStr = bl != null ? ':' + bl : '';
+    const safeName = name.replace(/\(/g, '_').replace(/\)/g, '_').replace(/:/g, '_');
+    return safeName + blStr;
+  } else {
+    const childParts = children.map((cid) => rcaBuildNewickNode(cid, idToChildren, nodesDict));
+    const n = nodesDict[nodeId] || {};
+    const support = n.support;
+    const supportStr = support != null ? String(support) : '';
+    const bl = n.branch_length;
+    const blStr = bl != null ? ':' + bl : '';
+    return '(' + childParts.join(',') + ')' + supportStr + blStr;
+  }
+}
+
+function rcaToNewick(tree) {
+  const nodes = Array.isArray(tree.nodes) ? tree.nodes : [];
+  const rootIds = Array.isArray(tree.root_ids) ? tree.root_ids : [];
+
+  const nodesDict = {};
+  for (const n of nodes) {
+    if (n && typeof n === 'object') {
+      const nid = String(n.id || '');
+      if (nid) nodesDict[nid] = n;
+    }
+  }
+
+  const idToChildren = {};
+  for (const rid of rootIds) idToChildren[String(rid)] = [];
+  for (const n of nodes) {
+    if (!n || typeof n !== 'object') continue;
+    const pid = n.parent;
+    if (pid != null) {
+      const pidStr = String(pid);
+      if (!(pidStr in idToChildren)) idToChildren[pidStr] = [];
+      idToChildren[pidStr].push(String(n.id || ''));
+    }
+  }
+
+  const parts = rootIds.map((rid) => rcaBuildNewickNode(String(rid), idToChildren, nodesDict));
+  return '(' + parts.join(',') + ');';
 }
 
 // Backend mode: POST to the same-origin Python server, which performs the
@@ -457,6 +785,11 @@ async function extractRangeChart(opts) {
   const target = (proxyUrl && proxyUrl.trim())
     ? proxyUrl.trim().replace(/\/+$/, '')
     : String(baseUrl).replace(/\/+$/, '');
+  // F-8: Enforce HTTPS for proxy URLs to prevent API key leakage via HTTP MITM
+  if (target.startsWith('http://')) {
+    console.error('Insecure proxy URL: HTTP is not allowed, falling back to direct connection');
+    return rcaCallBackend(opts, base64);
+  }
   const url = target + '/v1/messages';
 
   const langHint = (CHART_LANG_HINT && CHART_LANG_HINT[chartLang]) || '';
@@ -465,6 +798,8 @@ async function extractRangeChart(opts) {
     modeInstruction = 'Extract the columnar-section information as the strict JSON contract.';
   } else if (mode === 'abundance_diagram') {
     modeInstruction = 'Extract the abundance-diagram information as the strict JSON contract.';
+  } else if (mode === 'phylogenetic_tree') {
+    modeInstruction = 'Extract the phylogenetic-tree information as the strict JSON contract.';
   } else {
     modeInstruction = 'Extract the geological information as the strict JSON contract.';
   }
@@ -477,6 +812,8 @@ async function extractRangeChart(opts) {
     sysPrompt = COLUMNAR_SECTION_SYSTEM_PROMPT;
   } else if (mode === 'abundance_diagram' && typeof ABUNDANCE_DIAGRAM_SYSTEM_PROMPT !== 'undefined') {
     sysPrompt = ABUNDANCE_DIAGRAM_SYSTEM_PROMPT;
+  } else if (mode === 'phylogenetic_tree' && typeof PHYLOGENETIC_TREE_SYSTEM_PROMPT !== 'undefined') {
+    sysPrompt = PHYLOGENETIC_TREE_SYSTEM_PROMPT;
   }
 
   const body = {
@@ -585,6 +922,8 @@ async function extractRangeChart(opts) {
     data = rcaNormalizeColumnarResult(parsed);
   } else if (mode === 'abundance_diagram' && typeof rcaNormalizeAbundanceResult === 'function') {
     data = rcaNormalizeAbundanceResult(parsed);
+  } else if (mode === 'phylogenetic_tree' && typeof rcaNormalizePhylogeneticTreeResult === 'function') {
+    data = rcaNormalizePhylogeneticTreeResult(parsed);
   } else {
     data = rcaNormalizeResult(parsed);
   }

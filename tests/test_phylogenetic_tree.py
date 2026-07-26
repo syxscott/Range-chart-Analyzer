@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import unittest
 from unittest.mock import patch, call
@@ -310,6 +311,242 @@ class TestMergeSchemaRegistered(unittest.TestCase):
 
         # Legend list_keys should be merged
         self.assertIn("legend", merged)
+
+
+# ------------------------------------------------------------------
+# Raw trees for P0-3 normalizer / Newick tests
+# ------------------------------------------------------------------
+
+RAW_TREE_BL_ONLY = {
+    "metadata": {"taxon_group": "Foraminifera", "extraction_timestamp": "2026-07-26"},
+    "nodes": [
+        {"id": "n0", "name": "Root", "support": None, "branch_length": 0.5,
+         "is_leaf": False, "parent": None},
+        {"id": "n1", "name": "A", "support": None, "branch_length": 0.3,
+         "is_leaf": True, "parent": "n0"},
+        {"id": "n2", "name": "B", "support": None, "branch_length": 0.4,
+         "is_leaf": True, "parent": "n0"},
+    ],
+    "root_ids": ["n0"],
+    "confidence": 0.9,
+}
+
+RAW_TREE_FOREST = {
+    "metadata": {"taxon_group": "Radiolaria", "extraction_timestamp": "2026-07-26"},
+    "nodes": [
+        {"id": "r1", "name": "Tree1Root", "support": None,
+         "branch_length": None, "is_leaf": False, "parent": None},
+        {"id": "r2", "name": "Tree2Root", "support": None,
+         "branch_length": None, "is_leaf": False, "parent": None},
+        {"id": "l1", "name": "LeafA", "support": None,
+         "branch_length": 0.1, "is_leaf": True, "parent": "r1"},
+        {"id": "l2", "name": "LeafB", "support": None,
+         "branch_length": 0.2, "is_leaf": True, "parent": "r2"},
+    ],
+    "root_ids": ["r1", "r2"],
+    "confidence": 0.8,
+}
+
+RAW_TREE_ESCAPE = {
+    "metadata": {"taxon_group": "Radiolaria", "extraction_timestamp": "2026-07-26"},
+    "nodes": [
+        {"id": "n0", "name": "Root (sp. nov.)", "support": None,
+         "branch_length": 0.1, "is_leaf": False, "parent": None},
+        {"id": "n1", "name": "Clade:Test", "support": 95.0,
+         "branch_length": 0.2, "is_leaf": True, "parent": "n0"},
+    ],
+    "root_ids": ["n0"],
+    "confidence": 0.9,
+}
+
+
+# ------------------------------------------------------------------
+# P0-3: normalizer invariants
+# ------------------------------------------------------------------
+
+class TestNormalizerInvariants(unittest.TestCase):
+
+    def test_root_ids_empty_raises(self):
+        raw = dict(MOCK_TREE_RESPONSE, root_ids=[])
+        with self.assertRaises(ValueError) as ctx:
+            E._normalize_phylogenetic_tree_into(raw)
+        self.assertIn("root_ids is empty", str(ctx.exception))
+
+    def test_root_ids_unknown_node_raises(self):
+        raw = dict(MOCK_TREE_RESPONSE, root_ids=["n99"])
+        with self.assertRaises(ValueError) as ctx:
+            E._normalize_phylogenetic_tree_into(raw)
+        self.assertIn("root_ids contains unknown node id", str(ctx.exception))
+
+    def test_non_root_node_missing_parent_raises(self):
+        raw = copy.deepcopy(MOCK_TREE_RESPONSE)
+        for n in raw["nodes"]:
+            if n["id"] == "n1":
+                n["parent"] = None
+        with self.assertRaises(ValueError) as ctx:
+            E._normalize_phylogenetic_tree_into(raw)
+        self.assertIn("Non-root node n1 must have a parent", str(ctx.exception))
+
+    def test_non_root_node_parent_not_in_ids_raises(self):
+        raw = copy.deepcopy(MOCK_TREE_RESPONSE)
+        for n in raw["nodes"]:
+            if n["id"] == "n2":
+                n["parent"] = "n999"
+        with self.assertRaises(ValueError) as ctx:
+            E._normalize_phylogenetic_tree_into(raw)
+        self.assertIn("references parent n999 not in node ids", str(ctx.exception))
+
+    def test_root_node_with_non_null_parent_raises(self):
+        raw = copy.deepcopy(MOCK_TREE_RESPONSE)
+        for n in raw["nodes"]:
+            if n["id"] == "n0":
+                n["parent"] = "n1"
+        with self.assertRaises(ValueError) as ctx:
+            E._normalize_phylogenetic_tree_into(raw)
+        self.assertIn("Root node n0 must have parent == None", str(ctx.exception))
+
+    def test_support_out_of_range_raises(self):
+        raw = copy.deepcopy(MOCK_TREE_RESPONSE)
+        for n in raw["nodes"]:
+            if n["id"] == "n1":
+                n["support"] = 150.0
+        with self.assertRaises(ValueError) as ctx:
+            E._normalize_phylogenetic_tree_into(raw)
+        self.assertIn("support must be in [0, 100]", str(ctx.exception))
+
+    def test_is_leaf_reverse_check_corrects_mismatch(self):
+        raw = copy.deepcopy(MOCK_TREE_RESPONSE)
+        for n in raw["nodes"]:
+            if n["id"] == "n2":
+                n["is_leaf"] = False  # wrong: n2 has no children
+        result = E._normalize_phylogenetic_tree_into(raw)
+        n2 = next(nn for nn in result["nodes"] if nn["id"] == "n2")
+        self.assertTrue(n2["is_leaf"])
+
+    def test_confidence_clamped(self):
+        raw = dict(MOCK_TREE_RESPONSE, confidence=1.5)
+        result = E._normalize_phylogenetic_tree_into(raw)
+        self.assertEqual(result["confidence"], 1.0)
+        raw = dict(MOCK_TREE_RESPONSE, confidence=-0.5)
+        result = E._normalize_phylogenetic_tree_into(raw)
+        self.assertEqual(result["confidence"], 0.0)
+
+    def test_metadata_preserves_raw_fields(self):
+        result = E._normalize_phylogenetic_tree_into(MOCK_TREE_RESPONSE)
+        self.assertEqual(result["metadata"].get("taxon_group"), "Radiolaria")
+        self.assertEqual(result["metadata"].get("root_name"), "Spasmaria")
+
+    def test_node_extras_preserved(self):
+        result = E._normalize_phylogenetic_tree_into(MOCK_TREE_RESPONSE)
+        n2 = next(nn for nn in result["nodes"] if nn["id"] == "n2")
+        self.assertIn("metadata", n2)
+        self.assertEqual(n2["metadata"].get("depth_range_m"), "0-200")
+
+    def test_array_root_unwrap(self):
+        raw = {"_array_root": [copy.deepcopy(MOCK_TREE_RESPONSE)]}
+        result = E._normalize_phylogenetic_tree_into(raw)
+        self.assertEqual(result["metadata"].get("taxon_group"), "Radiolaria")
+        self.assertEqual(len(result["nodes"]), 4)
+
+
+# ------------------------------------------------------------------
+# P0-3: Newick export
+# ------------------------------------------------------------------
+
+class TestNewickExport(unittest.TestCase):
+
+    def test_basic_tree(self):
+        result = E._normalize_phylogenetic_tree_into(MOCK_TREE_RESPONSE)
+        newick = E.to_newick(result)
+        self.assertTrue(newick.endswith(";"))
+        self.assertIn("Spherical Radiolaria", newick)
+
+    def test_newick_no_branch_length(self):
+        raw = {
+            "metadata": {},
+            "nodes": [
+                {"id": "n0", "name": "Root", "support": None,
+                 "branch_length": None, "is_leaf": False, "parent": None},
+                {"id": "n1", "name": "Leaf", "support": None,
+                 "branch_length": None, "is_leaf": True, "parent": "n0"},
+            ],
+            "root_ids": ["n0"],
+            "confidence": 0.9,
+        }
+        result = E._normalize_phylogenetic_tree_into(raw)
+        newick = E.to_newick(result)
+        self.assertNotIn(":", newick)
+
+    def test_newick_branch_length_included(self):
+        result = E._normalize_phylogenetic_tree_into(RAW_TREE_BL_ONLY)
+        newick = E.to_newick(result)
+        self.assertIn(":0.3", newick)
+        self.assertIn(":0.4", newick)
+
+    def test_newick_support_included(self):
+        result = E._normalize_phylogenetic_tree_into(MOCK_TREE_RESPONSE)
+        newick = E.to_newick(result)
+        self.assertIn("89", newick)
+
+    def test_newick_support_missing_ok(self):
+        raw = {
+            "metadata": {},
+            "nodes": [
+                {"id": "n0", "name": "Root", "support": None,
+                 "branch_length": 0.1, "is_leaf": False, "parent": None},
+                {"id": "n1", "name": "Leaf", "support": None,
+                 "branch_length": 0.2, "is_leaf": True, "parent": "n0"},
+            ],
+            "root_ids": ["n0"],
+            "confidence": 0.9,
+        }
+        result = E._normalize_phylogenetic_tree_into(raw)
+        newick = E.to_newick(result)
+        self.assertNotIn("None", newick)
+
+    def test_newick_forest(self):
+        result = E._normalize_phylogenetic_tree_into(RAW_TREE_FOREST)
+        newick = E.to_newick(result)
+        self.assertTrue(newick.endswith(";"))
+        self.assertIn("LeafA", newick)
+        self.assertIn("LeafB", newick)
+
+    def test_newick_name_escaping(self):
+        result = E._normalize_phylogenetic_tree_into(RAW_TREE_ESCAPE)
+        newick = E.to_newick(result)
+        self.assertNotIn("(sp.", newick)
+        self.assertNotIn("Clade:Test", newick)
+
+    def test_to_newick_file(self):
+        import os, tempfile
+        result = E._normalize_phylogenetic_tree_into(MOCK_TREE_RESPONSE)
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".nwk", delete=False, encoding="utf-8"
+        ) as fh:
+            path = fh.name
+        try:
+            from rca_core.exporter import to_newick_file
+            to_newick_file(result, path)
+            with open(path, encoding="utf-8") as fh:
+                content = fh.read()
+            self.assertTrue(content.endswith(";\n") or content.endswith(";"))
+            self.assertIn("Spasmaria", content)
+        finally:
+            os.unlink(path)
+
+
+class TestNewickParity(unittest.TestCase):
+
+    def test_deterministic(self):
+        result = E._normalize_phylogenetic_tree_into(MOCK_TREE_RESPONSE)
+        n1 = E.to_newick(result)
+        n2 = E.to_newick(result)
+        self.assertEqual(n1, n2)
+
+    def test_same_tree_same_output(self):
+        r1 = E._normalize_phylogenetic_tree_into(MOCK_TREE_RESPONSE)
+        r2 = E._normalize_phylogenetic_tree_into(MOCK_TREE_RESPONSE)
+        self.assertEqual(E.to_newick(r1), E.to_newick(r2))
 
 
 if __name__ == "__main__":

@@ -38,6 +38,13 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
+from .ssrf import validate_endpoint, validate_endpoint_or_raise, SSRFError
+
+
+class LLMCallError(Exception):
+    """Raised when an LLM API call fails due to SSRF validation or other call-level errors."""
+    pass
+
 # Local imports kept lazy so this module can be imported on Python versions
 # or in environments that don't have the rest of rca_core available.
 def _usage_helpers():
@@ -118,10 +125,15 @@ class LlmProvider:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["api_format"] = self.api_format.value
+        # P2-2 (REVIEW-2026-07-25): obfuscate the API key at rest.
+        from rca_core.secrets_store import encrypt
+        if d.get("api_key"):
+            d["api_key"] = encrypt(d["api_key"])
         return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "LlmProvider":
+        from rca_core.secrets_store import decrypt, is_obfuscated
         d = dict(d)
         fmt_raw = d.get("api_format", "anthropic")
         try:
@@ -129,6 +141,15 @@ class LlmProvider:
         except ValueError:
             fmt = ApiFormat.ANTHROPIC
         d.pop("api_format", None)
+        # P2-2 (REVIEW-2026-07-25): decode obfuscated key (or pass
+        # legacy plaintext through untouched).
+        raw_key = d.get("api_key") or ""
+        if raw_key and is_obfuscated(raw_key):
+            try:
+                d["api_key"] = decrypt(raw_key)
+            except ValueError:
+                # Salt lost or envelope corrupted — force re-prompt.
+                d["api_key"] = ""
         provider = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
         provider.api_format = fmt
         return provider
@@ -907,7 +928,8 @@ def _decode_err_body(err_body: bytes) -> str:
             return ""
 
 
-def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_sec: int):
+def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_sec: int,
+               progress_callback=None):
     """Fire a POST and return (payload_bytes, status_code). Never raises.
 
     Returns ``(None, status, body_bytes)`` for HTTPError so callers can
@@ -915,6 +937,10 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
     For network-layer failures (DNS, refused connection, timeout, etc.) the
     status is ``None`` and ``body_bytes`` carries a short diagnostic string
     so the caller can distinguish timeout from connection-refused in logs.
+
+    ``progress_callback``, if given, is called with stage strings
+    ``"submitting"`` and ``"thinking"`` to allow the UI to show granular
+    progress rather than a generic spinner.
     """
     req = urllib.request.Request(
         url,
@@ -922,8 +948,12 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
         headers=headers,
         method="POST",
     )
+    if progress_callback:
+        progress_callback("submitting")
     try:
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            if progress_callback:
+                progress_callback("thinking")
             return resp.read(), resp.status, b""
     except urllib.error.HTTPError as e:
         # Best-effort read of the upstream error body. Don't fail if the
@@ -1041,7 +1071,15 @@ def _call_anthropic(
     user_text: str,
     max_tokens: int,
     timeout_sec: int,
+    progress_callback=None,
 ) -> tuple[str | None, bool, int | None, str, dict | None]:
+    # P0-2 (REVIEW-2026-07-25): validate endpoint before any network call.
+    # The server.py path validated before dispatching, but the GUI path loads
+    # providers from disk without re-validation. This unifies both paths.
+    try:
+        validate_endpoint_or_raise(provider.endpoint)
+    except SSRFError as e:
+        return None, False, None, f"endpoint rejected by SSRF guard: {e}", None
     if not image_b64:
         return None, False, None, "", None
     target = _api_base(provider.endpoint) + "/v1/messages"
@@ -1066,7 +1104,11 @@ def _call_anthropic(
         "content-type": "application/json",
     }
     headers.update(provider.extra_headers)
-    text, truncated, status, err_body, payload = _read_response(target, body, headers, timeout_sec)
+    if progress_callback:
+        progress_callback("uploading")
+    text, truncated, status, err_body, payload = _read_response(
+        target, body, headers, timeout_sec, progress_callback
+    )
     usage = None
     if payload is not None:
         u = parse_usage(payload, "anthropic")
@@ -1084,7 +1126,15 @@ def _call_openai(
     user_text: str,
     max_tokens: int,
     timeout_sec: int,
+    progress_callback=None,
 ) -> tuple[str | None, bool, int | None, str, dict | None]:
+    # P0-2 (REVIEW-2026-07-25): validate endpoint before any network call.
+    # The server.py path validated before dispatching, but the GUI path loads
+    # providers from disk without re-validation. This unifies both paths.
+    try:
+        validate_endpoint_or_raise(provider.endpoint)
+    except SSRFError as e:
+        return None, False, None, f"endpoint rejected by SSRF guard: {e}", None
     if not image_b64:
         return None, False, None, "", None
     target = _api_base(provider.endpoint) + "/v1/chat/completions"
@@ -1124,7 +1174,11 @@ def _call_openai(
         "content-type": "application/json",
     }
     headers.update(provider.extra_headers)
-    payload_bytes, status, err_body = _post_json(target, body, headers, timeout_sec)
+    if progress_callback:
+        progress_callback("uploading")
+    payload_bytes, status, err_body = _post_json(
+        target, body, headers, timeout_sec, progress_callback
+    )
     err_str = _decode_err_body(err_body)
     if payload_bytes is None:
         return None, False, status, err_str, None
@@ -1156,6 +1210,25 @@ def _call_openai(
     return raw_text, truncated, status, err_str, usage
 
 
+def _is_safe_endpoint(endpoint: str) -> bool:
+    """Minimal SSRF check: verify endpoint is a non-empty https URL with a host.
+
+    This is a defense-in-depth guard for the Gemini call path. The server.py
+    caller validates the endpoint before passing the provider here (Bug-6 fix),
+    but the GUI path loads providers from disk without re-validation, and
+    hand-edited providers.json could contain a malformed endpoint.
+    Unlike server.py ``_validate_endpoint``, this does NOT resolve DNS —
+    the global ``_NoRedirect`` opener already blocks redirect-based SSRF.
+    """
+    if not endpoint:
+        return False
+    try:
+        u = urllib.parse.urlparse(endpoint)
+    except ValueError:
+        return False
+    return u.scheme == "https" and bool(u.hostname)
+
+
 def _call_gemini(
     *,
     provider: LlmProvider,
@@ -1165,9 +1238,15 @@ def _call_gemini(
     user_text: str,
     max_tokens: int,
     timeout_sec: int,
+    progress_callback=None,
 ) -> tuple[str | None, bool, int | None, str, dict | None]:
     if not image_b64:
         return None, False, None, "", None
+    # F-26 fix: validate the endpoint before using it. The server.py caller
+    # already validated, but this guards against the GUI path (providers loaded
+    # from disk) and any future caller that bypasses server.py.
+    if not _is_safe_endpoint(provider.endpoint):
+        return None, False, None, "bad endpoint", None
     # Gemini accepts the API key via query param (key=) or header
     # (x-api-key). We default to the header to keep the key out of server,
     # proxy, and Referer logs — matching the safe pattern used by the other
@@ -1211,7 +1290,11 @@ def _call_gemini(
         "x-api-key": provider.api_key,
     }
     headers.update(provider.extra_headers)
-    payload_bytes, status, err_body = _post_json(target, body, headers, timeout_sec)
+    if progress_callback:
+        progress_callback("uploading")
+    payload_bytes, status, err_body = _post_json(
+        target, body, headers, timeout_sec, progress_callback
+    )
     err_str = _decode_err_body(err_body)
     if payload_bytes is None:
         return None, False, status, err_str, None
@@ -1245,11 +1328,14 @@ def _call_gemini(
 
 
 def _read_response(
-    target: str, body: dict[str, Any], headers: dict[str, str], timeout_sec: int
+    target: str, body: dict[str, Any], headers: dict[str, str], timeout_sec: int,
+    progress_callback=None,
 ) -> tuple[str | None, bool, int | None, str, dict | None]:
     """Anthropic-format specific reader. Returns the parsed payload as the
     5th element so the caller can extract usage without re-parsing."""
-    payload_bytes, status, err_body = _post_json(target, body, headers, timeout_sec)
+    payload_bytes, status, err_body = _post_json(
+        target, body, headers, timeout_sec, progress_callback
+    )
     err_str = _decode_err_body(err_body)
     if payload_bytes is None:
         return None, False, status, err_str, None
@@ -1279,6 +1365,7 @@ def call_llm_api(
     max_tokens: int,
     timeout_sec: int = 120,
     capture_error_body: bool = False,
+    progress_callback=None,
 ) -> tuple[str | None, bool, int | None, str, dict | None]:
     """Dispatch a call on the provider's API format. Never raises.
 
@@ -1293,6 +1380,10 @@ def call_llm_api(
         cache_creation_tokens, estimated}``
       or ``None`` when the API didn't return a usage block and we
       couldn't estimate it (no text).
+
+    ``progress_callback``, if given, is called with stage strings
+    ``"submitting"``, ``"uploading"``, ``"thinking"`` to allow the UI to
+    show granular extraction progress.
     """
     dispatch = {
         ApiFormat.ANTHROPIC: _call_anthropic,
@@ -1308,6 +1399,7 @@ def call_llm_api(
         user_text=user_text,
         max_tokens=max_tokens,
         timeout_sec=timeout_sec,
+        progress_callback=progress_callback,
     )
     if capture_error_body and not err_body:
         err_body = ""

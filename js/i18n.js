@@ -99,8 +99,13 @@ const RCA_I18N = {
     'loading.analyzing': '正在调用模型分析…',
     'loading.aggregating': '正在聚合多次结果…',
 
+    // P1-6 (REVIEW-2026-07-25): phylogenetic-tree parsing status
+    'status.phyloParsing': '正在解析系统发育树……',
+
     'results.title': '提取结果',
     'results.empty': '还没有结果。请在上方上传一张地层沿线图并点击「开始提取」。',
+    // Step 0 (8.0→9.5): chimera_warnings surfaced
+    'results.chimera_warning': '检测到 {n} 条嵌合共识行（自然界未观察到），已被自动丢弃',
     'results.confidence': '整体置信度',
     'results.exportAll': '导出全部 (JSON)',
     'results.copy': '复制',
@@ -117,7 +122,8 @@ const RCA_I18N = {
 
     'col.name': '名称',
     'col.ageRange': '年代范围',
-    'col.formations': '组 / 地层',
+    'col.formation': '组 / 地层',
+    'col.group': '群',
     'col.thickness': '厚度 (m)',
     'col.coordinates': '坐标',
     'col.species': '种属',
@@ -189,6 +195,17 @@ const RCA_I18N = {
     'quality.many_extras': '模型输出了较多未定义字段',
     'quality.null_fields': '部分预期字段为空',
     'quality.invalid_result': '提取结果无效',
+    // F-4 (REVIEW-2026-07-25): P1-3 consistency dimension messages
+    'quality.chimera_dropped':    '嵌合共识行被丢弃（无任何单次运行观察到该 FAD/LAD/生物带组合）',
+    'quality.fad_lt_lad':        '部分物种的 FAD（首现）晚于 LAD（末现）',
+    'quality.agreement_overflow': 'agreement_count 异常大于总运行次数',
+    'quality.missing_biozone':    '部分物种缺失生物带归属',
+    'quality.empty_result':        '提取结果为空',
+    'quality.bed_index_order_invalid': '岩性段 Bed 编号顺序颠倒',
+    'quality.bed_index_order_swapped': '部分岩性段的 Bed 编号顺序已被自动修正',
+    // P1-8: abundance sum-to-100
+    'quality.abundance_sum_violation': '丰度百分比之和不等于 100%（实测：{sum}%）',
+    'quality.abundance_sum_violation_count': '共 {count} 个层位的丰度之和不等于 100%',
   },
 };
 
@@ -289,8 +306,13 @@ RCA_I18N.en = {
   'loading.analyzing': 'Calling model for analysis…',
   'loading.aggregating': 'Aggregating multiple results…',
 
+  // P1-6 (REVIEW-2026-07-25): phylogenetic-tree parsing status
+  'status.phyloParsing': 'Parsing phylogenetic tree...',
+
   'results.title': 'Extraction results',
   'results.empty': 'No results yet. Upload a range chart above and click "Extract".',
+  // Step 0 (8.0→9.5): chimera_warnings surfaced
+  'results.chimera_warning': 'Detected {n} chimeric consensus rows (not observed in any single run) — automatically dropped',
   'results.confidence': 'Overall confidence',
   'results.exportAll': 'Export all (JSON)',
   'results.copy': 'Copy',
@@ -307,7 +329,8 @@ RCA_I18N.en = {
 
   'col.name': 'Name',
   'col.ageRange': 'Age range',
-  'col.formations': 'Formations',
+  'col.formation': 'Formations',
+  'col.group': 'Groups',
   'col.thickness': 'Thickness (m)',
   'col.coordinates': 'Coordinates',
   'col.species': 'Species',
@@ -379,6 +402,17 @@ RCA_I18N.en = {
   'quality.many_extras': 'Model emitted many undefined fields',
   'quality.null_fields': 'Some expected fields are null',
   'quality.invalid_result': 'Invalid extraction result',
+  // F-4 (REVIEW-2026-07-25): P1-3 consistency dimension messages
+  'quality.chimera_dropped':    'Chimeric consensus row dropped (no single run observed this combination)',
+  'quality.fad_lt_lad':        'Some taxa have FAD (first appearance) later than LAD (last appearance)',
+  'quality.agreement_overflow': 'agreement_count abnormally exceeds total number of runs',
+  'quality.missing_biozone':   'Some taxa lack biozone assignment',
+  'quality.empty_result':       'Extraction result is empty',
+  'quality.bed_index_order_invalid': 'Lithology bed index order is inverted',
+  'quality.bed_index_order_swapped': 'Some lithology bed index order was auto-corrected',
+  // P1-8: abundance sum-to-100
+  'quality.abundance_sum_violation': "Abundance percentages for '{sample}' sum to {sum}% (should be 100%)",
+  'quality.abundance_sum_violation_count': '{count} level(s) have abundance sums not equal to 100%',
 };
 
 RCA_I18N.ja = {
@@ -478,8 +512,13 @@ RCA_I18N.ja = {
   'loading.analyzing': 'モデルによる解析中…',
   'loading.aggregating': '複数結果を統合中…',
 
+  // P1-6 (REVIEW-2026-07-25): phylogenetic-tree parsing status
+  'status.phyloParsing': '系統樹を解析中……',
+
   'results.title': '抽出結果',
   'results.empty': 'まだ結果がありません。上で画像をアップロードして「抽出開始」を押してください。',
+  // Step 0 (8.0→9.5): chimera_warnings surfaced
+  'results.chimera_warning': '{n} 件のキメラ統合行を検出（単一ランでも観察されなかったため自動破棄）',
   'results.confidence': '全体の信頼度',
   'results.exportAll': 'すべて書き出し (JSON)',
   'results.copy': 'コピー',
@@ -496,7 +535,8 @@ RCA_I18N.ja = {
 
   'col.name': '名称',
   'col.ageRange': '年代範囲',
-  'col.formations': '累層 / 地層',
+  'col.formation': '累層 / 地層',
+  'col.group': '群',
   'col.thickness': '層厚 (m)',
   'col.coordinates': '座標',
   'col.species': '種',
@@ -568,6 +608,17 @@ RCA_I18N.ja = {
   'quality.many_extras': 'モデルが多くの未定義フィールドを出力しました',
   'quality.null_fields': '一部の期待されたフィールドが null です',
   'quality.invalid_result': '無効な抽出結果',
+  // F-4 (REVIEW-2026-07-25): P1-3 consistency dimension messages
+  'quality.chimera_dropped':    'キメラ統合行が破棄されました（単一ランもこの組合を観察していません）',
+  'quality.fad_lt_lad':        '一部の分類群で FAD（初現）が LAD（終現）よりも後になっています',
+  'quality.agreement_overflow': 'agreement_count が総ラン数を超えています',
+  'quality.missing_biozone':    '一部の分類群にbiozone所属がありません',
+  'quality.empty_result':       '抽出結果が空です',
+  'quality.bed_index_order_invalid': '岩相層のベッド番号順序が逆順です',
+  'quality.bed_index_order_swapped': '一部の岩相層のベッド番号順序が自動修正されました',
+  // P1-8: abundance sum-to-100
+  'quality.abundance_sum_violation': '試料「{sample}」の豊度合計は {sum}%（100%であるべき）',
+  'quality.abundance_sum_violation_count': '{count} 個の試料の豊度合計が 100% でない',
 };
 
 // ==================== i18n runtime ====================

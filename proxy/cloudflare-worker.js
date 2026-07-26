@@ -58,7 +58,7 @@ const ALLOWED_ORIGINS = [
 // is empty.
 const PROXY_SHARED_SECRET = '';
 
-// Path allowlist: only these path prefixes are forwarded to the upstream.
+// Path allowlist: exact-match only — only these paths are forwarded to upstream.
 // The MiniMax Anthropic-compatible endpoint lives at /v1/messages.
 const ALLOWED_PATH_PREFIXES = ['/v1/messages'];
 
@@ -290,7 +290,7 @@ export default {
 
     // Path allowlist
     const url = new URL(request.url);
-    if (!ALLOWED_PATH_PREFIXES.some((p) => url.pathname === p || url.pathname.startsWith(p + '/'))) {
+    if (!ALLOWED_PATH_PREFIXES.includes(url.pathname)) {
       return new Response('Not Found', { status: 404, headers: corsEcho });
     }
 

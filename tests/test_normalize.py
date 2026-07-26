@@ -147,25 +147,38 @@ class TestIronRuleSpeciesRanges(unittest.TestCase):
 
 
 class TestZoneTypeHandling(unittest.TestCase):
-    """MEDIUM: zone_type is declared by the normalizer but the prompt never
-    requests it. When the model does emit it, the suffix must still be applied
-    cleanly. When it doesn't, no silent corruption."""
+    """P0-4: zone_type is a first-class row field written by
+    _normalize_biozone_into. When the model emits it, it is stored in the
+    zone_type field (not appended to the name). When absent, zone_type
+    is inferred from the name keywords."""
 
-    def test_zone_type_appended_when_emitted(self):
+    def test_zone_type_written_as_field_when_emitted(self):
+        # P0-4: zone_type is stored as a field, not appended to name.
         r = normalize_result({'biozones': [
-            {'name': 'Zone A', 'age': 'Permian', 'zone_type': 'assemblage'},
+            {'name': 'Zone A', 'age': 'Permian', 'zone_type': 'assemblage_zone'},
         ]})
         bz = r['biozones'][0]
-        # zone_type is appended in parentheses.
-        self.assertIn('assemblage', bz['name'].lower())
+        self.assertEqual(bz.get('zone_type'), 'assemblage_zone')
+        # Name is unchanged (no suffix appended).
+        self.assertEqual(bz['name'], 'Zone A')
 
-    def test_zone_type_absent_no_op(self):
+    def test_zone_type_inferred_when_absent(self):
+        # P0-4: when zone_type is absent, it is inferred from name keywords.
+        r = normalize_result({'biozones': [
+            {'name': 'Acme Zone of N. optima', 'age': 'Permian'},
+        ]})
+        bz = r['biozones'][0]
+        self.assertEqual(bz.get('zone_type'), 'acme_zone')
+        self.assertEqual(bz['name'], 'Acme Zone of N. optima')
+
+    def test_zone_type_absent_no_suffix(self):
+        # P0-4: name has no spurious suffix appended when zone_type is absent.
         r = normalize_result({'biozones': [
             {'name': 'Zone A', 'age': 'Permian'},
         ]})
         bz = r['biozones'][0]
-        # No spurious suffix added.
-        self.assertFalse(bz['name'].endswith(')'))
+        # Name is unchanged; no parentheses suffix.
+        self.assertEqual(bz['name'], 'Zone A')
 
 
 class TestExtrasDedup(unittest.TestCase):

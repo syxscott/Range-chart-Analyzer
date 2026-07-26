@@ -659,6 +659,127 @@ test_viz_host_preserved();
 test_partial_failure_i18n();
 test_handlefile_abort();
 
+// ---------------------------------------------------------------------------
+// P0-5 (REVIEW-2026-07-25) regression: js/minimax.js must unwrap
+// _array_root wrappers in all three normalizers (range_chart,
+// columnar_section, abundance_diagram).
+// ---------------------------------------------------------------------------
+function test_p0_5_array_root_range_chart() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const arr = [
+    { species: 'Genus sp.', section: 'Sec A', range_top: 'Bed 9', range_base: 'Bed 7', biozone: 'B Zone' },
+    { name: 'Sec A', age_range: 'Albian', formations: ['Fm X'], thickness_m: '10' },
+    { name: 'B Zone', age: 'Albian' },
+    'Genus sp. A',
+  ];
+  const wrapped = { _array_root: arr, _note: 'wrap' };
+  const out = ctx.rcaNormalizeResult(wrapped);
+  check('p0-5: range_chart sections>=1',  out.sections.length >= 1);
+  check('p0-5: range_chart species>=1',   out.species_ranges.length >= 1);
+  check('p0-5: range_chart biozones>=1',  out.biozones.length >= 1);
+  check('p0-5: range_chart species.species=Genus sp.',
+        out.species_ranges[0] && out.species_ranges[0].species === 'Genus sp.');
+}
+
+function test_p0_5_array_root_columnar() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const arr = [
+    { id: 'Ki-1', group: 'A', lithology_blocks: [], age_units: [], samples: [] },
+    { marker: 'F1', pattern: 'wavy', meaning: 'fossil' },
+    { pattern: 'sand', meaning: 'sandstone' },
+    { from_section: 'A', from_bed_idx: 1, to_section: 'B', to_bed_idx: 2 },
+  ];
+  const wrapped = { _array_root: arr, _note: 'wrap' };
+  const out = ctx.rcaNormalizeColumnarResult(wrapped);
+  check('p0-5: columnar sections>=1', out.sections && out.sections.length >= 1);
+  check('p0-5: columnar fossil_legend>=1', out.fossil_legend && out.fossil_legend.length >= 1);
+  check('p0-5: columnar lithology_legend>=1', out.lithology_legend && out.lithology_legend.length >= 1);
+  check('p0-5: columnar cross_beds>=1', out.cross_beds && out.cross_beds.length >= 1);
+}
+
+function test_p0_5_array_root_abundance() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const arr = [
+    { site_id: 'S1', location: 'Loc1' },
+    { abundance: 'A', count: 5 },
+    { zone: 'Z1', assemblage: 'ass' },
+  ];
+  const wrapped = { _array_root: arr, _note: 'wrap' };
+  const out = ctx.rcaNormalizeAbundanceResult(wrapped);
+  check('p0-5: abundance sites>=1', out.sites && out.sites.length >= 1);
+  check('p0-5: abundance abundances>=1', out.abundances && out.abundances.length >= 1);
+  check('p0-5: abundance zones>=1', out.zones && out.zones.length >= 1);
+}
+
+function test_p0_5_non_array_passthrough() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const plain = { sections: [], species_ranges: [], biozones: [], other_fossils: [], confidence: 0.5 };
+  const out = ctx.rcaNormalizeResult(plain);
+  check('p0-5: non-array passthrough confidence',
+        out && out.confidence === 0.5);
+}
+
+test_p0_5_array_root_range_chart();
+test_p0_5_array_root_columnar();
+test_p0_5_array_root_abundance();
+test_p0_5_non_array_passthrough();
+
+// ---------------------------------------------------------------------------
+// P1-6 (REVIEW-2026-07-25) regression: js/minimax.js SP_KNOWN must include
+// the full 12 fields that match Python _KNOWN_SPECIES_KEYS; the species
+// row dict must promote those fields instead of dropping them into _extras.
+// ---------------------------------------------------------------------------
+function test_p1_6_sp_known_includes_extra_fields() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const parsed = {
+    species_ranges: [
+      {
+        species: 'Genus sp.',
+        section: 'Sec A',
+        range_top: 'Bed 9',
+        range_base: 'Bed 7',
+        biozone: 'B Zone',
+        author: 'Smith',
+        year: '1950',
+        author_year: 'Smith, 1950',
+        range_top_bed: 'Bed 9a',
+        range_base_bed: 'Bed 7b',
+        endpoint_kind: 'observed',
+        reworked: false,
+      },
+    ],
+    sections: [], biozones: [], other_fossils: [], confidence: 0.9,
+  };
+  const out = ctx.rcaNormalizeResult(parsed);
+  check('p1-6: species row has author',
+        out.species_ranges[0].author === 'Smith');
+  check('p1-6: species row has year',
+        out.species_ranges[0].year === '1950');
+  check('p1-6: species row has author_year',
+        out.species_ranges[0].author_year === 'Smith, 1950');
+  check('p1-6: species row has range_top_bed',
+        out.species_ranges[0].range_top_bed === 'Bed 9a');
+  check('p1-6: species row has range_base_bed',
+        out.species_ranges[0].range_base_bed === 'Bed 7b');
+  check('p1-6: species row has endpoint_kind',
+        out.species_ranges[0].endpoint_kind === 'observed');
+  check('p1-6: species row has reworked=false',
+        out.species_ranges[0].reworked === false);
+  // None of those 7 fields must leak into _extras (that path destroys data).
+  const extras = out.species_ranges[0]._extras || {};
+  for (const k of ['author', 'year', 'author_year', 'range_top_bed',
+                   'range_base_bed', 'endpoint_kind', 'reworked']) {
+    check(`p1-6: ${k} NOT in _extras`, !(k in extras));
+  }
+}
+
+test_p1_6_sp_known_includes_extra_fields();
+
 // Wait for async races to settle before printing summary.
 setTimeout(() => {
   console.log(`\n--- ${pass} passed, ${fail} failed ---`);

@@ -29,6 +29,7 @@ from .exporter import (
     to_csv,
     to_tsv,
     to_xlsx,
+    to_newick_file,
 )
 from .aggregate import merge_results
 from .extractor import (
@@ -45,6 +46,8 @@ from .extractor import (
     normalize_abundance_result,
     normalize_columnar_result,
     normalize_result,
+    normalize_phylogenetic_tree_result,
+    to_newick,
 )
 from .i18n import TRANSLATIONS, Translator
 from .json_utils import extract_balanced_json_object, safe_json_loads
@@ -52,6 +55,7 @@ from .prompt import (
     ABUNDANCE_DIAGRAM_SYSTEM_PROMPT,
     CHART_LANG_HINT,
     COLUMNAR_SECTION_SYSTEM_PROMPT,
+    PHYLOGENETIC_TREE_SYSTEM_PROMPT,
     RANGE_CHART_SYSTEM_PROMPT,
 )
 from .llm import (
@@ -85,7 +89,7 @@ __all__ = [
     "build_table_export",
     "get_configs_for_result",
     "result_to_json",
-    "to_csv", "to_tsv", "to_xlsx",
+    "to_csv", "to_tsv", "to_xlsx", "to_newick_file",
     # aggregate / extract / i18n / json / prompt
     "merge_results",
     "DEFAULT_ENDPOINT", "DEFAULT_MAX_TOKENS", "DEFAULT_MAX_EDGE", "DEFAULT_MODEL",
@@ -93,12 +97,15 @@ __all__ = [
     "extract", "extract_abundance_diagram", "extract_columnar_section", "extract_range_chart",
     "load_image_b64",
     "normalize_abundance_result", "normalize_columnar_result", "normalize_result",
+    "normalize_phylogenetic_tree_result",
+    "to_newick",
     "TRANSLATIONS", "Translator",
     "extract_balanced_json_object", "safe_json_loads",
     "ABUNDANCE_DIAGRAM_SYSTEM_PROMPT",
     "CHART_LANG_HINT",
     "COLUMNAR_SECTION_SYSTEM_PROMPT",
     "RANGE_CHART_SYSTEM_PROMPT",
+    "PHYLOGENETIC_TREE_SYSTEM_PROMPT",
     # providers / llm
     "ApiFormat", "LlmProvider", "ProviderPreset", "ProviderStore",
     "PROVIDER_PRESETS", "call_llm_api",

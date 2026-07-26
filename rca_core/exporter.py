@@ -15,7 +15,157 @@ from __future__ import annotations
 import csv
 import io
 import math
+import re
 from typing import Any, Callable
+
+
+# P0-7 (REVIEW-2026-07-25): regex to parse Bed identifiers like "Bed 23c" or
+# just "23c" into structured components for proper comparison. The numeric
+# part preserves paleontological bed numbering; the alphabetic subscript
+# (a, b, c, …) indicates sub-beds within a single numbered bed.
+_BED_PATTERN = re.compile(
+    r"^Bed\s*(\d+)\s*([a-zA-Z]*)$|^(?:Bed\s*)?(\d+)\s*([a-zA-Z]*)$"
+)
+
+
+def _parse_bed(value: str | None) -> dict[str, Any] | None:
+    """Parse a Bed identifier string into {bed_num, bed_sub, raw}.
+
+    Returns None when the value is not a recognisable Bed string.
+    The ``raw`` field preserves the original string so round-trip works.
+    """
+    if not value:
+        return None
+    s = str(value).strip()
+    # Try "Bed N" form first (with explicit "Bed" prefix).
+    m = re.match(r"^Bed\s*(\d+)\s*([a-zA-Z]*)$", s, re.IGNORECASE)
+    if m:
+        return {"bed_num": int(m.group(1)), "bed_sub": m.group(2).lower(), "raw": s}
+    # Try bare "N" or "Nc" form (some extractors omit the "Bed" prefix).
+    m = re.match(r"^(\d+)\s*([a-zA-Z]*)$", s)
+    if m:
+        return {"bed_num": int(m.group(1)), "bed_sub": m.group(2).lower(), "raw": s}
+    return None
+
+# P2-5 (REVIEW-2026-07-25): scientific invariants that all exported
+# range-chart data MUST satisfy before being written to CSV / xlsx /
+# JSON. Set as module-level constants so they can be referenced from
+# validators and quality.py alike.
+EXPORT_INVARIANTS = {
+    "species_ranges": {
+        # Every species row must carry these 4 scientific identifiers.
+        "required": ["species", "section", "range_base", "range_top"],
+        # Numeric coherence: FAD <= LAD. Strings that fail to parse
+        # are ignored (exporter may legitimately leave them as labels).
+        "constraints": ["range_base_le_range_top", "has_biozone_or_age"],
+    },
+    "biozones": {
+        "required": ["name"],
+    },
+    "sections": {
+        "required": ["name"],
+    },
+}
+
+
+def validate_export_invariants(data: dict[str, Any]) -> tuple[bool, list[dict[str, Any]]]:
+    """Return (ok, issues). ``issues`` is a list of dicts each with
+    keys ``table``, ``row_index``, ``missing``, ``constraint``.
+
+    P2-5: this is an ENTRY validator — calling it before to_csv/to_tsv/
+    to_xlsx surfaces data-integrity violations before they reach the
+    user's downloaded file. The exporter still runs to completion so
+    the user can see what's wrong, but the GUI can badge the result
+    with a 'had invariants failures' flag.
+    """
+    issues: list[dict[str, Any]] = []
+    for table_id, spec in EXPORT_INVARIANTS.items():
+        rows = data.get(table_id) or []
+        if not isinstance(rows, list):
+            continue
+        for ridx, row in enumerate(rows):
+            if not isinstance(row, dict):
+                # other_fossils plain-string row is allowed.
+                if table_id == "species_ranges" or "required" in spec:
+                    if not isinstance(row, dict):
+                        issues.append({
+                            "table": table_id,
+                            "row_index": ridx,
+                            "constraint": "not_a_dict",
+                        })
+                continue
+            for key in spec.get("required", []):
+                v = row.get(key)
+                if v is None or (isinstance(v, str) and not v.strip()):
+                    issues.append({
+                        "table": table_id, "row_index": ridx,
+                        "missing": key,
+                    })
+            for constraint in spec.get("constraints", []):
+                if constraint == "range_base_le_range_top":
+                    # P0-7 fix: Bed strings ("Bed 23c", "23c") must not be forced
+                    # through float() — they carry a subscript that float cannot
+                    # represent. We parse them structurally so numeric beds (23)
+                    # and sub-beds (c) are compared correctly.
+                    base_val = row.get("range_base")
+                    top_val = row.get("range_top")
+                    base_parsed = _parse_bed(base_val)
+                    top_parsed = _parse_bed(top_val)
+                    try:
+                        if base_parsed is not None and top_parsed is not None:
+                            # Both are Bed strings: compare bed_num first, then
+                            # alphabetic subscript as tiebreaker (bed 23a < bed 23b).
+                            if top_parsed["bed_num"] < base_parsed["bed_num"]:
+                                issues.append({
+                                    "table": table_id, "row_index": ridx,
+                                    "constraint": constraint,
+                                    "base": base_val, "top": top_val,
+                                })
+                            elif (top_parsed["bed_num"] == base_parsed["bed_num"]
+                                  and top_parsed["bed_sub"] < base_parsed["bed_sub"]):
+                                issues.append({
+                                    "table": table_id, "row_index": ridx,
+                                    "constraint": constraint,
+                                    "base": base_val, "top": top_val,
+                                })
+                        elif base_parsed is not None and top_parsed is None:
+                            # base is Bed, top is plain numeric: compare bed_num.
+                            top_num = float(top_val)
+                            if top_num < base_parsed["bed_num"]:
+                                issues.append({
+                                    "table": table_id, "row_index": ridx,
+                                    "constraint": constraint,
+                                    "base": base_val, "top": top_val,
+                                })
+                        elif base_parsed is None and top_parsed is not None:
+                            # base is plain numeric, top is Bed: compare with bed_num.
+                            base_num = float(base_val)
+                            if top_parsed["bed_num"] < base_num:
+                                issues.append({
+                                    "table": table_id, "row_index": ridx,
+                                    "constraint": constraint,
+                                    "base": base_val, "top": top_val,
+                                })
+                        else:
+                            # Both are plain numeric.
+                            base = float(base_val)
+                            top = float(top_val)
+                            if top < base:
+                                issues.append({
+                                    "table": table_id, "row_index": ridx,
+                                    "constraint": constraint,
+                                    "base": base, "top": top,
+                                })
+                    except (TypeError, ValueError):
+                        pass
+                elif constraint == "has_biozone_or_age":
+                    if not (row.get("biozone") or row.get("age")):
+                        issues.append({
+                            "table": table_id, "row_index": ridx,
+                            "constraint": constraint,
+                        })
+    return len(issues) == 0, issues
+
 
 # Each config: id, i18n title key, list of column i18n keys, and a row
 # extractor producing cell values in column order.
@@ -56,6 +206,18 @@ def _looks_abundance(data: dict[str, Any] | None) -> bool:
     return isinstance(ab, list) and len(ab) > 0
 
 
+def _looks_phylogenetic_tree(data: dict[str, Any] | None) -> bool:
+    """Heuristic: a phylogenetic-tree result carries a ``nodes`` list
+    with parent/id structure and optionally ``root_ids``."""
+    if not data:
+        return False
+    nodes = data.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        return False
+    first = nodes[0]
+    return isinstance(first, dict) and "id" in first and "parent" in first
+
+
 def _range_chart_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Range-chart table configs. Multi-run results gain an agreement column
     on the species table — mirrors js/table.js.
@@ -75,7 +237,7 @@ def _range_chart_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
         {
             "id": "sections",
             "title_key": "sec.sections",
-            "cols": ["col.name", "col.ageRange", "col.formations", "col.thickness", "col.coordinates"],
+            "cols": ["col.name", "col.ageRange", "col.formation", "col.thickness", "col.coordinates"],
             "data_keys": ["name", "age_range", "formations", "formation_thickness_m", "coordinates"],
             "row": lambda s: [
                 s.get("name", ""),
@@ -182,6 +344,9 @@ def get_configs_for_result(data: dict[str, Any] | None) -> list[dict[str, Any]]:
         # Detect by the presence of any columnar-named key.
         if any(k in data for k in ("fossil_legend", "lithology_legend", "cross_beds")):
             return _columnar_section_tables(data)
+    # Phylogenetic-tree detection (nodes with parent/id structure).
+    if _looks_phylogenetic_tree(data):
+        return _phylogenetic_tree_tables(data)
     return _range_chart_tables(data)
 
 
@@ -233,12 +398,36 @@ def _abundance_diagram_tables(data: dict[str, Any] | None) -> list[dict[str, Any
     ]
 
 
+def _phylogenetic_tree_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Phylogenetic-tree table configs. Nodes are exported as a flat table."""
+    return [
+        {
+            "id": "nodes",
+            "title_key": "sec.nodes",
+            "cols": ["col.nodeId", "col.parent", "col.name", "col.isLeaf",
+                     "col.branchLength", "col.nodeAgeMa", "col.support"],
+            "data_keys": ["id", "parent", "name", "is_leaf",
+                          "branch_length", "node_age_ma", "support"],
+            "row": lambda n: [
+                n.get("id", ""),
+                n.get("parent", ""),
+                n.get("name", ""),
+                "Y" if n.get("is_leaf") else "N",
+                "" if n.get("branch_length") is None else str(n.get("branch_length")),
+                "" if n.get("node_age_ma") is None else str(n.get("node_age_ma")),
+                "" if n.get("support") is None else str(n.get("support")),
+            ],
+        },
+    ]
+
+
 def get_config(table_id: str) -> dict[str, Any] | None:
     # Search through all presets — used by the fallback path in
     # build_table_export / apply_table_edits when the table isn't in the
     # data-shape-matched configs (e.g. editing a cross_beds row while the
     # result has no sections to detect columnar shape).
-    for fn in (_range_chart_tables, _columnar_section_tables, _abundance_diagram_tables):
+    for fn in (_range_chart_tables, _columnar_section_tables, _abundance_diagram_tables,
+               _phylogenetic_tree_tables):
         for c in fn(None):
             if c["id"] == table_id:
                 return c
@@ -314,6 +503,12 @@ COL_TYPES: dict[str, dict[str, str]] = {
     "sites": {},
     "abundances": {},
     "zones": {},
+    # Phylogenetic-tree tables: branch_length / node_age_ma / support are floats.
+    "nodes": {
+        "branch_length": "float",
+        "node_age_ma": "float",
+        "support": "float",
+    },
 }
 
 
@@ -380,7 +575,14 @@ def apply_table_edits(
     for row in rows:
         # Skip empty placeholder rows (a Qt quirk: rowCount is 1 even
         # when the model is empty, so the last row is a phantom).
+        # P0-7 (REVIEW-2026-07-25): also increment data_row_idx so the
+        # corresponding slot in existing_items is consumed. Without this,
+        # deleting a middle row causes subsequent rows to be rebuilt on
+        # top of the WRONG existing_items row — _extras, per-row
+        # confidence, and other non-data_keys fields are silently
+        # misaligned by one row each time a deletion occurs.
         if not row or all((c is None or str(c).strip() == "") for c in row[1:]):
+            data_row_idx += 1
             continue
         if table_id == "other_fossils":
             # Plain string list.
@@ -535,7 +737,18 @@ def to_xlsx(
     -------
     bytes when ``file_or_path`` is None (caller writes to disk).
     None   when ``file_or_path`` is given and the file is written.
+
+    Raises
+    ------
+    ValueError: when ``data`` violates an export invariant
+                (e.g. species row missing required fields, FAD<LAD inversion).
     """
+    # F-1 (REVIEW-2026-07-25 P2-5): wire the entry validator so data-integrity
+    # violations are surfaced before any table is written to the workbook.
+    ok, issues = validate_export_invariants(data)
+    if not ok:
+        raise ValueError(f"export invariants violated: {issues}")
+
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -584,9 +797,47 @@ def to_xlsx(
 
         items = (data or {}).get(cfg["id"]) or []
         italic_col = italic_col_idx.get(cfg["id"], -1)
+        # P0-6 (REVIEW-2026-07-25): other_fossils may be a list of plain
+        # strings (fossil taxon name only) rather than dict rows. The CSV/TSV
+        # path handled this at apply_table_edits:380-392; to_xlsx used to
+        # silently drop any non-dict item. Render string items as a single
+        # column row.
         for idx, item in enumerate(items, start=1):
-            if not isinstance(item, dict):
+            if isinstance(item, dict):
+                row_values: list[Any] = []
+                if include_index:
+                    row_values.append(idx)
+                row_values.extend(cfg["row"](item))
+                for ci, v in enumerate(row_values):
+                    row_values[ci] = "" if v is None else _cell_to_export(v)
+                ws.append(row_values)
+                excel_row = idx + 1
+                for ci, _ in enumerate(row_values, start=1):
+                    cell = ws.cell(row=excel_row, column=ci)
+                    cell.border = cell_border
+                    if ci == italic_col:
+                        cell.font = italic
+                    cell.alignment = Alignment(
+                        horizontal="left", vertical="top", wrap_text=True,
+                    )
                 continue
+            if isinstance(item, str):
+                # other_fossils plain-string row: # | name
+                txt = item.strip()
+                if not txt:
+                    continue
+                row_values = [idx] if include_index else []
+                row_values.append(_cell_to_export(txt))
+                ws.append(row_values)
+                excel_row = idx + 1
+                for ci, _ in enumerate(row_values, start=1):
+                    cell = ws.cell(row=excel_row, column=ci)
+                    cell.border = cell_border
+                    cell.alignment = Alignment(
+                        horizontal="left", vertical="top", wrap_text=True,
+                    )
+                continue
+            # unknown item shape — skip silently (already covered by tests)
             row_values: list[Any] = []
             if include_index:
                 row_values.append(idx)
@@ -628,3 +879,17 @@ def to_xlsx(
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def to_newick_file(tree: dict[str, Any], path: str) -> None:
+    """Write a normalized phylogenetic tree as a Newick-formatted file.
+
+    Raises
+    ------
+    OSError: on file write failure.
+    """
+    # Import lazily here to avoid circular import with extractor.py.
+    from .extractor import to_newick
+    text = to_newick(tree)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)

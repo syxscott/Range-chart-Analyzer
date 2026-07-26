@@ -25,7 +25,22 @@ import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-LOCK_FILE = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer.lock")
+# P1-1 (REVIEW-2026-07-25): import LOCK_PATH from rca_core.history so it is
+# the single source of truth. Previously this file defined LOCK_FILE separately.
+from rca_core.history import LOCK_PATH
+# Alias to the old name for backwards-compatible internal references.
+LOCK_FILE = LOCK_PATH
+
+# P2-1 (REVIEW-2026-07-25) note: this app.py is a PyWebView wrapper
+# that opens a NATIVE window pointing at http://127.0.0.1:<port>/.
+# It is not a "modern-UI deployment" with separate Origin — server.py's
+# /api/extract endpoint is same-origin by construction (browser makes
+# the request to the very host:port it's loaded from). Therefore the
+# Origin/EXPECTED_HOSTS hardening that protects server.py when hosted on
+# a public host does NOT apply here: the loading screen injected via
+# PyWebView always arrives from the same localhost origin.
+# We document this so future contributors don't add a redundant
+# EXPECTED_HOSTS check that would break the local-only flow.
 
 
 

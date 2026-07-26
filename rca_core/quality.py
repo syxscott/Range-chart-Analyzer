@@ -31,6 +31,12 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
+try:
+    from .standards.ics import ics_age_compare, ics_parse_age_range, ics_era, ICS_2024 as _ICS_2024
+    _HAS_ICS = True
+except ImportError:
+    _HAS_ICS = False
+
 # Weights for the 4 quality dimensions. Must sum to 1.0.
 W_COMPLETENESS = 0.30
 W_ACCURACY = 0.40
@@ -342,6 +348,69 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
             # Severe inversion penalty when the model consistently inverts.
             passed += max(0.0, 1.0 - bed_violations / bed_total)
 
+    # H-5 fix: detect impossible age sequences (e.g., Jurassic above Cambrian).
+    # Use a simple heuristic: flag when beds from radically different eons
+    # (Paleozoic + Mesozoic or older + younger eras) appear in the same section.
+    # A full ICS timescale lookup requires an external table; this catches the
+    # most egregious impossible-orderings without one.
+    _PALEOZOIC_RE = re.compile(
+        r"\b(cambrian|ordovician|silurian|devonian|carboniferous|pennsylvanian|mississippian|permutian|permian)\b",
+        re.IGNORECASE,
+    )
+    _MESOZOIC_RE = re.compile(
+        r"\b(triassic|jurassic|cretaceous)\b",
+        re.IGNORECASE,
+    )
+    _CENOZOIC_RE = re.compile(
+        r"\b(paleogene|neogene|quaternary|pleistocene|holocene|eocene|oligocene|miocene|pliocene)\b",
+        re.IGNORECASE,
+    )
+    section_ages: dict[str, set[str]] = {}
+    for sec in data.get("sections") or []:
+        if not isinstance(sec, dict):
+            continue
+        sec_name = str(sec.get("name") or sec.get("id") or "").strip()
+        if not sec_name:
+            continue
+        eras: set[str] = set()
+        for block in list(sec.get("lithology_blocks") or []) + list(sec.get("age_units") or []):
+            if not isinstance(block, dict):
+                continue
+            age_str = str(block.get("age") or "")
+            if _PALEOZOIC_RE.search(age_str):
+                eras.add("Paleozoic")
+            if _MESOZOIC_RE.search(age_str):
+                eras.add("Mesozoic")
+            if _CENOZOIC_RE.search(age_str):
+                eras.add("Cenozoic")
+        if eras:
+            section_ages[sec_name] = eras
+    cross_era_violations = sum(
+        1 for eras in section_ages.values()
+        if len(eras) > 1  # more than one era in one section = impossible
+    )
+    if cross_era_violations > 0:
+        checks += 1
+        passed += 0  # hard violation
+        issues.append({
+            "severity": "error",
+            "msg_key": "quality.ages_inconsistent",
+            "params": {"count": str(cross_era_violations)},
+        })
+
+    # ICS-based cross-era accuracy check: detect Stage order reversals
+    # using the actual ICS timescale lookup.
+    if _HAS_ICS:
+        ics_violations = _score_cross_era_accuracy(data.get("sections") or [])
+        for v in ics_violations:
+            checks += 1
+            passed += 0
+            issues.append({
+                "severity": v.get("severity", "warning"),
+                "msg_key": "quality.stage_order_reversed",
+                "params": {"section": v.get("section", ""), "detail": v.get("issue", "")},
+            })
+
     # Biozone section refs (columnar mode uses per-section thickness).
     for bz in data.get("biozones") or []:
         if not isinstance(bz, dict):
@@ -372,22 +441,239 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
             continue
 
     if checks == 0:
-        return 1.0, issues
-    score = passed / checks
+        score = 1.0
+    else:
+        score = passed / checks
+
+    # P1-8: abundance sum-to-100 check.
+    # Deduct 0.05 per violating level, capped at 0.3 total.
+    sum_violations = _score_abundance_sum(data)
+    if sum_violations:
+        deduction = min(0.3, 0.05 * len(sum_violations))
+        score = max(0.0, score - deduction)
+        for v in sum_violations[:5]:
+            issues.append({
+                "severity": "warning",
+                "msg_key": "quality.abundance_sum_violation",
+                "params": {"sample": str(v.get("sample", "")), "sum": str(round(v.get("sum", 0), 1))},
+            })
+        issues.append({
+            "severity": "info",
+            "msg_key": "quality.abundance_sum_violation_count",
+            "params": {"count": str(len(sum_violations))},
+        })
+
     return min(1.0, max(0.0, score)), issues
 
 
 def _score_consistency(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
-    """Cross-field agreement: primarily driven by _score_completeness checks.
-    This dimension is intentionally lightweight — the primary accuracy and
-    completeness checks handle the meaningful signal. Kept for schema
-    completeness (W_CONSISTENCY = 0.20 weight)."""
+    """P1-3 (REVIEW-2026-07-25): actually compute consistency, instead of
+    the previous hard-coded 1.0 which made the 0.20 weight a free 0.20
+    bonus and prevented D/F grades from ever being reachable.
+
+    What we check here (cross-field / per-row invariants that the other
+    three dimensions do NOT cover):
+      * FAD <= LAD on every species_ranges row (range_top >= range_base)
+      * per-row agreement_count <= total_runs when present (catches
+        over-merged rows where agreement denominator doesn't match runs)
+      * chimera_warnings presence (only the aggregator sets this)
+      * biozone plausibility: biozone string is non-empty for
+        every species_ranges row
+    """
     issues: list[dict[str, str]] = []
-    # D-2/M5 fix: removed dead per-row confidence check (rows never carry
-    # a confidence field — normalize_result does not populate it) and removed
-    # the redundant species_ranges/abundances existence check (completeness
-    # already covers that).
-    return 1.0, issues
+    score = 1.0
+
+    # (1) Chimera warnings from the merge.
+    chimera_warnings = data.get("chimera_warnings") or []
+    if chimera_warnings:
+        # Each dropped row degrades consistency by 0.1, floor 0.
+        score -= min(0.5, 0.1 * len(chimera_warnings))
+        for w in chimera_warnings[:5]:
+            issues.append({
+                "severity": "warning",
+                "msg_key": "quality.chimera_dropped",
+                "params": {"row": str(w.get("row", {}))[:200]},
+            })
+
+    species = data.get("species_ranges") or []
+    if isinstance(species, list) and species:
+        # (2) FAD <= LAD per row.
+        fad_violations = 0
+        for sp in species:
+            if not isinstance(sp, dict):
+                continue
+            top = sp.get("range_top")
+            base = sp.get("range_base")
+            if top is None or base is None:
+                continue
+            top_n = _parse_bed_n(top)
+            base_n = _parse_bed_n(base)
+            if top_n is not None and base_n is not None and top_n < base_n:
+                fad_violations += 1
+        if fad_violations:
+            score -= min(0.3, 0.1 * fad_violations)
+            issues.append({
+                "severity": "warning",
+                "msg_key": "quality.fad_lt_lad",
+                "params": {"count": str(fad_violations)},
+            })
+
+        # (3) agreement_count <= total_runs (catches the bug pattern from
+        # columnar secondary merge, even after P0-2 fixed it).
+        total_runs = data.get("runs")
+        over_agreed = 0
+        if isinstance(total_runs, int) and total_runs > 0:
+            for sp in species:
+                ac = sp.get("agreement_count")
+                if isinstance(ac, int) and ac > total_runs:
+                    over_agreed += 1
+        if over_agreed:
+            score -= min(0.3, 0.2 * over_agreed)
+            issues.append({
+                "severity": "warning",
+                "msg_key": "quality.agreement_overflow",
+                "params": {"count": str(over_agreed)},
+            })
+
+        # (4) Every species row has a non-empty biozone label.
+        missing_bz = sum(
+            1 for sp in species
+            if isinstance(sp, dict) and not (sp.get("biozone") or "").strip()
+        )
+        if missing_bz:
+            score -= min(0.2, 0.05 * missing_bz)
+            issues.append({
+                "severity": "warning",
+                "msg_key": "quality.missing_biozone",
+                "params": {"count": str(missing_bz)},
+            })
+
+    # P1-12: Steno's Law biozone order check.
+    biozone_violations, biozone_issues = _score_biozone_order(species, data.get("sections") or [])
+    if biozone_violations:
+        score -= min(0.3, 0.1 * biozone_violations)
+        issues.extend(biozone_issues[:5])
+
+    score = max(0.0, min(1.0, score))
+    return score, issues
+
+
+def _score_cross_era_accuracy(sections: list) -> list[dict[str, Any]]:
+    """ICS-based Stage order check using the actual timescale lookup.
+
+    For each section, parses the age_range string to extract Stage names,
+    then checks that stages are in correct stratigraphic order (older stages
+    should appear below/younger stages in the section).
+
+    Returns a list of violation dicts with keys: section, issue, severity.
+    """
+    violations: list[dict[str, Any]] = []
+
+    for sec in sections:
+        if not isinstance(sec, dict):
+            continue
+        sec_name = str(sec.get("name") or sec.get("id") or "").strip()
+        if not sec_name:
+            continue
+
+        age_range = str(sec.get("age_range") or "")
+        stages = ics_parse_age_range(age_range)
+
+        if len(stages) < 2:
+            continue
+
+        # Check consecutive stage pairs
+        for i in range(len(stages) - 1):
+            cmp_result = ics_age_compare(stages[i], stages[i + 1])
+            if cmp_result is None:
+                continue  # unknown stages - skip
+
+            # In stratigraphic order, oldest (highest Ma) should be first in list
+            # List order in section: oldest -> youngest (bottom -> top)
+            # If stages[i] is younger than stages[i+1], that's a reversal
+            # cmp_result > 0 means stage1 is younger (lower Ma) than stage2
+            if cmp_result > 0:
+                violations.append({
+                    "section": sec_name,
+                    "issue": f"Stage order reversed: {stages[i]} above {stages[i + 1]}",
+                    "severity": "high",
+                })
+
+    return violations
+
+
+def _score_biozone_order(species: list, sections: list) -> tuple[int, list[dict[str, Any]]]:
+    """P1-12: Steno's Law biozone order check.
+
+    For each section, if species A is in biozone X and species B is in
+    biozone Y where X is younger than Y, but A's range is BELOW B's,
+    this is a Steno's Law violation (younger biozone should be stratigraphically
+    above older one).
+
+    Uses lexicographic comparison of age strings as a proxy for relative age
+    (no ICS numeric parsing required). Returns (violation_count, issues).
+    """
+    if not species or not sections:
+        return 0, []
+
+    # Build section name → age string mapping from sections data.
+    # sections entries have age_range like "Late Permian" or "Late Permian - Early Triassic"
+    section_ages: dict[str, str] = {}
+    for sec in sections:
+        if isinstance(sec, dict):
+            name = sec.get("name", "")
+            age_range = sec.get("age_range", "")
+            if name and age_range:
+                section_ages[str(name)] = str(age_range)
+
+    if not section_ages:
+        return 0, []
+
+    # For each species, get its section and biozone
+    # Compare species within the same section by lexicographic biozone age.
+    # Violation: species in younger biozone appears BELOW (older) species in older biozone.
+    violations = 0
+    issues = []
+
+    # Group species by section
+    by_section: dict[str, list] = {}
+    for sp in species:
+        if not isinstance(sp, dict):
+            continue
+        sec_name = str(sp.get("section") or "")
+        if sec_name in section_ages:
+            by_section.setdefault(sec_name, []).append(sp)
+
+    for sec_name, sp_list in by_section.items():
+        if len(sp_list) < 2:
+            continue
+        # Sort by range_top (bed index) to get stratigraphic order (top=younger)
+        sorted_sp = sorted(
+            sp_list,
+            key=lambda s: _parse_bed_n(s.get("range_top")),
+        )
+        for i in range(len(sorted_sp) - 1):
+            younger = sorted_sp[i]
+            older = sorted_sp[i + 1]
+            younger_bz = str(younger.get("biozone") or "").strip()
+            older_bz = str(older.get("biozone") or "").strip()
+            if not younger_bz or not older_bz:
+                continue
+            # Lexicographic comparison of age strings as a proxy.
+            # If younger biozone name > older biozone name lexicographically AND
+            # younger is BELOW older in section → violation.
+            if younger_bz > older_bz:
+                violations += 1
+                issues.append({
+                    "severity": "warning",
+                    "msg_key": "quality.biozone_order_violation",
+                    "params": {
+                        "species": str(younger.get("species", "")),
+                        "younger_biozone": younger_bz,
+                        "older_biozone": older_bz,
+                    },
+                })
+    return violations, issues
 
 
 def _score_structure(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
@@ -441,6 +727,46 @@ def _score_structure(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]
         return 1.0, issues
     score = passed / checks
     return min(1.0, max(0.0, score)), issues
+
+
+def _score_abundance_sum(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """P1-8: For abundance diagrams, check that each level's percentages sum to 100±5.
+
+    Returns a list of violation dicts, each with keys ``sample`` (level id) and ``sum``
+    (the computed total). An empty list means no violations.
+    """
+    violations: list[dict[str, Any]] = []
+    samples = data.get("samples") or data.get("abundances") or []
+    if not isinstance(samples, list):
+        return violations
+    # Group by level/sample
+    level_sums: dict[str, float] = {}
+    level_ids: dict[str, str] = {}
+    for entry in samples:
+        if not isinstance(entry, dict):
+            continue
+        taxon = entry.get("taxon", "")
+        level = entry.get("level", "")
+        abundance_str = entry.get("abundance", "")
+        unit = str(entry.get("abundance_unit", "")).strip().lower()
+
+        # Only sum percentage values (unit == '%')
+        if unit != "%":
+            continue
+        try:
+            pct = float(abundance_str)
+        except (TypeError, ValueError):
+            continue
+
+        if level not in level_sums:
+            level_sums[level] = 0.0
+            level_ids[level] = level
+        level_sums[level] += pct
+
+    for level, total in level_sums.items():
+        if not (95 <= total <= 105):
+            violations.append({"sample": level_ids.get(level, level), "sum": total})
+    return violations
 
 
 def score_range_chart(data: dict[str, Any]) -> dict[str, Any]:

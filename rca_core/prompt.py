@@ -7,11 +7,25 @@ names.
 
 from __future__ import annotations
 
-# PROMPT_VERSION: bump this whenever the prompt text changes meaningfully.
+# PROMPT_VERSION: dict of per-mode version strings.
 # The cache layer (rca_core/cache.py) includes this in its cache key so that
 # old cached results produced by a previous prompt version are not served
 # after a prompt upgrade. Keep in sync with js/prompt.js PROMPT_VERSION.
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = {
+    "range_chart": "v3",
+    "columnar_section": "v3",
+    "abundance": "v3",
+    "phylogenetic_tree": "v1",
+}
+
+
+def prompt_version_for_mode(mode: str) -> str:
+    """Return the prompt version string for the given extraction mode.
+
+    P1-7: each mode has its own version string so upgrading one mode's
+    prompt doesn't invalidate the cache for other modes.
+    """
+    return PROMPT_VERSION.get(mode, "v3")
 
 
 def _degradation_clause() -> str:
@@ -69,7 +83,7 @@ RANGE_CHART_SYSTEM_PROMPT = "\n".join([
     "      \"range_top_idx\": 9 (int, the bed index of the young limit, 1-indexed from base; empty if the bed label is not numeric),",
     "      \"range_base_idx\": 7 (int, the bed index of the old limit, 1-indexed from base; empty if not numeric),",
     "      \"endpoint_kind\": \"observed\" (string, one of \"observed\", \"projected\", \"truncated\" — flag inferred rather than directly seen endpoints),",
-    "      \"reworked\": false (bool, true if the chart annotates this occurrence as reworked / redeposited rather than in-situ; false or omitted otherwise),",
+    "      \"occurrence_mode\": \"in_situ\" (string, one of \"in_situ\", \"reworked\", \"transported\", \"cavity_fill\", \"bioturbated\", \"derived\", \"lag_deposit\" — how the taxon occurs in the section),",
     "      \"biozone\": \"N. optima Zone (latest Changhsingian)\" (string, optional),",
     "      \"confidence\": 0.0-1.0 (float, per-row certainty; lower when the row is ambiguous),",
     "      \"note\": \"\" (string, short provenance / uncertainty remark such as \"unclear\" or \"partially obscured\"; NEVER embedded in `species` or other structured fields)",
@@ -162,6 +176,8 @@ ABUNDANCE_DIAGRAM_SYSTEM_PROMPT = "\n".join([
     "- Only extract what you can READ from the diagram. Do not invent data that is not present.",
     "- If the figure is NOT a fossil abundance / pollen diagram, return all arrays empty and confidence 0.0.",
     "- Return JSON only, no markdown fences, no commentary.",
+    # P1-8 (REVIEW-2026-07-25): SUM-TO-100 constraint for percentage diagrams.
+    "- SUM-TO-100. For each level (sample), the sum of all taxon percentages should equal 100 ± 5%. If your reading differs significantly, lower the row confidence and note the discrepancy in the row note field.",
     _degradation_clause(),
 ])
 
@@ -213,7 +229,8 @@ PHYLOGENETIC_TREE_SYSTEM_PROMPT = "\n".join([
     "Rules:",
     "- READ THE TREE TOPOLOGY CAREFULLY. Transcribe the parent-child structure as drawn — do NOT re-root, do NOT collapse polytomies into bifurcations unless the figure shows them as bifurcations, and do NOT reorder clades. Traverse from the root outward; emit one entry per node.",
     "- NODE IDS. Assign ids in traversal order: \"n0\" = root, then \"n1\", \"n2\", ... in the order the children first appear (left-to-right or top-to-bottom). Every internal node and every leaf gets exactly one entry. Refer to parents by id only.",
-    "- INTERNAL vs LEAF. A node is a leaf (`is_leaf: true`) iff it is a terminal taxon (no descendants drawn). All other nodes are internal (`is_leaf: false`) even when they carry a printed name. The root's `parent` is null; every other node's `parent` must equal an existing node's `id`.",
+    "- INTERNAL vs LEAF. A node is a leaf (`is_leaf: true`) iff it is a terminal taxon (no descendants drawn). All other nodes are internal (`is_leaf: false`) even when they carry a printed name.",
+    "- PARENT INVARIANT. Every ROOT's `parent` must be null. Every non-root node's `parent` must equal an existing node's `id`. Violating this rule produces an invalid tree.",
     "- SUPPORT VALUES. When a number is printed at a node (e.g. \"89\", \"0.97\"), put it into `support` as a float and set `support_confidence` according to how clearly you could read the digit (0.95+ when crystal clear, 0.5–0.7 when ambiguous). If no support value is printed at the node, leave `support` and `support_confidence` as null — do not invent a plausible-looking number.",
     "- BRANCH LENGTH. Only fill `branch_length` when the figure is a phylogram with an explicit scale bar AND the value can be read with confidence. For cladograms (no scale bar), leave it null.",
     "- DEPTH RANGE COLOR. Marine-plankton trees often color terminals by depth band. If a color→depth legend is printed, map each terminal's color to the corresponding depth string (e.g. \"0-200\") in `depth_range_m`. Leave `depth_range_m` empty for internal nodes and for terminals whose color does not match any legend band. Use the `legend.depth_colors` object to record the legend bands you used.",

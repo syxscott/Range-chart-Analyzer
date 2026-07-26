@@ -17,13 +17,59 @@ function rcaAggNorm(s) {
   return t.toLowerCase();
 }
 
-// B-1 fix: mirror of Python _extract_qualifiers (aggregate.py).
-// Returns the set of open-nomenclature qualifiers present in string s.
+// F-10 fix: mirror of Python _norm_iczn_author (aggregate.py:54).
+// Normalizes "Smith, 1950", "(Smith, 1950)", "Smith 1950", "Smith,1950"
+// to the same canonical form so they dedup together; year is preserved
+// as a separate suffix so "Smith, 1950" and "Smith, 1960" stay distinct.
+function rcaNormIcbnAuthor(s) {
+  if (!s) return '';
+  let t = String(s).trim().toLowerCase();
+  // Strip the year part first so we can normalize the author separately.
+  const yearMatch = t.match(/(\d{4})/);
+  const year = yearMatch ? yearMatch[1] : '';
+  // Remove the year from the working string.
+  const author = t.replace(/\d{4}/g, '');
+  // Strip ICZN-style punctuation: commas, parentheses, ampersands,
+  // multiple spaces, "et", "al.", "&".
+  let norm = author.replace(/&/g, ' ').replace(/\band\b/g, ' ');
+  norm = norm.replace(/[(),.;:'"`]/g, ' ');
+  norm = norm.replace(/\bet\.?\s+al\.?\b/g, '');  // "et al."
+  norm = norm.replace(/\s+/g, ' ').trim();
+  return year ? norm + '|' + year : norm;
+}
+
+// F-13 fix: Python repr()-compatible serialization for structured dedup keys.
+// Python repr produces: True/False (not true/false), None (not null),
+// quoted strings, bare numbers. JSON.stringify produces different strings
+// for the same logical content, causing duplicate detection to fail.
+function rcaStructDedupKey(item) {
+  const entries = Object.keys(item).sort().map((k) => {
+    const v = item[k];
+    if (v === null || v === undefined) return k + ':null';
+    if (typeof v === 'boolean') return k + ':' + (v ? 'True' : 'False');
+    if (typeof v === 'string') return k + ':' + JSON.stringify(v);
+    if (typeof v === 'number') return k + ':' + String(v);
+    return k + ':' + String(v);
+  });
+  return entries.join(',');
+}
+
+// P0-6: mirror of Python _QUALIFIER_PATTERNS (aggregate.py).
+// 10 common ICZN open-nomenclature markers. Long patterns before short ones.
 const _QUALIFIER_RE = [
-  [/\s+sp\.?$/i, 'sp'],
-  [/\s+cf\.?\s+/i, 'cf'],
-  [/\s+aff\.?\s+/i, 'aff'],
-  [/\s+\?$/i, 'unidentified'],
+  [/\bex\s+gr(oup)?\.?\b/i, 'ex gr.'],
+  [/\bs\.?\s*l\.?\b/i, 's.l.'],
+  [/\bs\.?\s*str\.?\b/i, 's.str.'],
+  [/\bsp\.?\b/i, 'sp.'],
+  [/\bspp\.?\b/i, 'spp.'],
+  [/\bcf\.?\s+/i, 'cf.'],
+  [/\baff\.?\s+/i, 'aff.'],
+  [/\?\s*$/i, '?'],
+  [/\bnom\.?\s+(dub|nud|nov|cons|obl|rej|van)\b/i, 'nom. $1'],
+  [/\bcomb\.?\s+nov\.?\b/i, 'comb. nov.'],
+  [/\bstat\.?\s+nov\.?\b/i, 'stat. nov.'],
+  [/\bsubsp\.?\b/i, 'subsp.'],
+  [/\bvar\.?\b/i, 'var.'],
 ];
 function rcaExtractQualifiers(s) {
   if (!s) return [];
@@ -82,9 +128,7 @@ function mergeStructuredField(values) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
       let sig;
       try {
-        sig = JSON.stringify(
-          Object.keys(item).sort().map((k) => [k, item[k]])
-        );
+        sig = rcaStructDedupKey(item);
       } catch (_e) {
         continue;
       }
@@ -210,13 +254,19 @@ function mergePrimaryList(runs, km, n) {
       if (!it || typeof it !== 'object') continue;
       // B-1 fix: include open-nomenclature qualifiers (sp./cf./aff./?)
       // in the dedup key so "Genus sp." and "Genus" stay separate.
+      // F-10 fix: also include ICZN-normalized author_year for range-chart
+      // so "Smith, 1950", "(Smith, 1950)", "Smith 1950" dedup together.
       const parts = km.idKeys.map((k) => rcaAggNorm(it[k]));
       if (!parts.some((p) => p)) continue;
+      // F-10: range-chart uses ICZN author_year normalization in dedup key.
+      const icznSuffix = km.primary === 'species_ranges'
+        ? '\x1e' + rcaNormIcbnAuthor(it['author_year'])
+        : '';
       // Extract qualifiers from the species/id fields for the key.
       const speciesRaw = it['species'] || it['id'] || '';
       const quals = rcaExtractQualifiers(speciesRaw);
       const qualsSuffix = quals.length ? '\x1f' + quals.join('|') : '';
-      const key = parts.join('') + qualsSuffix;
+      const key = parts.join('') + icznSuffix + qualsSuffix;
       if (seenInRun.has(key)) continue;
       seenInRun.add(key);
       if (!groups.has(key)) { groups.set(key, []); order.push(key); }
@@ -356,10 +406,10 @@ function mergeNamedLists(runs, km) {
           // Fall back to a content signature so identical items across runs
           // collapse to one and distinct items are preserved, instead of
           // being silently dropped. Mirrors the Python _merge_named_lists.
+          // F-13 fix: use Python-repr-compatible serialization (True/False/None)
+          // so boolean and null values produce the same key across JS/Python.
           try {
-            label = '__nolabel__:' + JSON.stringify(
-              Object.keys(it).sort().map((k) => [k, it[k] == null ? '' : String(it[k])])
-            );
+            label = '__nolabel__:' + rcaStructDedupKey(it);
           } catch (_e) {
             label = '__nolabel__:' + JSON.stringify(Object.keys(it).sort());
           }

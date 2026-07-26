@@ -249,7 +249,7 @@ function scoreAccuracy(data) {
     fadLadTotal += 1;
     if (top < base) {
       fadLadViolations += 1;
-      issues.push({severity: 'warning', msg_key: 'quality.range_top_lt_base'});
+      issues.push({severity: 'warning', msg_key: 'quality.fad_lt_lad'});
     }
   }
   if (fadLadTotal > 0) {
@@ -328,10 +328,97 @@ function scoreAccuracy(data) {
 }
 
 /**
- * consistency: intentionally lightweight.
+ * consistency: cross-field / per-row invariants not covered by the other
+ * three dimensions:
+ *   (1) chimera_warnings from merge (aggregator sets this)
+ *   (2) FAD <= LAD on every species_ranges row
+ *   (3) agreement_count <= total_runs per row
+ *   (4) every species_ranges row has a non-empty biozone label
  */
 function scoreConsistency(data) {
-  return [1.0, []];
+  const issues = [];
+  let score = 1.0;
+
+  // (1) Chimera warnings from the merge.
+  const chimeraWarnings = data && data.chimera_warnings;
+  if (Array.isArray(chimeraWarnings) && chimeraWarnings.length > 0) {
+    score -= Math.min(0.5, 0.1 * chimeraWarnings.length);
+    for (const w of chimeraWarnings.slice(0, 5)) {
+      if (w && typeof w === 'object') {
+        issues.push({
+          severity: 'warning',
+          msg_key: 'quality.chimera_dropped',
+          params: { row: JSON.stringify(w.row || {}).slice(0, 200) },
+        });
+      }
+    }
+  }
+
+  const species = (data && Array.isArray(data.species_ranges)) ? data.species_ranges : [];
+
+  if (species.length > 0) {
+    // (2) FAD <= LAD per row (range_top >= range_base).
+    let fadViolations = 0;
+    for (const sp of species) {
+      if (!sp || typeof sp !== 'object') continue;
+      const top = _parseBedN(sp.range_top);
+      const base = _parseBedN(sp.range_base);
+      if (top === null || base === null) continue;
+      if (top < base) {
+        fadViolations += 1;
+      }
+    }
+    if (fadViolations > 0) {
+      score -= Math.min(0.3, 0.1 * fadViolations);
+      issues.push({
+        severity: 'warning',
+        msg_key: 'quality.fad_lt_lad',
+        params: { count: String(fadViolations) },
+      });
+    }
+
+    // (3) agreement_count <= total_runs per row.
+    const totalRuns = (data && data.runs !== undefined && data.runs !== null) ? data.runs : null;
+    let overAgreed = 0;
+    if (Number.isInteger(totalRuns) && totalRuns > 0) {
+      for (const sp of species) {
+        if (!sp || typeof sp !== 'object') continue;
+        const ac = sp.agreement_count;
+        if (typeof ac === 'number' && ac > totalRuns) {
+          overAgreed += 1;
+        }
+      }
+    }
+    if (overAgreed > 0) {
+      score -= Math.min(0.3, 0.2 * overAgreed);
+      issues.push({
+        severity: 'warning',
+        msg_key: 'quality.agreement_overflow',
+        params: { count: String(overAgreed) },
+      });
+    }
+
+    // (4) Every species row has a non-empty biozone label.
+    let missingBiozone = 0;
+    for (const sp of species) {
+      if (!sp || typeof sp !== 'object') continue;
+      const bz = sp.biozone;
+      if (!bz || (typeof bz === 'string' && !bz.trim())) {
+        missingBiozone += 1;
+      }
+    }
+    if (missingBiozone > 0) {
+      score -= Math.min(0.2, 0.05 * missingBiozone);
+      issues.push({
+        severity: 'warning',
+        msg_key: 'quality.missing_biozone',
+        params: { count: String(missingBiozone) },
+      });
+    }
+  }
+
+  score = Math.min(1.0, Math.max(0.0, score));
+  return [score, issues];
 }
 
 /**

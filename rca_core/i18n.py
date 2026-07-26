@@ -87,7 +87,8 @@ TRANSLATIONS["zh"] = {
     "col.index": "#",
     "col.name": "名称",
     "col.ageRange": "年代范围",
-    "col.formations": "组 / 地层",
+    "col.formation": "组 / 地层",
+    "col.group": "群",
     "col.thickness": "厚度 (m)",
     "col.coordinates": "坐标",
     "col.species": "种属",
@@ -304,6 +305,11 @@ TRANSLATIONS["zh"] = {
     "quality.agreement_overflow": "agreement_count 异常大于总运行次数",
     "quality.missing_biozone": "部分物种缺失生物带归属",
     "quality.empty_result": "提取结果为空",
+    # P1-12: Steno's Law biozone order
+    "quality.biozone_order_violation": "Steno's Law 违反：{species} 的生物带 {younger_biozone}（较新）出现在更老的 {older_biozone} 之下",
+    # P1-8: abundance sum-to-100 constraint
+    "quality.abundance_sum_violation": "丰度百分比之和不等于 100%（实测：{sum}%）",
+    "quality.abundance_sum_violation_count": "共 {count} 个层位的丰度之和不等于 100%",
 }
 
 TRANSLATIONS["en"] = {
@@ -385,7 +391,8 @@ TRANSLATIONS["en"] = {
     "col.index": "#",
     "col.name": "Name",
     "col.ageRange": "Age range",
-    "col.formations": "Formations",
+    "col.formation": "Formations",
+    "col.group": "Groups",
     "col.thickness": "Thickness (m)",
     "col.coordinates": "Coordinates",
     "col.species": "Species",
@@ -599,6 +606,11 @@ TRANSLATIONS["en"] = {
     "quality.many_extras": "Model emitted many undefined fields",
     "quality.null_fields": "Some expected fields are null",
     "quality.invalid_result": "Invalid extraction result",
+    # P1-12: Steno's Law biozone order
+    "quality.biozone_order_violation": "Steno's Law violation: {species} in biozone {younger_biozone} (younger) appears below {older_biozone} (older)",
+    # P1-8: abundance sum-to-100 constraint
+    "quality.abundance_sum_violation": "Abundance percentages for '{sample}' sum to {sum}% (should be 100%)",
+    "quality.abundance_sum_violation_count": "{count} level(s) have abundance sums not equal to 100%",
 }
 
 TRANSLATIONS["ja"] = {
@@ -680,7 +692,8 @@ TRANSLATIONS["ja"] = {
     "col.index": "#",
     "col.name": "名称",
     "col.ageRange": "年代範囲",
-    "col.formations": "累層 / 地層",
+    "col.formation": "累層 / 地層",
+    "col.group": "群",
     "col.thickness": "層厚 (m)",
     "col.coordinates": "座標",
     "col.species": "種",
@@ -894,6 +907,11 @@ TRANSLATIONS["ja"] = {
     "quality.many_extras": "モデルが多くの未定義フィールドを出力しました",
     "quality.null_fields": "一部の期待されたフィールドが null です",
     "quality.invalid_result": "無効な抽出結果",
+    # P1-12: Steno's Law biozone order
+    "quality.biozone_order_violation": "Steno の法則違反：種 {species} の生層帯 {younger_biozone}（新しい）がより古い {older_biozone} の下に出現",
+    # P1-8: abundance sum-to-100 constraint
+    "quality.abundance_sum_violation": "試料「{sample}」の豊度合計は {sum}%（100%であるべき）",
+    "quality.abundance_sum_violation_count": "{count} 個の試料の豊度合計が 100% でない",
 }
 
 

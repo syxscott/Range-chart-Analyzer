@@ -39,10 +39,24 @@ from qfluentwidgets import (
     TitleLabel,
 )
 
-from rca_core.history import HistoryRecord
+from rca_core.history import HistoryRecord, LOCK_PATH
 from rca_core.i18n import Translator
 
 logger = logging.getLogger(__name__)
+
+
+def _read_lock_port() -> int:
+    """Return the server port from the lock file, or 8000 as a fallback."""
+    try:
+        lock_file = Path(LOCK_PATH)
+        content = lock_file.read_text(encoding="utf-8").strip()
+        if content:
+            host_port = content.split()[0]
+            _, port_str = host_port.rsplit(":", 1)
+            return int(port_str)
+    except Exception:
+        pass
+    return 8000
 
 # Resolve project root (one directory up from this file's directory).
 _PROJECT_ROOT = Path(__file__).resolve().parent
@@ -442,9 +456,14 @@ class HistoryDetailDialog(QDialog):
         scroll.setWidget(body)
         outer.addWidget(scroll, 1)
 
-        # Footer with Close button (primary action).
+        # Footer with action buttons.
         footer = QHBoxLayout()
         footer.addStretch(1)
+        # P2-4 (REVIEW-2026-07-25): Provenance PROV-O JSON-LD export.
+        btn_prov = PushButton("Export Provenance (PROV-O JSON-LD)")
+        btn_prov.setToolTip(self._t("history.detail.provenance"))
+        btn_prov.clicked.connect(self._on_export_provenance)
+        footer.addWidget(btn_prov)
         btn_close = PrimaryPushButton(self._t("history.detail.close"))
         btn_close.clicked.connect(self.accept)
         footer.addWidget(btn_close)
@@ -455,3 +474,81 @@ class HistoryDetailDialog(QDialog):
             return self._tr.t(key)
         except Exception:
             return key
+
+    def _on_export_provenance(self) -> None:
+        """Fetch the PROV-O JSON-LD provenance document and save to disk."""
+        import http.client
+        import json
+        port = _read_lock_port()
+        path = f"/api/history/{self._rec.id}/provenance"
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            body = resp.read()
+        except Exception as exc:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.error(
+                "", f"Failed to fetch provenance: {exc}",
+                parent=self, position=InfoBarPosition.TOP, duration=5000,
+            )
+            return
+        finally:
+            conn.close()
+
+        if resp.status == 404:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.error(
+                "", "Record not found",
+                parent=self, position=InfoBarPosition.TOP, duration=4000,
+            )
+            return
+        if resp.status >= 500:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.error(
+                "", "Provenance generation failed on server",
+                parent=self, position=InfoBarPosition.TOP, duration=4000,
+            )
+            return
+        if resp.status != 200:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.error(
+                "", f"Server error {resp.status}",
+                parent=self, position=InfoBarPosition.TOP, duration=4000,
+            )
+            return
+
+        # Parse to validate JSON, then let user choose save location.
+        try:
+            json.loads(body.decode("utf-8"))
+        except Exception:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.error(
+                "", "Server returned invalid JSON",
+                parent=self, position=InfoBarPosition.TOP, duration=4000,
+            )
+            return
+
+        from PySide6.QtWidgets import QFileDialog
+        save_path, _ = QFileDialog.getSaveFileName(
+            self,
+            self._t("export.provenance"),
+            f"provenance-{self._rec.id}.jsonld",
+            "PROV-O JSON-LD (*.jsonld);;All files (*)",
+        )
+        if not save_path:
+            return
+        try:
+            with open(save_path, "wb") as f:
+                f.write(body)
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.success(
+                "", self._t("status.saved"),
+                parent=self, position=InfoBarPosition.TOP, duration=2000,
+            )
+        except Exception as exc:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.error(
+                "", str(exc),
+                parent=self, position=InfoBarPosition.TOP, duration=4000,
+            )

@@ -1,0 +1,92 @@
+{
+  "metadata": {
+    "chart_type": "columnar_section",
+    "extraction_version": "1.0.0",
+    "synthetic": true,
+    "seed": 10
+  },
+  "sections": [
+    {
+      "id": "Locality-10",
+      "group": "Main Section",
+      "lithology_blocks": [
+        {
+          "pattern": "ss",
+          "range_top_idx": 3,
+          "range_base_idx": 1
+        },
+        {
+          "pattern": "sh",
+          "range_top_idx": 6,
+          "range_base_idx": 4
+        },
+        {
+          "pattern": "ls",
+          "range_top_idx": 9,
+          "range_base_idx": 7
+        }
+      ],
+      "age_units": [
+        {
+          "label": "Kimmeridgian",
+          "range_top_idx": 7,
+          "range_base_idx": 4
+        },
+        {
+          "label": "Oxfordian",
+          "range_top_idx": 4,
+          "range_base_idx": 1
+        }
+      ],
+      "samples": [
+        {
+          "bed_idx": 2,
+          "fossil_marker": "A",
+          "ref": "Fig. 3a"
+        },
+        {
+          "bed_idx": 5,
+          "fossil_marker": "B",
+          "ref": "Fig. 3b"
+        },
+        {
+          "bed_idx": 8,
+          "fossil_marker": "T",
+          "ref": "Fig. 3c"
+        }
+      ],
+      "coordinates_text": "N53.52° W1.52°",
+      "thickness_m": "11"
+    }
+  ],
+  "fossil_legend": [
+    {
+      "marker": "A",
+      "meaning": "Ammonites"
+    },
+    {
+      "marker": "B",
+      "meaning": "Belemnites"
+    },
+    {
+      "marker": "T",
+      "meaning": "Terebratulids"
+    }
+  ],
+  "lithology_legend": [
+    {
+      "pattern": "ss",
+      "meaning": "Sandstone"
+    },
+    {
+      "pattern": "sh",
+      "meaning": "Shale"
+    },
+    {
+      "pattern": "ls",
+      "meaning": "Limestone"
+    }
+  ],
+  "cross_beds": [],
+  "confidence": 0.9
+}

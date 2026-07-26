@@ -101,4 +101,21 @@ def validate_endpoint(endpoint: str) -> tuple[bool, str]:
     return True, ""
 
 
-__all__ = ["validate_endpoint", "is_private_host"]
+class SSRFError(Exception):
+    """Raised when an endpoint fails SSRF validation."""
+    pass
+
+
+def validate_endpoint_or_raise(endpoint: str) -> None:
+    """Validate an endpoint URL; raises SSRFError on failure.
+
+    Convenience wrapper around validate_endpoint() that raises instead of
+    returning a tuple. Use this in call-sites that want try/except control
+    flow rather than tuple unpacking.
+    """
+    ok, err_msg = validate_endpoint(endpoint)
+    if not ok:
+        raise SSRFError(err_msg)
+
+
+__all__ = ["validate_endpoint", "validate_endpoint_or_raise", "is_private_host", "SSRFError"]

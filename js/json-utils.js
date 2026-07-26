@@ -15,6 +15,7 @@ function extractAllBalancedJsonObjects(text) {
       if (inString) {
         if (escape) {
           escape = false;
+          continue; // skip the escaped character, matching Python behavior
         } else if (c === '\\') {
           escape = true;
         } else if (c === '"') {
@@ -53,7 +54,19 @@ const _PAYLOAD_KEYS = new Set([
 ]);
 
 function _payloadScore(parsed) {
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 0;
+  // P1-3 fix: arrays are scored by summing dict-item scores (matching Python
+  // _payload_score). Previously returned 0 for arrays, losing signal from
+  // list-of-dicts payloads.
+  if (!parsed || typeof parsed !== 'object') return 0;
+  if (Array.isArray(parsed)) {
+    let score = 0;
+    for (const item of parsed) {
+      if (item && typeof item === 'object' && !Array.isArray(item)) {
+        score += _payloadScore(item);
+      }
+    }
+    return score;
+  }
   const keys = Object.keys(parsed);
   let score = 0;
   // Real payload keys carry positive weight
@@ -84,6 +97,7 @@ function extractBalancedJsonObject(text) {
       if (inString) {
         if (escape) {
           escape = false;
+          continue; // skip the escaped character, matching Python behavior
         } else if (c === '\\') {
           escape = true;
         } else if (c === '"') {
@@ -123,6 +137,7 @@ function extractBalancedJsonArray(text) {
       if (inString) {
         if (escape) {
           escape = false;
+          continue; // skip the escaped character, matching Python behavior
         } else if (c === '\\') {
           escape = true;
         } else if (c === '"') {

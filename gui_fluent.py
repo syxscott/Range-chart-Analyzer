@@ -963,6 +963,13 @@ class ExtractPage(ScrollArea):
             w.setParent(None)
             w.deleteLater()
         self.tables = {}
+        # P1-2 fix: clear _table_widgets and delete old widgets to prevent
+        # memory accumulation. Without this, old TableWidget instances are
+        # retained indefinitely and _on_apply_edits iterates stale references.
+        for table in list(self._table_widgets.values()):
+            if table is not None and hasattr(table, 'deleteLater'):
+                table.deleteLater()
+        self._table_widgets = {}
         self.pivot.clear()
         while self.stack_lay.count():
             it = self.stack_lay.takeAt(0)
@@ -1020,6 +1027,19 @@ class ExtractPage(ScrollArea):
         self.edit_row_widget.setVisible(True)
         self.stack.setVisible(True)
         self.pivot.clear()
+        # P1-2 (REVIEW-2026-07-25): clean up old table widgets before building new ones.
+        # Previously _table_widgets was never cleared, so a second _render_result call
+        # (e.g., after a new extraction) left stale widgets in memory with dangling
+        # signal connections. The next "Apply Edits" would operate on the dead widget
+        # and crash. Now we delete the old scroll area and inner table widget.
+        for old_scroll in list(self.tables.values()):
+            if old_scroll is not None:
+                old_scroll.deleteLater()
+        self.tables.clear()
+        for old_table in list(self._table_widgets.values()):
+            if old_table is not None:
+                old_table.deleteLater()
+        self._table_widgets.clear()
         for idx, cfg in enumerate(configs):
             items = (self.result or {}).get(cfg["id"], []) or []
             table = TableWidget()

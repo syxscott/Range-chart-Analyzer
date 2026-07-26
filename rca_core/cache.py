@@ -100,6 +100,11 @@ class ResultCache:
         normalized = {}
         for k_ in sorted(fields.keys()):
             v_ = fields[k_]
+            # None values are normalised to absent so that
+            # make_key(extra_body=None) and make_key() produce the
+            # same cache key for the same logical request.
+            if v_ is None:
+                continue
             # Hash large binary-ish strings (images).
             if k_ == "image_b64" and isinstance(v_, str) and len(v_) > 64:
                 normalized[k_] = hashlib.sha256(v_.encode("utf-8")).hexdigest()

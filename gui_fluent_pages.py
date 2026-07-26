@@ -412,13 +412,19 @@ class HistoryPage(ScrollArea):
                 with open(path, "w", encoding="utf-8") as f:
                     dump(rec.to_dict(), f, ensure_ascii=False, indent=2, default=str)
             else:
-                # CSV: dump sections only (multi-table export to CSV isn't
-                # practical; the user gets the same flat table format
-                # extract page uses).
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("id,name\n")
-                    for sec in rec.result.get("sections", []):
-                        f.write(f"{rec.id},{sec.get('name','')}\n")
+                # C-6 (REVIEW-2026-07-25): CSV-only export silently dropped
+                # species_ranges / biozones / other_fossils. Since the
+                # History record holds a single result (not multiple runs),
+                # the full multi-table export is available via result_to_json.
+                # Change extension to .json and export everything.
+                json_path = path.rsplit(".", 1)[0] + ".json"
+                with open(json_path, "w", encoding="utf-8") as f:
+                    f.write(result_to_json(rec.result))
+                path = json_path  # so InfoBar reports the correct name
+                InfoBar.info(
+                    "", "Full export saved as JSON (all tables)", parent=self._win,
+                    position=InfoBarPosition.TOP, duration=3000,
+                )
             InfoBar.success(
                 "", self._t("status.saved"), parent=self._win,
                 position=InfoBarPosition.TOP, duration=2000,

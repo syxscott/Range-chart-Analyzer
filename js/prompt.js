@@ -4,10 +4,20 @@
 // Russian and to always emit English scientific names.
 'use strict';
 
-// PROMPT_VERSION: keep in sync with rca_core/prompt.py PROMPT_VERSION. The
-// cache layer includes this in its cache key so old cached results from a
-// previous prompt version are not served after a prompt upgrade.
-const PROMPT_VERSION = 'v3';
+// PROMPT_VERSION: dict of per-mode version strings. Keep in sync with
+// rca_core/prompt.py PROMPT_VERSION. The cache layer includes this in its
+// cache key so old cached results from a previous prompt version are not
+// served after a prompt upgrade.
+const PROMPT_VERSION = {
+  range_chart: 'v3',
+  columnar_section: 'v3',
+  abundance: 'v3',
+  phylogenetic_tree: 'v1',
+};
+
+function promptVersionForMode(mode) {
+  return PROMPT_VERSION[mode] || 'v3';
+}
 
 // Teaches the model to degrade gracefully (low confidence + note) instead of
 // hallucinating when a value is ambiguous/unreadable.

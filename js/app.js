@@ -173,6 +173,11 @@
       [RCA_STORE.runs, rcaStoreSet(RCA_STORE.runs, $('runs').value.trim() || '1')],
     ];
     // Phase C: remember-key is a switch button; read aria-checked.
+    // SECURITY MODEL (F-22 fix): RCA_STORE.apiKey is ALWAYS stored in
+    // sessionStorage (cleared on tab close) — the remember checkbox does NOT
+    // control whether it persists to localStorage.  The checkbox only
+    // controls whether the apiKey field is pre-filled on page load.
+    // On shared computers: close the tab (or the whole browser) when done.
     const rk = $('remember-key');
     const remember = rk ? rk.getAttribute('aria-checked') === 'true' : false;
     writes.push([RCA_STORE.rememberKey, rcaStoreSet(RCA_STORE.rememberKey, remember ? '1' : '')]);
@@ -240,12 +245,19 @@
     // "next opportunity" announcement). Keep role="status" for warnings —
     // they're informational and shouldn't interrupt the user.
     const role = (kind === 'danger') ? 'alert' : 'status';
-    let html = '<div class="alert alert-' + kind + '" role="' + role + '"><div>' + rcaEsc(message);
+    const div = document.createElement('div');
+    div.className = 'alert alert-' + kind;
+    div.setAttribute('role', role);
+    const inner = document.createElement('div');
+    inner.textContent = message;
+    div.appendChild(inner);
     if (rawDetail) {
-      html += '<pre>' + rcaEsc(String(rawDetail).slice(0, 4000)) + '</pre>';
+      const pre = document.createElement('pre');
+      pre.textContent = String(rawDetail).slice(0, 4000);
+      div.appendChild(pre);
     }
-    html += '</div></div>';
-    slot.innerHTML = html;
+    slot.innerHTML = '';
+    slot.appendChild(div);
   }
 
   // ---- file handling ----
@@ -354,6 +366,11 @@
       showAlert('warning', t('err.noImage'));
       return;
     }
+    const endpoint = $('endpoint').value.trim();
+    if (!endpoint) {
+      showAlert('warning', t('err.noEndpoint'));
+      return;
+    }
     clearAlert();
     // M42: persist any settings edits the user made since the last explicit
     // Save so the in-flight extraction always uses the values currently in
@@ -369,10 +386,11 @@
     state.abort = abort;
     setBusy(true);
 
-    // FR4: wrap the body in try/finally so an unexpected exception
+    // FR4: wrap the body in try/catch/finally so an unexpected exception
     // (e.g. a provider throwing synchronously) can never leave the UI
     // stuck in the busy state.
     let res;
+    let extractError = null;
     try {
       const maxTokens = rcaClampMaxTokens($('max-tokens').value);
       const connMode = rcaResolveMode();  // 'backend' | 'direct' (transport)
@@ -473,6 +491,12 @@
       } else {
         res = await extractRangeChart(baseOpts);
       }
+    } catch (exc) {
+      // P1-4 fix: catch synchronous exceptions from extractRangeChart or any
+      // other call in the try block. Show a danger alert instead of silently
+      // continuing (which would leave the result blank).
+      extractError = exc;
+      res = { ok: false, errorKey: 'err.network', raw: String(exc) };
     } finally {
       // FR4: always restore the UI — even on synchronous throw inside the
       // try block above or an unhandled rejection from extractRangeChart.
@@ -480,6 +504,18 @@
       // FIX-6: only clear the shared handle if it's still ours (a newer
       // extraction may have already replaced it).
       if (state.abort === abort) state.abort = null;
+    }
+
+    // P1-4 fix: if extractError was thrown, handle it after the finally block
+    // restores the UI. Check myToken first so a superseded extraction doesn't
+    // show a stale error.
+    if (extractError !== null) {
+      // FR2: superseded by a newer extraction — silent drop.
+      if (myToken !== state.extractToken) return;
+      // FIX-6: user cancelled — no error alert.
+      if (abort.signal.aborted) return;
+      showAlert('danger', t('err.network'), String(extractError));
+      return;
     }
 
     // FR2: any concurrent Reset / new file selection bumps state.extractToken
@@ -516,6 +552,16 @@
 
     state.result = res.data;
     state.rawText = res.raw;
+
+    // Step 0 (8.0→9.5): surface chimera_warnings so the operator knows
+    // when a merged row was not observed in any single run.
+    const chimeraWarnings = res.data && res.data.chimera_warnings;
+    if (chimeraWarnings && chimeraWarnings.length > 0) {
+      showAlert(
+        'warning',
+        t('results.chimera_warning', { n: chimeraWarnings.length })
+      );
+    }
 
     if (res.partialFailures && res.partialFailures > 0) {
       // M2: explicit partial-failure notice is more actionable than the
@@ -1000,10 +1046,11 @@ cards.forEach((c, i) => {
       if (e.key !== 'Enter') return;
       const t = e.target;
       const tag = (t && t.tagName) || '';
-      // Allow Ctrl+Enter inside <textarea> (caption) and contenteditable; only
-      // block when the user is in an <input type="text"> typing (so we don't
+      // F-15: Allow Ctrl+Enter inside <textarea> (caption) and contenteditable;
+      // only block when the user is in an <input type="text"> typing (so we don't
       // hijack newlines) — the caption textarea already wants extraction via
       // this combo.
+      if (tag === 'TEXTAREA') return;
       if (tag === 'INPUT' && t.type !== 'button') return;
       e.preventDefault();
       runExtraction();
