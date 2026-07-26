@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Phylogenetic Tree</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #fafafa;
+    color: #222;
+  }
+  #header {
+    padding: 12px 18px;
+    background: #fff;
+    border-bottom: 1px solid #e0e0e0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  #header h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  #header .meta {
+    font-size: 12px;
+    color: #666;
+  }
+  #controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  #controls button {
+    background: #1976d2;
+    color: #fff;
+    border: none;
+    padding: 6px 12px;
+    font-size: 13px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  #controls button:hover {
+    background: #1565c0;
+  }
+  #controls button:disabled {
+    background: #b0bec5;
+    cursor: not-allowed;
+  }
+  #tree-container {
+    width: 100%;
+    height: calc(100vh - 70px);
+    overflow: auto;
+    background: #fff;
+  }
+  #tree-container svg {
+    display: block;
+  }
+
+  /* Node */
+  .node circle {
+    stroke: #333;
+    stroke-width: 1px;
+    cursor: pointer;
+    transition: stroke-width 0.15s ease;
+  }
+  .node:hover circle {
+    stroke-width: 2.5px;
+  }
+  .node.leaf circle {
+    stroke: #555;
+  }
+  .node text.support-label {
+    font-size: 10px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    fill: #333;
+    text-anchor: middle;
+    dominant-baseline: middle;
+    pointer-events: none;
+    user-select: none;
+  }
+  .node text.support-label.low-support {
+    fill: #d32f2f;
+    font-weight: 700;
+  }
+  .node text.node-name {
+    font-size: 11px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    fill: #222;
+    text-anchor: start;
+    dominant-baseline: middle;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  /* Link */
+  .link {
+    fill: none;
+    stroke: #999;
+    stroke-width: 1.5px;
+    stroke-linecap: round;
+  }
+
+  /* Tooltip */
+  #tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: rgba(0, 0, 0, 0.85);
+    color: #fff;
+    padding: 8px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.4;
+    max-width: 280px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    z-index: 1000;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  }
+  #tooltip .tip-name {
+    font-weight: 600;
+    margin-bottom: 4px;
+    border-bottom: 1px solid rgba(255,255,255,0.2);
+    padding-bottom: 4px;
+  }
+  #tooltip .tip-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  #tooltip .tip-row .label {
+    opacity: 0.7;
+  }
+
+  /* Legend */
+  #legend {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 12px;
+    position: absolute;
+    top: 80px;
+    right: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  }
+  #legend .legend-title {
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  #legend .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+  #legend .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1px solid #555;
+  }
+
+  .placeholder {
+    padding: 32px;
+    text-align: center;
+    color: #888;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<div id="header">
+  <div>
+    <h1 id="title">Phylogenetic Tree</h1>
+    <div class="meta" id="meta"></div>
+  </div>
+  <div id="controls">
+    <button id="export-btn" disabled>Export SVG</button>
+  </div>
+</div>
+<div id="tree-container">
+  <div class="placeholder">No tree data loaded. Call <code>window.setTreeData(jsonData)</code> to render.</div>
+</div>
+<div id="legend" style="display:none;"></div>
+<div id="tooltip"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  // --- Internal state ---
+  let currentSvg = null;         // current SVG node (used for export)
+  let currentData = null;        // last data passed to setTreeData
+  let depthColorMap = {};        // legend depth_colors mapping
+  let sequenceMin = 1;
+  let sequenceMax = 100;
+
+  // --- Helpers ---
+
+  /**
+   * Map a depth_range_m string to a depth category using the legend mapping
+   * (or fallback default colors). Handles both "-" and en-dash "–" separators.
+   */
+  function depthCategoryFromValue(depthRangeM, legendColors) {
+    if (depthRangeM == null || depthRangeM === "" || depthRangeM === "unknown") {
+      return "unknown";
+    }
+    const norm = String(depthRangeM).replace(/\s/g, "").replace(/–/g, "-");
+    // Common ICZN / depth band entries
+    if (norm === "0-200" || norm === "0-100" || norm === "0-150") {
+      return "epipelagic";
+    }
+    if (norm === "200-1000" || norm === "100-1000" || norm === "150-1000") {
+      return "mesopelagic";
+    }
+    if (norm === "1000-4000" || norm === "1000-3000" || norm === "1000+") {
+      return "bathypelagic";
+    }
+    // Fallback: parse numbers
+    const m = norm.match(/(-?\d+)\s*-\s*(-?\d+)/);
+    if (m) {
+      const a = parseInt(m[1], 10);
+      const b = parseInt(m[2], 10);
+      const mid = (a + b) / 2;
+      if (mid <= 200) return "epipelagic";
+      if (mid <= 1000) return "mesopelagic";
+      return "bathypelagic";
+    }
+    return "unknown";
+  }
+
+  function colorForDepthCategory(category, legendColors) {
+    if (legendColors && legendColors[category] && legendColors[category].hex) {
+      return legendColors[category].hex;
+    }
+    // Defaults if legend absent
+    const defaults = {
+      epipelagic: "#4caf50",
+      mesopelagic: "#2196f3",
+      bathypelagic: "#7e57c2",
+      unknown: "#cccccc"
+    };
+    return defaults[category] || defaults.unknown;
+  }
+
+  function radiusScale(seq, min, max) {
+    if (seq == null || isNaN(seq)) return 6;
+    if (min === max) return 12;
+    const t = (seq - min) / (max - min);
+    return 4 + 20 * t;
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function buildHierarchy(nodes, rootIds) {
+    if (!Array.isArray(nodes) || nodes.length === 0) {
+      return null;
+    }
+    const idToNode = new Map();
+    nodes.forEach((n) => idToNode.set(n.id, n));
+
+    // Build children lookup
+    const childrenByParent = new Map();
+    nodes.forEach((n) => {
+      const parentId = n.parent == null ? null : n.parent;
+      if (parentId == null) return;
+      if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+      childrenByParent.get(parentId).push(n);
+    });
+
+    // Prefer explicit root_ids; fall back to nodes with null parent
+    let roots = [];
+    if (Array.isArray(rootIds) && rootIds.length > 0) {
+      rootIds.forEach((rid) => {
+        const r = idToNode.get(rid);
+        if (r) roots.push(r);
+      });
+    }
+    if (roots.length === 0) {
+      nodes.forEach((n) => {
+        if (n.parent == null) roots.push(n);
+      });
+    }
+
+    // If still no roots (cycle or all have parents), force first node as root
+    if (roots.length === 0) {
+      roots.push(nodes[0]);
+    }
+
+    // If multiple roots, wrap them under a synthetic root so d3.hierarchy works
+    if (roots.length > 1) {
+      const synth = {
+        id: "__synthetic_root__",
+        name: "root",
+        parent: null,
+        is_leaf: false,
+        _synthetic: true
+      };
+      roots.forEach((r) => { r.parent = "__synthetic_root__"; });
+      const allNodes = nodes.concat([synth]);
+      // rebuild map to include synth
+      const idToNode2 = new Map();
+      allNodes.forEach((n) => idToNode2.set(n.id, n));
+      const childrenByParent2 = new Map();
+      allNodes.forEach((n) => {
+        if (n.parent == null) return;
+        if (!childrenByParent2.has(n.parent)) childrenByParent2.set(n.parent, []);
+        childrenByParent2.get(n.parent).push(n);
+      });
+      return buildHierarchyFromRoots([synth], idToNode2, childrenByParent2);
+    }
+
+    return buildHierarchyFromRoots(roots, idToNode, childrenByParent);
+  }
+
+  function buildHierarchyFromRoots(roots, idToNode, childrenByParent) {
+    function buildTreeNode(rawNode) {
+      const kids = childrenByParent.get(rawNode.id) || [];
+      return {
+        raw: rawNode,
+        children: kids.map(buildTreeNode)
+      };
+    }
+    const rootChildren = roots.map(buildTreeNode);
+    return rootChildren.length === 1 ? rootChildren[0] : { raw: { id: "__multi_root__", name: "root", _synthetic: true }, children: rootChildren };
+  }
+
+  // --- Legend ---
+
+  function renderLegend(container, legend, depthColorMap) {
+    if (!legend || !legend.depth_colors) {
+      container.style.display = "none";
+      return;
+    }
+    const dc = legend.depth_colors;
+    let html = '<div class="legend-title">Depth Zone</div>';
+    const order = ["epipelagic", "mesopelagic", "bathypelagic"];
+    order.forEach((k) => {
+      if (!dc[k]) return;
+      const hex = dc[k].hex || colorForDepthCategory(k, dc);
+      const depth = dc[k].depth_m || "";
+      html += '<div class="legend-item">'
+        + '<span class="legend-swatch" style="background:' + escapeHtml(hex) + ';"></span>'
+        + '<span>' + escapeHtml(k) + (depth ? " (" + escapeHtml(String(depth)) + " m)" : "") + '</span>'
+        + '</div>';
+    });
+    container.innerHTML = html;
+    container.style.display = "block";
+  }
+
+  // --- Main render ---
+
+  function renderTree(data) {
+    const container = document.getElementById("tree-container");
+    const tooltip = d3.select("#tooltip");
+
+    // Clear previous
+    container.innerHTML = "";
+
+    if (!data || !data.nodes || data.nodes.length === 0) {
+      container.innerHTML = '<div class="placeholder">Empty tree data.</div>';
+      currentSvg = null;
+      document.getElementById("export-btn").disabled = true;
+      return;
+    }
+
+    depthColorMap = (data.legend && data.legend.depth_colors) || {};
+    sequenceMin = (data.legend && typeof data.legend.sequence_count_min === "number")
+      ? data.legend.sequence_count_min
+      : null;
+    sequenceMax = (data.legend && typeof data.legend.sequence_count_max === "number")
+      ? data.legend.sequence_count_max
+      : null;
+
+    // Compute actual sequence_count min/max if legend didn't provide them
+    const seqValues = data.nodes
+      .map((n) => (typeof n.sequence_count === "number" ? n.sequence_count : null))
+      .filter((v) => v != null);
+    if (seqValues.length > 0) {
+      const actualMin = Math.min.apply(null, seqValues);
+      const actualMax = Math.max.apply(null, seqValues);
+      if (sequenceMin == null) sequenceMin = actualMin;
+      if (sequenceMax == null) sequenceMax = actualMax;
+    } else {
+      if (sequenceMin == null) sequenceMin = 1;
+      if (sequenceMax == null) sequenceMax = 1;
+    }
+
+    const hierarchyRoot = buildHierarchy(data.nodes, data.root_ids);
+    if (!hierarchyRoot) {
+      container.innerHTML = '<div class="placeholder">Could not build hierarchy from data.</div>';
+      currentSvg = null;
+      document.getElementById("export-btn").disabled = true;
+      return;
+    }
+
+    const root = d3.hierarchy(hierarchyRoot, (d) => d.children);
+    const treeLayout = d3.tree().size([600, 600]);
+    treeLayout(root);
+
+    // Determine nodes' depth-extent for SVG height
+    const nodesRaw = root.descendants();
+    const linksRaw = root.links();
+    let maxY = 0;
+    nodesRaw.forEach((d) => {
+      if (d.y > maxY) maxY = d.y;
+    });
+    const margin = { top: 40, right: 240, bottom: 40, left: 60 };
+    const width = Math.max(800, maxY + margin.left + margin.right);
+    const height = Math.max(500, nodesRaw.length * 22 + margin.top + margin.bottom);
+
+    // Re-layout for full height fit
+    treeLayout.size([height - margin.top - margin.bottom, width - margin.left - margin.right]);
+    treeLayout(root);
+
+    const svg = d3.select(container)
+      .append("svg")
+      .attr("xmlns", "http://www.w3.org/2000/svg")
+      .attr("width", width)
+      .attr("height", height)
+      .attr("viewBox", "0 0 " + width + " " + height);
+
+    const g = svg.append("g")
+      .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+    // Links (using d.y as X, d.x as Y for horizontal layout)
+    const linkGen = d3.linkHorizontal()
+      .x((d) => d.y)
+      .y((d) => d.x);
+
+    g.selectAll("path.link")
+      .data(linksRaw)
+      .enter()
+      .append("path")
+      .attr("class", "link")
+      .attr("d", (d) => linkGen({ source: d.source, target: d.target }));
+
+    // Nodes group
+    const nodeGroups = g.selectAll("g.node")
+      .data(nodesRaw)
+      .enter()
+      .append("g")
+      .attr("class", (d) => "node" + (d.data.raw.is_leaf ? " leaf" : ""))
+      .attr("transform", (d) => "translate(" + d.y + "," + d.x + ")");
+
+    // Determine support text visibility: show on internal nodes if defined, or on leaves with support
+    function shouldShowSupport(d) {
+      const sup = d.data.raw.support;
+      return typeof sup === "number" || (typeof sup === "string" && sup !== "" && !isNaN(parseFloat(sup)));
+    }
+
+    function parseSupport(d) {
+      const sup = d.data.raw.support;
+      if (typeof sup === "number") return sup;
+      if (typeof sup === "string" && sup !== "") return parseFloat(sup);
+      return null;
+    }
+
+    nodeGroups.append("circle")
+      .attr("r", (d) => radiusScale(d.data.raw.sequence_count, sequenceMin, sequenceMax))
+      .attr("fill", (d) => {
+        const cat = depthCategoryFromValue(d.data.raw.depth_range_m, depthColorMap);
+        return colorForDepthCategory(cat, depthColorMap);
+      });
+
+    // Support label INSIDE the circle (only if circle is large enough to fit it)
+    nodeGroups.filter(shouldShowSupport)
+      .append("text")
+      .attr("class", (d) => {
+        const sup = parseSupport(d);
+        return "support-label" + (sup != null && sup < 70 ? " low-support" : "");
+      })
+      .attr("dy", "0.35em")
+      .text((d) => {
+        const sup = parseSupport(d);
+        return sup == null ? "" : (Math.round(sup * 10) / 10).toString();
+      });
+
+    // Node name label to the right (or skip for synthetic roots)
+    nodeGroups.filter((d) => !d.data.raw._synthetic)
+      .append("text")
+      .attr("class", "node-name")
+      .attr("x", (d) => radiusScale(d.data.raw.sequence_count, sequenceMin, sequenceMax) + 6)
+      .attr("dy", "0.35em")
+      .text((d) => d.data.raw.name || "");
+
+    // Tooltip behavior
+    nodeGroups
+      .on("mouseover", function (event, d) {
+        const raw = d.data.raw;
+        const cat = depthCategoryFromValue(raw.depth_range_m, depthColorMap);
+        const rows = [
+          { label: "Name", value: raw.name },
+          { label: "Support", value: (raw.support != null ? raw.support : "—")
+            + (raw.support_confidence != null ? " (" + raw.support_confidence + ")" : "") },
+          { label: "Depth range", value: (raw.depth_range_m != null ? raw.depth_range_m + " m" : "unknown")
+            + (raw.depth_confidence != null ? " (" + raw.depth_confidence + ")" : "") },
+          { label: "Depth zone", value: cat },
+          { label: "Sequence count", value: raw.sequence_count != null ? raw.sequence_count : "—" },
+          { label: "Branch length", value: raw.branch_length != null ? raw.branch_length : "—" },
+          { label: "ID", value: raw.id }
+        ];
+        let html = '<div class="tip-name">' + escapeHtml(raw.name || raw.id) + '</div>';
+        rows.forEach((r) => {
+          html += '<div class="tip-row"><span class="label">' + escapeHtml(r.label) + '</span>'
+            + '<span>' + escapeHtml(String(r.value)) + '</span></div>';
+        });
+        tooltip
+          .html(html)
+          .style("opacity", 1)
+          .style("left", (event.pageX + 12) + "px")
+          .style("top", (event.pageY + 12) + "px");
+      })
+      .on("mousemove", function (event) {
+        tooltip
+          .style("left", (event.pageX + 12) + "px")
+          .style("top", (event.pageY + 12) + "px");
+      })
+      .on("mouseout", function () {
+        tooltip.style("opacity", 0);
+      });
+
+    // Update title / meta
+    const meta = data.metadata || {};
+    document.getElementById("meta").textContent =
+      (meta.root_name ? "Root: " + meta.root_name + " · " : "")
+      + (meta.total_nodes != null ? meta.total_nodes + " nodes" : "");
+
+    renderLegend(document.getElementById("legend"), data.legend || {}, depthColorMap);
+
+    currentSvg = svg.node();
+    document.getElementById("export-btn").disabled = false;
+
+    // Wire export button (idempotent: replace any prior listener)
+    const exportBtn = document.getElementById("export-btn");
+    const newBtn = exportBtn.cloneNode(true);
+    exportBtn.parentNode.replaceChild(newBtn, exportBtn);
+    newBtn.addEventListener("click", onExportClick);
+  }
+
+  // --- Export ---
+
+  function onExportClick() {
+    if (typeof window.exportSVG === "function") {
+      try {
+        const svgStr = window.exportSVG();
+        downloadSvg(svgStr, "phylogenetic_tree.svg");
+        return;
+      } catch (e) {
+        console.warn("window.exportSVG() threw, falling back to internal serializer:", e);
+      }
+    }
+    const internal = serializeCurrentSvg();
+    downloadSvg(internal, "phylogenetic_tree.svg");
+  }
+
+  function serializeCurrentSvg() {
+    if (!currentSvg) return "";
+    const clone = currentSvg.cloneNode(true);
+    // Ensure xmlns is present
+    if (!clone.getAttribute("xmlns")) {
+      clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    }
+    // Inline computed styles so the SVG renders standalone
+    inlineStyles(clone);
+    return new XMLSerializer().serializeToString(clone);
+  }
+
+  function inlineStyles(node) {
+    if (node.nodeType !== 1) return;
+    const computed = window.getComputedStyle(node);
+    const stylesWhitelist = [
+      "fill", "fill-opacity", "stroke", "stroke-width", "stroke-opacity",
+      "stroke-linecap", "stroke-linejoin", "font-family", "font-size",
+      "font-weight", "text-anchor", "dominant-baseline", "opacity"
+    ];
+    let styleStr = "";
+    stylesWhitelist.forEach((prop) => {
+      const v = computed.getPropertyValue(prop);
+      if (v && v !== "" && v !== "none") {
+        styleStr += prop + ":" + v + ";";
+      }
+    });
+    if (styleStr) {
+      node.setAttribute("style", styleStr);
+    }
+    Array.from(node.children).forEach(inlineStyles);
+  }
+
+  function downloadSvg(svgString, filename) {
+    if (!svgString) return;
+    const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 0);
+  }
+
+  // --- Public API ---
+
+  window.setTreeData = function (jsonData) {
+    try {
+      currentData = jsonData;
+      renderTree(jsonData);
+    } catch (err) {
+      console.error("setTreeData failed:", err);
+      const container = document.getElementById("tree-container");
+      container.innerHTML = '<div class="placeholder" style="color:#c62828;">'
+        + 'Error rendering tree: ' + escapeHtml(err && err.message ? err.message : String(err))
+        + '</div>';
+      currentSvg = null;
+      document.getElementById("export-btn").disabled = true;
+    }
+  };
+
+  // Optional convenience: also serialize current SVG regardless of which path was used.
+  window.exportSVG = function () {
+    return serializeCurrentSvg();
+  };
+
+  // Expose serializer in case external code wants it without triggering download
+  window.serializeTreeSVG = serializeCurrentSvg;
+
+})();
+</script>
+</body>
+</html>
