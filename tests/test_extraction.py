@@ -25,7 +25,7 @@ class TestClampMaxTokens(unittest.TestCase):
         self.assertEqual(clamp_max_tokens(-100), 1)
 
     def test_clamp_above_max(self):
-        self.assertEqual(clamp_max_tokens(1_000_000), 32000)
+        self.assertEqual(clamp_max_tokens(1_000_000), 100000)
 
     def test_default_on_non_numeric(self):
         self.assertEqual(clamp_max_tokens(None), 4000)
