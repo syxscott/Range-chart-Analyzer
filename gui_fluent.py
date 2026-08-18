@@ -25,7 +25,7 @@ log = logging.getLogger("rca.gui_fluent")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PySide6.QtCore import Qt, QThread, Signal, QSize, QUrl
-from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtGui import QPixmap, QIcon, QColor
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFileDialog,
     QTableWidgetItem, QHeaderView, QFrame, QSizePolicy, QStackedLayout, QSplitter,
@@ -79,9 +79,22 @@ def load_config() -> dict:
     try:
         import json
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            cfg = json.load(f)
     except Exception:
         return {}
+    # H3 fix (REVIEW-2026-11-07): new saves encrypt the legacy api_key
+    # field at rest (see save_config). Legacy plaintext configs still
+    # load: only envelope-marked values are decrypted, and a decrypt
+    # failure keeps the raw value so a bad envelope can't wipe the field.
+    key = cfg.get("api_key")
+    if key:
+        try:
+            from rca_core.secrets_store import decrypt, is_obfuscated
+            if is_obfuscated(key):
+                cfg["api_key"] = decrypt(key)
+        except Exception:
+            pass
+    return cfg
 
 
 def save_config(cfg: dict) -> None:
@@ -90,12 +103,29 @@ def save_config(cfg: dict) -> None:
     A crash mid-write used to truncate the live config and lose all
     settings; the atomic-rename pattern keeps the previous good file
     intact if the new write fails.
+
+    H3 fix (REVIEW-2026-11-07): the legacy api_key field used to sit in
+    this JSON in PLAINTEXT. Encrypt it through rca_core.secrets_store
+    (Fernet when cryptography+keyring are installed, machine-fingerprint
+    obfuscation otherwise). A local copy is used so the caller's dict
+    (save_all passes the live self.cfg) is not mutated, and
+    is_obfuscated() prevents double-wrapping on re-save.
     """
     import json
+    to_write = cfg
+    key = (cfg.get("api_key") or "")
+    if key:
+        try:
+            from rca_core.secrets_store import encrypt, is_obfuscated
+            if not is_obfuscated(key):
+                to_write = dict(cfg)
+                to_write["api_key"] = encrypt(key)
+        except Exception:
+            pass
     tmp = CONFIG_PATH + ".tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
+            json.dump(to_write, f, ensure_ascii=False, indent=2)
             f.flush()
             try:
                 os.fsync(f.fileno())
@@ -168,6 +198,13 @@ class ExtractWorker(QThread):
             return
         ok_datas, last_fail, partial_fails, any_trunc, raws = [], None, 0, False, []
         done = 0
+        # P1 fix (2026-08-06): keep the image fingerprint + per-request
+        # metadata of the first successful run so the merged result's
+        # history record is stamped with the REAL image_sha256 instead of
+        # an empty fingerprint (the previous merged ExtractResult carried
+        # image_sha256="", breaking get_by_sha256 grouping for multi-run).
+        first_ok_sha = ""
+        first_ok_meta = None
         # Track the HTTP status from the most recent successful run so we
         # can surface it on the merged result. The previous code did
         # `ok_datas[0] and 200` which is always the literal 200 (a dict
@@ -192,6 +229,22 @@ class ExtractWorker(QThread):
             # one stalled run could pin the whole batch indefinitely).
             per_future_timeout = params.get("timeout_sec", 120) + 10
             for fut in concurrent.futures.as_completed(futures):
+                # Phase K fix: honour user cancel. Previously
+                # request_cancel() set the flag but run() never read
+                # it, so a click on Cancel would still wait for every
+                # future to finish. We bail out as soon as the flag
+                # is set on the next iteration, recording the remaining
+                # futures as "cancelled" partial failures so the merged
+                # result still has shape consistent with the cancel.
+                if self._cancel_requested:
+                    for unf in futures:
+                        if not unf.done():
+                            unf.cancel()
+                    self.finished_ok.emit(ExtractResult(
+                        ok=False, error_key="err.cancelled",
+                        error_body="user cancelled the extraction",
+                    ))
+                    return
                 try:
                     r = fut.result(timeout=per_future_timeout)
                 except concurrent.futures.TimeoutError:
@@ -217,6 +270,12 @@ class ExtractWorker(QThread):
                     any_trunc = any_trunc or bool(r.truncated)
                     if r.raw:
                         raws.append(r.raw)
+                    # P1 fix (2026-08-06): capture fingerprint + request
+                    # metadata from the first successful run.
+                    if not first_ok_sha and getattr(r, "image_sha256", ""):
+                        first_ok_sha = r.image_sha256
+                    if first_ok_meta is None and getattr(r, "request_meta", None):
+                        first_ok_meta = r.request_meta
                     # Capture the real HTTP status from the API response so
                     # the merged result carries the actual upstream code
                     # (200 / 201 / etc.), not a hardcoded constant.
@@ -258,6 +317,10 @@ class ExtractWorker(QThread):
             usage=merged_usage,
             latency_ms=total_latency,
             status=status_code,
+            # P1 fix (2026-08-06): propagate the real image fingerprint and
+            # request metadata so _on_result persists a correct audit record.
+            image_sha256=first_ok_sha,
+            request_meta=first_ok_meta or {},
         ))
 
 
@@ -306,13 +369,50 @@ if HAS_PHYLO_TREE_WIDGET:
             # Enable the minimum features the D3.js template needs. We do
             # NOT enable JS navigation guards or anything that would let the
             # embedded page reach the host filesystem beyond the template.
+
+            # FRONTEND-FIX (2026-07-27, #7): give the embedded page a
+            # persistent QWebEngineProfile so its localStorage /
+            # sessionStorage survive restarts on file://. Without an explicit
+            # persistent profile QWebEngine uses an off-the-record one and
+            # storage is lost on close. Scoped under AppDataLocation so
+            # settings/theme/key persistence works across launches. No
+            # registerJsObject / QWebChannel is introduced (intentionally).
+            try:
+                from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
+                from PySide6.QtCore import QStandardPaths
+                _storage = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+                if not _storage:
+                    _storage = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer", "web")
+                _profile = QWebEngineProfile("RangeChartAnalyzer", self)
+                _profile.setPersistentStoragePath(os.path.join(_storage, "web"))
+                self.setPage(QWebEnginePage(_profile, self))
+            except Exception:
+                # Defensive: if the Qt build lacks profile/page support, fall
+                # back to the default page; the attribute settings below still
+                # apply.
+                pass
+
             settings = self.settings()
-            settings.setAttribute(
-                QWebEngineSettings.JavascriptEnabled, True)
-            settings.setAttribute(
-                QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
-            settings.setAttribute(
-                QWebEngineSettings.LocalContentCanAccessLocalResources, True)
+            # Qt6 moved WebEngine attributes into the ``WebAttribute`` enum and
+            # renamed ``LocalContentCanAccessLocalResources`` to
+            # ``LocalContentCanAccessFileUrls``. Resolve defensively so this
+            # works across PySide2/PySide6 builds without AttributeError.
+            _WebAttr = getattr(QWebEngineSettings, "WebAttribute", QWebEngineSettings)
+            settings.setAttribute(_WebAttr.JavascriptEnabled, True)
+            settings.setAttribute(_WebAttr.LocalContentCanAccessRemoteUrls, True)
+            for _name in ("LocalContentCanAccessFileUrls",
+                          "LocalContentCanAccessLocalResources"):
+                _attr = getattr(_WebAttr, _name, None)
+                if _attr is not None:
+                    settings.setAttribute(_attr, True)
+                    break
+            # FRONTEND-FIX (#7): allow the embedded page to use
+            # localStorage/sessionStorage at all (default is off). Required
+            # for the frontend's per-session settings (theme, API key) to
+            # persist on file://.
+            _lsAttr = getattr(_WebAttr, "LocalStorageEnabled", None)
+            if _lsAttr is not None:
+                settings.setAttribute(_lsAttr, True)
             self.loadFinished.connect(self._on_load_finished)
             self._load_template()
 
@@ -653,8 +753,13 @@ class ExtractPage(ScrollArea):
                     pass
                 return
             self._cleanup_paste_tmp()
-            self._last_paste_tmp = tmp
+            # REVIEW-2026-11-07 (low): register tmp as the owned paste file
+            # only AFTER _load_image succeeded. Before, a failed load left
+            # _last_paste_tmp == tmp, so the except block below skipped the
+            # unlink and the orphan rca_paste_*.png persisted until the NEXT
+            # paste.
             self._load_image(tmp)
+            self._last_paste_tmp = tmp
             InfoBar.success("", self._t("image.pasted"), parent=self.win,
                             position=InfoBarPosition.TOP)
         except Exception:
@@ -736,13 +841,13 @@ class ExtractPage(ScrollArea):
         runs = self.win.runs()
         mode = self.win.chart_type()
         if mode == "auto":
-            cap = (params["caption"] + " " + (self.image_path or "")).lower()
-            if any(k in cap for k in ("pollen", "abundance", "percentage diagram", "palyno", "孢粉", "花粉", "丰度", "百分比")):
-                mode = "abundance_diagram"
-            elif any(k in cap for k in ("column", "columns", "columnar", "col_section", "col_sections", "柱状", "柱状図", "柱状图")):
-                mode = "columnar_section"
-            else:
-                mode = "range_chart"
+            # REVIEW-2026-11-07 (low): route through the shared
+            # rca_core.chart_mode heuristic — the inline substring copy
+            # diverged from the web frontend's word-boundary matching
+            # (e.g. "Pollinator..." and "phylogenetic" classified
+            # differently per UI).
+            from rca_core.chart_mode import auto_detect_chart_mode
+            mode = auto_detect_chart_mode(params["caption"] + " " + (self.image_path or ""))
         self.busy = True
         self._set_busy(True)
         # FIX (stale-result guard): bump the generation so any result from a
@@ -877,6 +982,14 @@ class ExtractPage(ScrollArea):
                 duration_ms=int(getattr(result, "latency_ms", 0) or 0),
                 status_code=result.status,
                 raw=result.raw or "",
+                # Phase J fix: propagate the audit-trail fields populated
+                # by rca_core.extractor (image_sha256, request_meta)
+                # so GUI records carry the same provenance as the
+                # server-side path. Previously these stayed empty,
+                # defeating the 5-year audit trail.
+                image_sha256=getattr(result, "image_sha256", "") or "",
+                request_meta=getattr(result, "request_meta", None) or {},
+                raws=getattr(result, "_raws", None)
             )
         except Exception as exc:
             # Persistence is best-effort: a failure here must not block the
@@ -1969,9 +2082,19 @@ class RangeChartFluentWindow(FluentWindow):
                        image_thumb: bytes | None, image_w: int, image_h: int,
                        provider, model: str, runs: int, confidence: float,
                        partial_failures: int, duration_ms: int,
-                       status_code: int | None, raw: str) -> int | None:
+                       status_code: int | None, raw: str,
+                       image_sha256: str = "",
+                       request_meta: dict | None = None,
+                       raws: list[str] | None = None) -> int | None:
         """Persist a completed extraction to the SQLite history table.
-        Returns the new record id, or None on failure."""
+        Returns the new record id, or None on failure.
+
+        Phase J fix: ``image_sha256`` and ``request_meta`` are now first-class
+        parameters so the audit trail captures the same provenance the
+        server-side path writes. ``raws`` (per-run raw text, for multi-run
+        mode) populates the raw_responses table so a researcher can reparse
+        each slot's exact LLM response years later.
+        """
         if self._history_store is None:
             # Persistent storage is non-fatal (the app still runs), but
             # the user must know their record is gone — otherwise they
@@ -2001,8 +2124,26 @@ class RangeChartFluentWindow(FluentWindow):
                 partial_failures=partial_failures,
                 duration_ms=duration_ms,
                 status_code=status_code,
+                # Phase J: pass audit-trail fields through.
+                image_sha256=image_sha256 or "",
+                request_meta=dict(request_meta or {}),
             )
-            new_id = self._history_store.add(rec)
+            new_id = self._history_store.add(
+                rec,
+                # Per-run raw_responses (Phase J): multi-run mode
+                # passes a list of raw texts per slot. Single-run
+                # mode can pass None or a single-element list.
+                raw_responses=[
+                    {
+                        "run_idx": i,
+                        "raw_text": r or "",
+                        "prompt_text": "",
+                        "request_meta": dict(request_meta or {}),
+                        "timestamp": int(__import__("time").time()),
+                    }
+                    for i, r in enumerate(raws or ([raw] if raw else []))
+                ] or None,
+            )
         except Exception as exc:
             log.warning("save_to_history failed: %s", exc)
             # Surface the failure on-screen too, not just in the console.
@@ -2236,6 +2377,21 @@ class RangeChartFluentWindow(FluentWindow):
             "api_key": s.ipt_key.text().strip() if remember else "",
         })
         save_config(self.cfg)
+        # H3 fix (REVIEW-2026-11-07): the Tkinter GUI already warned (via
+        # log) when at-rest protection is below Fernet; the Fluent save
+        # path had no warning at all. Surface it once per session when a
+        # key is actually being stored with the weaker protection.
+        if remember and s.ipt_key.text().strip():
+            try:
+                from rca_core.secrets_store import encryption_status
+                if encryption_status() in ("fingerprint", "plaintext") \
+                        and not getattr(self, "_warned_key_protection", False):
+                    self._warned_key_protection = True
+                    InfoBar.warning(
+                        "", self._t("settings.keyObfuscated"), parent=self,
+                        position=InfoBarPosition.TOP, duration=6000)
+            except Exception:
+                pass
 
     def closeEvent(self, event):
         try:
@@ -2333,6 +2489,16 @@ def main():
     setTheme(Theme.AUTO)
     setThemeColor("#2563eb")
     win = RangeChartFluentWindow()
+    # QFluentWidgets enables the Windows 11 Mica effect by default
+    # (window/fluent_window.py: setMicaEffectEnabled(True)). On machines where
+    # Mica isn't supported (VMs, RDP, some GPUs/drivers, Windows 10) the effect
+    # silently fails and the title bar + navigation panel render SOLID BLACK.
+    # Turn it off so the window falls back to the normal themed background.
+    win.setMicaEffectEnabled(False)
+    # With Mica off, give the title bar + navigation panel an explicit
+    # (non-pure-black) background — light mode -> light gray; dark mode ->
+    # proper dark gray (rgb(32,32,32)) instead of #000000.
+    win.setCustomBackgroundColor(QColor(243, 246, 250), QColor(32, 32, 32))
     win.show()
     app.exec()
     return 0

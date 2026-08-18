@@ -113,7 +113,14 @@ class HistoryRecord:
     request_meta: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize for JSON export. Thumbnail goes to base64."""
+        """Serialize for JSON export. Thumbnail goes to base64.
+
+        Phase J fix: ``image_sha256`` and ``request_meta`` are
+        also serialized so the audit trail survives a JSON
+        export. Without them, exporting a row to share with a
+        colleague drops the very fields the audit needs (image
+        fingerprint + sampling context).
+        """
         thumb_b64 = None
         if self.image_thumbnail:
             try:
@@ -139,6 +146,8 @@ class HistoryRecord:
             "duration_ms": self.duration_ms,
             "status_code": self.status_code,
             "notes": self.notes,
+            "image_sha256": self.image_sha256 or "",
+            "request_meta": dict(self.request_meta or {}),
         }
 
 
@@ -405,11 +414,16 @@ class HistoryStore:
         """
         import datetime as _dt
         with self.db.transaction():
-            cur_read = self.db.execute(
+            # REVIEW-2026-07-31: statements inside the transaction use
+            # query_one() / run() instead of execute() — execute() commits
+            # after every statement, which silently ended the BEGIN
+            # IMMEDIATE block and split the UPDATE + audit INSERT into two
+            # independent transactions (a failure between them could not be
+            # rolled back).
+            row = self.db.query_one(
                 "SELECT result_json, edit_count, edit_provenance FROM history WHERE id = ?",
                 (record_id,),
             )
-            row = cur_read.fetchone()
             if row is None:
                 return False
             prev_result_json = row[0]
@@ -456,7 +470,7 @@ class HistoryStore:
                     },
                 },
             })
-            cur = self.db.execute(
+            cur = self.db.run(
                 """UPDATE history SET result_json = ?, last_edited_at = ?,
                    last_editor = ?, edit_count = ?, edit_provenance = ?
                    WHERE id = ?""",
@@ -477,7 +491,7 @@ class HistoryStore:
                     before_dict = json.loads(prev_result_json)
                 except Exception:
                     before_dict = prev_result_json
-            self.db.execute(
+            self.db.run(
                 "INSERT INTO record_edits "
                 "(record_id, timestamp, editor, edit_type, before, after) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
@@ -586,7 +600,17 @@ class HistoryStore:
 
         # Original image entity (rca:image:{sha256_of_source})
         source_path = record.source_file or ""
-        image_entity_id = f"rca:image:{_sha256(source_path)}" if source_path else f"rca:image:{record_id}"
+        # REVIEW-2026-11-07 (low): when the source path is missing (e.g. a
+        # clipboard paste), most records still carry the content hash
+        # (image_sha256). Prefer it over record_id — the content hash is
+        # the stable identity and keeps the entity id meaningful; record_id
+        # stays only as the last resort.
+        if source_path:
+            image_entity_id = f"rca:image:{_sha256(source_path)}"
+        elif record.image_sha256:
+            image_entity_id = f"rca:image:{record.image_sha256}"
+        else:
+            image_entity_id = f"rca:image:{record_id}"
         doc.setdefault("prov:entity", []).append({
             "@id": image_entity_id,
             "prov:type": "prov:Entity",

@@ -18,7 +18,7 @@
 ## 核心特性
 
 - **多种 LLM 提供商**：内置 100+ 预设（MiniMax、OpenAI、Claude、Gemini、DeepSeek、Qwen、Kimi、智谱、各类中转聚合），统一配置 + 切换。
-- **可编辑结果**：表格可在线编辑（双击单元格），可新增 / 删除行，所见即所得。
+- **可编辑结果**：桌面 GUI 的表格可在线编辑（双击单元格）、可新增 / 删除行，所见即所得；Web 前端当前为只读展示（复制 / 导出不受影响）。
 - **多格式导出**：JSON、CSV、TSV、**Excel (XLSX)**（每个表一个 Sheet，物名斜体）。
 - **历史记录**：所有提取自动保存到 SQLite，支持加载、编辑备注、重新导出、删除。
 - **Token 用量统计**：每次调用的输入/输出 Tokens、缓存命中率、延迟、成功率，按天/提供商/模型聚合可视化。
@@ -67,7 +67,17 @@ python gui.py
 - 右上角切换中/英/日界面。
 - 设置自动保存到 `~/.range_chart_analyzer.json`（勾选「记住 API Key」才存密钥）。
 
-**依赖**：Python 3.9+（自带 tkinter）。Pillow 可选。**无需任何其他第三方库。**
+**依赖**：Python 3.10+（自带 tkinter）。核心提取与 CSV / JSON / TSV 导出**只用标准库**，无需任何第三方库。
+（3.9 因 `from __future__ import annotations` 在运行时大多可用，但 CI 只验证 3.10/3.12，且 PEP 604 `X | Y` 注解对静态类型检查器需要 3.10+，故正式支持 3.10+。）可选功能所需的依赖见 `requirements.txt`（共 8 个包）：
+
+- **XLSX 导出** 需要 `openpyxl`（`Export Excel` 按钮 / `rca_core.exporter.to_xlsx`）；
+- **用量图表** 需要 `matplotlib`（Usage 页可视化，缺失时回退为纯文本表）；
+- **现代 Fluent 桌面 GUI** 需要 `PySide6`（`+ PySide6-Fluent-Widgets` / `PySide6-Addons`，约 150–200MB），缺失时自动回退到 Tkinter；
+- **图片缩略图 / 客户端压缩** 需要 `Pillow`；
+- **原生窗口模式**（`python main.py --ui modern`）需要 `pywebview`；
+- **Tkinter 的 Fluent 主题** 需要 `sv_ttk`。
+
+未安装对应包时，相关功能会自动降级，不会崩溃。
 
 ---
 
@@ -164,8 +174,8 @@ Range-chart Analyzer/
 ├── server.py               # 方式二：静态托管 + /api/extract 后端
 ├── run_gui.bat             # Windows GUI 启动器
 ├── run_server.bat          # Windows 服务器启动器
-├── requirements.txt        # 仅 Pillow（可选）
-├── tests_core.py           # 核心单元测试（169 项）
+├── requirements.txt        # 可选依赖（8 个包）：Pillow / sv_ttk / pywebview / PySide6(+Addons,+Fluent-Widgets) / openpyxl / matplotlib
+├── tests_core.py           # 核心单元测试（~45 个 pytest 函数，约 375 条软断言）
 ├── tests_logo.py           # logo 生成测试（9 项）
 ├── tests/                  # 新增单元测试（test_csrf / test_ssrf / test_parity / test_enhance / test_cache / test_quality）
 ├── rca_core/logo.py        # 窗口 logo 生成器（Pillow）
@@ -201,9 +211,19 @@ Range-chart Analyzer/
 
 ## 测试 / Tests
 
+测试套件分三部分（REVIEW-2026-07-31 口径更新）：
+
 ```bash
-python tests_core.py     # 26 项：JSON 解析 / 归一化 / 导出 / i18n 键对齐
+python -m pytest tests/ tests_core.py -q     # Python 全量：784 项（含金标离线管线门槛）
+python tests_core.py                         # 核心套件独立运行（375 项，退出码反映失败数）
+node tests_frontend.js                       # 前端 JS parity + 行为测试（137 项）
 ```
+
+- **金标门槛**：`tests/test_gold_smoke.py` 离线运行真实提取管线
+  （`safe_json_loads` → `normalize_*` → `eval_metrics`），对每个 fixture 断言
+  精度/召回阈值。预录响应由 `python tests/fixtures/gold/_gen_canned.py` 生成。
+- **CI**：`.github/workflows/ci.yml` 在 Python 3.10/3.12 + Node 20 上运行以上全部。
+
 
 ---
 

@@ -33,3 +33,10 @@ openpyxl>=3.1 ; python_version >= "3.8"
 # Token-usage charts — rendered on the Usage page. Falls back to plain
 #   text tables if missing.
 matplotlib>=3.5 ; python_version >= "3.8"
+# At-rest encryption for stored API keys (rca_core/secrets_store.py):
+#   cryptography provides the Fernet envelope; keyring moves the key into
+#   the OS credential store. Without them the store falls back to
+#   fingerprint-derived obfuscation (any local user can recompute the
+#   key). Install both for real at-rest protection.
+cryptography>=41.0 ; python_version >= "3.8"
+keyring>=24.0 ; python_version >= "3.8"

@@ -271,6 +271,18 @@ def test_history_detail_html_contains_bootstrap():
         # still succeeds — only `_has_webengine()` returns False. We test
         # the HTML builder directly, which doesn't depend on Qt at all.
         from gui_fluent_history_detail import _build_webengine_html
+    except ModuleNotFoundError as exc:
+        # REVIEW-2026-11-07 (low): PySide6 is an OPTIONAL dependency. The
+        # CORE PySide6 imports sit at the top of gui_fluent_history_detail,
+        # so a bare stdlib install can't import the module at all — skip
+        # gracefully (CI installs requirements.txt and exercises the full
+        # path). Any other ModuleNotFoundError still fails.
+        if "PySide6" in str(exc):
+            print("SKIP detail-html (PySide6 not installed)")
+            return
+        check("detail-import", False)
+        print("import failed:", exc)
+        return
     except Exception as exc:
         check("detail-import", False)
         print("import failed:", exc)

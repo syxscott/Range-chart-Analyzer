@@ -7,6 +7,11 @@
     --primary-light: #60a5fa;
     --primary-dark:  #1e3a8a;
     --primary-soft:  #eff6ff;
+    /* UI-REVIEW-2026-08-01 (M1): background for ACTIVE lang/theme
+       buttons. White text on the dark-mode primary (#60a5fa) measured
+       2.54:1 (fails WCAG AA 4.5:1); this variable keeps a darker blue
+       in both themes so the active state passes. */
+    --primary-active: #2563eb;
 
     --success-color: #10b981;
     --success-soft:  #d1fae5;
@@ -25,6 +30,11 @@
     --bg-light:        #f7f6f5;
     --bg-lighter:      #efedeb;
     --bg-white:        #ffffff;
+    /* UI fix (2026-08-07): --surface was referenced by .quality-badge but
+       never defined anywhere, so the declaration was discarded and the badge
+       rendered with a transparent background. Define it once here; it
+       follows the dark-mode override of --bg-lighter automatically. */
+    --surface: var(--bg-lighter);
     --text-dark:       #0c0a09;
     --text-base:       #1c1917;
     --text-muted:      #57534e;
@@ -86,6 +96,8 @@
         --primary-color: #60a5fa;
         --primary-hover: #93c5fd;
         --primary-soft:  #1e3a8a;
+        /* M1: active button background — dark blue keeps white text >= 4.5:1. */
+        --primary-active: #1d4ed8;
         --success-soft:  #064e3b;
         --warning-soft:  #78350f;
         --danger-soft:   #7f1d1d;
@@ -114,6 +126,7 @@
     --primary-color: #60a5fa;
     --primary-hover: #93c5fd;
     --primary-soft:  #1e3a8a;
+    --primary-active: #1d4ed8;  /* M1: active-button bg, AA contrast with white text */
     --success-soft:  #064e3b;
     --warning-soft:  #78350f;
     --danger-soft:   #7f1d1d;
@@ -124,34 +137,29 @@
     --shadow-lg:  0 1px 3px 0 rgba(0,0,0,.5), 0 24px 56px -10px rgba(0,0,0,.7);
 }
 /* Phase B: dark-mode alert/pill text must be LIGHT (not the hardcoded
-   dark text from light mode) so it reads on dark soft backgrounds. */
+   dark text from light mode) so it reads on dark soft backgrounds.
+   NOTE: previously this block embedded `@media` inside a comma selector
+   list, which is invalid CSS and made the whole rule (and every colour
+   override below) get discarded by the parser. The explicit [data-theme]
+   path and the OS-preference path are now two separate, legal blocks. */
 :root[data-theme="dark"] .alert-success,
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme]) .alert-success { color: #6ee7b7; }
-}
+:root[data-theme="dark"] .pill-good { color: #6ee7b7; }
 :root[data-theme="dark"] .alert-warning,
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme]) .alert-warning { color: #fcd34d; }
-}
+:root[data-theme="dark"] .pill-mid  { color: #fcd34d; }
 :root[data-theme="dark"] .alert-danger,
+:root[data-theme="dark"] .pill-low  { color: #fca5a5; }
+:root[data-theme="dark"] .alert-info { color: #a5b4fc; }
+
+/* Follow the OS dark preference when no explicit theme is set. Kept in a
+   separate @media block — @media must never appear inside a selector list. */
 @media (prefers-color-scheme: dark) {
-    :root:not([data-theme]) .alert-danger { color: #fca5a5; }
-}
-:root[data-theme="dark"] .alert-info,
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme]) .alert-info { color: #a5b4fc; }
-}
-:root[data-theme="dark"] .pill-good,
-@media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) .alert-success,
     :root:not([data-theme]) .pill-good { color: #6ee7b7; }
-}
-:root[data-theme="dark"] .pill-mid,
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme]) .pill-mid { color: #fcd34d; }
-}
-:root[data-theme="dark"] .pill-low,
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme]) .pill-low { color: #fca5a5; }
+    :root:not([data-theme]) .alert-warning,
+    :root:not([data-theme]) .pill-mid  { color: #fcd34d; }
+    :root:not([data-theme]) .alert-danger,
+    :root:not([data-theme]) .pill-low  { color: #fca5a5; }
+    :root:not([data-theme]) .alert-info { color: #a5b4fc; }
 }
 
 /* Button row layout */
@@ -270,7 +278,10 @@ a:hover { text-decoration: underline; }
     color: var(--text-base);
 }
 .lang-switch button.active, .theme-toggle button[aria-pressed="true"] {
-    background: var(--primary-color);
+    /* M1: --primary-active is a darker blue in both themes so the white
+       text keeps >= 4.5:1 contrast (the dark-mode primary #60a5fa with
+       white text measured only 2.54:1). */
+    background: var(--primary-active);
     color: #fff;
 }
 .theme-toggle button[aria-pressed="true"] {
@@ -643,7 +654,10 @@ textarea { resize: vertical; min-height: 64px; }
 .segmented button + button { border-left: 1px solid var(--border-color); }
 .segmented button:hover { background: var(--bg-lighter); color: var(--text-base); }
 .segmented button[aria-checked="true"] {
-    background: var(--primary-color);
+    /* UI fix (2026-08-07): use --primary-active (darker blue in dark mode)
+       so white text keeps >= 4.5:1 contrast. The previous var(--primary-color)
+       is #60a5fa in dark mode → white text measured 2.54:1 (fails WCAG AA). */
+    background: var(--primary-active);
     color: #fff;
 }
 
@@ -782,10 +796,15 @@ button.btn.btn-primary:not(:disabled):active {
 .confidence-ring.high .bar { stroke: var(--success-color); }
 .confidence-ring.mid .bar  { stroke: var(--warning-color); }
 .confidence-ring.low .bar  { stroke: var(--danger-color); }
-.confidence-ring .label {
+/* UI fix (2026-08-07): the selector was `.confidence-ring .label`, but
+   table.js renders the label as a SIBLING of .confidence-ring inside
+   .rt-left — the descendant selector never matched, so font-size /
+   uppercase / letter-spacing silently didn't apply (14px, no uppercase).
+   margin-left is intentionally omitted: .rt-left's flex gap (12px) already
+   provides the spacing. */
+.rt-left .label {
     font-size: 11px;
     color: var(--text-muted);
-    margin-left: 8px;
     text-transform: uppercase;
     letter-spacing: var(--tracking-wide);
 }
@@ -844,6 +863,28 @@ button.btn.btn-primary:not(:disabled):active {
     max-height: 180px;
     overflow: auto;
     width: 100%;
+}
+
+/* UI polish: alert fade transition */
+.alert-fade-in {
+    animation: rcaAlertFadeIn 200ms ease-out forwards;
+}
+.alert-fade-out {
+    animation: rcaAlertFadeOut 180ms ease-in forwards;
+}
+@keyframes rcaAlertFadeIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes rcaAlertFadeOut {
+    from { opacity: 1; transform: translateY(0); }
+    to   { opacity: 0; transform: translateY(-4px); }
+}
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+    .alert-fade-in, .alert-fade-out {
+        animation: none;
+    }
 }
 
 /* ==================== Spinner ==================== */
@@ -1006,6 +1047,12 @@ table.data-table tbody th[scope="row"]:first-child { z-index: 1; }
 table.data-table thead th:first-child { background: rgba(255,255,255,0.95); }
 table.data-table tbody tr:nth-child(even) td:first-child,
 table.data-table tbody tr:nth-child(even) th[scope="row"]:first-child { background: rgba(0,0,0,0.018); }
+/* UI fix (2026-08-07): odd zebra rows left the sticky index column fully
+   transparent, so the table content scrolled underneath it while
+   horizontally scrolling. Give odd rows an opaque (theme-aware) background
+   so the index column always masks the content behind it. */
+table.data-table tbody tr:nth-child(odd) td:first-child,
+table.data-table tbody tr:nth-child(odd) th[scope="row"]:first-child { background: var(--bg-white); }
 /* Dark mode sticky backgrounds. */
 :root[data-theme="dark"] table.data-table thead th:first-child,
 :root[data-theme="dark"] table.data-table tbody td:first-child,

@@ -63,6 +63,15 @@ class TestSSRF:
         assert not _ok('https://169.254.169.254')   # AWS/GCP/Azure metadata
         assert not _ok('https://metadata.google.internal')  # GCP
 
+    def test_metadata_and_nat64_endpoint_rejected(self):
+        # H2: cloud-metadata URL (with a path) and NAT64-embedded IPv4 must
+        # be rejected. NAT64 prefixes (64:ff9b::/96, 64:ff9b:1::/48) embed
+        # an IPv4 destination; some Pythons report the prefix as
+        # is_global == True, so the SSRF check must reject it explicitly.
+        assert not _ok('https://169.254.169.254/latest/meta-data/')
+        assert not _ok('https://[64:ff9b::a9fe:a9fe]/')    # -> 169.254.169.254
+        assert not _ok('https://[64:ff9b:1::a9fe:a9fe]/')  # NAT64 /48 extension
+
     # ---- IPv6 addresses ----
     def test_ipv6_loopback_rejected(self):
         assert not _ok('https://[::1]')
@@ -88,6 +97,44 @@ class TestSSRF:
     def test_public_hostname_accepted(self):
         # 'api.anthropic.com' resolves to public IPs
         assert _is_private_host('api.anthropic.com') == False
+
+    def test_public_hostname_accepted_offline(self, monkeypatch):
+        """REVIEW-2026-07-31: the test above needs live DNS, which fails
+        in offline/sandboxed CI. This variant mocks getaddrinfo so the
+        public-hostname path is exercised deterministically."""
+        import socket
+
+        def fake_getaddrinfo(host, port=None):
+            assert host == 'api.anthropic.com'
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, '',
+                     ('1.2.3.4', 0))]
+
+        monkeypatch.setattr(socket, 'getaddrinfo', fake_getaddrinfo)
+        assert _is_private_host('api.anthropic.com') == False
+
+    def test_dns_rebinding_multiple_addresses_rejected(self, monkeypatch):
+        """A DNS answer mixing a public and a private address must be
+        rejected (check ALL addresses)."""
+        import socket
+
+        def fake_getaddrinfo(host, port=None):
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('1.2.3.4', 0)),
+                (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('10.0.0.1', 0)),
+            ]
+
+        monkeypatch.setattr(socket, 'getaddrinfo', fake_getaddrinfo)
+        assert _is_private_host('rebinding.example.com') == True
+
+    def test_dns_failure_fails_closed(self, monkeypatch):
+        """Unresolvable hostnames must be treated as private (fail closed)."""
+        import socket
+
+        def fake_getaddrinfo(host, port=None):
+            raise socket.gaierror('no such host')
+
+        monkeypatch.setattr(socket, 'getaddrinfo', fake_getaddrinfo)
+        assert _is_private_host('nonexistent.invalid') == True
 
     # ---- HTTP scheme rejected ----
     def test_http_rejected(self):

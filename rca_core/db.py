@@ -178,15 +178,20 @@ class Database:
         # FK enforcement is per-connection and defaults off, so it must
         # be re-issued on every (re)open.
         self._conn.execute("PRAGMA foreign_keys=ON;")
-        # Schema + migrations run inside the lock because they issue
-        # multi-statement transactions via executescript().
-        with self.transaction() as conn:
-            conn.executescript(SCHEMA)
-            self._apply_migrations(conn)
+        # Schema + migrations run under the lock. They issue their own
+        # transactions via executescript(), so they must NOT run inside the
+        # explicit BEGIN IMMEDIATE opened by transaction() — nesting
+        # executescript() there auto-commits the outer transaction and breaks
+        # atomicity (the SCHEMA DDL would commit before the migrations run).
+        # We hold only the lock; executescript() manages its own commit.
+        with self._lock:
+            self._conn.executescript(SCHEMA)
+            self._apply_migrations(self._conn)
             # P1-5 (REVIEW-2026-07-25): add edit-provenance columns to
             # pre-existing databases that predate this schema. Idempotent
             # — silent no-op if columns already exist.
-            self._add_provenance_columns(conn)
+            self._add_provenance_columns(self._conn)
+            self._conn.commit()
 
     def _add_provenance_columns(self, conn: sqlite3.Connection) -> None:
         """Add edit_provenance columns to existing history table.
@@ -324,6 +329,19 @@ class Database:
             self._conn.commit()
             return cur
 
+    def run(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
+        """Execute WITHOUT committing — for use inside ``transaction()``.
+
+        REVIEW-2026-07-31: ``execute()`` auto-commits, which silently ends
+        an enclosing ``BEGIN IMMEDIATE ... COMMIT`` block and destroys its
+        atomicity — a later failure could not roll the earlier statements
+        back. Multi-statement writes inside ``transaction()`` must use
+        ``run()``; the outer context manager commits (or rolls back) the
+        whole block.
+        """
+        with self._lock:
+            return self._conn.execute(sql, params)
+
     def executemany(self, sql: str, params_list: list[Any]) -> sqlite3.Cursor:
         with self._lock:
             cur = self._conn.executemany(sql, params_list)
@@ -354,31 +372,10 @@ class Database:
 Database._MIGRATIONS.append((
     0, 1,
     """
-    CREATE TABLE IF NOT EXISTS raw_responses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        record_id INTEGER NOT NULL,
-        run_idx INTEGER NOT NULL DEFAULT 0,
-        raw_text TEXT,
-        prompt_text TEXT,
-        request_meta TEXT,
-        timestamp INTEGER,
-        FOREIGN KEY (record_id) REFERENCES history(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_raw_responses_record ON raw_responses(record_id, run_idx);
-
-    CREATE TABLE IF NOT EXISTS record_edits (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        record_id INTEGER NOT NULL,
-        timestamp INTEGER NOT NULL,
-        editor TEXT,
-        edit_type TEXT NOT NULL,
-        row_idx INTEGER,
-        col_name TEXT,
-        before JSON,
-        after JSON,
-        FOREIGN KEY (record_id) REFERENCES history(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_record_edits_record ON record_edits(record_id, timestamp);
+    -- Migration (0,1) previously recreated raw_responses / record_edits here.
+    -- Those tables are now part of SCHEMA (created unconditionally with
+    -- IF NOT EXISTS), so recreating them was redundant. Kept only as a
+    -- no-op version bump for legacy databases that predate this schema.
     """
 ))
 

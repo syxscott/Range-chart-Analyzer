@@ -28,6 +28,12 @@ from rca_core.prompt import RANGE_CHART_SYSTEM_PROMPT
 _pass = 0
 _fail = 0
 
+# Accumulator of check() failures for the *current* test. Drained by the
+# pytest guard fixture below. In standalone (`python tests_core.py`) mode
+# the fixture is absent, so _failures is only appended to (never asserted)
+# and the `if __name__ == "__main__"` block drives pass/fail via `_fail`.
+_failures: list[str] = []
+
 
 def check(name, cond):
     global _pass, _fail
@@ -37,6 +43,33 @@ def check(name, cond):
     else:
         _fail += 1
         print("FAIL", name)
+        _failures.append(name)
+
+
+try:
+    import pytest
+
+    @pytest.fixture(autouse=True)
+    def _check_guard():
+        """Turn every soft-assert (check) into a pytest failure.
+
+        Previously ``check()`` only printed, so real failures (e.g. the
+        i18n-parity / gemini-key / m5-clamp regressions) were invisible
+        under pytest — the suite reported 45 PASS while a standalone run
+        exited 1. Now all ``check()`` failures inside a test are collected
+        and asserted at the end of the test, so they surface as failures.
+        """
+        _failures.clear()
+        yield
+        if _failures:
+            raise AssertionError(
+                "check() failures in this test: " + ", ".join(_failures)
+            )
+except ImportError:
+    # Standalone mode: pytest is not importable, so the autouse fixture is
+    # skipped and the existing `if __name__ == "__main__"` driver handles
+    # the exit code via the `_fail` counter.
+    pass
 
 
 def test_json():
@@ -146,10 +179,15 @@ def test_merge():
 
 
 def test_t12_norm_strips_sp_cf():
-    """aggregate._norm must strip trailing sp./cf. and collapse whitespace."""
+    """aggregate._norm collapses whitespace and lowercases; it must NOT
+    strip sp./cf./aff. qualifiers (B-1 fix in rca_core/aggregate._norm)."""
     from rca_core.aggregate import _norm
-    check("norm-strip-sp", _norm("Neoalbaillella sp.") == "neoalbaillella")
-    check("norm-strip-cf", _norm("Entactinia cf. sashidai") == "entactinia sashidai")
+    # B-1 fix: sp./cf. are preserved so indeterminate specimens ("Genus sp.")
+    # are not silently merged into the identified species ("Genus"). The
+    # original assertions here expected the OLD buggy behaviour that stripped
+    # those suffixes — update them to the corrected contract.
+    check("norm-strip-sp", _norm("Neoalbaillella sp.") == "neoalbaillella sp.")
+    check("norm-strip-cf", _norm("Entactinia cf. sashidai") == "entactinia cf. sashidai")
     check("norm-collapse-ws", _norm("  Hello   World  ") == "hello world")
 
 def test_t13_balanced_json_edge_cases():
@@ -545,6 +583,55 @@ def test_h7_error_body_surfaces():
     er = ExtractResult(ok=False, error_key="err.http", status=500,
                        error_body="rate limit exceeded")
     check("h7-error-body-field", er.error_body == "rate limit exceeded")
+
+
+def test_neterr_bad_endpoint_is_not_network():
+    """NETERR fix (2026-07-27): a bad endpoint must read as err.badEndpoint,
+    never as err.network. This is the 'config silently changed, now it fails'
+    trap — a wrong/empty endpoint must surface as a *config* error, not a
+    *network* error, so the user doesn't go chasing a non-existent network
+    problem. Loopback must still be allowed (local Ollama / dev servers).
+    """
+    import rca_core.llm as LLM_mod
+    from rca_core.llm import LlmProvider, ApiFormat
+
+    # 1) Empty endpoint -> err.badEndpoint (NOT err.network).
+    p_empty = LlmProvider(api_format=ApiFormat.ANTHROPIC, endpoint="",
+                          api_key="k", model="claude-3-haiku-20240307")
+    r_empty = LLM_mod.test_llm_connection(p_empty, timeout_sec=2)
+    check("neterr-empty-endpoint-badEndpoint",
+          (not r_empty.ok) and r_empty.error_key == "err.badEndpoint")
+
+    # 2) Plain-HTTP public host -> err.badEndpoint (cleartext key leak guard).
+    p_http = LlmProvider(api_format=ApiFormat.ANTHROPIC,
+                         endpoint="http://example.com/anthropic",
+                         api_key="k", model="claude-3-haiku-20240307")
+    r_http = LLM_mod.test_llm_connection(p_http, timeout_sec=2)
+    check("neterr-http-public-badEndpoint",
+          (not r_http.ok) and r_http.error_key == "err.badEndpoint")
+
+    # 3) Loopback http is allowed (local model / dev server) — must NOT be
+    #    flagged badEndpoint. We don't require it to actually connect, only
+    #    that the policy lets it through to the probe stage.
+    p_loop = LlmProvider(api_format=ApiFormat.ANTHROPIC,
+                         endpoint="http://127.0.0.1:11434",
+                         api_key="k", model="claude-3-haiku-20240307")
+    r_loop = LLM_mod.test_llm_connection(p_loop, timeout_sec=2)
+    check("neterr-loopback-not-badEndpoint",
+          r_loop.error_key != "err.badEndpoint")
+
+    # 4) A *valid* endpoint that is genuinely unreachable -> err.network
+    #    (real connection-layer failure, distinct from a config error).
+    #    Use loopback on a closed port: _is_safe_endpoint whitelists
+    #    loopback, so the probe actually fires and hits a refused
+    #    connection (URLError -> status=None -> err.network). This proves
+    #    the badEndpoint guard doesn't swallow legitimate network failures.
+    p_unreach = LlmProvider(api_format=ApiFormat.ANTHROPIC,
+                            endpoint="https://127.0.0.1:59999/anthropic",
+                            api_key="k", model="claude-3-haiku-20240307")
+    r_unreach = LLM_mod.test_llm_connection(p_unreach, timeout_sec=2)
+    check("neterr-unreachable-valid-endpoint-network",
+          (not r_unreach.ok) and r_unreach.error_key == "err.network")
 
 
 def test_h8_normalize_preserves_extras():

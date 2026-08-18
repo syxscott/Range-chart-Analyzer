@@ -16,36 +16,26 @@ import csv
 import io
 import math
 import re
+from decimal import Decimal as _Decimal
 from typing import Any, Callable
 
+# M-1 fix (REVIEW-2026-07-25): shared bed parser. Previously
+# eval_metrics.py and exporter.py carried two independent
+# implementations that disagreed on subscript handling — a
+# predicted Bed 23c and a ground-truth Bed 23d would both be reduced
+# to the integer 23, inflating accuracy. Both now route through
+# rca_core.bed_parser.parse_bed so the exporter and the quality
+# scorer always agree.
+from .bed_parser import parse_bed as _parse_bed_impl  # noqa: E402  (post-import hook)
 
-# P0-7 (REVIEW-2026-07-25): regex to parse Bed identifiers like "Bed 23c" or
-# just "23c" into structured components for proper comparison. The numeric
-# part preserves paleontological bed numbering; the alphabetic subscript
-# (a, b, c, …) indicates sub-beds within a single numbered bed.
-_BED_PATTERN = re.compile(
-    r"^Bed\s*(\d+)\s*([a-zA-Z]*)$|^(?:Bed\s*)?(\d+)\s*([a-zA-Z]*)$"
-)
+
+def _parse_bed(value):
+    """Module-level alias preserved for any tests that monkey-patch here."""
+    return _parse_bed_impl(value)
 
 
-def _parse_bed(value: str | None) -> dict[str, Any] | None:
-    """Parse a Bed identifier string into {bed_num, bed_sub, raw}.
-
-    Returns None when the value is not a recognisable Bed string.
-    The ``raw`` field preserves the original string so round-trip works.
-    """
-    if not value:
-        return None
-    s = str(value).strip()
-    # Try "Bed N" form first (with explicit "Bed" prefix).
-    m = re.match(r"^Bed\s*(\d+)\s*([a-zA-Z]*)$", s, re.IGNORECASE)
-    if m:
-        return {"bed_num": int(m.group(1)), "bed_sub": m.group(2).lower(), "raw": s}
-    # Try bare "N" or "Nc" form (some extractors omit the "Bed" prefix).
-    m = re.match(r"^(\d+)\s*([a-zA-Z]*)$", s)
-    if m:
-        return {"bed_num": int(m.group(1)), "bed_sub": m.group(2).lower(), "raw": s}
-    return None
+# Backward-compat alias kept for tests that import ``_BED_PATTERN``.
+_BED_PATTERN = re.compile(r"^Bed\s*(\d+)\s*([a-zA-Z]*)$|^(?:Bed\s*)?(\d+)\s*([a-zA-Z]*)$")
 
 # P2-5 (REVIEW-2026-07-25): scientific invariants that all exported
 # range-chart data MUST satisfy before being written to CSV / xlsx /
@@ -636,9 +626,16 @@ def _sanitize_number_cell(v: Any) -> Any:
     Finite floats pass through unchanged. Strings / ints / None are
     returned as-is — formula-injection mitigation is handled separately
     by ``_sanitize_formula_cell``.
+
+    M5 fix (REVIEW-2026-11-07): ``decimal.Decimal`` is NOT a subclass of
+    ``float``, so ``Decimal('NaN')`` / ``Decimal('Infinity')`` used to
+    bypass the check and reach XLSX as invalid numbers. Check it too.
     """
     if isinstance(v, float):
         if math.isnan(v) or math.isinf(v):
+            return ""
+    if isinstance(v, _Decimal):
+        if v.is_nan() or v.is_infinite():
             return ""
     return v
 
@@ -675,6 +672,24 @@ def to_tsv(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
+def _strip_nonfinite(obj: Any) -> Any:
+    """M5 fix (REVIEW-2026-11-07): recursively replace non-finite floats
+    (NaN / +/-Inf — invalid in strict JSON) with ``None`` so that
+    ``json.dumps(..., allow_nan=False)`` cannot raise when the LLM emits
+    them (e.g. a ``confidence`` of ``Infinity``). Only the JSON shapes the
+    result carries (dict / list / float) are walked; everything else —
+    including Decimal, which json.dumps already rejects loudly — passes
+    through untouched.
+    """
+    if isinstance(obj, dict):
+        return {k: _strip_nonfinite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_strip_nonfinite(v) for v in obj]
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    return obj
+
+
 def result_to_json(data: dict[str, Any], source_file: str | None, timestamp: str | None) -> str:
     payload = {
         "extracted_at": timestamp,
@@ -683,7 +698,10 @@ def result_to_json(data: dict[str, Any], source_file: str | None, timestamp: str
     }
     import json
 
-    return json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False)
+    # M5 fix (REVIEW-2026-11-07): allow_nan=False used to raise ValueError
+    # on NaN/Inf floats anywhere in the result; sanitize first so the
+    # export degrades to null instead of crashing.
+    return json.dumps(_strip_nonfinite(payload), ensure_ascii=False, indent=2, allow_nan=False)
 
 
 # ---------------------------------------------------------------------------

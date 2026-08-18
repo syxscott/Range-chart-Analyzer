@@ -8,51 +8,53 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .bed_parser import parse_bed_int as _parse_bed_int
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _normalize_taxon(name: str) -> str:
-    """Lowercase, strip whitespace, drop ICZN qualifiers for fuzzy matching.
+def _normalize_taxon(name: str, *, preserve_qualifiers: bool = True) -> str:
+    """Canonicalize a taxon name with an explicit strict/lenient policy.
 
-    Example: "Ammonites cf. koslovensis" → "ammonites koslovensis"
+    Strict normalization is the default: spelling, case and punctuation variants
+    are normalized, but ICZN open-nomenclature qualifiers remain part of the
+    scientific identity. Lenient normalization removes those qualifiers for an
+    explicitly labelled secondary metric.
     """
     if not name:
         return ""
     s = re.sub(r"\s+", " ", str(name).strip().lower())
-    # Token-based ICZN qualifier removal.
-    # Handles: cf., aff., ex gr., sensu lato, and ? (doubt marker, possibly attached).
-    _ICZN = frozenset({"cf.", "cf", "aff.", "aff", "ex", "gr.", "sensu", "lato"})
-    parts = s.split()
-    filtered = []
-    i = 0
-    while i < len(parts):
-        tok = parts[i]
-        tok_stripped = tok.rstrip(".")
-        if tok in _ICZN or tok_stripped in _ICZN:
-            # Skip compound qualifiers like "ex gr." and "sensu lato"
-            if tok in ("ex", "sensu") and i + 1 < len(parts):
-                i += 2
-                continue
-            if tok == "gr." and i > 0 and parts[i - 1] == "ex":
-                i += 1
-                continue
-            if tok == "lato" and i > 0 and parts[i - 1] == "sensu":
-                i += 1
-                continue
-            i += 1
-            continue
-        # Handle ? suffix (ICZN doubt marker possibly attached to the name)
-        if tok.endswith("?"):
-            tok = tok[:-1]
-            if tok:
-                filtered.append(tok)
-            i += 1
-            continue
-        filtered.append(tok)
-        i += 1
-    return " ".join(filtered)
+    canonical = (
+        (r"\bex\s+gr(?:oup)?\.?(?=\s|$)", "ex gr."),
+        (r"\bsensu\s+lato\b|\bs\.?\s*l\.?(?=\s|$)", "s.l."),
+        (r"\bsensu\s+stricto\b|\bs\.?\s*str\.?(?=\s|$)", "s.str."),
+        (r"\bcf\.?(?=\s|$)", "cf."),
+        (r"\baff\.?(?=\s|$)", "aff."),
+        (r"\bspp\.?(?=\s|$)", "spp."),
+        (r"\bsp\.?(?=\s|$)", "sp."),
+    )
+    for pattern, replacement in canonical:
+        s = re.sub(pattern, replacement, s)
+    s = re.sub(r"\s*\?\s*", " ? ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    if preserve_qualifiers:
+        return s
+
+    qualifier_patterns = (
+        r"\bex\s+gr\.\s*",
+        r"\bs\.l\.\s*",
+        r"\bs\.str\.\s*",
+        r"\bcf\.\s*",
+        r"\baff\.\s*",
+        r"\bspp\.\s*",
+        r"\bsp\.\s*",
+        r"\s*\?\s*",
+    )
+    for pattern in qualifier_patterns:
+        s = re.sub(pattern, " ", s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -60,10 +62,45 @@ def _normalize_taxon(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _species_pr_for_policy(
+    predicted: list[dict[str, Any]],
+    ground_truth: list[dict[str, Any]],
+    *,
+    preserve_qualifiers: bool,
+) -> dict[str, Any]:
+    pred_species = {
+        _normalize_taxon(row.get("species", ""), preserve_qualifiers=preserve_qualifiers)
+        for row in predicted if row.get("species")
+    }
+    true_species = {
+        _normalize_taxon(row.get("species", ""), preserve_qualifiers=preserve_qualifiers)
+        for row in ground_truth if row.get("species")
+    }
+    pred_species.discard("")
+    true_species.discard("")
+    if not true_species:
+        return {"precision": 0.0, "recall": 0.0, "f1": 0.0, "true_positives": 0, "false_positives": 0, "false_negatives": 0}
+
+    tp = len(pred_species & true_species)
+    fp = len(pred_species - true_species)
+    fn = len(true_species - pred_species)
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    return {
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "f1": round(f1, 4),
+        "true_positives": tp,
+        "false_positives": fp,
+        "false_negatives": fn,
+    }
+
+
 def species_precision_recall(
     predicted: list[dict[str, Any]], ground_truth: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Compute P/R for species identification (range_chart / abundance).
+    """Compute strict species P/R and report an explicit lenient companion.
 
     Args:
         predicted: list of species row dicts (must have "species" key)
@@ -78,28 +115,23 @@ def species_precision_recall(
             "false_positives": int,
             "false_negatives": int,
         }
+
+    REVIEW-2026-11-07 (low): with an EMPTY ground truth every predicted
+    species is a false positive, but the deliberate convention here is to
+    report 0/0/0 (not 0 precision) so callers can treat "no annotation
+    available" as "not scored" rather than "perfectly wrong". If you need
+    the strict set-theoretic reading, check ``false_positives`` directly.
     """
-    pred_species = {_normalize_taxon(r.get("species", "")) for r in predicted if r.get("species")}
-    true_species = {_normalize_taxon(r.get("species", "")) for r in ground_truth if r.get("species")}
-
-    if not true_species:
-        return {"precision": 0.0, "recall": 0.0, "f1": 0.0, "true_positives": 0, "false_positives": 0, "false_negatives": 0}
-
-    tp = len(pred_species & true_species)
-    fp = len(pred_species - true_species)
-    fn = len(true_species - pred_species)
-
-    p = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    r = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1 = (2 * p * r / (p + r)) if (p + r) > 0 else 0.0
-
+    strict = _species_pr_for_policy(
+        predicted, ground_truth, preserve_qualifiers=True,
+    )
+    lenient = _species_pr_for_policy(
+        predicted, ground_truth, preserve_qualifiers=False,
+    )
     return {
-        "precision": round(p, 4),
-        "recall": round(r, 4),
-        "f1": round(f1, 4),
-        "true_positives": tp,
-        "false_positives": fp,
-        "false_negatives": fn,
+        **strict,
+        "matching_policy": "strict",
+        "lenient": {**lenient, "matching_policy": "qualifier_insensitive"},
     }
 
 
@@ -109,16 +141,16 @@ def species_precision_recall(
 
 
 def _parse_bed(value: Any) -> int | None:
-    """Parse a bed indicator into an integer, or return None if unparseable."""
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    s = str(value).strip()
-    if not s:
-        return None
-    m = re.search(r"-?\d+", s)
-    return int(m.group()) if m else None
+    """Parse a bed indicator into an integer, or return None if unparseable.
+
+    M-1 fix (REVIEW-2026-07-25): the previous inline implementation
+    used ``re.search(r\"-?\\d+\")`` and dropped subscript qualifiers
+    like \"Bed 23c\" → ``23``. This silently diverged from
+    ``rca_core.exporter._parse_bed`` which kept both number and
+    subscript. Both now route through ``rca_core.bed_parser.parse_bed_int``
+    so the quality scorer and the exporter agree.
+    """
+    return _parse_bed_int(value)
 
 
 def range_top_accuracy(
@@ -165,6 +197,62 @@ def range_top_accuracy(
             exact += 1
             within_tol += 1
         elif abs(pred_top - gt_top) <= tolerance:
+            within_tol += 1
+        else:
+            wrong += 1
+
+    if total == 0:
+        return {"exact": 0, "within_tolerance": 0, "wrong": 0, "acc_exact": 0.0, "acc_tolerance": 0.0}
+
+    return {
+        "exact": exact,
+        "within_tolerance": within_tol,
+        "wrong": wrong,
+        "acc_exact": round(exact / total, 4),
+        "acc_tolerance": round(within_tol / total, 4),
+    }
+
+
+def range_base_accuracy(
+    predicted: list[dict[str, Any]], ground_truth: list[dict[str, Any]], tolerance: int = 1
+) -> dict[str, Any]:
+    """Symmetric counterpart to range_top_accuracy.
+
+    M-1 fix (REVIEW-2026-07-25): the original ``range_top_accuracy``
+    parsed both ``range_top`` and ``range_base`` from ground truth but
+    only validated ``range_top``. A prediction that perfectly nailed
+    the top boundary but completely missed the base scored 100%. For
+    range charts the FAD (base, older) is often the more scientifically
+    important datum. This function validates ``range_base`` and
+    reports the same shape so the JSON side can render both badges.
+    """
+    gt_lookup: dict[str, tuple[int | None, int | None]] = {}
+    for row in ground_truth:
+        sp_key = _normalize_taxon(row.get("species", ""))
+        if sp_key:
+            gt_lookup[sp_key] = (_parse_bed(row.get("range_top")), _parse_bed(row.get("range_base")))
+
+    if not gt_lookup:
+        return {"exact": 0, "within_tolerance": 0, "wrong": 0, "acc_exact": 0.0, "acc_tolerance": 0.0}
+
+    exact = 0
+    within_tol = 0
+    wrong = 0
+    total = 0
+
+    for row in predicted:
+        sp_key = _normalize_taxon(row.get("species", ""))
+        if sp_key not in gt_lookup:
+            continue
+        _gt_top, gt_base = gt_lookup[sp_key]
+        pred_base = _parse_bed(row.get("range_base"))
+        if gt_base is None or pred_base is None:
+            continue
+        total += 1
+        if pred_base == gt_base:
+            exact += 1
+            within_tol += 1
+        elif abs(pred_base - gt_base) <= tolerance:
             within_tol += 1
         else:
             wrong += 1

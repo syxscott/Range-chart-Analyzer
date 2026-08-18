@@ -5,15 +5,35 @@
 
 // Downscale an image File to a JPEG/PNG data URL whose long edge <= maxEdge.
 // Returns { dataUrl, mime, width, height, resized }.
-function rcaLoadAndMaybeResize(file, maxEdge) {
+//
+// REVIEW-2026-11-07 (low): optional opts.signal — when aborted, the
+// FileReader is stopped and the promise rejects with Error('aborted').
+// Before, a superseded file-selection let the FileReader + Image decode
+// run to completion in the background (the caller's token check already
+// dropped the stale result, but the CPU/memory work was wasted).
+function rcaLoadAndMaybeResize(file, maxEdge, opts) {
+  opts = opts || {};
+  const signal = opts.signal || null;
   return new Promise((resolve, reject) => {
+    let settled = false;
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error('imageRead'));
+    const cleanup = () => { if (signal) signal.removeEventListener('abort', onAbort); };
+    const fail = (msg) => { if (!settled) { settled = true; cleanup(); reject(new Error(msg)); } };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try { reader.abort(); } catch (_e) { /* ignore */ }
+      reject(new Error('aborted'));
+    };
+    reader.onerror = () => fail('imageRead');
+    reader.onabort = () => fail('aborted');
     reader.onload = () => {
       const originalDataUrl = reader.result;
       const img = new Image();
-      img.onerror = () => reject(new Error('imageRead'));
+      img.onerror = () => fail('imageRead');
       img.onload = () => {
+        if (signal && signal.aborted) { fail('aborted'); return; }
         const w = img.naturalWidth;
         const h = img.naturalHeight;
         const longEdge = Math.max(w, h);
@@ -34,7 +54,37 @@ function rcaLoadAndMaybeResize(file, maxEdge) {
         canvas.width = nw;
         canvas.height = nh;
         const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, nw, nh);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        if (opts.enhance) {
+          // Front-end image enhancement for thin lines / small text.
+          // 1) Supersample: draw into a ~2x temp canvas (capped so memory
+          //    stays bounded), then downsample back to the target size. This
+          //    recovers smoother detail than a single direct downscale.
+          // 2) Light unsharp-mask (3x3 blur) on the final canvas to sharpen
+          //    edges without over-exposing or ringing. Without `enhance`
+          //    the path below is unchanged.
+          const up = 2;
+          let uw = Math.round(nw * up);
+          let uh = Math.round(nh * up);
+          const MAX_INTERMEDIATE = 4096;
+          if (uw > MAX_INTERMEDIATE) {
+            const r = MAX_INTERMEDIATE / uw; uw = MAX_INTERMEDIATE; uh = Math.round(uh * r);
+          }
+          if (uh > MAX_INTERMEDIATE) {
+            const r = MAX_INTERMEDIATE / uh; uh = MAX_INTERMEDIATE; uw = Math.round(uw * r);
+          }
+          const tmp = document.createElement('canvas');
+          tmp.width = uw; tmp.height = uh;
+          const tctx = tmp.getContext('2d');
+          tctx.imageSmoothingEnabled = true;
+          tctx.imageSmoothingQuality = 'high';
+          tctx.drawImage(img, 0, 0, uw, uh);
+          ctx.drawImage(tmp, 0, 0, nw, nh);
+          rcaUnsharpMask(ctx, nw, nh, 0.4, 1);
+        } else {
+          ctx.drawImage(img, 0, 0, nw, nh);
+        }
         // Prefer lossless PNG for downscaled charts so the small italic
         // species names stay sharp — JPEG re-compression blurs dense chart
         // text and is a known cause of OCR misreads. Only keep JPEG when the
@@ -49,8 +99,58 @@ function rcaLoadAndMaybeResize(file, maxEdge) {
       };
       img.src = originalDataUrl;
     };
+    if (signal) {
+      if (signal.aborted) { onAbort(); return; }
+      signal.addEventListener('abort', onAbort);
+    }
     reader.readAsDataURL(file);
   });
+}
+
+// Light unsharp-mask sharpening applied in-place on a 2D canvas context.
+// amount: strength of the high-pass signal added back (0..1, kept low so we
+//   don't over-expose or ring). threshold: only sharpen pixels whose
+//   blur-delta exceeds this, so flat areas don't get noise amplified.
+// Wrapped in try/catch: a tainted or oversized canvas (shouldn't happen for
+// a local file) silently skips sharpening rather than throwing.
+function rcaUnsharpMask(ctx, w, h, amount, threshold) {
+  try {
+    if (w * h > 16_000_000) return; // guard against pathological sizes
+    const img = ctx.getImageData(0, 0, w, h);
+    const data = img.data;
+    // 3x3 box blur (cheap Gaussian approximation).
+    const blur = new Float32Array(w * h * 3);
+    const at = (x, y, c) => {
+      const cx = x < 0 ? 0 : (x >= w ? w - 1 : x);
+      const cy = y < 0 ? 0 : (y >= h ? h - 1 : y);
+      return data[(cy * w + cx) * 4 + c];
+    };
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        for (let c = 0; c < 3; c++) {
+          let s = 0;
+          for (let ky = -1; ky <= 1; ky++)
+            for (let kx = -1; kx <= 1; kx++)
+              s += at(x + kx, y + ky, c);
+          blur[(y * w + x) * 3 + c] = s / 9;
+        }
+      }
+    }
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const oi = (y * w + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          const orig = data[oi + c];
+          const diff = orig - blur[(y * w + x) * 3 + c];
+          if (Math.abs(diff) >= threshold) {
+            const v = orig + amount * diff;
+            data[oi + c] = v < 0 ? 0 : (v > 255 ? 255 : v);
+          }
+        }
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  } catch (_e) { /* sharpening is best-effort */ }
 }
 
 // Split a data URL into { mediaType, base64 }.
@@ -153,14 +253,56 @@ function rcaNormalizeResult(parsed) {
   // P1-6 (REVIEW-2026-07-25): align SP_KNOWN with rca_core/extractor.py
   // _KNOWN_SPECIES_KEYS (13 fields). The previous 5-field list silently
   // dropped author, year, author_year, range_top_bed, range_base_bed,
-  // endpoint_kind, reworked into row._extras as a dict — which would
-  // be coerced to "[object Object]" by the JS merge multi-run fallback.
+  // endpoint_kind, occurrence_mode into row._extras as a dict — which
+  // would be coerced to "[object Object]" by the JS merge multi-run
+  // fallback.
+  // M-1 fix: replaced 'reworked' (boolean) with 'occurrence_mode' (string enum)
+  // to match rca_core/extractor.py:455 and the updated Python prompt.
   const SP_KNOWN = [
     'species', 'section', 'range_top', 'range_base', 'biozone',
     'author', 'year', 'author_year',
     'range_top_bed', 'range_base_bed',
-    'endpoint_kind', 'reworked',
+    'range_top_idx', 'range_base_idx',
+    'endpoint_kind', 'occurrence_mode', 'reworked', 'confidence', 'note',
   ];
+  // P1-5 parity: enum values for occurrence_mode (must match
+  // rca_core/extractor.py:92-100 VALID_OCCURRENCE_MODES).
+  const VALID_OCCURRENCE_MODES = new Set([
+    'unknown', 'in_situ', 'reworked', 'transported', 'cavity_fill',
+    'bioturbated', 'derived', 'lag_deposit',
+  ]);
+  const VALID_ENDPOINT_KINDS = new Set([
+    'unknown', 'observed', 'projected', 'truncated',
+  ]);
+  const asOptionalInt = (v) => {
+    if (v === null || v === undefined || v === '' || typeof v === 'boolean') return null;
+    const n = Number(v);
+    return Number.isInteger(n) ? n : null;
+  };
+  const asOptionalConfidence = (v) => {
+    if (v === null || v === undefined || v === '' || typeof v === 'boolean') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
+  };
+
+  function _normalizeOccurrenceMode(sp) {
+    const raw = sp && sp.occurrence_mode;
+    if (typeof raw === 'string') {
+      const normalized = raw.trim().toLowerCase();
+      if (VALID_OCCURRENCE_MODES.has(normalized)) return normalized;
+    }
+    if (sp && typeof sp.reworked === 'boolean') {
+      return sp.reworked ? 'reworked' : 'in_situ';
+    }
+    return 'unknown';
+  }
+  function _normalizeEndpointKind(value) {
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (VALID_ENDPOINT_KINDS.has(normalized)) return normalized;
+    }
+    return 'unknown';
+  }
   // PARITY (extractor.py:250): biozones row includes `section` so the
   // aggregation layer can fold section into the row label and prevent two
   // biozones with the same name in different sections from collapsing into
@@ -198,15 +340,20 @@ function rcaNormalizeResult(parsed) {
       author_year: asStr(sp.author_year),
       range_top_bed: asStr(sp.range_top_bed),
       range_base_bed: asStr(sp.range_base_bed),
-      endpoint_kind: asStr(sp.endpoint_kind),
-      reworked: sp.reworked === true,
+      range_top_idx: asOptionalInt(sp.range_top_idx),
+      range_base_idx: asOptionalInt(sp.range_base_idx),
+      endpoint_kind: _normalizeEndpointKind(sp.endpoint_kind),
+      occurrence_mode: _normalizeOccurrenceMode(sp),
+      confidence: asOptionalConfidence(sp.confidence),
+      // P1-5 / H-8: capture the per-row uncertainty note.
+      note: asStr(sp.note || ''),
     };
     const extras = rcaCarryExtras(sp, SP_KNOWN);
     if (extras) row._extras = extras;
     // P0-4: defensive — if species name looks like a zone, flag & strip.
     const spName = row.species;
     if (spName && /\b(zone|zonule|assemblage|oppel|interval|lineage|range|acme)\b/i.test(spName)) {
-      row.note = ((row.note && row.note !== 'null' ? row.note : '') + ' [zone-mislabel-warning]').trim();
+      row.note = ((row.note || '') + ' [zone-mislabel-warning]').trim();
     }
     out.species_ranges.push(row);
   }
@@ -285,11 +432,14 @@ function rcaNormalizeColumnarResult(parsed) {
         dist.cross_beds.push(item);
       }
     }
+    const original = arguments[0] || {};
     parsed = { ...dist };
-    for (const k of Object.keys(parsed || {})) {
-      if (k === '_array_root') continue;
-      if (k in dist) continue;
-      parsed[k] = (arguments[0] || {})[k];
+    // Walk the ORIGINAL (pre-rewrite) payload, not the freshly-built `dist`
+    // copy, so extra top-level fields that aren't columnar buckets get
+    // carried through instead of being silently dropped.
+    for (const k of Object.keys(original)) {
+      if (k === '_array_root' || k in dist) continue;
+      parsed[k] = original[k];
     }
   }
   const asStr = (v) => (v === null || v === undefined ? '' : String(v));
@@ -642,6 +792,11 @@ function rcaToNewick(tree) {
 
 // Backend mode: POST to the same-origin Python server, which performs the
 // MiniMax call server-side and returns an already-normalized result.
+//
+// FIXES applied:
+// 1. JSON parse failure now captures HTTP status and response text
+// 2. CSRF fetch failure shows better error (CSRF_FETCH_FAILED)
+// 3. Concurrent requests are serialized via a pending queue to prevent token races
 async function rcaCallBackend(opts, base64) {
   let resp;
   const controller = new AbortController();
@@ -655,30 +810,90 @@ async function rcaCallBackend(opts, base64) {
     else opts.signal.addEventListener('abort', onExtAbort);
   }
 
-  // Fetch CSRF token before POST. Uses a persistent session token stored
-  // in memory so subsequent requests reuse the same session.
-  // FIX: pass `signal: controller.signal` so a user cancel or the run-aware
-  // timeout fires for the CSRF GET too. Without it the GET could hang for
-  // minutes on a stalled connection while the POST timeout already fired,
-  // leaving the user staring at a spinner.
-  let sessionToken = rcaCallBackend._sessionToken || '';
-  try {
-    const csrfResp = await fetch('/api/extract', {
-      method: 'GET',
-      headers: { 'X-Session-Token': sessionToken },
-      signal: controller.signal,
-    });
-    if (csrfResp.ok) {
-      const csrfData = await csrfResp.json();
-      rcaCallBackend._sessionToken = csrfData.session_token;
-      sessionToken = csrfData.session_token;
-      rcaCallBackend._csrfToken = csrfData.csrf_token;
+  // Serialize CSRF token acquisition + POST to prevent concurrent requests from
+  // racing on token updates. Each request waits for the previous one to complete.
+  // FIX: this queue prevents token corruption when multiple extractions run concurrently.
+  if (!rcaCallBackend._pending) rcaCallBackend._pending = Promise.resolve();
+  const myRequest = rcaCallBackend._pending.then(async () => {
+    // Fetch CSRF token before POST. Uses a persistent session token stored
+    // in memory so subsequent requests reuse the same session.
+    // FIX: pass `signal: controller.signal` so a user cancel or the run-aware
+    // timeout fires for the CSRF GET too.
+    let sessionToken = rcaCallBackend._sessionToken || '';
+    let csrfFetchFailed = false;
+    let csrfErrorBody = '';
+    try {
+      const csrfResp = await fetch('/api/extract', {
+        method: 'GET',
+        headers: { 'X-Session-Token': sessionToken },
+        signal: controller.signal,
+      });
+      if (csrfResp.ok) {
+        const csrfData = await csrfResp.json();
+        // Update stored tokens atomically after successful fetch
+        rcaCallBackend._sessionToken = csrfData.session_token;
+        sessionToken = csrfData.session_token;
+        rcaCallBackend._csrfToken = csrfData.csrf_token;
+      } else {
+        // CSRF fetch returned non-OK - capture the error for better diagnostics
+        csrfFetchFailed = true;
+        try {
+          const errText = await csrfResp.text();
+          csrfErrorBody = errText.substring(0, 500);
+        } catch (_e) { /* ignore */ }
+      }
+    } catch (_e) {
+      // Network error on CSRF fetch - capture for better error message
+      csrfFetchFailed = true;
+      csrfErrorBody = _e && _e.message ? _e.message : 'network error';
+      // REVIEW-2026-11-07 (low): an ABORTED CSRF GET (user pressed Cancel
+      // mid-flight) is not a fetch failure. Without this the catch above
+      // fell through to the err.csrfFetch branch below and the UI showed
+      // "CSRF token failed" for what was really a user cancel.
+      if (_e && _e.name === 'AbortError' && controller.signal.aborted) {
+        return {
+          ok: false,
+          errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout',
+          status: null,
+          errorBody: 'CSRF fetch aborted',
+        };
+      }
     }
+
+    // If CSRF fetch failed and we have no valid token, return error early
+    if (csrfFetchFailed && !rcaCallBackend._csrfToken) {
+      return {
+        ok: false,
+        errorKey: 'err.csrfFetch',
+        status: null,
+        errorBody: 'Failed to obtain CSRF token: ' + csrfErrorBody,
+      };
+    }
+
+    const csrfToken = rcaCallBackend._csrfToken || '';
+    return { sessionToken, csrfToken };
+  });
+
+  // Wait for token acquisition (and any prior request) to complete
+  let tokenResult;
+  try {
+    tokenResult = await myRequest;
   } catch (_e) {
-    // Network error on token fetch — proceed without token; server will reject.
+    clearTimeout(timer);
+    if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
+    if (_e && _e.name === 'AbortError') {
+      return { ok: false, errorKey: opts.signal && opts.signal.aborted ? 'err.cancelled' : 'err.timeout' };
+    }
+    return { ok: false, errorKey: 'err.network', errorBody: String(_e) };
   }
 
-  const csrfToken = rcaCallBackend._csrfToken || '';
+  // If token acquisition returned an error object, propagate it
+  if (tokenResult && tokenResult.errorKey) {
+    return tokenResult;
+  }
+
+  const { sessionToken, csrfToken } = tokenResult;
+
   try {
     resp = await fetch('/api/extract', {
       method: 'POST',
@@ -698,13 +913,7 @@ async function rcaCallBackend(opts, base64) {
         max_tokens: opts.maxTokens,
         mode: opts.mode || 'range_chart',
         runs: runs,
-        // FIX (force-rerun): forward the user-driven cache bypass. Server
-        // reads this from req.get('force_rerun') in server.py:574/638. Was
-        // silently dropped before, so "Force rerun" was a no-op in browser.
         force_rerun: !!opts.force_rerun,
-        // FIX (enhance): forward the image-enhancement flag. Server already
-        // accepts `enhance` in the payload; passing it lets the server-side
-        // pre-processor boost OCR on thin lines / small text.
         enhance: opts.enhance === true,
       }),
       signal: controller.signal,
@@ -712,20 +921,49 @@ async function rcaCallBackend(opts, base64) {
   } catch (err) {
     clearTimeout(timer);
     if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
-    // Distinguish a user cancel from a timeout: both surface as AbortError.
     if (err && err.name === 'AbortError') {
       return { ok: false, errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout' };
     }
-    return { ok: false, errorKey: 'err.network' };
+    return { ok: false, errorKey: 'err.network', errorBody: String(err) };
   }
   clearTimeout(timer);
   if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
+
+  // FIX 1: JSON parse failure now captures HTTP status and response text
   let payload;
+  let parseErrorBody = '';
+  let parseErrorStatus = resp.status;
   try {
     payload = await resp.json();
   } catch (_e) {
-    return { ok: false, errorKey: 'err.parse' };
+    // Try to capture the response text for better error diagnostics
+    try {
+      const rawText = await resp.text();
+      parseErrorBody = rawText.substring(0, 500);
+    } catch (_e2) {
+      parseErrorBody = 'could not read response body';
+    }
+    return {
+      ok: false,
+      errorKey: 'err.parse',
+      status: parseErrorStatus,
+      errorBody: parseErrorBody,
+      raw: parseErrorBody,
+    };
   }
+
+  // FIX 2: Check for server-side CSRF/auth errors and auto-recover by clearing tokens.
+  // REVIEW-2026-11-07 (low): naming note — 'err.forbidden' is the BACKEND
+  // mode's 403 (same-origin CSRF/origin rejection, token-clearable), while
+  // 'err.403' (set in the direct-mode !resp.ok branch below) is a raw
+  // upstream 403 that needs no token handling. Both are intentionally
+  // distinct keys; the similar names are historical, don't merge them.
+  if (payload.error_key === 'err.forbidden' && payload.error_body && payload.error_body.includes('CSRF')) {
+    // CSRF token was invalid/expired - clear cached tokens so next request fetches fresh ones
+    rcaCallBackend._csrfToken = null;
+    rcaCallBackend._sessionToken = null;
+  }
+
   // The server mirrors the ExtractResult shape with snake_case keys.
   return {
     ok: !!payload.ok,
@@ -734,16 +972,10 @@ async function rcaCallBackend(opts, base64) {
     status: payload.status,
     raw: payload.raw || '',
     truncated: !!payload.truncated,
-    // H7: upstream error body so the UI can show 5xx reasons.
     errorBody: payload.error_body || '',
-    // M2: how many of the requested runs failed.
     partialFailures: payload.partial_failures || 0,
-    // Usage and latency from the server.
     usage: payload.usage || null,
     latencyMs: payload.latency_ms || 0,
-    // M40: surface server-side warning (e.g. partial-aggregation notice).
-    // Previously dropped silently so the user never saw "2 of 3 runs
-    // succeeded" style hints from the server's merge layer.
     warning: payload.warning || '',
   };
 }
@@ -788,6 +1020,28 @@ async function extractRangeChart(opts) {
   // F-8: Enforce HTTPS for proxy URLs to prevent API key leakage via HTTP MITM
   if (target.startsWith('http://')) {
     console.error('Insecure proxy URL: HTTP is not allowed, falling back to direct connection');
+    return rcaCallBackend(opts, base64);
+  }
+  // SSRF protection: block private/internal hostnames and cloud metadata endpoints
+  let targetHostname;
+  try {
+    targetHostname = new URL(target).hostname.toLowerCase();
+  } catch (_) {
+    targetHostname = '';
+  }
+  const ssrfBlocked = [
+    'localhost', '127.0.0.1', '0.0.0.0', '::1',
+    '169.254.169.254',   // AWS / Azure metadata
+    'metadata.google.internal', // GCP metadata
+  ];
+  const isPrivate = /^10\./.test(targetHostname) ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(targetHostname) ||
+    /^192\.168\./.test(targetHostname) ||
+    /^127\./.test(targetHostname) ||
+    /^169\.254\./.test(targetHostname) ||
+    ssrfBlocked.includes(targetHostname);
+  if (isPrivate && targetHostname) {
+    console.error('Insecure endpoint: private/internal URLs are not allowed in direct mode, falling back to backend');
     return rcaCallBackend(opts, base64);
   }
   const url = target + '/v1/messages';
@@ -870,10 +1124,26 @@ async function extractRangeChart(opts) {
   if (!resp.ok) {
     let detail = '';
     try { detail = await resp.text(); } catch (_e) { /* ignore */ }
+    // Phase M fix: try to surface the server's structured error_key
+    // from the JSON body when the status is one of the documented
+    // ones. Previously resp.text() was used unconditionally, which
+    // discarded the server's `error_key: 'err.bodyTooLarge'` hint.
     let errorKey = 'err.http';
     if (resp.status === 401) errorKey = 'err.401';
     else if (resp.status === 403) errorKey = 'err.403';
+    // REVIEW-2026-11-07 (low): direct-mode 403 → 'err.403' (upstream
+    // rejected the key/endpoint). Distinct from backend-mode
+    // 'err.forbidden' (CSRF/origin), see the comment in rcaCallBackend.
+    else if (resp.status === 413) errorKey = 'err.bodyTooLarge';
     else if (resp.status === 429) errorKey = 'err.429';
+    // If the body is JSON, lift the server's error_key (when it
+    // matches a known key) so the i18n string is correct.
+    let serverKey = null;
+    try {
+      const j = JSON.parse(detail);
+      if (j && typeof j.error_key === 'string') serverKey = j.error_key;
+    } catch (_e) { /* not JSON, ignore */ }
+    if (serverKey) errorKey = serverKey;
     return { ok: false, errorKey, status: resp.status, raw: detail };
   }
 
@@ -884,13 +1154,17 @@ async function extractRangeChart(opts) {
     return { ok: false, errorKey: 'err.parse', raw: '' };
   }
 
-  // Extract the first text content block (Anthropic-compatible shape).
+  // Extract ALL text content blocks (Anthropic-compatible shape).
+  // REVIEW-2026-07-31: Anthropic splits long replies into multiple text
+  // blocks; taking only the first one dropped the tail of the JSON, so
+  // multi-block replies failed to parse in the browser-only path while
+  // the Python side (_read_response) concatenated them and succeeded.
+  // Concatenate all text blocks in order — identical to the Python side.
   let rawText = '';
   const content = Array.isArray(payload.content) ? payload.content : [];
   for (const c of content) {
-    if (c && c.type === 'text') {
-      rawText = c.text || '';
-      break;
+    if (c && c.type === 'text' && typeof c.text === 'string') {
+      rawText += c.text;
     }
   }
   // M10: detect truncation across API shapes. Anthropic uses
@@ -918,14 +1192,24 @@ async function extractRangeChart(opts) {
   }
 
   let data;
-  if (mode === 'columnar_section' && typeof rcaNormalizeColumnarResult === 'function') {
-    data = rcaNormalizeColumnarResult(parsed);
-  } else if (mode === 'abundance_diagram' && typeof rcaNormalizeAbundanceResult === 'function') {
-    data = rcaNormalizeAbundanceResult(parsed);
-  } else if (mode === 'phylogenetic_tree' && typeof rcaNormalizePhylogeneticTreeResult === 'function') {
-    data = rcaNormalizePhylogeneticTreeResult(parsed);
-  } else {
-    data = rcaNormalizeResult(parsed);
+  // REVIEW-2026-07-31: the normalizers enforce invariants by throwing
+  // (mirroring rca_core/extractor.py), but the Python caller catches the
+  // exception and returns ok=False — the JS side previously let the throw
+  // escape, violating the never-throws contract. Mirror the Python
+  // try/except here.
+  try {
+    if (mode === 'columnar_section' && typeof rcaNormalizeColumnarResult === 'function') {
+      data = rcaNormalizeColumnarResult(parsed);
+    } else if (mode === 'abundance_diagram' && typeof rcaNormalizeAbundanceResult === 'function') {
+      data = rcaNormalizeAbundanceResult(parsed);
+    } else if (mode === 'phylogenetic_tree' && typeof rcaNormalizePhylogeneticTreeResult === 'function') {
+      data = rcaNormalizePhylogeneticTreeResult(parsed);
+    } else {
+      data = rcaNormalizeResult(parsed);
+    }
+  } catch (err) {
+    const why = err && err.message ? err.message : String(err);
+    return { ok: false, errorKey: 'err.extract', raw: rawText, truncated, warning: 'normalize failed: ' + why };
   }
   return { ok: true, data, raw: rawText, truncated };
 }

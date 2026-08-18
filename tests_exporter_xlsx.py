@@ -41,7 +41,7 @@ def test_to_xlsx_bytes():
             {"species": "Sp. x", "section": "Sec A", "range_base": "Bed 1",
              "range_top": "Bed 3", "biozone": "Z1"},
             {"species": "Sp. y", "section": "Sec A", "range_base": "Bed 2",
-             "range_top": "Bed 4", "biozone": ""},
+             "range_top": "Bed 4", "biozone": "", "age": "Late"},
         ],
         "biozones": [{"name": "Z1", "age": "Late", "thickness_m": "3m"}],
         "other_fossils": ["Ammonoid: X"],
@@ -61,14 +61,21 @@ def test_to_xlsx_bytes():
 
 
 def test_to_xlsx_to_file(tmp_path=None):
-    from rca_core.exporter import to_xlsx
+    try:
+        from openpyxl import Workbook  # noqa: F401  (openpyxl is required by to_xlsx)
+        from rca_core.exporter import to_xlsx
+    except ImportError as exc:
+        check("xlsx-to-file-import", False)
+        print("SKIP: openpyxl not available:", exc)
+        return
+    check("xlsx-to-file-import", True)
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         data = {
             "sections": [{"name": "S1", "age_range": "P", "formations": [],
                           "formation_thickness_m": "", "coordinates": ""}],
-            "species_ranges": [{"species": "S. x", "section": "S1", "range_base": "",
-                                 "range_top": "", "biozone": ""}],
+            "species_ranges": [{"species": "S. x", "section": "S1", "range_base": "Bed 1",
+                                 "range_top": "Bed 2", "biozone": "Z1"}],
             "biozones": [],
             "other_fossils": [],
         }
@@ -128,12 +135,18 @@ def test_missing_dependency_error():
         builtins.__import__ = orig
 
 
-test_to_xlsx_bytes()
-test_to_xlsx_to_file()
-test_to_xlsx_sheet_name_sanitization()
-test_body_too_large_key_present()
-test_missing_dependency_error()
 if __name__ == "__main__":
+    # These calls run only when the file is executed directly. They must
+    # NOT run at import time: pytest collects this module and would execute
+    # them during collection, and because the exporter's invariant validator
+    # raises ValueError on bad data, collection would crash before any test
+    # is registered. Keeping them behind ``if __name__`` lets pytest import
+    # cleanly and run the ``test_*`` functions below.
+    test_to_xlsx_bytes()
+    test_to_xlsx_to_file()
+    test_to_xlsx_sheet_name_sanitization()
+    test_body_too_large_key_present()
+    test_missing_dependency_error()
     print("--- %d passed, %d failed ---" % (_pass, _fail))
     sys.exit(1 if _fail else 0)
 

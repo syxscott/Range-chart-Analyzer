@@ -20,13 +20,22 @@ Migration / backward compatibility:
     falls back to the legacy XOR keystream (marked deprecated).
 
 Security limits:
-  * The derived key depends on a machine fingerprint + per-install salt.
-    An attacker with read access to BOTH ``providers.json`` AND
-    ``~/.range_chart_analyzer/secrets_salt`` can still brute-force the
-    key offline. On a single-user workstation this is a meaningful step
-    up from plaintext.
-  * Copying ``providers.json`` to another machine or deleting the salt
-    makes decryption impossible — handled by the store's
+  * **Preferred key source: OS keyring.** When the ``keyring`` package is
+    installed, a random Fernet key is stored in the OS credential store
+    (service ``range_chart_analyzer``) and never written to disk. A
+    same-machine attacker who can read ``providers.json`` cannot recompute
+    it, defeating the local-recompute attack.
+  * **Fallback: user passphrase.** ``encrypt``/``decrypt`` accept an optional
+    ``passphrase`` (PBKDF2-derived) so a user-supplied secret can gate access
+    without the OS keyring.
+  * **Last resort: fingerprint-derived Fernet key.** Only when neither keyring
+    nor a passphrase is available do we derive the key from a machine
+    fingerprint + readable salt. This is OBFUSCATION ONLY — any local user
+    who can read ``providers.json`` can recompute the key. A ``RuntimeWarning``
+    is emitted once in that case.
+  * ``providers.json`` is chmod 0600 best-effort after each write.
+  * Copying ``providers.json`` to another machine (or deleting the OS keyring /
+    salt) makes decryption impossible — handled by the store's
     ``decrypt_or_fallback`` policy: undecryptable values trigger a
     re-prompt in the GUI.
 """
@@ -37,12 +46,19 @@ import hashlib
 import json
 import os
 import secrets
+import warnings
 
 try:
     from cryptography.fernet import Fernet
     _HAS_FERNET = True
 except ImportError:
     _HAS_FERNET = False
+
+try:
+    import keyring
+    _HAS_KEYRING = True
+except ImportError:
+    _HAS_KEYRING = False
 
 # Tag prefixes — distinguish legacy from current envelope formats.
 _OBF_TAG = "obf:v1:"   # legacy XOR keystream (deprecated)
@@ -118,12 +134,124 @@ def _derive_key() -> bytes:
 
 
 def _derive_fernet_key() -> bytes:
-    """Derive a Fernet-compatible 32-byte url-safe-b64 key from PBKDF2 (600k iterations)."""
+    """Legacy fingerprint-derived Fernet key (PBKDF2, 600k iters).
+
+    Kept as a fallback for decrypting envelopes written before OS keyring
+    support existed. NOTE: a same-machine attacker who can read
+    ``providers.json`` can recompute this key from the locally-readable
+    machine fingerprint + salt — it is obfuscation, not real protection.
+    Prefer :func:`_active_fernet_key` (keyring) for new encryptions.
+    """
     raw = hashlib.pbkdf2_hmac(
         "sha256", _machine_fingerprint(), _get_or_create_salt(),
         _PBKDF2_ITERS_FERNET, dklen=_KEY_LEN
     )
     return base64.urlsafe_b64encode(raw)
+
+
+# --- OS keyring support (M4) ---------------------------------------------
+# Prefer storing the Fernet key in the OS credential store (keyring) so a
+# local attacker cannot recompute it from readable files. Falls back to a
+# user-supplied passphrase, then to the fingerprint-derived key above.
+_KEYRING_SERVICE = "range_chart_analyzer"
+_KEYRING_USERNAME = "fernet-key"
+_warned_obfuscation = False
+
+
+def encryption_status() -> str:
+    """Report which key source would be used for NEW encryption.
+
+    REVIEW-2026-07-31: returns ``"passphrase"`` / ``"keyring"`` /
+    ``"fingerprint"`` / ``"plaintext"`` so the GUIs can surface the
+    at-rest protection level to the user (the RuntimeWarning from
+    ``_warn_obfuscation_only`` is invisible in a windowed app).
+    """
+    if not _HAS_FERNET:
+        return "plaintext"
+    if _HAS_KEYRING:
+        return "keyring"
+    return "fingerprint"
+
+
+def _warn_obfuscation_only() -> None:
+    """Emit a one-time warning that the current key source is obfuscation-only."""
+    global _warned_obfuscation
+    if _warned_obfuscation:
+        return
+    _warned_obfuscation = True
+    warnings.warn(
+        "secrets_store: OS keyring unavailable; the encryption key is derived "
+        "from a locally-readable machine fingerprint (hostname + home + MAC) plus "
+        "a readable salt. This is OBFUSCATION ONLY - any local user who can read "
+        "providers.json can recompute the key and decrypt stored API keys. "
+        "Install the 'keyring' package for real at-rest protection.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
+def _fernet_key_from_passphrase(passphrase: str) -> bytes:
+    """Derive a Fernet key from a user-supplied passphrase (PBKDF2)."""
+    salt = _get_or_create_salt()
+    raw = hashlib.pbkdf2_hmac(
+        "sha256", passphrase.encode("utf-8"), salt,
+        _PBKDF2_ITERS_FERNET, dklen=_KEY_LEN
+    )
+    return base64.urlsafe_b64encode(raw)
+
+
+def _active_fernet_key(passphrase: str | None = None) -> bytes:
+    """Resolve the Fernet key for a NEW encryption, strongest source first.
+
+    1. If ``passphrase`` is given, derive from it (no keyring needed).
+    2. Else if the OS keyring is available, get-or-create a random key there.
+    3. Else fall back to the fingerprint-derived key and warn that it is
+       obfuscation only.
+    """
+    if passphrase:
+        return _fernet_key_from_passphrase(passphrase)
+    if _HAS_KEYRING:
+        try:
+            k = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
+            if k is None:
+                k = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii")
+                keyring.set_password(_KEYRING_SERVICE, _KEYRING_USERNAME, k)
+            return k.encode("ascii")
+        except Exception:
+            # Keyring backend missing/broken (no D-Bus, no credential store...).
+            pass
+    _warn_obfuscation_only()
+    return _derive_fernet_key()
+
+
+def _fernet_decrypt_candidates(passphrase: str | None = None) -> list[bytes]:
+    """Keys to try when decrypting, so old fingerprint-derived envelopes
+    remain readable after keyring adoption."""
+    if passphrase:
+        return [_fernet_key_from_passphrase(passphrase)]
+    keys: list[bytes] = [_active_fernet_key()]
+    # Legacy fingerprint-derived key: decrypt envelopes written before keyring.
+    try:
+        keys.append(_derive_fernet_key())
+    except Exception:
+        pass
+    return keys
+
+
+def _providers_path() -> str:
+    base = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer")
+    return os.path.join(base, "providers.json")
+
+
+def _protect_providers_file(path: str | None = None) -> None:
+    """Best-effort: restrict providers.json to 0600 so other local accounts
+    cannot read stored API keys. Call after writing the file."""
+    p = path or _providers_path()
+    try:
+        if os.path.exists(p):
+            os.chmod(p, 0o600)
+    except (OSError, AttributeError):
+        pass
 
 
 def _keystream(key: bytes, n: int) -> bytes:
@@ -163,28 +291,46 @@ def _legacy_decrypt(envelope: str) -> str:
         raise ValueError("secrets_store: corrupt envelope (utf-8)")
 
 
-def encrypt(plaintext: str) -> str:
-    """Encrypt a secret string. Returns an authenticated Fernet envelope
-    (fer:v1:) or falls back to legacy XOR obfuscation (obf:v1:) if
-    cryptography is not installed. Empty input is returned unchanged."""
+def encrypt(plaintext: str, passphrase: str | None = None) -> str:
+    """Encrypt a secret string.
+
+    Key source (strongest available): user passphrase -> OS keyring ->
+    fingerprint-derived Fernet key (obfuscation only; warns). Returns an
+    authenticated Fernet envelope (fer:v1:), or falls back to legacy XOR
+    obfuscation (obf:v1:) if cryptography is not installed. Empty input is
+    returned unchanged. Best-effort chmod 0600 is applied to providers.json.
+    """
     if not plaintext:
         return plaintext
     if _HAS_FERNET:
-        f = Fernet(_derive_fernet_key())
+        f = Fernet(_active_fernet_key(passphrase))
+        _protect_providers_file()
         return _FER_TAG + f.encrypt(plaintext.encode()).decode()
+    _warn_obfuscation_only()
     return _legacy_encrypt(plaintext)
 
 
-def decrypt(envelope: str) -> str:
+def decrypt(envelope: str, passphrase: str | None = None) -> str:
     """Decrypt a secret string. Handles fer:v1: (Fernet), obf:v1: (legacy
-    XOR), and legacy plaintext (no tag). Raises ValueError on corruption."""
+    XOR), and legacy plaintext (no tag). Raises ValueError on corruption.
+
+    For fer:v1: envelopes, every candidate key is tried (active key then the
+    legacy fingerprint key) so envelopes written before keyring adoption
+    remain readable.
+    """
     if not envelope:
         return envelope
     if envelope.startswith(_FER_TAG):
         if not _HAS_FERNET:
             raise ValueError("secrets_store: Fernet unavailable (cryptography not installed)")
-        f = Fernet(_derive_fernet_key())
-        return f.decrypt(envelope[len(_FER_TAG):].encode()).decode()
+        payload = envelope[len(_FER_TAG):].encode()
+        last_err: Exception | None = None
+        for key in _fernet_decrypt_candidates(passphrase):
+            try:
+                return Fernet(key).decrypt(payload).decode()
+            except Exception as exc:  # wrong key / tampered token
+                last_err = exc
+        raise ValueError("secrets_store: could not decrypt fer:v1 envelope") from last_err
     if envelope.startswith(_OBF_TAG):
         return _legacy_decrypt(envelope)
     # Legacy plaintext value — surface as-is rather than corrupting it.

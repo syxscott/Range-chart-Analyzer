@@ -240,8 +240,11 @@ class HistoryPage(ScrollArea):
         self.table.setRowCount(len(self._records))
         for ri, rec in enumerate(self._records):
             ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(rec.timestamp or 0))
+            # REVIEW-2026-11-07 (low): phylogenetic_tree was missing, so a
+            # phylo record's mode cell rendered the raw code.
             mode_label = {"range_chart": "Range", "columnar_section": "Columnar",
-                          "abundance_diagram": "Abundance"}.get(rec.mode, rec.mode or "-")
+                          "abundance_diagram": "Abundance",
+                          "phylogenetic_tree": "Phylo"}.get(rec.mode, rec.mode or "-")
             cells = [
                 str(rec.id),
                 ts,
@@ -421,9 +424,13 @@ class HistoryPage(ScrollArea):
                 with open(json_path, "w", encoding="utf-8") as f:
                     f.write(result_to_json(rec.result))
                 path = json_path  # so InfoBar reports the correct name
+                # M4 fix (REVIEW-2026-11-07): localized message that
+                # explicitly says the user's .csv pick was saved as .json
+                # (the old text was hard-coded English and didn't mention
+                # the extension swap).
                 InfoBar.info(
-                    "", "Full export saved as JSON (all tables)", parent=self._win,
-                    position=InfoBarPosition.TOP, duration=3000,
+                    "", self._t("history.exportCsvAsJson"), parent=self._win,
+                    position=InfoBarPosition.TOP, duration=4000,
                 )
             InfoBar.success(
                 "", self._t("status.saved"), parent=self._win,

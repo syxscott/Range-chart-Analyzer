@@ -32,7 +32,13 @@ import re
 from typing import Any, Iterable
 
 try:
-    from .standards.ics import ics_age_compare, ics_parse_age_range, ics_era, ICS_2024 as _ICS_2024
+    from .standards.ics import (
+        ics_age_compare,
+        ics_parse_age_range,
+        ics_resolve_age_bound,
+        ics_era,
+        ICS_2024 as _ICS_2024,
+    )
     _HAS_ICS = True
 except ImportError:
     _HAS_ICS = False
@@ -149,6 +155,53 @@ def _parse_bed_n(value: Any) -> int | None:
         return None
     m = _BED_RE.search(s)
     return int(m.group()) if m else None
+
+
+# REVIEW-2026-07-31: an age unit is only recognised when a NUMBER is
+# directly followed by the unit ("260 Ma", "255.5Ma", "5 m.y."). The
+# previous substring search `re.search(r"ma|myr", text, re.I)` matched ANY
+# word containing "ma" (Madison, marine, Maokou, samples...) and then took
+# the first number in the text as the age — so a perfectly valid bed pair
+# like range_base="Madison 3" / range_top="Madison 6" was misread as an
+# inverted age range (3 Ma < 6 Ma) and flagged as an FAD<LAD violation.
+_AGE_UNIT_PATTERN = re.compile(
+    r"(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
+    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_age(value: Any) -> bool:
+    """True when the value carries an explicit numeric age unit.
+
+    Used to route a range bound to the bed-index branch vs the Ma/stage
+    branch of the FAD<LAD check.
+    """
+    return bool(_AGE_UNIT_PATTERN.search(str(value or "")))
+
+
+def _resolve_age_ma(value: Any, prefer: str = "older") -> Optional[float]:
+    """Resolve a free-text age/stage label (or numeric Ma) to a numeric Ma.
+
+    Used by the FAD<LAD check to validate ranges expressed as ages or stage
+    names rather than bed numbers. Delegates to
+    :func:`rca_core.standards.ics.ics_resolve_age_bound`, which handles:
+      1. explicit numeric Ma literals — range-aware, ``prefer`` selects the
+         older ("259.51-254.14 Ma" -> 259.51) or younger end;
+      2. Chinese stage aliases, series/epoch labels ("Late Permian"), and
+         period names;
+      3. ICS stage names (returns the stage midpoint).
+
+    Returns ``None`` when the ICS table is unavailable or the value can't be
+    resolved, so callers can skip the age/stage branch gracefully.
+    """
+    if value is None or not _HAS_ICS or ics_resolve_age_bound is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    _stage, ma = ics_resolve_age_bound(text, prefer=prefer)
+    return ma
 
 
 def _section_names(data: dict[str, Any]) -> set[str]:
@@ -292,15 +345,43 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
     for row in species_rows:
         if not isinstance(row, dict):
             continue
-        top = _parse_bed_n(row.get("range_top"))
-        base = _parse_bed_n(row.get("range_base"))
-        if top is None or base is None:
-            continue  # can't validate — skip, don't penalise
-        fad_lad_total += 1
-        if top < base:
-            fad_lad_violations += 1
-            issues.append({"severity": "warning",
-                           "msg_key": "quality.range_top_lt_base"})
+        top_raw = row.get("range_top")
+        base_raw = row.get("range_base")
+        top = _parse_bed_n(top_raw)
+        base = _parse_bed_n(base_raw)
+        # A value carrying an age unit ("Ma"/"myr") is an age, not a bed
+        # index; send it to the age/stage branch below instead of letting
+        # _parse_bed_n misread "253 Ma" as bed 253. REVIEW-2026-07-31: the
+        # unit must be a number+unit pair — substrings like "Madison" no
+        # longer route bed labels into the age branch.
+        looks_like_age = _looks_like_age(top_raw) or _looks_like_age(base_raw)
+        if top is not None and base is not None and not looks_like_age:
+            # Bed-number branch (existing): beds are 1-indexed from the
+            # bottom, so a younger bed has the LARGER index; FAD (base)
+            # must have the smaller index than LAD (top).
+            fad_lad_total += 1
+            if top < base:
+                fad_lad_violations += 1
+                issues.append({"severity": "warning",
+                               "msg_key": "quality.range_top_lt_base"})
+        elif _HAS_ICS:
+            # M-1 fix (REVIEW-2026-07-25): when the model emits ages
+            # ("260–255 Ma") or stage names instead of bed numbers, the
+            # bed-number parse returns None and the original check silently
+            # skipped — making it ineffective for most real range-chart
+            # output. Resolve both bounds via ICS and compare numerically.
+            # Convention: range_base = FAD = OLDER = LARGER Ma;
+            # range_top = LAD = YOUNGER = SMALLER Ma. A valid range has
+            # base_ma >= top_ma; an inversion (base_ma < top_ma) is a
+            # violation.
+            top_ma = _resolve_age_ma(top_raw, prefer="younger")
+            base_ma = _resolve_age_ma(base_raw, prefer="older")
+            if top_ma is not None and base_ma is not None:
+                fad_lad_total += 1
+                if base_ma < top_ma:
+                    fad_lad_violations += 1
+                    issues.append({"severity": "warning",
+                                   "msg_key": "quality.range_top_lt_base"})
     if fad_lad_total > 0:
         checks += 1
         if fad_lad_violations == 0:
@@ -354,7 +435,7 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
     # A full ICS timescale lookup requires an external table; this catches the
     # most egregious impossible-orderings without one.
     _PALEOZOIC_RE = re.compile(
-        r"\b(cambrian|ordovician|silurian|devonian|carboniferous|pennsylvanian|mississippian|permutian|permian)\b",
+        r"\b(cambrian|ordovician|silurian|devonian|carboniferous|pennsylvanian|mississippian|permian)\b",
         re.IGNORECASE,
     )
     _MESOZOIC_RE = re.compile(
@@ -387,13 +468,18 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
             section_ages[sec_name] = eras
     cross_era_violations = sum(
         1 for eras in section_ages.values()
-        if len(eras) > 1  # more than one era in one section = impossible
+        if len(eras) > 1
     )
     if cross_era_violations > 0:
+        # M-1 fix (REVIEW-2026-07-25): boundary sections (e.g. K-Pg or
+        # P-Tr) legitimately span more than one era, so a section
+        # containing both Paleozoic and Mesozoic keywords is NOT a
+        # hard error. Downgrade to a warning and only penalise
+        # proportionally so single-boundary extraction isn't graded F.
         checks += 1
-        passed += 0  # hard violation
+        passed += max(0.0, 1.0 - 0.5 * cross_era_violations)
         issues.append({
-            "severity": "error",
+            "severity": "warning",
             "msg_key": "quality.ages_inconsistent",
             "params": {"count": str(cross_era_violations)},
         })
@@ -498,6 +584,11 @@ def _score_consistency(data: dict[str, Any]) -> tuple[float, list[dict[str, str]
     species = data.get("species_ranges") or []
     if isinstance(species, list) and species:
         # (2) FAD <= LAD per row.
+        # REVIEW-2026-07-31: age/stage bounds ("300 Ma", "Wuchiapingian")
+        # are validated numerically in _score_accuracy; the bed-index
+        # comparison here must skip them, or a valid age range like
+        # base="300 Ma" / top="250 Ma" was flagged as inverted
+        # (300 < 250 after _parse_bed_n read the leading integers).
         fad_violations = 0
         for sp in species:
             if not isinstance(sp, dict):
@@ -505,6 +596,8 @@ def _score_consistency(data: dict[str, Any]) -> tuple[float, list[dict[str, str]
             top = sp.get("range_top")
             base = sp.get("range_base")
             if top is None or base is None:
+                continue
+            if _looks_like_age(top) or _looks_like_age(base):
                 continue
             top_n = _parse_bed_n(top)
             base_n = _parse_bed_n(base)
@@ -603,21 +696,28 @@ def _score_cross_era_accuracy(sections: list) -> list[dict[str, Any]]:
 
 
 def _score_biozone_order(species: list, sections: list) -> tuple[int, list[dict[str, Any]]]:
-    """P1-12: Steno's Law biozone order check.
+    """Steno's Law biozone order check (P1-12 / M-1).
 
     For each section, if species A is in biozone X and species B is in
-    biozone Y where X is younger than Y, but A's range is BELOW B's,
-    this is a Steno's Law violation (younger biozone should be stratigraphically
-    above older one).
+    biozone Y where X is YOUNGER than Y in real stratigraphic time,
+    but A's range is BELOW B's in the section (i.e. older-looking FAD),
+    this is a Steno's Law violation.
 
-    Uses lexicographic comparison of age strings as a proxy for relative age
-    (no ICS numeric parsing required). Returns (violation_count, issues).
+    M-1 fix (REVIEW-2026-07-25): the previous version used
+    *lexicographic* string comparison (`younger_bz > older_bz`) as a
+    proxy for stratigraphic order. Lexicographic order has NO
+    relationship to time — "Zone 10" sorts before "Zone 9" in
+    strings, and "N. optima Zone" vs "T. pseudotruncarum Zone" is
+    arbitrary. We now use ``ics_age_compare`` (real stratigraphic
+    ordering by ICS base_ma). When neither biozone label matches a
+    known stage in the bundled ICS table, the pair is skipped
+    rather than penalised (ancient or rarely-referenced biozone
+    names should not generate false positives).
     """
     if not species or not sections:
         return 0, []
 
-    # Build section name → age string mapping from sections data.
-    # sections entries have age_range like "Late Permian" or "Late Permian - Early Triassic"
+    # Build section name → age string mapping.
     section_ages: dict[str, str] = {}
     for sec in sections:
         if isinstance(sec, dict):
@@ -629,13 +729,9 @@ def _score_biozone_order(species: list, sections: list) -> tuple[int, list[dict[
     if not section_ages:
         return 0, []
 
-    # For each species, get its section and biozone
-    # Compare species within the same section by lexicographic biozone age.
-    # Violation: species in younger biozone appears BELOW (older) species in older biozone.
     violations = 0
     issues = []
 
-    # Group species by section
     by_section: dict[str, list] = {}
     for sp in species:
         if not isinstance(sp, dict):
@@ -647,11 +743,23 @@ def _score_biozone_order(species: list, sections: list) -> tuple[int, list[dict[
     for sec_name, sp_list in by_section.items():
         if len(sp_list) < 2:
             continue
-        # Sort by range_top (bed index) to get stratigraphic order (top=younger)
-        sorted_sp = sorted(
-            sp_list,
-            key=lambda s: _parse_bed_n(s.get("range_top")),
-        )
+        # Only records with an actual bed position can participate in a
+        # Steno-order comparison. Sorting raw parse results mixed ``int`` and
+        # ``None`` and crashed the entire quality scorer on labels such as
+        # "unclear". Excluding unpositioned rows is both stable and
+        # scientifically preferable to inventing their relative position.
+        positioned_sp = [
+            (_parse_bed_n(sp.get("range_top")), sp)
+            for sp in sp_list
+        ]
+        sorted_sp = [
+            sp for _, sp in sorted(
+                (item for item in positioned_sp if item[0] is not None),
+                key=lambda item: item[0],
+            )
+        ]
+        if len(sorted_sp) < 2:
+            continue
         for i in range(len(sorted_sp) - 1):
             younger = sorted_sp[i]
             older = sorted_sp[i + 1]
@@ -659,10 +767,26 @@ def _score_biozone_order(species: list, sections: list) -> tuple[int, list[dict[
             older_bz = str(older.get("biozone") or "").strip()
             if not younger_bz or not older_bz:
                 continue
-            # Lexicographic comparison of age strings as a proxy.
-            # If younger biozone name > older biozone name lexicographically AND
-            # younger is BELOW older in section → violation.
-            if younger_bz > older_bz:
+            # Resolve each biozone label to an ICS stage (if known).
+            y_stage = _resolve_biozone_stage(younger_bz)
+            o_stage = _resolve_biozone_stage(older_bz)
+            if y_stage is None or o_stage is None:
+                # Unknown biozone names — skip the pair instead of
+                # using the meaningless lexicographic fallback. This
+                # prevents the false positives flagged in the audit.
+                continue
+            cmp = _HAS_ICS and ics_age_compare(y_stage, o_stage)
+            if cmp is None:
+                continue
+            # sorted_sp is sorted by range_top ASC — so sorted_sp[i]
+            # (smaller range_top, sits LOWER in section) has the
+            # "younger" biozone label and sorted_sp[i+1] has the
+            # "older" label. Stratigraphic convention says younger
+            # stages sit ABOVE older stages, i.e. have LARGER
+            # range_top. If the species labeled "younger" really is
+            # younger in time (cmp > 0), the LOWER position is a
+            # Steno's-Law violation.
+            if cmp > 0:
                 violations += 1
                 issues.append({
                     "severity": "warning",
@@ -673,7 +797,76 @@ def _score_biozone_order(species: list, sections: list) -> tuple[int, list[dict[
                         "older_biozone": older_bz,
                     },
                 })
+            # cmp == 0 means the two stages are the same age — no
+            # violation. cmp < 0 means the "younger" label actually
+            # names an older stage, which is itself a labelling
+            # inconsistency but not a strat-order violation here.
     return violations, issues
+
+
+# M-1 / P1-12 (REVIEW-2026-07-25): best-effort map from common biozone index
+# fossils to their ICS stage. Real ammonite / radiolarian / conodont zone
+# names (e.g. "N. optima Zone") do NOT contain a literal ICS stage name, so
+# the whole-word stage match below never fired and Steno's Law check was a
+# near-no-op. This modest dictionary lets the check actually run for a few
+# well-known zones. It is intentionally small and incomplete; unknown zones
+# still fall through to None and are skipped (no false positives).
+_BIOZONE_STAGE_MAP: dict[str, str] = {
+    # REVIEW-2026-07-31: species-level conodont zone keys only. The genus
+    # Clarkina spans the Wuchiapingian-Changhsingian, so a bare "clarkina"
+    # key mis-assigned Wuchiapingian zones (C. orientalis, C. leveni,
+    # C. subcarinata...) to the Changhsingian, which made the Steno check
+    # silently miss real violations.
+    # Wuchiapingian conodont zones.
+    "clarkina orientalis": "Wuchiapingian",
+    "clarkina leveni": "Wuchiapingian",
+    "clarkina subcarinata": "Wuchiapingian",
+    "clarkina guangyuanensis": "Wuchiapingian",
+    "clarkina transcaucasica": "Wuchiapingian",
+    # Changhsingian conodont zones.
+    "clarkina changxingensis": "Changhsingian",
+    "clarkina yini": "Changhsingian",
+    "clarkina meishanensis": "Changhsingian",
+    "clarkina optima": "Changhsingian",
+    "neogondolella changxingensis": "Changhsingian",
+    "neogondolella optima": "Changhsingian",
+    "n. optima": "Changhsingian",
+    # Ammonite zones (basal Triassic Induan).
+    "otoceras": "Induan",
+    "ophiceras": "Induan",
+    "griesbachian": "Induan",
+    # Ammonite zones (Olenekian / early Middle Triassic).
+    "anasirabites": "Olenekian",
+    "subcolumbites": "Olenekian",
+}
+
+
+def _resolve_biozone_stage(label: str) -> Optional[str]:
+    """Map a free-text biozone label to an ICS stage name if possible.
+
+    Resolution order:
+      1. an explicit biozone -> stage entry in ``_BIOZONE_STAGE_MAP``
+         (substring match on the label, e.g. "N. optima Zone" ->
+         "Changhsingian");
+      2. a whole-word ICS stage name appearing literally in the label.
+
+    Returns the matched stage name from the bundled ICS_2024 table, or None
+    if no match. Unknown biozone names return None so the Steno's Law check
+    skips them (no false positives).
+    """
+    if not label:
+        return None
+    if not _HAS_ICS:
+        return None
+    label_lower = label.lower()
+    for key, stage in _BIOZONE_STAGE_MAP.items():
+        if key in label_lower and stage in _ICS_2024:
+            return stage
+    for stage_name in _ICS_2024.keys():
+        # Match by whole-word presence of the stage name.
+        if re.search(r"\b" + re.escape(stage_name.lower()) + r"\b", label_lower):
+            return stage_name
+    return None
 
 
 def _score_structure(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
@@ -794,20 +987,33 @@ def score_range_chart(data: dict[str, Any]) -> dict[str, Any]:
                 "issues": [{"severity": "warning",
                             "msg_key": "quality.empty_result"}]}
 
-    c_score, c_issues = _score_completeness(data)
-    a_score, a_issues = _score_accuracy(data)
-    k_score, k_issues = _score_consistency(data)
-    s_score, s_issues = _score_structure(data)
-
-    composite = (
-        W_COMPLETENESS * c_score
-        + W_ACCURACY * a_score
-        + W_CONSISTENCY * k_score
-        + W_STRUCTURE * s_score
+    dimensions = (
+        ("completeness", W_COMPLETENESS, _score_completeness),
+        ("accuracy", W_ACCURACY, _score_accuracy),
+        ("consistency", W_CONSISTENCY, _score_consistency),
+        ("structure", W_STRUCTURE, _score_structure),
     )
+    weighted_scores: list[float] = []
+    all_issues: list[dict[str, Any]] = []
+    for dimension, weight, scorer in dimensions:
+        try:
+            dimension_score, dimension_issues = scorer(data)
+        except Exception as exc:  # fail closed: scoring must never block extraction
+            dimension_score = 0.0
+            dimension_issues = [{
+                "severity": "warning",
+                "msg_key": "quality.scoring_failed",
+                "params": {
+                    "dimension": dimension,
+                    "error_type": type(exc).__name__,
+                },
+            }]
+        weighted_scores.append(weight * min(1.0, max(0.0, dimension_score)))
+        all_issues.extend(dimension_issues)
+
+    composite = sum(weighted_scores)
     composite = min(1.0, max(0.0, composite))
 
-    all_issues = c_issues + a_issues + k_issues + s_issues
     return {
         "score": round(composite, 4),
         "grade": _grade_for(composite),

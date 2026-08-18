@@ -28,7 +28,16 @@ function rcaNormIcbnAuthor(s) {
   const yearMatch = t.match(/(\d{4})/);
   const year = yearMatch ? yearMatch[1] : '';
   // Remove the year from the working string.
-  const author = t.replace(/\d{4}/g, '');
+  let author = t.replace(/\d{4}/g, '');
+  // H-7 parity (REVIEW-2026-07-31): em-dash (— or --) is an author
+  // separator per ICZN Art. 51.2 — "Smith—Jones" must dedup with
+  // "Smith, Jones".
+  author = author.replace(/—+/g, ' ');
+  author = author.replace(/--+/g, ' ');
+  // H-7 parity: "Smith ex Jones" / "Smith in Jones" cite Jones as the
+  // original; only the primary author(s) are retained for dedup.
+  author = author.replace(/\s+ex\s+\S+(\s+\S+)*/g, '');
+  author = author.replace(/\s+in\s+\S+(\s+\S+)*/g, '');
   // Strip ICZN-style punctuation: commas, parentheses, ampersands,
   // multiple spaces, "et", "al.", "&".
   let norm = author.replace(/&/g, ' ').replace(/\band\b/g, ' ');
@@ -116,6 +125,41 @@ function mergeScalarField(values) {
   return rcaAggMode(coerced);
 }
 
+function mergeTypedInteger(values) {
+  const valid = values.filter((v) => typeof v === 'number' && Number.isInteger(v));
+  if (valid.length === 0) return NO_MERGE;
+  const counts = new Map();
+  for (const value of valid) counts.set(value, (counts.get(value) || 0) + 1);
+  const top = Math.max(...counts.values());
+  return Array.from(counts.entries())
+    .filter(([, count]) => count === top)
+    .map(([value]) => value)
+    .sort((a, b) => a - b)[0];
+}
+
+function mergeConfidenceField(values) {
+  const valid = [];
+  for (const value of values) {
+    if (value == null || value === '' || typeof value === 'boolean') continue;
+    const n = Number(value);
+    if (Number.isFinite(n)) valid.push(Math.max(0, Math.min(1, n)));
+  }
+  if (valid.length === 0) return NO_MERGE;
+  return Math.round((valid.reduce((a, b) => a + b, 0) / valid.length) * 10000) / 10000;
+}
+
+function mergeMappingField(values) {
+  const mappings = values.filter((v) => v && typeof v === 'object' && !Array.isArray(v));
+  if (mappings.length === 0) return NO_MERGE;
+  const keys = Array.from(new Set(mappings.flatMap((mapping) => Object.keys(mapping)))).sort();
+  const out = {};
+  for (const key of keys) {
+    const merged = mergeFieldAcrossRuns(mappings.map((mapping) => mapping[key]));
+    if (merged !== NO_MERGE) out[key] = merged;
+  }
+  return out;
+}
+
 function mergeStructuredField(values) {
   // Union of dict items by stable signature. Mirrors the Python side's
   // _merge_structured_field — first-seen wins on duplicates.
@@ -153,13 +197,18 @@ function mergeFieldAcrossRuns(values) {
   if (nonNull.every((v) => Array.isArray(v) && v.every((x) => x && typeof x === 'object' && !Array.isArray(x)))) {
     return mergeStructuredField(values);
   }
+  // Dictionaries (notably _extras) stay structured. If a malformed run
+  // mixes objects with another shape, retain the structured observations.
+  if (nonNull.some((v) => v && typeof v === 'object' && !Array.isArray(v))) {
+    return mergeMappingField(values);
+  }
   // All non-null values are primitives → scalar merge.
   if (nonNull.every((v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')) {
     const m = mergeScalarField(values);
     return m === NO_MERGE ? NO_MERGE : m;
   }
-  // Mixed / unknown → fall back to plain string mode.
-  return rcaAggMode(nonNull.map(String));
+  // Unsupported mixed structures are omitted instead of stringified.
+  return NO_MERGE;
 }
 
 // Default keymap for range-chart (backward compat).
@@ -198,11 +247,41 @@ const RCA_ABUNDANCE_KEYMAP = {
   extraSections: null,
 };
 
+// Keymap for phylogenetic-tree results. Nodes are the primary rows
+// (deduped by ``id``); species names collapse by majority across runs.
+// ``metadata`` and ``legend`` are single dicts (not lists) and are NOT
+// in listKeys — the merger would otherwise extend their values into
+// a list, destroying the dict shape. ``root_ids`` is a real list and
+// is safe to merge. Mirrors rca_core/aggregate.PHYLOGENETIC_TREE_SCHEMA.
+const RCA_PHYLO_KEYMAP = {
+  primary: 'nodes',
+  idKeys: ['id'],
+  strModeFields: ['name'],
+  sortKeys: [['agreement_count', 'desc'], ['name', 'asc']],
+  listKeys: ['root_ids'],
+  confidence: 'confidence',
+  extraSections: null,
+};
+
 const RCA_KEYMAP_BY_MODE = {
   range_chart: RCA_DEFAULT_KEYMAP,
   columnar_section: RCA_COLUMNAR_KEYMAP,
   abundance_diagram: RCA_ABUNDANCE_KEYMAP,
+  phylogenetic_tree: RCA_PHYLO_KEYMAP,
 };
+
+// Deep clone helper (REVIEW-2026-08-17 P1-5): used by the single-run
+// passthrough to keep merged-result mutations from leaking back into the
+// source run. Mirrors Python ``copy.deepcopy``. ``structuredClone`` is
+// available in Node 17+ and all evergreen browsers since 2022; the
+// JSON round-trip is a portable fallback that handles the JSON-shaped
+// values the merger actually produces (no Date, RegExp, Map/Set, etc.).
+function deepClone(value) {
+  if (typeof structuredClone === 'function') {
+    try { return structuredClone(value); } catch (_) { /* fall through */ }
+  }
+  return JSON.parse(JSON.stringify(value));
+}
 
 // Detect the appropriate keymap from the shape of the first result object.
 // Mirrors Python _auto_detect_schema so both ends agree on the schema.
@@ -212,22 +291,42 @@ function rcaAutoDetectKeymap(results) {
   }
   let abCount = 0;
   let colCount = 0;
+  let phyCount = 0;
   for (const r of results) {
-    if (r && Array.isArray(r.abundances) && r.abundances.length > 0) abCount++;
-    if (r && Array.isArray(r.sections) && r.sections.length > 0 &&
+    if (!r || typeof r !== 'object') continue;
+    if (Array.isArray(r.abundances) && r.abundances.length > 0) abCount++;
+    if (Array.isArray(r.sections) && r.sections.length > 0 &&
         r.sections[0] && typeof r.sections[0] === 'object' && 'id' in r.sections[0]) {
       colCount++;
+    }
+    // REVIEW-2026-08-17 (P2): phylo detection. The phylo extractor emits a
+    // ``nodes`` list (primary rows deduped by id) plus a single ``metadata``
+    // dict and a ``root_ids`` list. Without this branch, phylo data was
+    // silently merged as range_chart, destroying the primary row key.
+    // M2 fix (REVIEW-2026-11-07): require BOTH id and parent so the JS
+    // detector agrees with Python _looks_phylogenetic and
+    // exporter._looks_phylogenetic_tree. The normalizer always writes both
+    // keys (parent=null for roots), so normalized data is unaffected.
+    if (Array.isArray(r.nodes) && r.nodes.length > 0 &&
+        r.nodes[0] && typeof r.nodes[0] === 'object' &&
+        'id' in r.nodes[0] && 'parent' in r.nodes[0]) {
+      phyCount++;
     }
   }
   const n = results.length;
   const half = Math.floor((n + 1) / 2);
+  // Phylo is the most specific shape — it wins over columnar/abundance when
+  // multiple detectors meet the threshold simultaneously.
+  if (phyCount >= half) return RCA_PHYLO_KEYMAP;
   if (colCount >= half && abCount >= half) {
     // Both detectors meet threshold — prefer the more specific one.
     return colCount >= abCount ? RCA_COLUMNAR_KEYMAP : RCA_ABUNDANCE_KEYMAP;
   }
   if (colCount >= half) return RCA_COLUMNAR_KEYMAP;
   if (abCount >= half) return RCA_ABUNDANCE_KEYMAP;
-  // Neither detector hit majority.
+  // Phylo beats the others when neither of them meets majority but phylo
+  // still has at least one detection (handles the 1-run / 2-run edge case).
+  if (phyCount > colCount && phyCount > abCount) return RCA_PHYLO_KEYMAP;
   if (colCount > abCount) return RCA_COLUMNAR_KEYMAP;
   if (abCount > colCount) return RCA_ABUNDANCE_KEYMAP;
   return RCA_DEFAULT_KEYMAP;  // tie → default to range-chart
@@ -238,6 +337,35 @@ function emptyFor(km, n) {
   for (const k of km.listKeys) out[k] = [];
   out[km.confidence] = 0;
   return out;
+}
+
+// M-1 fix: chimera detection — mirror of rca_core/aggregate.py:388-419
+// (_is_chimeric_row). Returns true if the merged row's
+// (range_base, range_top, biozone, section) tuple never appears in any
+// single source run — i.e. the per-field mode vote produced a
+// recombination that no individual run ever observed.
+//
+// Scientific meaning: emitting such a row as if it were a real
+// consensus is misleading. The merged tuple may be internally
+// consistent (base ≤ top, plausible biozone), but it is NOT what the
+// chart showed. Mark it so the caller can drop or surface it.
+//
+// P0-5: include section so the same species across different sections
+// are NOT flagged as chimeras (they are legitimate multi-section obs).
+function rcaIsChimericRow(group, merged) {
+  if (!Array.isArray(group) || group.length < 2) return false;
+  const keys = ['range_base', 'range_top', 'biozone', 'section'];
+  const mergedTuple = keys.map((k) => rcaAggNorm(merged ? merged[k] : ''));
+  if (!mergedTuple.some((v) => v)) return false;  // no scientific content
+  for (const g of group) {
+    if (!g || typeof g !== 'object') continue;
+    const itemTuple = keys.map((k) => rcaAggNorm(g[k]));
+    if (itemTuple.length === mergedTuple.length
+        && itemTuple.every((v, i) => v === mergedTuple[i])) {
+      return false;  // at least one source run observed this tuple
+    }
+  }
+  return true;
 }
 
 function mergePrimaryList(runs, km, n) {
@@ -327,9 +455,24 @@ function mergePrimaryList(runs, km, n) {
     for (const [k, _vals] of fieldsToMerge) {
       if (aggr[k] !== undefined) continue;  // already filled by strModeFields
       const perRun = group.map((x) => x ? x[k] : null);
-      const merged_v = mergeFieldAcrossRuns(perRun);
+      let merged_v;
+      if (km.primary === 'species_ranges' && (k === 'range_top_idx' || k === 'range_base_idx')) {
+        merged_v = mergeTypedInteger(perRun);
+      } else if (km.primary === 'species_ranges' && k === 'confidence') {
+        merged_v = mergeConfidenceField(perRun);
+      } else {
+        merged_v = mergeFieldAcrossRuns(perRun);
+      }
       if (merged_v === NO_MERGE) continue;  // drop empty key
       aggr[k] = merged_v;
+    }
+    // M-1 fix: chimera detection. If every contributing run produced a
+    // DIFFERENT (range_base, range_top, biozone, section) tuple for this
+    // species — i.e. no run ever observed the merged tuple — flag with
+    // _chimera_dropped so the caller can filter (and so score_consistency
+    // in quality.js can surface chimera_warnings).
+    if (rcaIsChimericRow(group, aggr)) {
+      aggr._chimera_dropped = true;
     }
     merged.push(aggr);
   }
@@ -468,7 +611,14 @@ function rcaMergeResults(results, totalRuns, keymap) {
 
   // Single-run passthrough.
   if (runs.length === 1 && (totalRuns === undefined || totalRuns === null || totalRuns === 1)) {
-    const single = Object.assign({}, runs[0]);
+    // REVIEW-2026-08-17 (P1-5): deep copy, not shallow. The Python side
+    // (``copy.deepcopy(runs[0])``) already deep-copies to keep the source
+    // run unaliased from the merged result. A shallow ``Object.assign``
+    // made in-place mutations of nested structures (e.g.
+    // ``merged.sections[0].formations.push(...)``) silently rewrite the
+    // source run's nested arrays/objects, breaking audit integrity and
+    // the Python↔JS parity contract.
+    const single = deepClone(runs[0]);
     const primary = single[km.primary] || [];
     single[km.primary] = primary.map((it) => Object.assign({}, it, { agreement_count: 1, agreement: '1/1' }));
     if (single[km.confidence] === undefined) single[km.confidence] = 0;
@@ -480,13 +630,43 @@ function rcaMergeResults(results, totalRuns, keymap) {
   out[km.primary] = mergePrimaryList(runs, km, n);
   Object.assign(out, mergeNamedLists(runs, km));
 
-  // Mean confidence.
-  let sum = 0, cnt = 0;
+  // REVIEW-2026-08-17 (P2 follow-up): phylogenetic-tree ``metadata`` and
+  // ``legend`` are single dicts (not lists). They are identical across
+  // runs for the same image, so preserve them from the first run rather
+  // than letting the merger drop them. Mirrors
+  // rca_core/aggregate.py:790-796 so the Python↔JS multi-run merge
+  // produces the same shape (otherwise pure-frontend phylo merge lost
+  // these fields while Python preserved them — silent data loss).
+  if (km.primary === 'nodes') {
+    for (const key of ['metadata', 'legend']) {
+      if (runs && runs[0] && typeof runs[0] === 'object' && key in runs[0]) {
+        // Deep-copy so downstream mutations on the merged result do not
+        // taint the source run (consistent with the single-run
+        // passthrough's deepClone behavior).
+        out[key] = deepClone(runs[0][key]);
+      }
+    }
+  }
+
+  // Weighted-mean confidence (P0-3 fix, REVIEW-2026-08-17).
+  // Each run is weighted by its own ``runs`` field — a run that already
+  // aggregated 3 sub-attempts counts 3x in the average, since it
+  // represents 3 LLM calls. This matches rca_core.aggregate.merge_results
+  // (the previous simple-average JS implementation silently produced
+  // different values whenever runs reported different ``runs`` counts,
+  // breaking the Python↔JS merge parity for multi-run extractions).
+  // Runs with no ``runs`` field (or a non-positive value) fall back to
+  // weight 1, mirroring Python's ``int(r.get("runs") or 1)`` + ``w < 1 → 1``.
+  let wSum = 0, wN = 0;
   for (const r of runs) {
     const c = Number(r[km.confidence]);
-    if (Number.isFinite(c)) { sum += c; cnt++; }
+    if (!Number.isFinite(c)) continue;
+    let w = Number(r.runs);
+    if (!Number.isFinite(w) || w < 1) w = 1;
+    wSum += c * w;
+    wN += w;
   }
-  out[km.confidence] = cnt ? Math.round((sum / cnt) * 10000) / 10000 : 0;
+  out[km.confidence] = wN > 0 ? Math.round((wSum / wN) * 10000) / 10000 : 0;
 
   // Range-chart-only: also merge the parallel "sections" list of measured
   // sections so the original four-table shape is preserved.
@@ -521,6 +701,34 @@ function rcaMergeResults(results, totalRuns, keymap) {
       });
     }
     out[km.extraSections] = merged;
+  }
+
+  // M-1 fix: filter chimeric rows from the primary list. Dropped rows
+  // are surfaced via `chimera_warnings` so consumers and the UI can
+  // tell the operator "we dropped X rows because no run ever observed
+  // the merged (FAD/LAD/biozone) tuple together". Mirrors
+  // rca_core/aggregate.py:784-807.
+  const primaryList = out[km.primary];
+  if (Array.isArray(primaryList) && primaryList.length > 0) {
+    const chimeras = primaryList.filter((r) => r && r._chimera_dropped);
+    if (chimeras.length > 0) {
+      const surviving = primaryList.filter((r) => r && !r._chimera_dropped);
+      for (const r of surviving) delete r._chimera_dropped;
+      out[km.primary] = surviving;
+      out.chimera_warnings = [];
+      for (const c of chimeras) {
+        const row = {
+          species: c.species, section: c.section, biozone: c.biozone,
+          range_top: c.range_top, range_base: c.range_base,
+        };
+        out.chimera_warnings.push({
+          table: km.primary,
+          row: row,
+          reason: 'no single run observed the merged (FAD/LAD/biozone) tuple',
+        });
+        delete c._chimera_dropped;
+      }
+    }
   }
 
   return out;

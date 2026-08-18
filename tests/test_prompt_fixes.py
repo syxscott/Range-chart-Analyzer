@@ -105,10 +105,21 @@ def _extract_js_prompt_const(src: str, const_name: str) -> str:
     return joined
 
 
-def _js_prompt_version() -> str:
+def _js_prompt_versions() -> dict:
+    """Parse the JS PROMPT_VERSION object literal into a {mode: version} dict.
+
+    The literal is an object, e.g. ``{range_chart: 'v4', ...}`` — the old
+    string-form regex (``const PROMPT_VERSION = 'v3'``) predates the per-mode
+    dict and returned "" for the object form.
+    """
     src = _read_js_source()
-    m = re.search(r"const\s+PROMPT_VERSION\s*=\s*['\"]([^'\"]+)['\"]", src)
-    return m.group(1) if m else ""
+    m = re.search(r"const\s+PROMPT_VERSION\s*=\s*\{([^}]+)\}", src, re.S)
+    if not m:
+        return {}
+    out: dict[str, str] = {}
+    for k, v in re.findall(r"(\w+)\s*:\s*'([^']*)'", m.group(1)):
+        out[k] = v
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -318,10 +329,33 @@ def test_byte_identical_python_vs_js():
     )
 
 
-def test_prompt_version_v3_both_sides():
-    """HIGH: PROMPT_VERSION must be 'v3' on both sides after the fixes."""
-    check("py-prompt-version-v3", PROMPT_VERSION == "v3", evidence=f"py={PROMPT_VERSION!r}")
-    check("js-prompt-version-v3", _js_prompt_version() == "v3", evidence=f"js={_js_prompt_version()!r}")
+def test_prompt_version_both_sides():
+    """HIGH: PROMPT_VERSION must be a per-mode dict and match on both sides.
+
+    Updated 2026-08-06: the original test asserted ``PROMPT_VERSION == "v3"``
+    (a string), which stopped matching when PROMPT_VERSION became a per-mode
+    dict — the stale assertion failed only when this file is run directly
+    (``python tests/test_prompt_fixes.py``), not under pytest (check-style
+    tests don't assert). The canonical mode keys must resolve to the same
+    version on the Python and JS sides; the legacy "abundance" alias must
+    remain consistent with the canonical "abundance_diagram" key.
+    """
+    check("py-prompt-version-dict",
+          isinstance(PROMPT_VERSION, dict) and len(PROMPT_VERSION) >= 5,
+          evidence=f"py={PROMPT_VERSION!r}")
+    for mode in ("range_chart", "columnar_section", "abundance_diagram",
+                 "phylogenetic_tree"):
+        check(f"py-prompt-version-{mode}", bool(PROMPT_VERSION.get(mode)),
+              evidence=f"mode={mode} py={PROMPT_VERSION!r}")
+    check("py-abundance-alias-consistent",
+          PROMPT_VERSION.get("abundance") == PROMPT_VERSION.get("abundance_diagram"),
+          evidence=f"py={PROMPT_VERSION!r}")
+    js_versions = _js_prompt_versions()
+    for mode in ("range_chart", "columnar_section", "abundance_diagram",
+                 "phylogenetic_tree", "abundance"):
+        check(f"js-prompt-version-{mode}",
+              js_versions.get(mode) == PROMPT_VERSION.get(mode),
+              evidence=f"mode={mode} js={js_versions.get(mode)!r} py={PROMPT_VERSION.get(mode)!r}")
 
 
 if __name__ == "__main__":
@@ -333,6 +367,6 @@ if __name__ == "__main__":
     test_reworked_flag_present()
     test_author_year_requested()
     test_byte_identical_python_vs_js()
-    test_prompt_version_v3_both_sides()
+    test_prompt_version_both_sides()
     print(f"\n--- {_pass} passed, {_fail} failed ---")
     sys.exit(1 if _fail else 0)

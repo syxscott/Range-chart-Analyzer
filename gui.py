@@ -19,6 +19,7 @@ import concurrent.futures
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -76,6 +77,12 @@ from rca_core.extractor import (  # noqa: E402
 )
 from rca_core import ProviderStore  # noqa: E402
 from rca_core.llm import ApiFormat, LlmProvider, PROVIDER_PRESETS  # noqa: E402
+# Phase J: history audit-trail persistence (was previously a no-op on
+# the Tkinter path).
+try:
+    from rca_core.history import Database, HistoryRecord, HistoryStore  # noqa: E402
+except ImportError:  # pragma: no cover — defensive
+    Database = HistoryRecord = HistoryStore = None  # type: ignore
 
 try:
     from PIL import Image, ImageTk  # type: ignore
@@ -138,19 +145,48 @@ PAD_L = 36   # section gap
 def load_config() -> dict:
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            cfg = json.load(f)
     except Exception:
         return {}
+    # H3 fix (REVIEW-2026-11-07): new saves encrypt the legacy api_key
+    # field at rest (see save_config). Legacy plaintext configs still
+    # load: only envelope-marked values are decrypted, and a decrypt
+    # failure keeps the raw value so a bad envelope can't wipe the field.
+    key = cfg.get("api_key")
+    if key:
+        try:
+            from rca_core.secrets_store import decrypt, is_obfuscated
+            if is_obfuscated(key):
+                cfg["api_key"] = decrypt(key)
+        except Exception:
+            pass
+    return cfg
 
 
 def save_config(cfg: dict) -> None:
     # Atomic write: write to a sibling tmp file, fsync, then os.replace. Mirrors
     # ProviderStore.save() so a crash mid-write can never truncate the config
     # file (which used to lose the API key + settings together).
+    # H3 fix (REVIEW-2026-11-07): the legacy api_key field used to sit in
+    # this JSON in PLAINTEXT. Encrypt it through rca_core.secrets_store
+    # (Fernet when cryptography+keyring are installed, machine-fingerprint
+    # obfuscation otherwise). A local copy is used so the caller's dict
+    # (gui_fluent passes the live self.cfg) is not mutated, and
+    # is_obfuscated() prevents double-wrapping on re-save.
+    to_write = cfg
+    key = (cfg.get("api_key") or "")
+    if key:
+        try:
+            from rca_core.secrets_store import encrypt, is_obfuscated
+            if not is_obfuscated(key):
+                to_write = dict(cfg)
+                to_write["api_key"] = encrypt(key)
+        except Exception:
+            pass
     try:
         tmp = CONFIG_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
+            json.dump(to_write, f, ensure_ascii=False, indent=2)
             f.flush()
             try:
                 os.fsync(f.fileno())
@@ -865,6 +901,12 @@ class RangeChartApp:
             ("range_chart", "Range Chart"),
             ("columnar_section", "Columnar Section"),
             ("abundance_diagram", "Abundance / Pollen"),
+            # H1 fix (REVIEW-2026-11-07): the manual option for
+            # phylogenetic_tree was missing from this dropdown, so a
+            # Tkinter user whose caption/filename carried no phylo
+            # keyword could never reach the mode (auto-detection only).
+            # Fluent GUI and the web frontend both offer it.
+            ("phylogenetic_tree", "Phylogenetic Tree"),
         ]
         self.cmb_chart_type = ttk.Combobox(
             adv_frame, state="readonly", width=14,
@@ -1543,11 +1585,33 @@ class RangeChartApp:
 
     def _current_provider(self) -> LlmProvider | None:
         """Try to load the active provider from disk; fall back to None to
-        signal legacy flat-field behavior."""
+        signal legacy flat-field behavior.
+
+        REVIEW-2026-07-31: also caches the result in ``self._active_provider``
+        so the history audit trail records provider_id / provider_name /
+        model — previously the attribute was never assigned and those
+        fields were always empty.
+        """
         try:
             store = ProviderStore().load()
-            return store.get_current()
+            self._active_provider = store.get_current()
+            # REVIEW-2026-07-31: surface the at-rest protection level — the
+            # RuntimeWarning from secrets_store is invisible in a windowed
+            # app, and fingerprint-derived obfuscation is NOT real
+            # encryption.
+            try:
+                from rca_core.secrets_store import encryption_status
+                _st = encryption_status()
+                if _st in ("fingerprint", "plaintext"):
+                    log.warning(
+                        "secrets_store: at-rest protection is '%s' — install "
+                        "cryptography + keyring (requirements.txt) for real "
+                        "encryption of stored API keys", _st)
+            except Exception:
+                pass
+            return self._active_provider
         except Exception:
+            self._active_provider = None
             return None
 
     def _on_extract(self):
@@ -1590,13 +1654,14 @@ class RangeChartApp:
         # caption/path heuristic (column chart -> columnar_section).
         mode = (self.var_chart_type.get() or "auto").strip()
         if mode == "auto":
-            cap = (self.txt_caption.get("1.0", "end").strip() + " " + (self.image_path or "")).lower()
-            if any(k in cap for k in ("pollen", "abundance", "percentage diagram", "palyno", "孢粉", "花粉", "丰度", "百分比")):
-                mode = "abundance_diagram"
-            elif any(k in cap for k in ("column", "columns", "columnar", "col_section", "col_sections", "柱状", "柱状図", "柱状图")):
-                mode = "columnar_section"
-            else:
-                mode = "range_chart"
+            # REVIEW-2026-11-07 (low): route through the shared
+            # rca_core.chart_mode heuristic — the inline substring copy
+            # diverged from the web frontend's word-boundary matching
+            # (e.g. "Pollinator..." and "phylogenetic" classified
+            # differently per UI).
+            from rca_core.chart_mode import auto_detect_chart_mode
+            cap = self.txt_caption.get("1.0", "end").strip() + " " + (self.image_path or "")
+            mode = auto_detect_chart_mode(cap)
         threading.Thread(target=self._worker, args=(params, mode, runs), daemon=True).start()
 
     def _worker(self, params, mode="range_chart", runs=1):
@@ -1612,11 +1677,31 @@ class RangeChartApp:
         partial_fails = 0
         any_truncated = False
         raws = []
+        # P1 fix (2026-08-06): keep the image fingerprint + per-request
+        # metadata of the first successful run so the merged result's
+        # history record carries the REAL image_sha256 (previously the
+        # merged ExtractResult left it empty and _save_to_history stored
+        # "" / the empty-bytes hash, breaking get_by_sha256 grouping).
+        first_ok_sha = ""
+        first_ok_meta = None
         with concurrent.futures.ThreadPoolExecutor(max_workers=runs) as ex:
             futures = [ex.submit(extract, mode=mode, **params) for _ in range(runs)]
+            # Phase K fix: per-future hard timeout. The user's
+            # ``timeout_sec`` is the per-request LLM timeout, plus a
+            # small grace window (10s) for Python / JIT overhead. A
+            # future that exceeds this is recorded as a timeout failure
+            # rather than blocking the UI forever (the previous version
+            # called fut.result() with no timeout - one stalled run
+            # could pin the whole batch indefinitely).
+            per_future_timeout = params.get("timeout_sec", 120) + 10
             for fut in concurrent.futures.as_completed(futures):
                 try:
-                    r = fut.result()
+                    r = fut.result(timeout=per_future_timeout)
+                except concurrent.futures.TimeoutError:
+                    r = ExtractResult(
+                        ok=False, error_key="err.timeout",
+                        error_body=f"per-future timeout after {per_future_timeout}s",
+                    )
                 except Exception as exc:
                     # extract() never raises, but defend against unforeseen
                     # bugs in user code. Bug-12 fix: log so the exception
@@ -1629,6 +1714,12 @@ class RangeChartApp:
                     any_truncated = any_truncated or bool(r.truncated)
                     if r.raw:
                         raws.append(r.raw)
+                    # P1 fix (2026-08-06): capture fingerprint + request
+                    # metadata from the first successful run.
+                    if not first_ok_sha and getattr(r, "image_sha256", ""):
+                        first_ok_sha = r.image_sha256
+                    if first_ok_meta is None and getattr(r, "request_meta", None):
+                        first_ok_meta = r.request_meta
                 else:
                     last_fail = r
                     partial_fails += 1
@@ -1641,6 +1732,10 @@ class RangeChartApp:
             ok=True, data=merged, raw="\n---RUN---\n".join(raws)[:8000],
             truncated=any_truncated or bool(partial_fails),
             partial_failures=partial_fails,
+            # P1 fix (2026-08-06): propagate the real fingerprint + request
+            # metadata so _save_to_history writes a correct audit record.
+            image_sha256=first_ok_sha,
+            request_meta=first_ok_meta or {},
         ))
 
     def _poll_queue(self):
@@ -1696,6 +1791,21 @@ class RangeChartApp:
         elif result.truncated:
             status += " - " + self._t("err.truncated")
         self.var_status.set(status)
+        # Phase J fix: persist the audit trail. Previously gui.py did
+        # NOT write any HistoryRecord, so Tkinter users lost every
+        # extraction to the void. Mirror the gui_fluent path: image
+        # fingerprint + request metadata + per-run raw text so the
+        # History tab is populated and the 5-year audit trail is
+        # complete.
+        # REVIEW-2026-07-31: _save_to_history was misindented outside the
+        # class and every call raised AttributeError (silently swallowed
+        # by _poll_queue) — the audit trail was never written. It is now
+        # a real method; surface the saved state in the status bar.
+        try:
+            self._save_to_history(result)
+            self.var_status.set(status + " - " + self._t("status.historySaved"))
+        except Exception as exc:
+            log.warning("save_to_history failed: %s", exc)
 
     def _render_result(self):
         multi = self.result and int(self.result.get("runs", 1) or 1) > 1
@@ -1867,6 +1977,72 @@ class RangeChartApp:
         self.root.destroy()
 
 
+    def _save_to_history(self, result) -> None:
+        """Phase J fix: persist the extraction to the history DB.
+
+        Tkinter gui.py previously did NOT call HistoryStore.add at all,
+        so Tkinter users had zero audit trail. Mirror the gui_fluent
+        path: image_sha256 fingerprint + request_meta (model, sampling,
+        prompt_version) + per-run raw text are all captured here so
+        the History tab is populated and a future researcher can
+        reconstruct what produced a given row 5 years later.
+        """
+        try:
+            store = HistoryStore(Database())
+        except Exception as exc:
+            log.warning("history unavailable: %s", exc)
+            return
+        try:
+            sha = getattr(result, "image_sha256", "") or ""
+            meta = dict(getattr(result, "request_meta", None) or {})
+            raws = getattr(result, "_raws", None)
+            raw_responses = [
+                {
+                    "run_idx": i,
+                    "raw_text": (raws[i] if raws else result.raw) or "",
+                    "prompt_text": "",
+                    "request_meta": meta,
+                    "timestamp": int(time.time()),
+                }
+                for i in range(len(raws) if raws else (1 if result.raw else 0))
+            ] or None
+            rec = HistoryRecord(
+                timestamp=time.time(),
+                source_file=self.image_path or "",
+                image_thumbnail=self._maybe_thumbnail(),
+                image_width=int(self._img_dims[0] if hasattr(self, "_img_dims") and self._img_dims and self._img_dims[0] else 0) or 0,
+                image_height=int(self._img_dims[1] if hasattr(self, "_img_dims") and self._img_dims and len(self._img_dims) > 1 and self._img_dims[1] else 0) or 0,
+                provider_id=(self._active_provider.id if getattr(self, "_active_provider", None) else "") or "",
+                provider_name=(self._active_provider.name if getattr(self, "_active_provider", None) else "") or "",
+                model=(self._active_provider.model if getattr(self, "_active_provider", None) else "") or "",
+                mode=str(getattr(self, "var_chart_type", tk.StringVar(value="range_chart")).get()),
+                runs=int((self.result or {}).get("runs", 1) or 1),
+                result=self.result if isinstance(self.result, dict) else {},
+                raw=(result.raw or "")[:8192],
+                confidence=float((self.result or {}).get("confidence", 0) or 0),
+                partial_failures=int(getattr(result, "partial_failures", 0) or 0),
+                duration_ms=int(getattr(result, "latency_ms", 0) or 0),
+                status_code=getattr(result, "status", None),
+                notes="",
+                image_sha256=sha,
+                request_meta=meta,
+            )
+            store.add(rec, raw_responses=raw_responses)
+        except Exception as exc:
+            log.warning("save_to_history failed: %s", exc)
+
+    def _maybe_thumbnail(self):
+        """Best-effort thumbnail (≤200px JPEG, ≤20 KB). Mirror the
+        Fluent GUI helper. Empty when Pillow is missing or the image is
+        unreadable so history rows still load.
+        """
+        try:
+            from rca_core.history import make_thumbnail
+            if self.image_path and os.path.isfile(self.image_path):
+                return make_thumbnail(self.image_path)
+        except Exception:
+            pass
+        return None
 def main():
     root = tk.Tk()
     app = RangeChartApp(root)
@@ -1881,6 +2057,8 @@ if __name__ == "__main__":
 # Provider management wizard (2-step: preset grid -> details form)
 # Mirrors cc-switch's AddProviderDialog + ProviderPresetSelector layout.
 # ---------------------------------------------------------------------------
+
+
 
 
 class ProviderWizard:

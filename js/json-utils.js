@@ -198,6 +198,27 @@ function extractJsonLike(text) {
   return null;
 }
 
+// Lift a payload nested one level under a common wrapper key.
+// REVIEW-2026-07-31 (M2 parity): Python's safe_json_loads gained this in
+// _promote_wrapper. When the model wraps the real payload in
+// {"data": {...}} — with or without sibling metadata — the inner keys are
+// promoted to the top level so the normalizers see the payload.
+function promoteWrapper(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return parsed;
+  for (const key of ['data', 'result', 'payload', 'response', 'output']) {
+    const inner = parsed[key];
+    if (inner && typeof inner === 'object' && !Array.isArray(inner) && Object.keys(inner).length > 0) {
+      const promoted = Object.assign({}, parsed);
+      delete promoted[key];
+      for (const k of Object.keys(inner)) {
+        if (!(k in promoted)) promoted[k] = inner[k];
+      }
+      return promoted;
+    }
+  }
+  return parsed;
+}
+
 // Lenient JSON object parse with a 6-level fallback chain.
 // Chain (each runs only if prior failed):
 //   1. Strip markdown fences (```json ... ```)
@@ -218,7 +239,7 @@ function safeJsonLoads(text) {
     const parsed = JSON.parse(s);
     // Fix J-1: typeof null === 'object' in JS, but null is not a valid object
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed !== null) {
-      return parsed;
+      return promoteWrapper(parsed);
     }
     // Top-level array: wrap it so downstream code can use object semantics,
     // matching Python's {_array_root: [...]} wrapper.
@@ -231,25 +252,45 @@ function safeJsonLoads(text) {
   }
   // Level 4: enumerate ALL balanced {...} objects, score each, pick best.
   // This is the key parity fix with Python's safe_json_loads Level 4.
+  // H8/M2 parity (REVIEW-2026-07-31): Python scores candidates on PAYLOAD
+  // LIKELIHOOD ONLY and uses length as a TIEBREAKER (the old JS formula
+  // `_payloadScore(p) * 10 + candidate.length` let a long schema/example
+  // string outscore a small real payload, silently discarding the data in
+  // the browser-only path). Python also drops candidates nested inside
+  // another candidate (M2) so a wrapper object keeps its sibling fields
+  // and the payload is not lost.
+  // Tie-break order mirrors Python's sorted(..., reverse=True) on
+  // (payload_score, length, index): highest score, then LONGEST source,
+  // then LATEST occurrence.
   const allCandidates = extractAllBalancedJsonObjects(s);
   if (allCandidates.length > 0) {
+    // M2: drop candidates nested inside another candidate (Python's
+    // `not any(c != d and c in d for d in candidates)`).
+    const topLevel = allCandidates.filter(c => !allCandidates.some(d => d !== c && d.indexOf(c) !== -1));
     let best = null;
     let bestScore = -Infinity;
-    for (const candidate of allCandidates) {
+    let bestLen = -1;
+    let bestIdx = -1;
+    for (let idx = 0; idx < topLevel.length; idx++) {
+      const candidate = topLevel[idx];
       try {
         const p = JSON.parse(candidate);
         if (p && typeof p === 'object' && !Array.isArray(p)) {
-          const sc = _payloadScore(p) * 10 + candidate.length;
-          if (sc > bestScore) {
+          const sc = _payloadScore(p);
+          if (sc > bestScore ||
+              (sc === bestScore && candidate.length > bestLen) ||
+              (sc === bestScore && candidate.length === bestLen && idx > bestIdx)) {
             bestScore = sc;
             best = p;
+            bestLen = candidate.length;
+            bestIdx = idx;
           }
         }
       } catch (_e) {
         // skip invalid
       }
     }
-    if (best !== null) return best;
+    if (best !== null) return promoteWrapper(best);
   }
   // Level 5: balanced-bracket array extraction → wrapped.
   const arrCandidate = extractBalancedJsonArray(s);
@@ -264,7 +305,7 @@ function safeJsonLoads(text) {
   if (prose !== null) {
     try {
       const parsed = JSON.parse(prose);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed !== null) return parsed;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed !== null) return promoteWrapper(parsed);
       if (Array.isArray(parsed)) return { _array_root: parsed, _note: 'model returned a top-level array; wrapping for diagnostics' };
     } catch (_e) { /* fall through */ }
   }

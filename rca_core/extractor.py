@@ -29,6 +29,7 @@ from .prompt import (
     COLUMNAR_SECTION_SYSTEM_PROMPT,
     PHYLOGENETIC_TREE_SYSTEM_PROMPT,
     RANGE_CHART_SYSTEM_PROMPT,
+    prompt_version_for_mode,
 )
 
 DEFAULT_ENDPOINT = "https://api.minimaxi.com/anthropic"
@@ -37,7 +38,12 @@ DEFAULT_MAX_TOKENS = 4000
 # M5: explicit min/max bounds for clamp_max_tokens — defends against
 # user typing absurd values (negative, millions) in the GUI / API.
 MIN_MAX_TOKENS = 1
-MAX_MAX_TOKENS = 100000
+# Cap must match the web UI's max token slider: index.html:65 has
+# max="32000" and js/config.js:17 has maxMaxTokens: 32000 (the JS clamp
+# at js/config.js:34 also uses 32000). The previous 100000 was a
+# core/UI inconsistency that let the server accept values the UI could
+# never produce; align the core to the system-wide 32000 cap.
+MAX_MAX_TOKENS = 32000
 DEFAULT_TIMEOUT_SEC = 120
 DEFAULT_MAX_EDGE = 4000
 
@@ -90,6 +96,7 @@ def clamp_max_edge(value):
 # Replaces the old boolean `reworked` field with a string classification
 # of how the taxon occurred in the section.
 VALID_OCCURRENCE_MODES = frozenset({
+    "unknown",
     "in_situ",
     "reworked",
     "transported",
@@ -98,6 +105,44 @@ VALID_OCCURRENCE_MODES = frozenset({
     "derived",
     "lag_deposit",
 })
+
+VALID_ENDPOINT_KINDS = frozenset({
+    "unknown",
+    "observed",
+    "projected",
+    "truncated",
+})
+
+
+def _build_request_meta(provider, mode, max_tokens, image_sha256, prompt_version):
+    """Build the per-request metadata dict persisted into ExtractResult.
+
+    P1-2 + D6 (REVIEW-2026-07-27): a record must carry enough context
+    for a 5-year audit to reconstruct "what produced this row". Any
+    field that affects reproducibility (model, sampling, prompt text)
+    goes here. ``image_sha256`` is included so the metadata and the
+    fingerprint can be cross-referenced even when source_path is
+    absent (clipboard paste).
+    """
+    meta: dict[str, Any] = {
+        "mode": mode,
+        "max_tokens": max_tokens,
+        "prompt_version": prompt_version,
+        "image_sha256": image_sha256,
+    }
+    if provider is not None:
+        meta["model"] = provider.model
+        meta["endpoint"] = provider.endpoint
+        meta["api_format"] = provider.api_format.value
+        # temperature / seed live in extra_body (LLM providers carry
+        # them as opaque overrides). Read them out so the metadata
+        # field reflects them as first-class fields.
+        eb = provider.extra_body or {}
+        if "temperature" in eb:
+            meta["temperature"] = eb["temperature"]
+        if "seed" in eb:
+            meta["seed"] = eb["seed"]
+    return meta
 
 
 @dataclass
@@ -125,15 +170,14 @@ class ExtractResult:
     # a clear "result may be incomplete" banner without flipping `ok`
     # to False (which would discard otherwise-usable data).
     warning: str = ""
-    # P1-1/P1-2 (REVIEW-2026-07-27): mandatory image fingerprint and per-request
-    # metadata. image_sha256 survives clipboard-paste / no-source-path cases
-    # so a 5-year audit can prove "this record came from THAT image".
+    # P1-1 / P1-2 (REVIEW-2026-07-27): mandatory image fingerprint and
+    # per-request metadata. ``image_sha256`` survives clipboard-paste /
+    # no-source-path cases so a 5-year audit can prove "this record
+    # came from THAT image". ``request_meta`` carries the full sampling
+    # context (model, max_tokens, temperature, seed, prompt_sha256, …)
+    # populated by ``extract_*`` so the server / GUI can persist a
+    # complete reproducible provenance record.
     image_sha256: str = ""
-    request_meta: dict[str, Any] = field(default_factory=dict)
-    # P1-1 (REVIEW-2026-07-27): SHA-256 image fingerprint for 5-year audits.
-    # Stored even when source_path is missing (clipboard paste, re-upload).
-    image_sha256: str = ""
-    # P1-2 (REVIEW-2026-07-27): per-request metadata (model, max_tokens, etc.)
     request_meta: dict[str, Any] = field(default_factory=dict)
 
 
@@ -274,7 +318,7 @@ _KNOWN_SPECIES_KEYS = (
     "species", "section", "range_top", "range_base", "biozone",
     "author", "year",
     # HIGH fix: author_year is the combined string the prompt requests.
-    "author_year",
+    "author_year", "reworked",
     # P0-3 (REVIEW-2026-07-25): the four fields below are NOW first-class
     # row keys written explicitly by _normalize_species_into, so they must
     # NOT be in _KNOWN_SPECIES_KEYS — otherwise _carry_extras would treat
@@ -400,26 +444,62 @@ def _normalize_section_into(sec: dict[str, Any],
 
 
 def _normalize_occurrence_mode(sp: dict[str, Any]) -> str:
-    """Extract occurrence_mode from a species row dict.
+    """Return a scientifically explicit occurrence classification.
 
-    P1-5: replaces the old boolean `reworked` field with a string
-    `occurrence_mode` field. Valid values: in_situ | reworked | transported
-    | cavity_fill | bioturbated | derived | lag_deposit.
-
-    Backward compatibility: if the source dict still uses the old
-    ``reworked: bool`` field, map True → "reworked" and False → "in_situ".
-    If ``occurrence_mode`` is already a valid string, use it as-is.
+    Missing or invalid modern enum values remain ``unknown`` rather than being
+    promoted to the positive assertion ``in_situ``. The legacy
+    ``reworked: bool`` field is still mapped for backward compatibility because
+    both boolean values carry an explicit assertion from older saved results.
     """
     raw = sp.get("occurrence_mode")
-    if isinstance(raw, str) and raw in VALID_OCCURRENCE_MODES:
-        return raw
-    # Fallback: check old boolean `reworked` field.
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in VALID_OCCURRENCE_MODES:
+            return normalized
     reworked = sp.get("reworked")
     if isinstance(reworked, bool):
         return "reworked" if reworked else "in_situ"
-    # Default
-    return "in_situ"
+    return "unknown"
 
+
+def _normalize_endpoint_kind(value: Any) -> str:
+    """Normalize an endpoint classification without inventing observation."""
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in VALID_ENDPOINT_KINDS:
+            return normalized
+    return "unknown"
+
+
+def _normalize_optional_int(value: Any) -> int | None:
+    """Return an exact integer index, or ``None`` when it is not integral."""
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = float(text)
+        except ValueError:
+            return None
+        return int(parsed) if parsed.is_integer() else None
+    return None
+
+
+def _normalize_confidence(value: Any) -> float | None:
+    """Normalize an optional per-row confidence to the closed interval [0, 1]."""
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(1.0, parsed))
 
 
 def _normalize_species_into(sp: dict[str, Any],
@@ -447,12 +527,13 @@ def _normalize_species_into(sp: dict[str, Any],
         # does not double-write them.
         "range_top_bed": s(sp.get("range_top_bed", "")),
         "range_base_bed": s(sp.get("range_base_bed", "")),
-        "endpoint_kind": s(sp.get("endpoint_kind") if str(sp.get("endpoint_kind")) in ("observed", "projected", "truncated") else "observed"),
-        # P1-5 fix: replace boolean `reworked` with string `occurrence_mode`.
-        # Accepts: in_situ | reworked | transported | cavity_fill | bioturbated |
-        # derived | lag_deposit. Backward-compat: old `reworked` bool maps to
-        # "reworked" (True) or "in_situ" (False).
+        "range_top_idx": _normalize_optional_int(sp.get("range_top_idx")),
+        "range_base_idx": _normalize_optional_int(sp.get("range_base_idx")),
+        "endpoint_kind": _normalize_endpoint_kind(sp.get("endpoint_kind")),
+        # Missing modern classifications remain unknown. Explicit legacy
+        # reworked booleans retain their historical compatibility mapping.
         "occurrence_mode": _normalize_occurrence_mode(sp),
+        "confidence": _normalize_confidence(sp.get("confidence")),
         # H-8 fix: prompt explicitly asks for a note field for degraded
         # determinations; it was never written to the output row.
         "note": s(sp.get("note", "")),
@@ -694,9 +775,15 @@ def extract_range_chart(
     the ``base_url`` / ``api_key`` / ``model`` kwargs are ignored. When None
     (legacy callers), an Anthropic-format provider is built from the kwargs so
     old behaviour is preserved byte-for-byte.
+
+    FIX-BUG: all numeric parameters are clamped to valid ranges so that
+    callers who bypass the GUI/CLI wrappers cannot pass absurd values.
     """
     if not image_b64:
         return ExtractResult(ok=False, error_key="err.imageRead")
+    # FIX-BUG: clamp all numeric parameters to valid ranges
+    max_tokens = clamp_max_tokens(max_tokens)
+    timeout_sec = clamp_timeout_sec(timeout_sec)
     # P1-1 (REVIEW-2026-07-27): compute image fingerprint early, before any
     # processing, so clipboard paste / canvas-extracted / re-uploaded images
     # have a verifiable bytes-level identity even when source_path is absent.
@@ -752,7 +839,7 @@ def extract_range_chart(
     warning = ("Result may be truncated (model hit max_tokens). "
                "Try raising the max_tokens setting and re-running.")
     if raw_text is None:
-        return _error_from_status_with_body(status, err_body, latency_ms)
+        return _error_from_status_with_body(status, err_body, latency_ms, image_sha256=image_sha256)
     try:
         parsed = safe_json_loads(raw_text)
     except ValueError:
@@ -761,6 +848,7 @@ def extract_range_chart(
             truncated=truncated, latency_ms=latency_ms,
             usage=usage or {},
             warning=warning if truncated else "",
+            image_sha256=image_sha256,
         )
     try:
         data = normalize_result(parsed)
@@ -793,6 +881,11 @@ def extract_range_chart(
         ok=True, data=data, raw=raw_text,
         truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
         warning=warning if truncated else "",
+        image_sha256=image_sha256,
+        request_meta=_build_request_meta(
+            p, "range_chart", max_tokens, image_sha256,
+            prompt_version_for_mode("range_chart"),
+        ),
     )
 
 
@@ -1091,6 +1184,9 @@ def extract_columnar_section(
     """Columnar-section extraction. Same contract as extract_range_chart."""
     if not image_b64:
         return ExtractResult(ok=False, error_key="err.imageRead")
+    # FIX-BUG: clamp all numeric parameters to valid ranges
+    max_tokens = clamp_max_tokens(max_tokens)
+    timeout_sec = clamp_timeout_sec(timeout_sec)
     # P1-1 (REVIEW-2026-07-27): mandatory image fingerprint.
     image_sha256 = compute_image_sha256_from_b64(image_b64)
     p = provider or LlmProvider(
@@ -1161,6 +1257,10 @@ def extract_columnar_section(
         truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
         warning=warning if truncated else "",
         image_sha256=image_sha256,
+        request_meta=_build_request_meta(
+            p, "columnar_section", max_tokens, image_sha256,
+            prompt_version_for_mode("columnar_section"),
+        ),
     )
 
 
@@ -1280,6 +1380,9 @@ def extract_abundance_diagram(
     """Abundance-diagram extraction. Same contract as extract_range_chart."""
     if not image_b64:
         return ExtractResult(ok=False, error_key="err.imageRead")
+    # FIX-BUG: clamp all numeric parameters to valid ranges
+    max_tokens = clamp_max_tokens(max_tokens)
+    timeout_sec = clamp_timeout_sec(timeout_sec)
     # P1-1 (REVIEW-2026-07-27): mandatory image fingerprint.
     image_sha256 = compute_image_sha256_from_b64(image_b64)
     p = provider or LlmProvider(
@@ -1350,6 +1453,10 @@ def extract_abundance_diagram(
         truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
         warning=warning if truncated else "",
         image_sha256=image_sha256,
+        request_meta=_build_request_meta(
+            p, "abundance_diagram", max_tokens, image_sha256,
+            prompt_version_for_mode("abundance_diagram"),
+        ),
     )
 
 
@@ -1542,6 +1649,25 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
 normalize_phylogenetic_tree_result = _normalize_phylogenetic_tree_into
 
 
+def _quote_newick_label(label):
+    """Return a Newick-safe representation of ``label``.
+
+    Newick tokens that need quoting: ``( ) [ ] ; ,``. We also quote
+    when the label contains whitespace, a leading/trailing space,
+    or a literal ``:`` (which would otherwise be ambiguous with the
+    ``name:branch_length`` separator — the parser splits on the
+    FIRST ``:`` and treats anything after as the branch length, so
+    without quoting ``"A:B"`` becomes the tuple ``(name=A,
+    branch_length="B")``). Embedded single quotes are doubled per
+    the Newick format spec.
+    """
+    if not label:
+        return "''"
+    needs_quote = any(ch in label for ch in '(),[];:')
+    if not needs_quote and label.strip() == label and ' ' not in label:
+        return label
+    return "'" + label.replace("'", "''") + "'"
+
 def _build_newick_node(node_id: str, id_to_children: dict[str, list[str]],
                        nodes_dict: dict[str, dict[str, Any]]) -> str:
     """Recursively build the Newick subtree for ``node_id``."""
@@ -1552,8 +1678,13 @@ def _build_newick_node(node_id: str, id_to_children: dict[str, list[str]],
         name = n.get("name", "")
         bl = n.get("branch_length")
         bl_str = f":{bl}" if bl is not None else ""
-        # Escape parentheses and colons in taxon names
-        safe_name = name.replace("(", "_").replace(")", "_").replace(":", "_")
+        # Phase M fix: the previous escaping replaced `(`, `)`, `:`
+        # with `_`, which loses semantic information (e.g. "(A)"
+        # becomes "_A_"). Use the Newick-standard single-quote
+        # quoting: wrap the name in single quotes when it contains
+        # any of the structural characters, with embedded single
+        # quotes doubled per the Newick spec.
+        safe_name = _quote_newick_label(name)
         return f"{safe_name}{bl_str}"
     else:
         # Internal node: (children)support:branch_length
@@ -1618,6 +1749,9 @@ def extract_phylogenetic_tree(
     """Phylogenetic-tree extraction. Same contract as extract_range_chart."""
     if not image_b64:
         return ExtractResult(ok=False, error_key="err.imageRead")
+    # FIX-BUG: clamp all numeric parameters to valid ranges
+    max_tokens = clamp_max_tokens(max_tokens)
+    timeout_sec = clamp_timeout_sec(timeout_sec)
     # P1-1 (REVIEW-2026-07-27): mandatory image fingerprint.
     image_sha256 = compute_image_sha256_from_b64(image_b64)
     p = provider or LlmProvider(
@@ -1698,11 +1832,683 @@ def extract_phylogenetic_tree(
         truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
         warning=warning if truncated else "",
         image_sha256=image_sha256,
+        request_meta=_build_request_meta(
+            p, "phylogenetic_tree", max_tokens, image_sha256,
+            prompt_version_for_mode("phylogenetic_tree"),
+        ),
+    )
+
+
+# ============================================================================
+# NEW CHART TYPES: Chemical Stratigraphy
+# ============================================================================
+
+_KNOWN_CHEMICAL_STRAT_ROOT_KEYS = ("metadata", "data_points", "events", "intervals", "confidence")
+_KNOWN_CHEMICAL_STRAT_DATA_POINT_KEYS = (
+    "sample_id", "depth_m", "age_ma", "stage", "values", "lithology", "fossil_horizon", "note"
+)
+_KNOWN_CHEMICAL_STRAT_EVENT_KEYS = ("type", "depth_m", "age_ma", "name", "magnitude", "description")
+_KNOWN_CHEMICAL_STRAT_INTERVAL_KEYS = (
+    "name", "top_depth_m", "base_depth_m", "top_age_ma", "base_age_ma",
+    "characteristic_values", "lithology"
+)
+
+
+def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Coerce the parsed chemical stratigraphy JSON into the strict result shape.
+
+    FIX-NEW: new chart type for isotopic curves, elemental data.
+    H8: extra keys the model emits are preserved under ``_extras``.
+    """
+    if not isinstance(parsed, dict):
+        return {
+            "metadata": {},
+            "data_points": [],
+            "events": [],
+            "intervals": [],
+            "confidence": 0.0,
+            "_warnings": ["normalize_non_dict_input"],
+        }
+
+    def s(v):
+        return "" if v is None else str(v)
+
+    out = {
+        "metadata": {},
+        "data_points": [],
+        "events": [],
+        "intervals": [],
+        "confidence": 0.0,
+    }
+
+    # Normalize metadata
+    meta = parsed.get("metadata") or {}
+    if isinstance(meta, dict):
+        out["metadata"] = {
+            "section_name": s(meta.get("section_name", "")),
+            "location": s(meta.get("location", "")),
+            "latitude": s(meta.get("latitude", "")),
+            "longitude": s(meta.get("longitude", "")),
+            "age_range": s(meta.get("age_range", "")),
+            "curve_types": meta.get("curve_types") if isinstance(meta.get("curve_types"), list) else [],
+        }
+
+    # Normalize data_points
+    for pt in parsed.get("data_points") or []:
+        if not isinstance(pt, dict):
+            continue
+        values_raw = pt.get("values") or {}
+        values = {}
+        if isinstance(values_raw, dict):
+            for k, v in values_raw.items():
+                values[str(k)] = s(v)
+        row = {
+            "sample_id": s(pt.get("sample_id")),
+            "depth_m": s(pt.get("depth_m")),
+            "age_ma": s(pt.get("age_ma")),
+            "stage": s(pt.get("stage")),
+            "values": values,
+            "lithology": s(pt.get("lithology")),
+            "fossil_horizon": s(pt.get("fossil_horizon")),
+            "note": s(pt.get("note")),
+        }
+        _carry_extras(pt, _KNOWN_CHEMICAL_STRAT_DATA_POINT_KEYS, row)
+        out["data_points"].append(row)
+
+    # Normalize events
+    for ev in parsed.get("events") or []:
+        if not isinstance(ev, dict):
+            continue
+        row = {
+            "type": s(ev.get("type")),
+            "depth_m": s(ev.get("depth_m")),
+            "age_ma": s(ev.get("age_ma")),
+            "name": s(ev.get("name")),
+            "magnitude": s(ev.get("magnitude")),
+            "description": s(ev.get("description")),
+        }
+        _carry_extras(ev, _KNOWN_CHEMICAL_STRAT_EVENT_KEYS, row)
+        out["events"].append(row)
+
+    # Normalize intervals
+    for iv in parsed.get("intervals") or []:
+        if not isinstance(iv, dict):
+            continue
+        row = {
+            "name": s(iv.get("name")),
+            "top_depth_m": s(iv.get("top_depth_m")),
+            "base_depth_m": s(iv.get("base_depth_m")),
+            "top_age_ma": s(iv.get("top_age_ma")),
+            "base_age_ma": s(iv.get("base_age_ma")),
+            "characteristic_values": s(iv.get("characteristic_values")),
+            "lithology": s(iv.get("lithology")),
+        }
+        _carry_extras(iv, _KNOWN_CHEMICAL_STRAT_INTERVAL_KEYS, row)
+        out["intervals"].append(row)
+
+    try:
+        conf = float(parsed.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        conf = 0.0
+    out["confidence"] = max(0.0, min(1.0, conf))
+
+    extras_src = {k: v for k, v in parsed.items() if k not in _KNOWN_CHEMICAL_STRAT_ROOT_KEYS}
+    if extras_src:
+        out["_extras"] = extras_src
+    return out
+
+
+def extract_chemical_stratigraphy(
+    *,
+    api_key: str,
+    image_b64: str,
+    media_type: str,
+    caption: str = "",
+    chart_lang: str = "auto",
+    base_url: str = DEFAULT_ENDPOINT,
+    model: str = DEFAULT_MODEL,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    provider: LlmProvider | None = None,
+    progress_callback=None,
+) -> ExtractResult:
+    """Chemical stratigraphy extraction. Same contract as extract_range_chart."""
+    from .prompt import CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT
+
+    if not image_b64:
+        return ExtractResult(ok=False, error_key="err.imageRead")
+    max_tokens = clamp_max_tokens(max_tokens)
+    timeout_sec = clamp_timeout_sec(timeout_sec)
+    image_sha256 = compute_image_sha256_from_b64(image_b64)
+    p = provider or LlmProvider(
+        name="Legacy Anthropic-compatible",
+        api_format=ApiFormat.ANTHROPIC,
+        endpoint=base_url,
+        api_key=api_key,
+        model=model,
+    )
+    lang_hint = CHART_LANG_HINT.get(chart_lang, "")
+    user_prompt = (
+        "Caption:\n"
+        + (caption.strip() if caption and caption.strip() else "(no caption)")
+        + "\n\n"
+        + lang_hint
+        + "Extract the chemical stratigraphy information as the strict JSON contract."
+    )
+    t0 = time.perf_counter()
+    try:
+        raw_text, truncated, status, err_body, usage = call_llm_api(
+            provider=p,
+            system_prompt=CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT,
+            image_b64=image_b64,
+            media_type=media_type,
+            user_text=user_prompt,
+            max_tokens=max_tokens,
+            timeout_sec=timeout_sec,
+            capture_error_body=True,
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw="", latency_ms=latency_ms,
+            warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+            image_sha256=image_sha256,
+        )
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    warning = ("Result may be truncated (model hit max_tokens). "
+               "Try raising the max_tokens setting and re-running.")
+    if raw_text is None:
+        return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
+    try:
+        parsed = safe_json_loads(raw_text)
+    except ValueError:
+        return ExtractResult(
+            ok=False, error_key="err.parse", raw=raw_text,
+            truncated=truncated, latency_ms=latency_ms,
+            usage=usage or {},
+            warning=warning if truncated else "",
+            image_sha256=image_sha256,
+        )
+    try:
+        data = normalize_chemical_stratigraphy_result(parsed)
+    except Exception as exc:
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw=raw_text, truncated=truncated, usage=usage or {},
+            latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+            image_sha256=image_sha256,
+        )
+    return ExtractResult(
+        ok=True, data=data, raw=raw_text,
+        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
+        warning=warning if truncated else "",
+        image_sha256=image_sha256,
+        request_meta=_build_request_meta(
+            p, "chemical_stratigraphy", max_tokens, image_sha256,
+            prompt_version_for_mode("chemical_stratigraphy"),
+        ),
+    )
+
+
+# ============================================================================
+# NEW CHART TYPES: Paleogeographic Map
+# ============================================================================
+
+_KNOWN_PALEOMAP_ROOT_KEYS = (
+    "metadata", "continents", "oceans_seas", "tectonic_features",
+    "biogeographic_realms", "fossil_sites", "paleolatitude_indicators", "confidence"
+)
+
+
+def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Coerce the parsed paleogeographic map JSON into the strict result shape.
+
+    FIX-NEW: new chart type for paleogeographic maps.
+    """
+    if not isinstance(parsed, dict):
+        return {
+            "metadata": {},
+            "continents": [],
+            "oceans_seas": [],
+            "tectonic_features": [],
+            "biogeographic_realms": [],
+            "fossil_sites": [],
+            "paleolatitude_indicators": [],
+            "confidence": 0.0,
+            "_warnings": ["normalize_non_dict_input"],
+        }
+
+    def s(v):
+        return "" if v is None else str(v)
+
+    out = {
+        "metadata": {},
+        "continents": [],
+        "oceans_seas": [],
+        "tectonic_features": [],
+        "biogeographic_realms": [],
+        "fossil_sites": [],
+        "paleolatitude_indicators": [],
+        "confidence": 0.0,
+    }
+
+    # Normalize metadata
+    meta = parsed.get("metadata") or {}
+    if isinstance(meta, dict):
+        out["metadata"] = {
+            "time_slice": s(meta.get("time_slice", "")),
+            "approximate_age_ma": s(meta.get("approximate_age_ma", "")),
+            "map_title": s(meta.get("map_title", "")),
+            "projection": s(meta.get("projection", "")),
+            "scale": s(meta.get("scale", "")),
+            "source": s(meta.get("source", "")),
+        }
+
+    def norm_coords(val):
+        """Normalize coordinates to list of [lat, lon] pairs."""
+        if isinstance(val, list):
+            result = []
+            for item in val:
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    try:
+                        result.append([float(item[0]), float(item[1])])
+                    except (TypeError, ValueError):
+                        result.append([s(item[0]), s(item[1])])
+            return result
+        return []
+
+    # Normalize continents
+    for cont in parsed.get("continents") or []:
+        if not isinstance(cont, dict):
+            continue
+        row = {
+            "name": s(cont.get("name")),
+            "type": s(cont.get("type")),
+            "coordinates": norm_coords(cont.get("coordinates")),
+            "paleolatitude": s(cont.get("paleolatitude")),
+            "note": s(cont.get("note")),
+        }
+        out["continents"].append(row)
+
+    # Normalize oceans/seas
+    for sea in parsed.get("oceans_seas") or []:
+        if not isinstance(sea, dict):
+            continue
+        row = {
+            "name": s(sea.get("name")),
+            "type": s(sea.get("type")),
+            "coordinates": norm_coords(sea.get("coordinates")),
+            "note": s(sea.get("note")),
+        }
+        out["oceans_seas"].append(row)
+
+    # Normalize tectonic features
+    for feat in parsed.get("tectonic_features") or []:
+        if not isinstance(feat, dict):
+            continue
+        row = {
+            "name": s(feat.get("name")),
+            "type": s(feat.get("type")),
+            "coordinates": norm_coords(feat.get("coordinates")),
+            "direction": s(feat.get("direction")),
+            "description": s(feat.get("description")),
+        }
+        out["tectonic_features"].append(row)
+
+    # Normalize biogeographic realms
+    for realm in parsed.get("biogeographic_realms") or []:
+        if not isinstance(realm, dict):
+            continue
+        row = {
+            "name": s(realm.get("name")),
+            "type": s(realm.get("type")),
+            "coordinates": norm_coords(realm.get("coordinates")),
+            "characteristic_fauna": s(realm.get("characteristic_fauna")),
+        }
+        out["biogeographic_realms"].append(row)
+
+    # Normalize fossil sites
+    for site in parsed.get("fossil_sites") or []:
+        if not isinstance(site, dict):
+            continue
+        row = {
+            "name": s(site.get("name")),
+            "lat_lon": s(site.get("lat_lon")),
+            "age": s(site.get("age")),
+            "fossils": s(site.get("fossils")),
+            "marker_type": s(site.get("marker_type")),
+        }
+        out["fossil_sites"].append(row)
+
+    # Normalize paleolatitude indicators
+    for ind in parsed.get("paleolatitude_indicators") or []:
+        if not isinstance(ind, dict):
+            continue
+        row = {
+            "type": s(ind.get("type")),
+            "coordinates": norm_coords(ind.get("coordinates")),
+        }
+        out["paleolatitude_indicators"].append(row)
+
+    try:
+        conf = float(parsed.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        conf = 0.0
+    out["confidence"] = max(0.0, min(1.0, conf))
+
+    extras_src = {k: v for k, v in parsed.items() if k not in _KNOWN_PALEOMAP_ROOT_KEYS}
+    if extras_src:
+        out["_extras"] = extras_src
+    return out
+
+
+def extract_paleomap(
+    *,
+    api_key: str,
+    image_b64: str,
+    media_type: str,
+    caption: str = "",
+    chart_lang: str = "auto",
+    base_url: str = DEFAULT_ENDPOINT,
+    model: str = DEFAULT_MODEL,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    provider: LlmProvider | None = None,
+    progress_callback=None,
+) -> ExtractResult:
+    """Paleogeographic map extraction. Same contract as extract_range_chart."""
+    from .prompt import PALEOMAP_SYSTEM_PROMPT
+
+    if not image_b64:
+        return ExtractResult(ok=False, error_key="err.imageRead")
+    max_tokens = clamp_max_tokens(max_tokens)
+    timeout_sec = clamp_timeout_sec(timeout_sec)
+    image_sha256 = compute_image_sha256_from_b64(image_b64)
+    p = provider or LlmProvider(
+        name="Legacy Anthropic-compatible",
+        api_format=ApiFormat.ANTHROPIC,
+        endpoint=base_url,
+        api_key=api_key,
+        model=model,
+    )
+    lang_hint = CHART_LANG_HINT.get(chart_lang, "")
+    user_prompt = (
+        "Caption:\n"
+        + (caption.strip() if caption and caption.strip() else "(no caption)")
+        + "\n\n"
+        + lang_hint
+        + "Extract the paleogeographic map information as the strict JSON contract."
+    )
+    t0 = time.perf_counter()
+    try:
+        raw_text, truncated, status, err_body, usage = call_llm_api(
+            provider=p,
+            system_prompt=PALEOMAP_SYSTEM_PROMPT,
+            image_b64=image_b64,
+            media_type=media_type,
+            user_text=user_prompt,
+            max_tokens=max_tokens,
+            timeout_sec=timeout_sec,
+            capture_error_body=True,
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw="", latency_ms=latency_ms,
+            warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+            image_sha256=image_sha256,
+        )
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    warning = ("Result may be truncated (model hit max_tokens). "
+               "Try raising the max_tokens setting and re-running.")
+    if raw_text is None:
+        return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
+    try:
+        parsed = safe_json_loads(raw_text)
+    except ValueError:
+        return ExtractResult(
+            ok=False, error_key="err.parse", raw=raw_text,
+            truncated=truncated, latency_ms=latency_ms,
+            usage=usage or {},
+            warning=warning if truncated else "",
+            image_sha256=image_sha256,
+        )
+    try:
+        data = normalize_paleomap_result(parsed)
+    except Exception as exc:
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw=raw_text, truncated=truncated, usage=usage or {},
+            latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+            image_sha256=image_sha256,
+        )
+    return ExtractResult(
+        ok=True, data=data, raw=raw_text,
+        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
+        warning=warning if truncated else "",
+        image_sha256=image_sha256,
+        request_meta=_build_request_meta(
+            p, "paleomap", max_tokens, image_sha256,
+            prompt_version_for_mode("paleomap"),
+        ),
+    )
+
+
+# ============================================================================
+# NEW CHART TYPES: Scatter Plot / Biplot
+# ============================================================================
+
+_KNOWN_SCATTER_PLOT_ROOT_KEYS = (
+    "metadata", "groups", "points", "outliers", "statistics", "confidence"
+)
+
+
+def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Coerce the parsed scatter plot JSON into the strict result shape.
+
+    FIX-NEW: new chart type for scatter plots and biplots.
+    """
+    if not isinstance(parsed, dict):
+        return {
+            "metadata": {},
+            "groups": [],
+            "points": [],
+            "outliers": [],
+            "statistics": {},
+            "confidence": 0.0,
+            "_warnings": ["normalize_non_dict_input"],
+        }
+
+    def s(v):
+        return "" if v is None else str(v)
+
+    out = {
+        "metadata": {},
+        "groups": [],
+        "points": [],
+        "outliers": [],
+        "statistics": {},
+        "confidence": 0.0,
+    }
+
+    # Normalize metadata
+    meta = parsed.get("metadata") or {}
+    if isinstance(meta, dict):
+        out["metadata"] = {
+            "title": s(meta.get("title", "")),
+            "x_axis_label": s(meta.get("x_axis_label", "")),
+            "y_axis_label": s(meta.get("y_axis_label", "")),
+            "z_axis_label": s(meta.get("z_axis_label", "")),
+            "x_unit": s(meta.get("x_unit", "")),
+            "y_unit": s(meta.get("y_unit", "")),
+            "n_points": meta.get("n_points") if isinstance(meta.get("n_points"), int) else None,
+            "grouping_variable": s(meta.get("grouping_variable", "")),
+        }
+
+    # Normalize groups
+    for grp in parsed.get("groups") or []:
+        if not isinstance(grp, dict):
+            continue
+        row = {
+            "name": s(grp.get("name")),
+            "color": s(grp.get("color")),
+            "marker": s(grp.get("marker")),
+            "n_points_visible": grp.get("n_points_visible") if isinstance(grp.get("n_points_visible"), int) else None,
+            "description": s(grp.get("description")),
+        }
+        out["groups"].append(row)
+
+    # Normalize points (limit to first 500 for very large outputs)
+    for pt in (parsed.get("points") or [])[:500]:
+        if not isinstance(pt, dict):
+            continue
+        row = {
+            "x": s(pt.get("x")),
+            "y": s(pt.get("y")),
+            "z": s(pt.get("z")),
+            "group": s(pt.get("group")),
+            "label": s(pt.get("label")),
+            "note": s(pt.get("note")),
+        }
+        out["points"].append(row)
+
+    # Normalize outliers
+    for ot in parsed.get("outliers") or []:
+        if not isinstance(ot, dict):
+            continue
+        row = {
+            "x": s(ot.get("x")),
+            "y": s(ot.get("y")),
+            "group": s(ot.get("group")),
+            "reason": s(ot.get("reason")),
+        }
+        out["outliers"].append(row)
+
+    # Normalize statistics
+    stats = parsed.get("statistics") or {}
+    if isinstance(stats, dict):
+        out["statistics"] = {
+            "correlation": s(stats.get("correlation")),
+            "regression_line": s(stats.get("regression_line")),
+            "r_squared": s(stats.get("r_squared")),
+            "p_value": s(stats.get("p_value")),
+        }
+
+    try:
+        conf = float(parsed.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        conf = 0.0
+    out["confidence"] = max(0.0, min(1.0, conf))
+
+    extras_src = {k: v for k, v in parsed.items() if k not in _KNOWN_SCATTER_PLOT_ROOT_KEYS}
+    if extras_src:
+        out["_extras"] = extras_src
+    return out
+
+
+def extract_scatter_plot(
+    *,
+    api_key: str,
+    image_b64: str,
+    media_type: str,
+    caption: str = "",
+    chart_lang: str = "auto",
+    base_url: str = DEFAULT_ENDPOINT,
+    model: str = DEFAULT_MODEL,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    provider: LlmProvider | None = None,
+    progress_callback=None,
+) -> ExtractResult:
+    """Scatter plot extraction. Same contract as extract_range_chart."""
+    from .prompt import SCATTER_PLOT_SYSTEM_PROMPT
+
+    if not image_b64:
+        return ExtractResult(ok=False, error_key="err.imageRead")
+    max_tokens = clamp_max_tokens(max_tokens)
+    timeout_sec = clamp_timeout_sec(timeout_sec)
+    image_sha256 = compute_image_sha256_from_b64(image_b64)
+    p = provider or LlmProvider(
+        name="Legacy Anthropic-compatible",
+        api_format=ApiFormat.ANTHROPIC,
+        endpoint=base_url,
+        api_key=api_key,
+        model=model,
+    )
+    lang_hint = CHART_LANG_HINT.get(chart_lang, "")
+    user_prompt = (
+        "Caption:\n"
+        + (caption.strip() if caption and caption.strip() else "(no caption)")
+        + "\n\n"
+        + lang_hint
+        + "Extract the scatter plot information as the strict JSON contract."
+    )
+    t0 = time.perf_counter()
+    try:
+        raw_text, truncated, status, err_body, usage = call_llm_api(
+            provider=p,
+            system_prompt=SCATTER_PLOT_SYSTEM_PROMPT,
+            image_b64=image_b64,
+            media_type=media_type,
+            user_text=user_prompt,
+            max_tokens=max_tokens,
+            timeout_sec=timeout_sec,
+            capture_error_body=True,
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw="", latency_ms=latency_ms,
+            warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+            image_sha256=image_sha256,
+        )
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    warning = ("Result may be truncated (model hit max_tokens). "
+               "Try raising the max_tokens setting and re-running.")
+    if raw_text is None:
+        return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
+    try:
+        parsed = safe_json_loads(raw_text)
+    except ValueError:
+        return ExtractResult(
+            ok=False, error_key="err.parse", raw=raw_text,
+            truncated=truncated, latency_ms=latency_ms,
+            usage=usage or {},
+            warning=warning if truncated else "",
+            image_sha256=image_sha256,
+        )
+    try:
+        data = normalize_scatter_plot_result(parsed)
+    except Exception as exc:
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw=raw_text, truncated=truncated, usage=usage or {},
+            latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+            image_sha256=image_sha256,
+        )
+    return ExtractResult(
+        ok=True, data=data, raw=raw_text,
+        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
+        warning=warning if truncated else "",
+        image_sha256=image_sha256,
+        request_meta=_build_request_meta(
+            p, "scatter_plot", max_tokens, image_sha256,
+            prompt_version_for_mode("scatter_plot"),
+        ),
     )
 
 
 _MODE_DISPATCH["abundance_diagram"] = extract_abundance_diagram
 _MODE_DISPATCH["phylogenetic_tree"] = extract_phylogenetic_tree
+_MODE_DISPATCH["chemical_stratigraphy"] = extract_chemical_stratigraphy
+_MODE_DISPATCH["paleomap"] = extract_paleomap
+_MODE_DISPATCH["scatter_plot"] = extract_scatter_plot
 
 
 def extract(

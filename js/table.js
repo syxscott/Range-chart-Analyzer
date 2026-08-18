@@ -120,6 +120,40 @@ function rcaTableConfigs(data) {
     ];
   }
 
+  // -------- phylogenetic-tree mode (UI-FIX 2026-08-07) --------
+  // Mirrors rca_core.exporter._looks_phylogenetic_tree + _phylogenetic_tree_tables.
+  // Without this the web frontend could select the mode but rendered four
+  // empty range-chart tables for a tree payload (no nodes table existed).
+  const hasPhyloShape = data
+    && Array.isArray(data.nodes)
+    && data.nodes.length > 0
+    && data.nodes[0]
+    && typeof data.nodes[0] === 'object'
+    && 'id' in data.nodes[0]
+    && 'parent' in data.nodes[0];
+
+  // -------- phylogenetic-tree mode --------
+  if (hasPhyloShape) {
+    return [
+      {
+        id: 'nodes',
+        titleKey: 'sec.nodes',
+        cols: ['col.nodeId', 'col.parent', 'col.name', 'col.isLeaf',
+               'col.branchLength', 'col.nodeAgeMa', 'col.support'],
+        italicCol: -1,
+        row: (n) => [
+          n.id,
+          n.parent == null ? '' : n.parent,
+          n.name,
+          n.is_leaf ? 'Y' : 'N',
+          n.branch_length == null ? '' : String(n.branch_length),
+          n.node_age_ma == null ? '' : String(n.node_age_ma),
+          n.support == null ? '' : String(n.support),
+        ],
+      },
+    ];
+  }
+
   // -------- range-chart mode (default) --------
   const speciesCols = ['col.species', 'col.section', 'col.rangeBase', 'col.rangeTop', 'col.biozone'];
   const speciesRow = (r) => [r.species, r.section, r.range_base, r.range_top, r.biozone];
@@ -131,7 +165,10 @@ function rcaTableConfigs(data) {
     {
       id: 'sections',
       titleKey: 'sec.sections',
-      cols: ['col.name', 'col.ageRange', 'col.formations', 'col.thickness', 'col.coordinates'],
+      // REVIEW-2026-07-31: col.formations was renamed to col.formation
+      // (P1-9) — the stale key rendered "[?col.formations]" in every
+      // section header.
+      cols: ['col.name', 'col.ageRange', 'col.formation', 'col.thickness', 'col.coordinates'],
       italicCol: -1,
       row: (s) => [
         s.name,
@@ -197,11 +234,10 @@ function rcaRenderResults(data, rawText) {
   parts.push('<span class="num" data-target="' + confPct + '">0</span>');
   parts.push('</span>');
   parts.push('<span class="label">' + rcaEsc(t('results.confidence')) + '</span>');
-  parts.push('</div>');
-  // FIX (quality): quality badge next to the confidence ring. Shows the
-  // composite score (0.0–1.0) and a letter grade (A/B/C/D/F) with a tooltip
-  // listing detected issues. Lets the user judge extraction reliability at a
-  // glance and spot low-confidence rows for manual review.
+  // UI-REVIEW-2026-08-01 (M3): the quality badge used to be a THIRD
+  // sibling of rt-left / rt-actions, so `justify-content: space-between`
+  // floated it alone in the middle of the toolbar (~440px away from the
+  // confidence ring). Move it inside .rt-left so it sits next to the ring.
   const q = data.quality;
   if (q && typeof q.score === 'number') {
     const qpct = Math.round(q.score * 100);
@@ -209,7 +245,18 @@ function rcaRenderResults(data, rawText) {
     if (q.score >= 0.75) qLevel = 'high';
     else if (q.score >= 0.6) qLevel = 'mid';
     const issuesList = (q.issues || [])
-      .map((iss) => t(iss.msg_key || 'quality.invalid_result'))
+      .map((iss) => {
+        // REVIEW-2026-07-31: substitute {param} placeholders — issue
+        // translations like "{count} section(s) span eras" rendered the
+        // literal "{count}" before.
+        let text = t(iss.msg_key || 'quality.invalid_result');
+        if (iss.params && typeof iss.params === 'object') {
+          for (const k of Object.keys(iss.params)) {
+            text = text.split('{' + k + '}').join(String(iss.params[k]));
+          }
+        }
+        return text;
+      })
       .filter(Boolean)
       .join('; ');
     parts.push('<span class="quality-badge ' + qLevel + '" title="' + rcaEsc(issuesList) + '">');
@@ -217,6 +264,7 @@ function rcaRenderResults(data, rawText) {
     parts.push('<span class="qb-grade">' + rcaEsc(q.grade || '-') + '</span>');
     parts.push('</span>');
   }
+  parts.push('</div>');
   parts.push('<div class="rt-actions">');
   parts.push('<button type="button" class="btn btn-secondary btn-small" id="btn-export-all">' + rcaEsc(t('results.exportAll')) + '</button>');
   parts.push('</div>');
@@ -291,8 +339,19 @@ function rcaRenderResults(data, rawText) {
         if (colKey === 'col.rangeBase' || colKey === 'col.rangeTop') {
           cls = val.trim() ? 'cell-num' : 'cell-empty';
         }
+        // UI fix (2026-08-07): every td defaults to nowrap + ellipsis
+        // (max-width 280px), but no title attribute was emitted, so the
+        // truncated tail was the ONLY thing the user could see — the full
+        // value was unreachable. Attach a title attribute on every non-empty
+        // cell so hover shows the complete text. Also wrap the single-column
+        // other_fossils table (long free-text entries read better wrapped
+        // than truncated).
+        if (cfg.id === 'other_fossils' && val.trim()) {
+          cls += ' cell-wrapping';
+        }
+        const titleAttr = val.trim() ? ' title="' + rcaEscAttr(val) + '"' : '';
         const disp = val.trim() ? rcaEsc(val) : '-';
-        parts.push('<td class="' + cls + '">' + disp + '</td>');
+        parts.push('<td class="' + cls + '"' + titleAttr + '>' + disp + '</td>');
       });
       parts.push('</tr>');
     });

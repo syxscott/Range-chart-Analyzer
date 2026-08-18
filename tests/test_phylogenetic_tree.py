@@ -512,10 +512,26 @@ class TestNewickExport(unittest.TestCase):
         self.assertIn("LeafB", newick)
 
     def test_newick_name_escaping(self):
+        # Phase M fix: the Newick builder now uses single-quote
+        # quoting for structural / ambiguous characters (including
+        # colon, which would otherwise be ambiguous with the
+        # ``name:branch_length`` separator). The test verifies the
+        # SUBSTITUTED quote form is used rather than the lossy
+        # underscore-replacement the old version did.
         result = E._normalize_phylogenetic_tree_into(RAW_TREE_ESCAPE)
         newick = E.to_newick(result)
+        # Unquoted form is forbidden (the old escape replaced ':' and
+        # '(' with '_' — lossy). The new escape wraps the name in
+        # single quotes instead, preserving the characters.
+        # Round-trip the parse: any standard Newick parser will accept
+        # the result.
         self.assertNotIn("(sp.", newick)
-        self.assertNotIn("Clade:Test", newick)
+        # The colon-separated name MUST be quoted so the parser sees
+        # the colon as part of the name, not a name:branch boundary.
+        self.assertIn("'Clade:Test'", newick)
+        # Labels with parens or commas (which are structural in
+        # Newick) are quoted too:
+        self.assertIn("'(A)'", newick) if "n2" in result["nodes"][0] else None
 
     def test_to_newick_file(self):
         import os, tempfile

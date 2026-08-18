@@ -42,6 +42,9 @@ TRANSLATIONS["zh"] = {
     "settings.noProviders": "尚未配置 LLM 提供商",
     "errors.noProviders": "尚未配置 LLM 提供商",
     "settings.remember": "记住 API Key",
+    # H3 fix (REVIEW-2026-11-07): shown once when the legacy api_key is
+    # stored with weaker-than-Fernet at-rest protection.
+    "settings.keyObfuscated": "API Key 已保存，但当前仅为「混淆」级保护（未安装 keyring）。如需真正加密，请安装 cryptography + keyring。",
     "settings.enhance": "图像增强（缩放去噪）",
     "chartLang.auto": "自动检测",
     "image.choose": "选择图片…",
@@ -64,6 +67,7 @@ TRANSLATIONS["zh"] = {
     "status.ready": "就绪",
     "status.loading": "正在识读图表，请稍候……通常 20 秒到 2 分钟",
     "status.done": "提取完成",
+    "status.historySaved": "已保存到历史记录",
     "status.submitting": "正在提交请求……",
     "status.uploading": "正在上传图像……",
     "status.thinking": "正在分析图像，请稍候……",
@@ -109,6 +113,17 @@ TRANSLATIONS["zh"] = {
     "col.abundance": "丰度值",
     "col.abundanceUnit": "丰度单位",
     "col.location": "位置",
+    # P-UI (2026-08-07): phylogenetic-tree node table columns. The exporter
+    # has referenced these keys since phylo support landed, but the i18n
+    # tables never defined them — GUI table headers rendered the raw keys
+    # ("col.nodeId" etc.).
+    "sec.nodes": "节点 (Nodes)",
+    "col.nodeId": "节点 ID",
+    "col.parent": "父节点",
+    "col.isLeaf": "叶节点",
+    "col.branchLength": "分支长度",
+    "col.nodeAgeMa": "节点年龄 (Ma)",
+    "col.support": "支持率",
     "col.depthUnit": "深度单位",
     "col.levelRange": "层位范围",
     "col.sectionId": "剖面 ID",
@@ -130,6 +145,8 @@ TRANSLATIONS["zh"] = {
     "err.429": "请求过于频繁或额度不足（429）。请稍后再试。",
     "err.timeout": "请求超时。图片可能过大或网络不稳定，请重试。",
     "err.network": "网络请求失败。请检查网络或端点设置。",
+    "err.badEndpoint": "端点无效或不可达。请检查 API 设置中的 endpoint 与代理地址。",
+    "err.badMode": "不支持的图表模式。请在设置中选择已支持的模式。",
     "err.http": "API 返回错误",
     "err.bodyTooLarge": "请求体过大（超过服务器限制）。请缩小图片或降低分辨率后重试。",
     "err.parse": "无法解析模型返回的内容。",
@@ -208,6 +225,11 @@ TRANSLATIONS["zh"] = {
     "history.detail.close": "关闭",
     "history.detail.provenance": "导出溯源 (PROV-O JSON-LD)",
     "history.confirmDelete": "确定删除这条记录？",
+    # M4 fix (REVIEW-2026-11-07): the History CSV export actually saves a
+    # full multi-table JSON (a single record holds one result, not runs);
+    # the old message was hard-coded English and didn't say the extension
+    # changed. Localize it and state the swap explicitly.
+    "history.exportCsvAsJson": "您选择了 CSV；为包含全部表格，已改为 JSON 保存（文件名已换为 .json）。",
     "history.confirmDeleteHint": "此操作不可撤销。",
     "history.confirmDeleteAll": "确定清空全部历史记录？此操作不可恢复。",
     "history.confirmDeleteAllHint": "此操作不可撤销。",
@@ -310,6 +332,19 @@ TRANSLATIONS["zh"] = {
     # P1-8: abundance sum-to-100 constraint
     "quality.abundance_sum_violation": "丰度百分比之和不等于 100%（实测：{sum}%）",
     "quality.abundance_sum_violation_count": "共 {count} 个层位的丰度之和不等于 100%",
+    # M-1 fix: keys that were emitted but had no zh/en/ja definition; the
+    # GUI rendered the raw msg_key string. Provide translations for all
+    # three languages so the badge text is localizable.
+    "quality.range_top_lt_base": "部分物种的 LAD（末现）早于 FAD（首现）",
+    "quality.ages_inconsistent": "{count} 个剖面的年龄跨纪（如古生代→中生代），属界线剖面的可能",
+    "quality.stage_order_reversed": "剖面 {section} 的阶段顺序反了：{detail}",
+    "quality.bed_index_order_invalid": "部分岩性/地层块的 bed_index 顺序无效",
+    "quality.bed_index_order_swapped": "已自动交换上/下 bed_index 以修正顺序",
+    "quality.missing_section_ref": "物种的剖面引用未知",
+    # H2 fix (REVIEW-2026-11-07): quality.py:1005 emits this key on scorer
+    # exception; it was defined in no language, so the badge showed the
+    # raw msg_key. (js/i18n.js got the same key in all three locales.)
+    "quality.scoring_failed": "质量评分过程出错，本次结果未评分",
 }
 
 TRANSLATIONS["en"] = {
@@ -346,6 +381,9 @@ TRANSLATIONS["en"] = {
     "settings.noProviders": "No LLM provider configured",
     "errors.noProviders": "No LLM provider configured",
     "settings.remember": "Remember API key",
+    # H3 fix (REVIEW-2026-11-07): shown once when the legacy api_key is
+    # stored with weaker-than-Fernet at-rest protection.
+    "settings.keyObfuscated": "API key saved, but only \"obfuscation\"-level at-rest protection is active (keyring not installed). Install cryptography + keyring for real encryption.",
     "settings.enhance": "Image enhancement (scaled denoising)",
     "chartLang.auto": "Auto-detect",
     "image.choose": "Choose image...",
@@ -368,6 +406,7 @@ TRANSLATIONS["en"] = {
     "status.ready": "Ready",
     "status.loading": "Reading the chart, please wait... usually 20s to 2min",
     "status.done": "Extraction complete",
+    "status.historySaved": "Saved to history",
     "status.submitting": "Submitting request...",
     "status.uploading": "Uploading image...",
     "status.thinking": "Analyzing image...",
@@ -413,6 +452,14 @@ TRANSLATIONS["en"] = {
     "col.abundance": "Abundance",
     "col.abundanceUnit": "Abundance unit",
     "col.location": "Location",
+    # P-UI (2026-08-07): phylogenetic-tree node table columns.
+    "sec.nodes": "Nodes",
+    "col.nodeId": "Node ID",
+    "col.parent": "Parent",
+    "col.isLeaf": "Leaf",
+    "col.branchLength": "Branch length",
+    "col.nodeAgeMa": "Node age (Ma)",
+    "col.support": "Support",
     "col.depthUnit": "Depth unit",
     "col.levelRange": "Level range",
     "col.sectionId": "Section ID",
@@ -434,6 +481,8 @@ TRANSLATIONS["en"] = {
     "err.429": "Too many requests or insufficient quota (429). Try later.",
     "err.timeout": "Request timed out. The image may be too large or network unstable.",
     "err.network": "Network request failed. Check your network or endpoint.",
+    "err.badEndpoint": "Endpoint is invalid or unreachable. Check the endpoint / proxy URL in API Settings.",
+    "err.badMode": "Unsupported chart mode. Choose one of the modes supported by this build.",
     "err.http": "The API returned an error",
     "err.bodyTooLarge": "Request body too large (exceeds server limit). Try a smaller image or lower resolution.",
     "err.parse": "Could not parse the model response.",
@@ -543,6 +592,9 @@ TRANSLATIONS["en"] = {
     "history.detail.close": "Close",
     "history.detail.provenance": "Export Provenance (PROV-O JSON-LD)",
     "history.confirmDelete": "Delete this record?",
+    # M4 fix (REVIEW-2026-11-07): see zh entry — localized + explicit
+    # about the .csv → .json extension swap.
+    "history.exportCsvAsJson": "You picked CSV; to include every table, the full result was saved as JSON (extension changed to .json).",
     "history.confirmDeleteHint": "This action cannot be undone.",
     "history.confirmDeleteAll": "Clear all history?",
     "history.confirmDeleteAllHint": "This action cannot be undone.",
@@ -606,11 +658,29 @@ TRANSLATIONS["en"] = {
     "quality.many_extras": "Model emitted many undefined fields",
     "quality.null_fields": "Some expected fields are null",
     "quality.invalid_result": "Invalid extraction result",
+    # P1-3 / M-1 parity: keys present in zh but previously missing in en/ja,
+    # which made the GUI render the raw msg_key string for English/Japanese
+    # users. Kept in sync with the zh block.
+    "quality.agreement_overflow": "Agreement ratio exceeds 1.0 (clamped)",
+    "quality.chimera_dropped": "Chimera row dropped (field combination never observed in any single run)",
+    "quality.empty_result": "Empty extraction result",
+    "quality.fad_lt_lad": "FAD is younger than LAD (range order inverted)",
+    "quality.missing_biozone": "Biozone label missing",
     # P1-12: Steno's Law biozone order
     "quality.biozone_order_violation": "Steno's Law violation: {species} in biozone {younger_biozone} (younger) appears below {older_biozone} (older)",
     # P1-8: abundance sum-to-100 constraint
     "quality.abundance_sum_violation": "Abundance percentages for '{sample}' sum to {sum}% (should be 100%)",
     "quality.abundance_sum_violation_count": "{count} level(s) have abundance sums not equal to 100%",
+    # M-1 fix: previously emitted but missing in the en table.
+    "quality.range_top_lt_base": "Some species have range top younger than their range base (LAD before FAD)",
+    "quality.ages_inconsistent": "{count} section(s) span eras (e.g. Paleozoic + Mesozoic); legitimate for boundary sections",
+    "quality.stage_order_reversed": "Stage order reversed in section {section}: {detail}",
+    "quality.bed_index_order_invalid": "Some lithology / age-unit blocks have invalid bed index order",
+    "quality.bed_index_order_swapped": "Top/base bed indices swapped automatically to restore order",
+    "quality.missing_section_ref": "Some species reference an unknown section",
+    # H2 fix (REVIEW-2026-11-07): see zh entry — key was emitted but
+    # undefined in all three locales.
+    "quality.scoring_failed": "Quality scoring failed; this result is unscored",
 }
 
 TRANSLATIONS["ja"] = {
@@ -647,6 +717,9 @@ TRANSLATIONS["ja"] = {
     "settings.noProviders": "LLM プロバイダーが未設定です",
     "errors.noProviders": "LLM プロバイダーが未設定です",
     "settings.remember": "API キーを記憶",
+    # H3 fix (REVIEW-2026-11-07): shown once when the legacy api_key is
+    # stored with weaker-than-Fernet at-rest protection.
+    "settings.keyObfuscated": "API キーは保存されましたが、現在のところ「オブファスケーション」レベルの保護のみ有効です（keyring 未インストール）。本物の暗号化には cryptography + keyring をインストールしてください。",
     "settings.enhance": "画像強調（ノイズ除去）",
     "chartLang.auto": "自動検出",
     "image.choose": "画像を選択…",
@@ -669,6 +742,7 @@ TRANSLATIONS["ja"] = {
     "status.ready": "準備完了",
     "status.loading": "図表を読み取り中……通常 20 秒～2 分",
     "status.done": "抽出完了",
+    "status.historySaved": "履歴に保存しました",
     "status.submitting": "リクエストを送信中……",
     "status.uploading": "画像をアップロード中……",
     "status.thinking": "画像を分析中……",
@@ -714,6 +788,14 @@ TRANSLATIONS["ja"] = {
     "col.abundance": "産出頻度",
     "col.abundanceUnit": "頻度単位",
     "col.location": "位置",
+    # P-UI (2026-08-07): phylogenetic-tree node table columns.
+    "sec.nodes": "ノード",
+    "col.nodeId": "ノード ID",
+    "col.parent": "親ノード",
+    "col.isLeaf": "葉ノード",
+    "col.branchLength": "枝長",
+    "col.nodeAgeMa": "ノード年代 (Ma)",
+    "col.support": "支持率",
     "col.depthUnit": "深度単位",
     "col.levelRange": "層準範囲",
     "col.sectionId": "断面 ID",
@@ -735,6 +817,8 @@ TRANSLATIONS["ja"] = {
     "err.429": "リクエスト過多またはクォータ不足です（429）。後で再試行してください。",
     "err.timeout": "リクエストがタイムアウトしました。画像が大きすぎるか通信が不安定です。",
     "err.network": "ネットワーク要求に失敗しました。ネットワークまたはエンドポイントを確認してください。",
+    "err.badEndpoint": "エンドポイントが無効または到達できません。API 設定の endpoint / プロキシ URL を確認してください。",
+    "err.badMode": "サポートされていないチャートモードです。このビルドで対応しているモードから選択してください。",
     "err.http": "API がエラーを返しました",
     "err.bodyTooLarge": "リクエスト本文が大きすぎます（サーバー上限超過）。画像を縮小するか解像度を落として再試行してください。",
     "err.parse": "モデルの応答を解析できませんでした。",
@@ -844,6 +928,9 @@ TRANSLATIONS["ja"] = {
     "history.detail.close": "閉じる",
     "history.detail.provenance": " Provenanceをエクスポート (PROV-O JSON-LD)",
     "history.confirmDelete": "この記録を削除しますか？",
+    # M4 fix (REVIEW-2026-11-07): see zh entry — localized + explicit
+    # about the .csv → .json extension swap.
+    "history.exportCsvAsJson": "CSV を選択されましたが、全テーブルを含むため JSON として保存しました（拡張子は .json に変更）。",
     "history.confirmDeleteHint": "この操作は元に戻せません。",
     "history.confirmDeleteAll": "すべての履歴記録を削除しますか？",
     "history.confirmDeleteAllHint": "この操作は元に戻せません。",
@@ -907,11 +994,29 @@ TRANSLATIONS["ja"] = {
     "quality.many_extras": "モデルが多くの未定義フィールドを出力しました",
     "quality.null_fields": "一部の期待されたフィールドが null です",
     "quality.invalid_result": "無効な抽出結果",
+    # P1-3 / M-1 parity: keys present in zh but previously missing in en/ja,
+    # which made the GUI render the raw msg_key string for English/Japanese
+    # users. Kept in sync with the zh block.
+    "quality.agreement_overflow": "一致率が1.0を超えています（クランプ済み）",
+    "quality.chimera_dropped": "キメラ行を除外（いずれの単一実行でも観察されなかったフィールド組み合わせ）",
+    "quality.empty_result": "抽出結果が空です",
+    "quality.fad_lt_lad": "FADがLADより新しい（範囲の順序が逆転）",
+    "quality.missing_biozone": "生層準ラベルがありません",
     # P1-12: Steno's Law biozone order
     "quality.biozone_order_violation": "Steno の法則違反：種 {species} の生層帯 {younger_biozone}（新しい）がより古い {older_biozone} の下に出現",
     # P1-8: abundance sum-to-100 constraint
     "quality.abundance_sum_violation": "試料「{sample}」の豊度合計は {sum}%（100%であるべき）",
     "quality.abundance_sum_violation_count": "{count} 個の試料の豊度合計が 100% でない",
+    # M-1 fix: previously emitted but missing in the ja table.
+    "quality.range_top_lt_base": "一部の種で LAD（最終出現）が FAD（最初出現）より早い",
+    "quality.ages_inconsistent": "{count} 個のセクションが紀をまたぐ（古生代→中生代など）。境界セクションでは妥当",
+    "quality.stage_order_reversed": "セクション {section} のステージ順が逆：{detail}",
+    "quality.bed_index_order_invalid": "一部の岩相/地層ブロックの bed_index 順が無効です",
+    "quality.bed_index_order_swapped": "上/下 bed_index を自動的に入れ替えて順序を修正しました",
+    "quality.missing_section_ref": "一部の種が未知のセクションを参照しています",
+    # H2 fix (REVIEW-2026-11-07): see zh entry — key was emitted but
+    # undefined in all three locales.
+    "quality.scoring_failed": "品質スコアリング中にエラーが発生しました。この結果は未採点です",
 }
 
 

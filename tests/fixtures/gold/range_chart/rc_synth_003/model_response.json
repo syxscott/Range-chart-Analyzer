@@ -1,0 +1,99 @@
+{
+  "metadata": {
+    "chart_type": "range_chart",
+    "extraction_version": "1.0.0",
+    "synthetic": true,
+    "seed": 2
+  },
+  "sections": [
+    {
+      "name": "Section X",
+      "age_range": "Early Cretaceous",
+      "formations": [
+        "Corallian"
+      ],
+      "coordinates": "N55.29° W2.33°"
+    },
+    {
+      "name": "Section Y",
+      "age_range": "Late Jurassic",
+      "formations": [
+        "Kimmeridge Clay"
+      ],
+      "coordinates": "N52.59° W1.32°"
+    }
+  ],
+  "species_ranges": [
+    {
+      "species": "Ammonites koslovansis",
+      "section": "Section X",
+      "range_top": "9",
+      "range_base": "5",
+      "biozone": "Aspidoceras Zone",
+      "author": "Brown",
+      "year": "1967",
+      "author_year": "Smith, 1935",
+      "range_top_bed": "Bed 9",
+      "range_base_bed": "Bed 5",
+      "endpoint_kind": "observed",
+      "occurrence_mode": "in_situ"
+    },
+    {
+      "species": "Koslovites flexionus",
+      "section": "Section Y",
+      "range_top": "15",
+      "range_base": "7",
+      "biozone": "Koslovites Biozone",
+      "author": "Brown",
+      "year": "1914",
+      "author_year": "Smith, 1883",
+      "range_top_bed": "Bed 15",
+      "range_base_bed": "Bed 7",
+      "endpoint_kind": "observed",
+      "occurrence_mode": "in_situ"
+    },
+    {
+      "species": "Posidonia ? buchii",
+      "section": "Section Y",
+      "range_top": "11",
+      "range_base": "6",
+      "biozone": "Koslovites Biozone",
+      "author": "Brown",
+      "year": "1901",
+      "author_year": "Brown, 1902",
+      "range_top_bed": "Bed 11",
+      "range_base_bed": "Bed 6",
+      "endpoint_kind": "observed",
+      "occurrence_mode": "in_situ"
+    },
+    {
+      "species": "Orthoceros regulare",
+      "section": "Section X",
+      "range_top": "7",
+      "range_base": "4",
+      "biozone": "Ring Zone",
+      "author": "Jones",
+      "year": "1902",
+      "author_year": "Smith, 1945",
+      "range_top_bed": "Bed 7",
+      "range_base_bed": "Bed 4",
+      "endpoint_kind": "observed",
+      "occurrence_mode": "in_situ"
+    }
+  ],
+  "biozones": [
+    {
+      "name": "Oxynotes Zone",
+      "section": "Section Y",
+      "age": "Early Cretaceous",
+      "zone_type": "assemblage_zone"
+    },
+    {
+      "name": "Koslovites Biozone",
+      "section": "Section Y",
+      "age": "Late Jurassic",
+      "zone_type": "assemblage_zone"
+    }
+  ],
+  "confidence": 0.95
+}

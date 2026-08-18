@@ -84,6 +84,30 @@ class TestChimeraDetection:
         assert len(sp_rows) == 1, f"majority-agreed row should be kept, got: {sp_rows}"
         assert merged.get("chimera_warnings", []) == []
 
+    def test_typed_scientific_fields_and_extras_merge_without_stringification(self):
+        results = [
+            _run([{"species": "Genus alpha", "section": "X",
+                   "range_top": "Bed 9", "range_base": "Bed 7", "biozone": "",
+                   "range_top_idx": 9, "range_base_idx": 7,
+                   "endpoint_kind": "unknown", "occurrence_mode": "unknown",
+                   "confidence": 0.4, "_extras": {"source": "caption", "page": 2}}]),
+            _run([{"species": "Genus alpha", "section": "X",
+                   "range_top": "Bed 9", "range_base": "Bed 7", "biozone": "",
+                   "range_top_idx": 9, "range_base_idx": 8,
+                   "endpoint_kind": "observed", "occurrence_mode": "in_situ",
+                   "confidence": 0.8, "_extras": {"source": "caption", "review": True}}]),
+        ]
+        row = merge_results(results, total_runs=2)["species_ranges"][0]
+        assert row["range_top_idx"] == 9 and isinstance(row["range_top_idx"], int)
+        assert row["range_base_idx"] == 7 and isinstance(row["range_base_idx"], int)
+        assert row["confidence"] == 0.6
+        assert row["endpoint_kind"] == "observed"
+        assert row["occurrence_mode"] == "in_situ"
+        assert isinstance(row["_extras"], dict)
+        assert row["_extras"]["source"] == "caption"
+        assert row["_extras"]["page"] == "2"
+        assert row["_extras"]["review"] is True
+
     def test_single_run_passthrough_no_chimera_check(self):
         """Single run: no chimera check needed (nothing to disagree with)."""
         results = [_run([{"species": "Genus sp.", "section": "X",

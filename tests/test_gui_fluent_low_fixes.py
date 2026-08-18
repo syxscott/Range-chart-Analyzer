@@ -29,6 +29,53 @@ def _have_pyside():
         return False
 
 
+def _destroy_window(win):
+    """close() + eager C++ deletion of the Fluent window.
+
+    REVIEW-2026-11-07 (low): these tests run headless with NO event loop,
+    so ``deleteLater()`` only SCHEDULES the C++ deletion and the widget
+    tree survives until interpreter shutdown. The window hosts a
+    PhyloTreeWidget (a QWebEngineView with a persistent
+    QWebEngineProfile); at shutdown QtWebEngine destroyed the profile
+    BEFORE the page → "Release of profile requested but WebEnginePage
+    still not deleted" + access violation (exit 0xC0000005) that turned
+    a fully green run red on CI machines with QtWebEngine installed.
+    Deleting eagerly while Qt is still alive avoids the ordering issue.
+    """
+    # If the window hosts a PhyloTreeWidget (a QWebEngineView with a
+    # persistent profile), delete the WebEngine page FIRST so it is gone
+    # before the profile is released — otherwise QtWebEngine prints
+    # "Release of profile requested but WebEnginePage still not deleted".
+    try:
+        page = win.extract_page
+        view = getattr(page, "phylotree", None)
+        web_page = view.page() if view is not None else None
+        if web_page is not None:
+            view.setPage(None)  # detach before deleting the page
+            _shiboken_delete(web_page)
+    except Exception:
+        pass
+    win.close()
+    # PySide6 exposes shiboken as a TOP-LEVEL module (``shiboken6``);
+    # ``from PySide6 import shiboken`` ImportErrors on some builds, so try
+    # both spellings before falling back to a deferred delete.
+    if _shiboken_delete(win):
+        return
+    win.deleteLater()
+
+
+def _shiboken_delete(obj) -> bool:
+    """Eagerly delete a QObject's C++ instance. Returns True on success."""
+    for _imp in ("shiboken6", "PySide6.shiboken"):
+        try:
+            mod = __import__(_imp, fromlist=["delete"])
+            mod.delete(obj)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 @unittest.skipUnless(_have_pyside(), "PySide6 / qfluentwidgets not installed")
 class TestFluentLowFixes(unittest.TestCase):
 
@@ -60,8 +107,7 @@ class TestFluentLowFixes(unittest.TestCase):
             self.assertEqual(new_val, start + 1)
             self.assertEqual(page._extract_gen, start + 1)
         finally:
-            win.close()
-            win.deleteLater()
+            _destroy_window(win)
 
     def test_paste_unlinks_tmp_on_save_failure(self):
         """Audit fix: _paste_image must unlink the mkstemp file when img.save raises."""
@@ -109,8 +155,7 @@ class TestFluentLowFixes(unittest.TestCase):
             finally:
                 Image.Image.save = orig_save
         finally:
-            win.close()
-            win.deleteLater()
+            _destroy_window(win)
 
 
 if __name__ == "__main__":

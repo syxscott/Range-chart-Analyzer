@@ -1,0 +1,99 @@
+{
+  "metadata": {
+    "chart_type": "range_chart",
+    "extraction_version": "1.0.0",
+    "synthetic": true,
+    "seed": 1
+  },
+  "sections": [
+    {
+      "name": "Section X",
+      "age_range": "Middle Jurassic",
+      "formations": [
+        "Corallian"
+      ],
+      "coordinates": "N53.32° W2.12°"
+    },
+    {
+      "name": "Section Y",
+      "age_range": "Early Cretaceous",
+      "formations": [
+        "Kimmeridge Clay"
+      ],
+      "coordinates": "N54.56° W1.54°"
+    }
+  ],
+  "species_ranges": [
+    {
+      "species": "Orthoceros regulere",
+      "section": "Section Y",
+      "range_top": "13",
+      "range_base": "8",
+      "biozone": "Ring Zone",
+      "author": "Smith",
+      "year": "1942",
+      "author_year": "Smith, 1986",
+      "range_top_bed": "Bed 13",
+      "range_base_bed": "Bed 8",
+      "endpoint_kind": "observed",
+      "occurrence_mode": "in_situ"
+    },
+    {
+      "species": "Koslovites flexionus",
+      "section": "Section X",
+      "range_top": "13",
+      "range_base": "7",
+      "biozone": "Koslovites Biozone",
+      "author": "Jones",
+      "year": "1972",
+      "author_year": "Smith, 1955",
+      "range_top_bed": "Bed 13",
+      "range_base_bed": "Bed 7",
+      "endpoint_kind": "observed",
+      "occurrence_mode": "in_situ"
+    },
+    {
+      "species": "Inoceramus cf. elongatus",
+      "section": "Section X",
+      "range_top": "6",
+      "range_base": "2",
+      "biozone": "Aspidoceras Zone",
+      "author": "Brown",
+      "year": "1949",
+      "author_year": "Smith, 1928",
+      "range_top_bed": "Bed 6",
+      "range_base_bed": "Bed 2",
+      "endpoint_kind": "observed",
+      "occurrence_mode": "in_situ"
+    },
+    {
+      "species": "Ammonites koslovensis",
+      "section": "Section X",
+      "range_top": "9",
+      "range_base": "4",
+      "biozone": "Ring Zone",
+      "author": "Jones",
+      "year": "1943",
+      "author_year": "Brown, 1909",
+      "range_top_bed": "Bed 9",
+      "range_base_bed": "Bed 4",
+      "endpoint_kind": "observed",
+      "occurrence_mode": "in_situ"
+    }
+  ],
+  "biozones": [
+    {
+      "name": "Aspidoceras Zone",
+      "section": "Section Y",
+      "age": "Late Jurassic",
+      "zone_type": "assemblage_zone"
+    },
+    {
+      "name": "Koslovites Biozone",
+      "section": "Section Y",
+      "age": "Middle Jurassic",
+      "zone_type": "assemblage_zone"
+    }
+  ],
+  "confidence": 0.95
+}

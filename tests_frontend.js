@@ -35,7 +35,17 @@ function buildContext() {
     // app.js both touch document.* at load time.
     document: {
       addEventListener() {}, removeEventListener() {},
-      getElementById: (id) => makeEl(id),
+      // UI-REVIEW-2026-08-01: cache elements by id so DOM state (e.g.
+      // classList recordings, value) survives repeated getElementById
+      // calls — the previous fresh-instance-per-call stub made it
+      // impossible to observe visibility toggles.
+      _els: new Map(),
+      getElementById(id) {
+        if (!this._els.has(id)) {
+          this._els.set(id, makeEl(id));
+        }
+        return this._els.get(id);
+      },
       // Default: no theme-choice buttons exist in the test sandbox, so an
       // empty NodeList matches what theme.js's wireToggleButtons sees when
       // the page hasn't been wired up yet.
@@ -92,7 +102,15 @@ function buildContext() {
 function makeEl(id) {
   const el = {
     id,
-    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    // UI-REVIEW-2026-08-01: record classList calls so tests can assert
+    // visibility toggles (e.g. the force-rerun button after a result).
+    classList: {
+      _calls: [],
+      add(c) { this._calls.push(['add', c]); },
+      remove(c) { this._calls.push(['remove', c]); },
+      toggle(c, f) { this._calls.push(['toggle', c, f]); },
+      contains: () => false,
+    },
     style: {},
     dataset: {},
     attributes: {},
@@ -131,6 +149,12 @@ function loadAllScripts(ctx) {
     'js/i18n.js',
     'js/prompt.js',
     'js/json-utils.js',
+    // REVIEW-2026-07-31: ics_table.js (RCA_ICS_TABLE + label maps) and
+    // quality.js (scoreRangeChart) are loaded so the pure-frontend
+    // quality scorer is actually exercised in tests — before, it had
+    // zero behavioral coverage.
+    'js/ics_table.js',
+    'js/quality.js',
     'js/aggregate.js',
     'js/table.js',
     'js/export.js',
@@ -157,6 +181,7 @@ function loadAllScripts(ctx) {
           'globalThis.handleFile = handleFile;\n' +
           'globalThis.state = state;\n' +
           'globalThis.saveSettings = saveSettings;\n' +
+          'globalThis.updateActionButtons = updateActionButtons;\n' +
           '})();';
       }
     }
@@ -749,8 +774,11 @@ function test_p1_6_sp_known_includes_extra_fields() {
         author_year: 'Smith, 1950',
         range_top_bed: 'Bed 9a',
         range_base_bed: 'Bed 7b',
+        range_top_idx: '9',
+        range_base_idx: 7,
         endpoint_kind: 'observed',
         reworked: false,
+        confidence: '1.4',
       },
     ],
     sections: [], biozones: [], other_fossils: [], confidence: 0.9,
@@ -766,19 +794,273 @@ function test_p1_6_sp_known_includes_extra_fields() {
         out.species_ranges[0].range_top_bed === 'Bed 9a');
   check('p1-6: species row has range_base_bed',
         out.species_ranges[0].range_base_bed === 'Bed 7b');
+  check('p1-6: species row has typed range_top_idx',
+        out.species_ranges[0].range_top_idx === 9);
+  check('p1-6: species row has typed range_base_idx',
+        out.species_ranges[0].range_base_idx === 7);
+  check('p1-6: species row confidence is clamped',
+        out.species_ranges[0].confidence === 1);
   check('p1-6: species row has endpoint_kind',
         out.species_ranges[0].endpoint_kind === 'observed');
-  check('p1-6: species row has reworked=false',
-        out.species_ranges[0].reworked === false);
+  // M-1 fix: 'occurrence_mode' (string enum) replaces the old
+  // boolean 'reworked'. Default is 'in_situ' when absent.
+  check('p1-6: species row has occurrence_mode',
+        out.species_ranges[0].occurrence_mode === 'in_situ');
+  check('p1-6: species row has note',
+        typeof out.species_ranges[0].note === 'string');
   // None of those 7 fields must leak into _extras (that path destroys data).
   const extras = out.species_ranges[0]._extras || {};
   for (const k of ['author', 'year', 'author_year', 'range_top_bed',
-                   'range_base_bed', 'endpoint_kind', 'reworked']) {
+                   'range_base_bed', 'range_top_idx', 'range_base_idx',
+                   'endpoint_kind', 'occurrence_mode', 'confidence', 'reworked']) {
     check(`p1-6: ${k} NOT in _extras`, !(k in extras));
   }
 }
 
+function test_unknown_scientific_states_are_not_promoted() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const out = ctx.rcaNormalizeResult({
+    species_ranges: [{ species: 'Genus alpha', occurrence_mode: 'native', endpoint_kind: 'certain' }],
+    sections: [], biozones: [], other_fossils: [], confidence: 0.5,
+  });
+  check('unknown occurrence mode remains unknown', out.species_ranges[0].occurrence_mode === 'unknown');
+  check('unknown endpoint kind remains unknown', out.species_ranges[0].endpoint_kind === 'unknown');
+  check('missing row confidence remains null', out.species_ranges[0].confidence === null);
+}
+
 test_p1_6_sp_known_includes_extra_fields();
+test_unknown_scientific_states_are_not_promoted();
+
+// ---------------------------------------------------------------------------
+// REVIEW-2026-07-31 regression tests: JS/Python parity fixes
+// ---------------------------------------------------------------------------
+
+function test_json_utils_wrapper_promotion() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // Level 3: {"data": {...}} promotes inner keys to the top level.
+  const r1 = ctx.safeJsonLoads('{"data": {"species_ranges": [{"species": "A"}], "confidence": 0.9}}');
+  check('json-utils L3 wrapper promotes species_ranges', Array.isArray(r1.species_ranges) && r1.species_ranges.length === 1);
+  check('json-utils L3 wrapper keeps siblings', r1.confidence === 0.9);
+  // Level 4: schema restated in prose, payload inside {"data": {...}}.
+  const text = 'Schema: {"properties": {"species_ranges": {"type": "array", "items": {"type": "object"}}}, "required": ["species_ranges"]}. Result: {"data": {"species_ranges": [{"species": "B", "range_base": "1", "range_top": "5"}], "confidence": 0.8}}';
+  const r2 = ctx.safeJsonLoads(text);
+  check('json-utils L4 wrapper promotes payload', Array.isArray(r2.species_ranges) && r2.species_ranges.length === 1 && r2.species_ranges[0].species === 'B');
+  // Long schema string must NOT outscore the small real payload (H8).
+  const schemaLong = '{"properties": {"species_ranges": {"type": "array", "items": {"type": "object", "properties": {"species": {"type": "string"}, "section": {"type": "string"}, "range_top": {"type": "string"}, "range_base": {"type": "string"}, "biozone": {"type": "string"}}}}, "required": ["species_ranges"]}}';
+  const text2 = 'Here is the schema for reference: ' + schemaLong + '. And here is the actual result: {"species_ranges": [{"species": "Real", "range_base": "2", "range_top": "7"}]}';
+  const r3 = ctx.safeJsonLoads(text2);
+  check('json-utils long schema does not outscore payload', Array.isArray(r3.species_ranges) && r3.species_ranges[0].species === 'Real');
+}
+
+function test_quality_fad_lad_ma_branch() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // Age-based ranges must NOT be flagged (bed branch would read 300/250).
+  const ageOk = ctx.scoreRangeChart({
+    sections: [{ name: 'A', age_range: 'Permian' }],
+    species_ranges: [{ species: 'X', section: 'A', range_base: '300 Ma', range_top: '250 Ma', biozone: '' }],
+    confidence: 0.9,
+  });
+  check('quality Ma range valid (no fad_lt_lad)', !ageOk.issues.some(i => i.msg_key === 'quality.fad_lt_lad'));
+  // Inverted age range IS flagged.
+  const ageInv = ctx.scoreRangeChart({
+    sections: [{ name: 'A', age_range: 'Permian' }],
+    species_ranges: [{ species: 'X', section: 'A', range_base: '250 Ma', range_top: '300 Ma', biozone: '' }],
+    confidence: 0.9,
+  });
+  check('quality inverted Ma range flagged', ageInv.issues.some(i => i.msg_key === 'quality.fad_lt_lad'));
+  // Bed labels containing "ma" (Madison) must NOT be read as ages.
+  const bedOk = ctx.scoreRangeChart({
+    sections: [{ name: 'A', age_range: 'Permian' }],
+    species_ranges: [{ species: 'X', section: 'A', range_base: 'Madison 3', range_top: 'Madison 6', biozone: '' }],
+    confidence: 0.9,
+  });
+  check('quality "Madison 3/6" bed pair not flagged', !bedOk.issues.some(i => i.msg_key === 'quality.fad_lt_lad'));
+}
+
+function test_quality_cross_era_proportional() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const res = ctx.scoreRangeChart({
+    sections: [{ name: 'A', age_range: 'Permian', lithology_blocks: [
+      { age: 'Permian' }, { age: 'Triassic' },
+    ]}],
+    species_ranges: [], confidence: 0.9,
+  });
+  // 1 violating section → accuracy gets 0.5, NOT a flat 0 (parity with Python).
+  const acc = res.details && res.details.accuracy;
+  check('quality cross-era penalty proportional', acc === undefined || acc >= 0.4);
+}
+
+function test_quality_steno_biozone_map() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // "N. optima Zone" must resolve via the biozone stage map; a LOWER
+  // species (range_top 3) in a YOUNGER biozone than an UPPER species
+  // (range_top 9) is a Steno violation.
+  const res = ctx.scoreRangeChart({
+    sections: [{ name: 'A', age_range: 'Permian' }],
+    species_ranges: [
+      { species: 'Low', section: 'A', range_base: '1', range_top: '3', biozone: 'N. optima Zone' },
+      { species: 'Up', section: 'A', range_base: '4', range_top: '9', biozone: 'Clarkina orientalis Zone' },
+    ],
+    confidence: 0.9,
+  });
+  check('quality Steno detects lower-species-in-younger-zone', res.issues.some(i => i.msg_key === 'quality.biozone_order_violation'));
+}
+
+function test_aggregate_author_h7_parity() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  check('aggregate em-dash author normalized', ctx.rcaNormIcbnAuthor('Smith—Jones, 1950') === 'smith jones|1950');
+  check('aggregate double-dash author normalized', ctx.rcaNormIcbnAuthor('Smith--Jones, 1950') === 'smith jones|1950');
+  check('aggregate ex author stripped', ctx.rcaNormIcbnAuthor('Smith ex Jones, 1950') === 'smith|1950');
+  check('aggregate in author stripped', ctx.rcaNormIcbnAuthor('Smith in Jones, 1950') === 'smith|1950');
+}
+
+function test_prompt_phylo_parent_and_degradation() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // PHYLOGENETIC_TREE_SYSTEM_PROMPT is a `const` — not visible on the
+  // context object; evaluate it inside the vm instead. (The final value
+  // is a string: the array literal ends with `.join('\\n')`.)
+  const promptText = vm.runInContext('PHYLOGENETIC_TREE_SYSTEM_PROMPT', ctx);
+  check('phylo prompt has parent field', /parent/.test(promptText));
+  check('phylo prompt has degradation clause', /DEGRADE GRACEFULLY/.test(promptText));
+}
+
+function test_ics_table_data_parity() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const t = ctx.RCA_ICS_TABLE;
+  check('ics_table Campanian base 83.6', t.Campanian && t.Campanian.base_ma === 83.6);
+  check('ics_table Santonian base 86.3', t.Santonian && t.Santonian.base_ma === 86.3);
+  check('ics_table Turonian base 93.9', t.Turonian && t.Turonian.base_ma === 93.9);
+  check('ics_table no Pleistocene pseudo-stage', !('Pleistocene' in t));
+  check('ics_table Dapingian base 470.0', t.Dapingian && t.Dapingian.base_ma === 470.0);
+}
+
+test_json_utils_wrapper_promotion();
+test_quality_fad_lad_ma_branch();
+test_quality_cross_era_proportional();
+test_quality_steno_biozone_map();
+test_aggregate_author_h7_parity();
+test_prompt_phylo_parent_and_degradation();
+test_ics_table_data_parity();
+
+// UI-REVIEW-2026-08-01 (H1): the force-rerun button must become visible
+// after the FIRST successful result. Previously setBusy(false) ran in
+// `finally` BEFORE state.result was assigned, so the visibility check
+// read the stale null and the button never appeared on first extraction.
+function test_force_rerun_visible_after_first_result() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const rerun = ctx.document.getElementById('force-rerun-btn');
+  ctx.state.result = null;
+  ctx.state.busy = false;
+  ctx.updateActionButtons();
+  // Recorded calls are ['toggle', className, force] — the class name is
+  // index 1 and the visibility flag index 2.
+  const callsBefore = (rerun.classList._calls || []).filter(c => c[1] === 'hidden');
+  // What runExtraction does AFTER the finally block: store the result,
+  // then re-evaluate the buttons.
+  ctx.state.result = { sections: [], species_ranges: [], confidence: 0.9 };
+  ctx.updateActionButtons();
+  const callsAfter = (rerun.classList._calls || []).filter(c => c[1] === 'hidden');
+  const last = callsAfter[callsAfter.length - 1];
+  check('force-rerun visible after first result', callsAfter.length > callsBefore.length && last && last[2] === false);
+}
+
+test_force_rerun_visible_after_first_result();
+
+// ---- UI-FIX-2026-08-07: phylogenetic_tree mode must be selectable ----
+// The web frontend previously had no chart-mode option and no auto-detect
+// keyword for phylogenetic trees, so trees could never be extracted.
+function test_ui_phylo_mode_selectable() {
+  const appSrc = fs.readFileSync(path.join(__dirname, 'js/app.js'), 'utf8');
+  const htmlSrc = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const i18nSrc = fs.readFileSync(path.join(__dirname, 'js/i18n.js'), 'utf8');
+  check('ui-option-phylo-in-html', htmlSrc.includes('<option value="phylogenetic_tree"'));
+  check('ui-resolve-whitelist-phylo', /choice === 'phylogenetic_tree'/.test(appSrc));
+  check('ui-auto-keywords-phylo', /phyloKeysAscii = \['phylogen'/.test(appSrc));
+  const locales = (i18nSrc.match(/upload\.chartMode\.phylogeneticTree/g) || []).length;
+  check('ui-i18n-phylo-three-locales', locales === 3);
+}
+
+test_ui_phylo_mode_selectable();
+
+// ---- UI-FIX-2026-08-07: result cells carry title + other_fossils wraps ----
+// Every td defaults to nowrap + ellipsis; without a title attribute the
+// truncated tail was the only visible part of long values.
+function test_ui_cell_title_and_wrapping() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const data = {
+    sections: [{ name: 'A very long section name that will definitely exceed two hundred and eighty pixels of width', age_range: '', formations: ['F1'], formation_thickness_m: '', coordinates: '' }],
+    species_ranges: [{ species: 'Genus species', section: 'S', range_base: 'Bed 1', range_top: 'Bed 5', biozone: 'Z' }],
+    biozones: [], other_fossils: ['A very long free-text fossil record that should wrap instead of truncate because it is the only column of the table and users need to read it'],
+    confidence: 0.9,
+  };
+  const html = ctx.rcaRenderResults(data, '');
+  check('ui-cell-title-attr-present', html.includes('title="'));
+  check('ui-cell-title-has-long-value', html.includes('title="A very long section name'));
+  check('ui-other-fossils-wrapping', html.includes('cell-wrapping'));
+  // Empty cells render the dash placeholder and must NOT carry a title.
+  check('ui-empty-cell-no-title', !/<td[^>]*title="[^"]*"[^>]*>-\s*<\/td>/.test(html));
+}
+
+test_ui_cell_title_and_wrapping();
+
+// ---- UI-FIX-2026-08-07: CSS token/selector fixes present in source ----
+function test_ui_css_fixes() {
+  const cssSrc = fs.readFileSync(path.join(__dirname, 'css/style.css'), 'utf8');
+  check('css-surface-defined', /--surface:\s*var\(--bg-lighter\)/.test(cssSrc));
+  check('css-segmented-uses-primary-active', /\.segmented button\[aria-checked="true"\]\s*\{[\s\S]*?var\(--primary-active\)/.test(cssSrc));
+  check('css-label-selector-fixed', /\.rt-left \.label\s*\{/.test(cssSrc));
+  check('css-sticky-odd-row-bg', /tr:nth-child\(odd\) td:first-child/.test(cssSrc));
+}
+
+test_ui_css_fixes();
+
+// ---- UI-FIX-2026-08-07: phylogenetic-tree payload renders a nodes table ----
+// rcaTableConfigs had no phylo branch, so a tree result rendered four empty
+// range-chart tables; the nodes table is the web-side mirror of the Python
+// exporter's _phylogenetic_tree_tables.
+function test_ui_phylo_nodes_table() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const phylo = {
+    metadata: {}, root_ids: ['n0'],
+    nodes: [
+      { id: 'n0', parent: null, name: 'Spasmaria', is_leaf: false, branch_length: null, node_age_ma: null, support: 89 },
+      { id: 'n1', parent: 'n0', name: 'Taxon A', is_leaf: true, branch_length: 0.12, node_age_ma: 5.0, support: null },
+    ],
+    confidence: 0.9, runs: 1,
+  };
+  const configs = ctx.rcaTableConfigs(phylo);
+  check('ui-phylo-nodes-table-present', configs.length === 1 && configs[0].id === 'nodes');
+  const html = ctx.rcaRenderResults(phylo, '');
+  check('ui-phylo-nodes-title-i18n', html.includes(ctx.t('sec.nodes')));
+  check('ui-phylo-node-row-rendered', html.includes('Spasmaria') && html.includes('Taxon A'));
+  check('ui-phylo-leaf-column', html.includes('>Y<') && html.includes('>N<'));
+}
+
+test_ui_phylo_nodes_table();
+
+// ---- UI-FIX-2026-08-07: phylo i18n keys exist in all 3 locales (py+js) ----
+function test_ui_phylo_i18n_keys() {
+  const pySrc = fs.readFileSync(path.join(__dirname, 'rca_core/i18n.py'), 'utf8');
+  const jsSrc = fs.readFileSync(path.join(__dirname, 'js/i18n.js'), 'utf8');
+  for (const key of ['sec.nodes', 'col.nodeId', 'col.parent', 'col.isLeaf', 'col.branchLength', 'col.nodeAgeMa', 'col.support']) {
+    // Match only key DEFINITIONS (": value"), not mentions inside comments.
+    check('ui-py-i18n-' + key, (pySrc.match(new RegExp('"' + key + '"\s*:', 'g')) || []).length === 3);
+    check('ui-js-i18n-' + key, (jsSrc.match(new RegExp("'" + key + "'\\s*:", 'g')) || []).length === 3);
+  }
+}
+
+test_ui_phylo_i18n_keys();
 
 // Wait for async races to settle before printing summary.
 setTimeout(() => {

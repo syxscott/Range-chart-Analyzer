@@ -112,6 +112,118 @@ function _parseBedN(value) {
 
 function _clamp01(x) { return Math.min(1.0, Math.max(0.0, x)); }
 
+// ---------------------------------------------------------------------------
+// REVIEW-2026-07-31: age-bound resolution mirroring
+// rca_core/standards/ics.py:ics_resolve_age_bound, so the FAD<LAD Ma
+// branch behaves identically in the browser-only path.
+// ---------------------------------------------------------------------------
+
+const _AGE_UNIT_RE = /(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:Ma|Myr|Mya|m\.?\s*y\.?|million\s+years?(?:\s+ago)?)\b/i;
+const _AGE_RANGE_RE = /(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:[-–—]|\bto\b)\s*([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:Ma|Myr|Mya|m\.?\s*y\.?|million\s+years?(?:\s+ago)?)\b/i;
+
+function _explicitMaValues(text) {
+  const out = [];
+  const s = String(text);
+  let m;
+  const re1 = new RegExp(_AGE_UNIT_RE.source, 'gi');
+  while ((m = re1.exec(s)) !== null) out.push(parseFloat(m[1]));
+  const re2 = new RegExp(_AGE_RANGE_RE.source, 'gi');
+  while ((m = re2.exec(s)) !== null) { out.push(parseFloat(m[1])); out.push(parseFloat(m[2])); }
+  return out;
+}
+
+// True when the value carries an explicit numeric age unit ("260 Ma",
+// "255.5Ma") — NOT when a word merely contains "ma" ("Madison 3" must
+// stay a bed label).
+function _looksLikeAge(v) {
+  const s = String(v || '');
+  return new RegExp(_AGE_UNIT_RE.source, 'i').test(s) || new RegExp(_AGE_RANGE_RE.source, 'i').test(s);
+}
+
+function _regExpEscape(s) { return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'); }
+
+// Resolve a bound label to {name, ma} or null. Mirrors
+// ics_resolve_age_bound: explicit Ma literals (range-aware, prefer picks
+// older/younger end), Chinese stage aliases, series/epoch labels,
+// whole-word stage names, period names.
+function _resolveAgeBound(text, prefer) {
+  const s = String(text || '').trim();
+  if (!s) return null;
+  const stages = (typeof globalThis !== 'undefined' && globalThis.RCA_ICS_TABLE) ? globalThis.RCA_ICS_TABLE : null;
+  if (!stages) return null;
+
+  const vals = _explicitMaValues(s);
+  if (vals.length > 0) {
+    const ma = prefer === 'younger' ? Math.min.apply(null, vals) : Math.max.apply(null, vals);
+    let name = null;
+    for (const k of Object.keys(stages)) {
+      if (stages[k].top_ma <= ma && ma <= stages[k].base_ma) { name = k; break; }
+    }
+    return { name, ma };
+  }
+
+  const cnStages = globalThis.RCA_ICS_CN_STAGES;
+  if (cnStages) {
+    for (const alias of Object.keys(cnStages)) {
+      if (s.indexOf(alias) !== -1) {
+        const st = cnStages[alias];
+        if (stages[st]) return { name: st, ma: (stages[st].base_ma + stages[st].top_ma) / 2 };
+      }
+    }
+  }
+
+  const series = globalThis.RCA_ICS_SERIES || {};
+  const norm = s.toLowerCase();
+  for (const label of Object.keys(series)) {
+    if (new RegExp('\\b' + _regExpEscape(label) + '\\b', 'i').test(norm)) {
+      const ent = series[label];
+      const first = stages[ent.stages[0]];
+      const last = stages[ent.stages[ent.stages.length - 1]];
+      if (first && last) {
+        const older = ent.bounds ? ent.bounds[0] : first.base_ma;
+        const younger = ent.bounds ? ent.bounds[1] : last.top_ma;
+        return { name: ent.name, ma: prefer === 'younger' ? younger : older };
+      }
+    }
+  }
+  const cnSeries = globalThis.RCA_ICS_CN_SERIES || {};
+  for (const alias of Object.keys(cnSeries)) {
+    if (s.indexOf(alias) !== -1) {
+      const ent = series[cnSeries[alias]];
+      if (!ent) continue;
+      const first = stages[ent.stages[0]];
+      const last = stages[ent.stages[ent.stages.length - 1]];
+      if (first && last) {
+        const older = ent.bounds ? ent.bounds[0] : first.base_ma;
+        const younger = ent.bounds ? ent.bounds[1] : last.top_ma;
+        return { name: ent.name, ma: prefer === 'younger' ? younger : older };
+      }
+    }
+  }
+
+  for (const k of Object.keys(stages)) {
+    if (new RegExp('\\b' + _regExpEscape(k) + '\\b', 'i').test(s)) {
+      return { name: k, ma: (stages[k].base_ma + stages[k].top_ma) / 2 };
+    }
+  }
+
+  const periods = globalThis.RCA_ICS_PERIODS || {};
+  for (const label of Object.keys(periods)) {
+    if (new RegExp('\\b' + label + '\\b', 'i').test(norm)) {
+      const b = periods[label];
+      return { name: label, ma: prefer === 'younger' ? b[1] : b[0] };
+    }
+  }
+  const cnPeriods = globalThis.RCA_ICS_CN_PERIODS || {};
+  for (const alias of Object.keys(cnPeriods)) {
+    if (s.indexOf(alias) !== -1) {
+      const b = cnPeriods[alias];
+      return { name: alias, ma: prefer === 'younger' ? b[1] : b[0] };
+    }
+  }
+  return null;
+}
+
 function sectionNames(data) {
   const names = new Set();
   const sects = data && data.sections;
@@ -239,17 +351,40 @@ function scoreAccuracy(data) {
   }
 
   // FAD<LAD check for range-chart species.
+  // REVIEW-2026-07-31: mirror rca_core/quality.py's two-branch check.
+  //  * Bed branch: beds are 1-indexed from the bottom, so a younger bed
+  //    has the LARGER index; FAD (base) must have the smaller index than
+  //    LAD (top). The age branch is only entered when a bound carries an
+  //    explicit age unit — previously "300 Ma"/"250 Ma" rows fell into the
+  //    bed branch, _parseBedN read the leading integers and every valid
+  //    age range was flagged as a violation.
+  //  * Age branch: range_base = FAD = OLDER = LARGER Ma; range_top = LAD =
+  //    YOUNGER = SMALLER Ma. base_ma < top_ma is a violation.
   let fadLadTotal = 0;
   let fadLadViolations = 0;
   for (const row of speciesRows) {
     if (!row || typeof row !== 'object') continue;
-    const top = _parseBedN(row.range_top);
-    const base = _parseBedN(row.range_base);
-    if (top === null || base === null) continue;
-    fadLadTotal += 1;
-    if (top < base) {
-      fadLadViolations += 1;
-      issues.push({severity: 'warning', msg_key: 'quality.fad_lt_lad'});
+    const topRaw = row.range_top;
+    const baseRaw = row.range_base;
+    const top = _parseBedN(topRaw);
+    const base = _parseBedN(baseRaw);
+    const looksLikeAge = _looksLikeAge(topRaw) || _looksLikeAge(baseRaw);
+    if (top !== null && base !== null && !looksLikeAge) {
+      fadLadTotal += 1;
+      if (top < base) {
+        fadLadViolations += 1;
+        issues.push({severity: 'warning', msg_key: 'quality.fad_lt_lad'});
+      }
+    } else {
+      const topR = _resolveAgeBound(topRaw, 'younger');
+      const baseR = _resolveAgeBound(baseRaw, 'older');
+      if (topR && baseR && topR.ma !== null && baseR.ma !== null) {
+        fadLadTotal += 1;
+        if (baseR.ma < topR.ma) {
+          fadLadViolations += 1;
+          issues.push({severity: 'warning', msg_key: 'quality.fad_lt_lad'});
+        }
+      }
     }
   }
   if (fadLadTotal > 0) {
@@ -323,6 +458,140 @@ function scoreAccuracy(data) {
     } catch (_) { /* non-numeric — skip */ }
   }
 
+  // M-1 fix: cross-era consistency check.
+  // Any section containing blocks from more than one era (Paleozoic /
+  // Mesozoic / Cenozoic) gets a warning (NOT a hard error — boundary
+  // sections such as P/T or K/Pg legitimately span eras).
+  const paleozoicRe2 = /\b(cambrian|ordovician|silurian|devonian|carboniferous|pennsylvanian|mississippian|permian)\b/i;
+  const mesozoicRe2 = /\b(triassic|jurassic|cretaceous)\b/i;
+  const cenozoicRe2 = /\b(paleogene|neogene|quaternary|pleistocene|holocene|eocene|oligocene|miocene|pliocene)\b/i;
+  const sects2 = data && Array.isArray(data.sections) ? data.sections : [];
+  const erasBySection = {};
+  for (const sec of sects2) {
+    if (!sec || typeof sec !== 'object') continue;
+    const secName = String(sec.name || sec.id || '').trim();
+    if (!secName) continue;
+    const blocks = []
+      .concat(Array.isArray(sec.lithology_blocks) ? sec.lithology_blocks : [])
+      .concat(Array.isArray(sec.age_units) ? sec.age_units : []);
+    const eras = new Set();
+    for (const b of blocks) {
+      if (!b || typeof b !== 'object') continue;
+      const t = String(b.age || '');
+      if (paleozoicRe2.test(t)) eras.add('Paleozoic');
+      if (mesozoicRe2.test(t)) eras.add('Mesozoic');
+      if (cenozoicRe2.test(t)) eras.add('Cenozoic');
+    }
+    if (eras.size > 0) erasBySection[secName] = eras;
+  }
+  let crossEraCount2 = 0;
+  for (const k of Object.keys(erasBySection)) {
+    if (erasBySection[k].size > 1) {
+      crossEraCount2 += 1;
+      issues.push({severity: 'warning', msg_key: 'quality.ages_inconsistent', params: {count: String(crossEraCount2)}});
+    }
+  }
+  if (crossEraCount2 > 0) {
+    checks += 1;
+    // REVIEW-2026-07-31: mirror rca_core/quality.py — proportional
+    // penalty (1 - 0.5 per violating section), NOT a flat 0. Boundary
+    // sections (K/Pg, P/Tr) legitimately span eras; grading them F was a
+    // false penalty the Python side never applied.
+    passed += Math.max(0.0, 1.0 - 0.5 * crossEraCount2);
+  }
+
+  // M-1 fix: ICS-based stage-order check (parity with
+  // rca_core/quality.py:_score_cross_era_accuracy). Bundle a small
+  // ICS table on globalThis (RCA_ICS_TABLE) so this check works in
+  // pure-frontend mode. If a section's age_range contains 2+ known
+  // stages, check that older stages aren't listed AFTER younger ones.
+  const stages = (typeof globalThis !== 'undefined' && globalThis.RCA_ICS_TABLE)
+    ? globalThis.RCA_ICS_TABLE
+    : null;
+  if (stages) {
+    const icsAgeCompare = (s1, s2) => {
+      if (!stages[s1] || !stages[s2]) return null;
+      const b1 = stages[s1].base_ma;
+      const b2 = stages[s2].base_ma;
+      if (b1 > b2) return -1;
+      if (b1 < b2) return 1;
+      return 0;
+    };
+    for (const sec of sects2) {
+      if (!sec || typeof sec !== 'object') continue;
+      const secName = String(sec.name || sec.id || '').trim();
+      if (!secName) continue;
+      const ageRange = String(sec.age_range || '');
+      const found = [];
+      for (const stageName of Object.keys(stages)) {
+        const re = new RegExp('\\b' + stageName.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + '\\b', 'i');
+        const m = re.exec(ageRange);
+        if (m) found.push({name: stageName, idx: m.index});
+      }
+      found.sort((a, b) => a.idx - b.idx);
+      if (found.length < 2) continue;
+      let stageViolations = 0;
+      for (let i = 0; i < found.length - 1; i += 1) {
+        const cmp = icsAgeCompare(found[i].name, found[i + 1].name);
+        if (cmp === null) continue;
+        if (cmp > 0) {
+          stageViolations += 1;
+          issues.push({
+            severity: 'warning', msg_key: 'quality.stage_order_reversed',
+            params: {section: secName, detail: found[i].name + ' above ' + found[i + 1].name}
+          });
+        }
+      }
+      if (stageViolations > 0) {
+        checks += 1;
+        passed += 0;
+      }
+    }
+  }
+
+  // M-1 fix: abundance-diagram SUM-TO-100 check (parity with
+  // rca_core/quality.py:_score_abundance_sum). For each (sample) level,
+  // the sum of all %-unit abundances should equal 100±5. Violations
+  // deduct 0.05 each, capped at 0.3.
+  const abSamples = (data && Array.isArray(data.abundances)) ? data.abundances : [];
+  let sumViolCount = 0;
+  if (abSamples.length > 0) {
+    const levelSums = {};
+    const levelIds = {};
+    for (const e of abSamples) {
+      if (!e || typeof e !== 'object') continue;
+      const unit = String(e.abundance_unit || '').trim().toLowerCase();
+      if (unit !== '%') continue;
+      const p = Number(e.abundance);
+      if (!Number.isFinite(p)) continue;
+      const lvl = String(e.level || '');
+      if (!lvl) continue;
+      levelSums[lvl] = (levelSums[lvl] || 0) + p;
+      if (!levelIds[lvl]) levelIds[lvl] = lvl;
+    }
+    const violations = [];
+    for (const lvl of Object.keys(levelSums)) {
+      const s = levelSums[lvl];
+      if (s < 95 || s > 105) violations.push({sample: levelIds[lvl], sum: s});
+    }
+    if (violations.length > 0) {
+      const deduction = Math.min(0.3, 0.05 * violations.length);
+      // Degrade the accuracy score by deduction.
+      passed = Math.max(0.0, passed - deduction);
+      sumViolCount = violations.length;
+      for (const v of violations.slice(0, 5)) {
+        issues.push({
+          severity: 'warning', msg_key: 'quality.abundance_sum_violation',
+          params: {sample: v.sample, sum: String(Math.round(v.sum * 10) / 10)}
+        });
+      }
+      issues.push({
+        severity: 'info', msg_key: 'quality.abundance_sum_violation_count',
+        params: {count: String(violations.length)}
+      });
+    }
+  }
+
   if (checks === 0) return [1.0, issues];
   return [_clamp01(passed / checks), issues];
 }
@@ -358,11 +627,18 @@ function scoreConsistency(data) {
 
   if (species.length > 0) {
     // (2) FAD <= LAD per row (range_top >= range_base).
+    // REVIEW-2026-07-31: age/stage bounds are validated numerically in
+    // scoreAccuracy — skip them here so a valid age range like
+    // base="300 Ma" / top="250 Ma" is not flagged as inverted by the
+    // bed-index parse (parity with rca_core/quality.py).
     let fadViolations = 0;
     for (const sp of species) {
       if (!sp || typeof sp !== 'object') continue;
-      const top = _parseBedN(sp.range_top);
-      const base = _parseBedN(sp.range_base);
+      const topRaw = sp.range_top;
+      const baseRaw = sp.range_base;
+      if (_looksLikeAge(topRaw) || _looksLikeAge(baseRaw)) continue;
+      const top = _parseBedN(topRaw);
+      const base = _parseBedN(baseRaw);
       if (top === null || base === null) continue;
       if (top < base) {
         fadViolations += 1;
@@ -414,6 +690,118 @@ function scoreConsistency(data) {
         msg_key: 'quality.missing_biozone',
         params: { count: String(missingBiozone) },
       });
+    }
+
+    // M-1 fix: Steno's-Law biozone-order check (parity with
+    // rca_core/quality.py:_score_biozone_order). For each section,
+    // compare two species that carry biozone labels. If both labels
+    // resolve to a stage, use ics_age_compare on base_ma as the real
+    // stratigraphic order (NOT lexicographic).
+    // REVIEW-2026-07-31: (a) mirror Python's _BIOZONE_STAGE_MAP so real
+    // conodont/ammonite zone names ("N. optima Zone", "Clarkina
+    // orientalis Zone") actually resolve; (b) fix the inverted
+    // comparison — the LOWER-positioned species carrying a YOUNGER
+    // biozone than the higher-positioned one is the violation, not the
+    // other way around; (c) exclude rows without a bed position (the
+    // Python side filters them too).
+    const stages2 = (typeof globalThis !== 'undefined' && globalThis.RCA_ICS_TABLE)
+      ? globalThis.RCA_ICS_TABLE : null;
+    if (stages2) {
+      const icsAgeCompare2 = (s1, s2) => {
+        const a = stages2[s1]; const b = stages2[s2];
+        if (!a || !b) return null;
+        if (a.base_ma > b.base_ma) return -1;
+        if (a.base_ma < b.base_ma) return 1;
+        return 0;
+      };
+      // Same curated zone->stage map as rca_core/quality.py (species-
+      // level keys; a bare "clarkina" key mis-assigns Wuchiapingian
+      // zones to the Changhsingian).
+      const biozoneStageMap = {
+        'clarkina orientalis': 'Wuchiapingian',
+        'clarkina leveni': 'Wuchiapingian',
+        'clarkina subcarinata': 'Wuchiapingian',
+        'clarkina guangyuanensis': 'Wuchiapingian',
+        'clarkina transcaucasica': 'Wuchiapingian',
+        'clarkina changxingensis': 'Changhsingian',
+        'clarkina yini': 'Changhsingian',
+        'clarkina meishanensis': 'Changhsingian',
+        'clarkina optima': 'Changhsingian',
+        'neogondolella changxingensis': 'Changhsingian',
+        'neogondolella optima': 'Changhsingian',
+        'n. optima': 'Changhsingian',
+        'otoceras': 'Induan',
+        'ophiceras': 'Induan',
+        'griesbachian': 'Induan',
+        'anasirabites': 'Olenekian',
+        'subcolumbites': 'Olenekian',
+      };
+      const resolveBiozoneStage = (txt) => {
+        const low = String(txt).toLowerCase();
+        for (const key of Object.keys(biozoneStageMap)) {
+          if (low.indexOf(key) !== -1 && stages2[biozoneStageMap[key]]) return biozoneStageMap[key];
+        }
+        for (const k of Object.keys(stages2)) {
+          if (new RegExp('\\b' + _regExpEscape(k) + '\\b', 'i').test(low)) return k;
+        }
+        return null;
+      };
+      // Group species by section.name (only those that name a section
+      // present in the result).
+      const sectsForBio = (data && Array.isArray(data.sections)) ? data.sections : [];
+      const sectionNames = new Set();
+      for (const s of sectsForBio) if (s && s.name) sectionNames.add(String(s.name).trim());
+      const bySection = new Map();
+      for (const sp of species) {
+        if (!sp || typeof sp !== 'object') continue;
+        const secName = String(sp.section || '').trim();
+        if (!sectionNames.has(secName)) continue;
+        if (!bySection.has(secName)) bySection.set(secName, []);
+        bySection.get(secName).push(sp);
+      }
+      let biozoneViol = 0;
+      for (const [secName, sps] of bySection) {
+        // Only rows with an actual bed position participate (Python
+        // excludes unpositioned rows rather than inventing an order).
+        const positioned = sps
+          .map(sp => ({ bed: _parseBedN(sp.range_top), sp }))
+          .filter(x => x.bed !== null)
+          .sort((a, b) => a.bed - b.bed)
+          .map(x => x.sp);
+        if (positioned.length < 2) continue;
+        for (let i = 0; i < positioned.length - 1; i += 1) {
+          // positioned is sorted by range_top ASC: positioned[i] sits
+          // LOWER in the section (older stratigraphic position).
+          const lowerSp = positioned[i];
+          const upperSp = positioned[i + 1];
+          const lowerBz = String(lowerSp.biozone || '').trim();
+          const upperBz = String(upperSp.biozone || '').trim();
+          if (!lowerBz || !upperBz) continue;
+          const lowerStage = resolveBiozoneStage(lowerBz);
+          const upperStage = resolveBiozoneStage(upperBz);
+          if (!lowerStage || !upperStage) continue;
+          const cmp2 = icsAgeCompare2(lowerStage, upperStage);
+          if (cmp2 === null) continue;
+          // Steno's Law: the LOWER-positioned species must NOT sit in a
+          // YOUNGER biozone than the upper one. icsAgeCompare2 returns 1
+          // when stage1 (lowerStage) is younger -> violation.
+          if (cmp2 > 0) {
+            biozoneViol += 1;
+            issues.push({
+              severity: 'warning',
+              msg_key: 'quality.biozone_order_violation',
+              params: {
+                species: String(lowerSp.species || ''),
+                younger_biozone: lowerBz,
+                older_biozone: upperBz,
+              },
+            });
+          }
+        }
+      }
+      if (biozoneViol > 0) {
+        score -= Math.min(0.3, 0.1 * biozoneViol);
+      }
     }
   }
 

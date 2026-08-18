@@ -7,6 +7,20 @@ __pycache__/
 # Test screenshots / output
 屏幕截图_*.jpeg
 range_chart_result.json
+# Test / debug byproducts (REVIEW-2026-11-07: these accumulated at repo
+# root across review sessions)
+_*.txt
+_*.log
+_*.marker
+_*.out
+*.out
+*.log
+.pytest_cache/
+_pytest_tmp/
+_tmpwin/
+# Node (no package.json manifest — deps are not reproducible; the JS
+# tests in tests_frontend.js are dependency-free Node scripts)
+node_modules/
 # OS
 Thumbs.db
 .DS_Store

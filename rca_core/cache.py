@@ -33,6 +33,10 @@ DEFAULT_MAX_ENTRIES = 200
 # Schema version — bump on breaking change and the table is recreated.
 _SCHEMA_VERSION = 1
 
+# REVIEW-2026-11-07 (low): serialises connection bootstrap across SEPARATE
+# ResultCache instances pointing at the same file (see ResultCache._init_conn).
+_INIT_LOCK = threading.Lock()
+
 
 def _ensure_dir() -> None:
     os.makedirs(_CACHE_DIR, exist_ok=True)
@@ -61,10 +65,25 @@ class ResultCache:
         self._max = max_entries
         self._path = db_path
         self._lock = threading.RLock()
-        _ensure_dir()
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._create_table()
+        self._conn = None
+        self._init_conn()
+
+    def _init_conn(self) -> None:
+        """Create the SQLite connection and bootstrap the schema.
+
+        REVIEW-2026-11-07 (low): previously the connection was created in
+        ``__init__`` before ``self._lock`` existed, so two threads
+        constructing SEPARATE ResultCache instances against the same file
+        (bypassing the get_cache() singleton) could interleave — one
+        instance's schema-version guard DROP TABLE while the other was
+        mid-transaction. The module-level _INIT_LOCK serialises bootstrap
+        across instances; the instance lock covers same-instance re-entry.
+        """
+        with _INIT_LOCK, self._lock:
+            _ensure_dir()
+            self._conn = sqlite3.connect(self._path, check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._create_table()
 
     def _create_table(self) -> None:
         with self._lock:
@@ -132,30 +151,65 @@ class ResultCache:
             except Exception:
                 return None
 
+    def _with_retry(self, fn, retries: int = 5, base_delay: float = 0.05):
+        """Run ``fn`` and retry on ``sqlite3.OperationalError`` when the
+        message indicates a lock/busy condition (e.g. ``server.py`` and
+        ``gui.py`` opening the same SQLite file). Other OperationalErrors
+        propagate immediately."""
+        last: Exception | None = None
+        for attempt in range(retries):
+            try:
+                return fn()
+            except sqlite3.OperationalError as exc:
+                last = exc
+                msg = str(exc).lower()
+                if "locked" not in msg and "busy" not in msg:
+                    raise
+                time.sleep(base_delay * (attempt + 1))
+        raise last
+
     def put(self, key: str, value: dict) -> None:
-        """Insert or replace a cached result, then evict to the LRU bound."""
+        """Insert or replace a cached result, then evict to the LRU bound.
+
+        Wrapped in a retry because ``server.py`` and ``gui.py`` may open the
+        same SQLite file; a concurrent writer from another process raises
+        ``sqlite3.OperationalError: database is locked``, which we back off
+        and retry rather than silently dropping the cache write. (The
+        in-process ``RLock`` already serialises accesses within one process;
+        WAL file locking handles cross-process concurrency.)
+        """
         with self._lock:
             ts = time.time()
             blob = json.dumps(value, ensure_ascii=False, default=str)
-            existing = _rowid_for(self._conn, key)
-            if existing is None:
-                self._conn.execute(
-                    "INSERT INTO extract_cache (k, v, ts) VALUES (?, ?, ?)",
-                    (key, blob, ts))
-            else:
-                self._conn.execute(
-                    "UPDATE extract_cache SET v = ?, ts = ? WHERE k = ?",
-                    (blob, ts, key))
-            self._evict()
-            self._conn.commit()
+
+            def _work() -> None:
+                existing = _rowid_for(self._conn, key)
+                if existing is None:
+                    self._conn.execute(
+                        "INSERT INTO extract_cache (k, v, ts) VALUES (?, ?, ?)",
+                        (key, blob, ts))
+                else:
+                    self._conn.execute(
+                        "UPDATE extract_cache SET v = ?, ts = ? WHERE k = ?",
+                        (blob, ts, key))
+                self._evict()
+                self._conn.commit()
+
+            self._with_retry(_work)
 
     def _evict(self) -> None:
-        """Drop oldest entries beyond the LRU bound."""
+        """Drop oldest entries beyond the LRU bound.
+
+        The KEEP set is ordered by ``ts DESC, id DESC`` so the selection is
+        deterministic even when timestamps tie — otherwise SQLite's choice of
+        which row to keep among equal timestamps was unstable and could delete
+        a row written moments ago.
+        """
         self._conn.execute(
             """
             DELETE FROM extract_cache
             WHERE id NOT IN (
-                SELECT id FROM extract_cache ORDER BY ts DESC LIMIT ?
+                SELECT id FROM extract_cache ORDER BY ts DESC, id DESC LIMIT ?
             )
             """, (self._max,))
 

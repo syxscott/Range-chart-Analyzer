@@ -1,0 +1,80 @@
+{
+  "metadata": {
+    "title": "Synthetic Phylogenetic Tree",
+    "extraction_timestamp": "2026-07-27T00:00:00Z",
+    "tree_type": "cladogram",
+    "scale": "substitutions/site",
+    "rooted": true,
+    "source": "synthetic"
+  },
+  "root_ids": [
+    "root"
+  ],
+  "nodes": [
+    {
+      "id": "root",
+      "parent": null,
+      "name": "",
+      "is_leaf": false,
+      "branch_length": null,
+      "support": null
+    },
+    {
+      "id": "n1",
+      "parent": "root",
+      "name": "",
+      "is_leaf": false,
+      "branch_length": 0.31,
+      "support": 84
+    },
+    {
+      "id": "n2",
+      "parent": "root",
+      "name": "",
+      "is_leaf": false,
+      "branch_length": 0.32,
+      "support": 94
+    },
+    {
+      "id": "n3",
+      "parent": "n1",
+      "name": "",
+      "is_leaf": false,
+      "branch_length": 0.23,
+      "support": 76
+    },
+    {
+      "id": "sp1",
+      "parent": "n3",
+      "name": "Genus beta",
+      "is_leaf": true,
+      "branch_length": 0.11,
+      "support": null
+    },
+    {
+      "id": "sp2",
+      "parent": "n3",
+      "name": "Genus epsilon",
+      "is_leaf": true,
+      "branch_length": 0.23,
+      "support": null
+    },
+    {
+      "id": "sp3",
+      "parent": "n2",
+      "name": "Genus zeta",
+      "is_leaf": true,
+      "branch_length": 0.19,
+      "support": null
+    },
+    {
+      "id": "sp4",
+      "parent": "n2",
+      "name": "Genus theta",
+      "is_leaf": true,
+      "branch_length": 0.11,
+      "support": null
+    }
+  ],
+  "confidence": 0.88
+}

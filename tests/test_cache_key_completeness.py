@@ -117,9 +117,9 @@ class TestPromptVersionPerMode:
     def test_upgrading_one_mode_does_not_invalidate_other_modes(self):
         """Upgrading range_chart version doesn't change cache keys for other modes."""
         from rca_core.prompt import PROMPT_VERSION
-        # Simulate upgrading range_chart to "v4"
+        # Simulate a future upgrade without assuming today's concrete version.
         old_version = PROMPT_VERSION["range_chart"]
-        new_version = "v4"
+        new_version = f"{old_version}-next"
 
         base = dict(
             endpoint="e", model="m", api_format="openai",

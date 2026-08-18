@@ -50,6 +50,15 @@ def test_llmprovider_roundtrip():
 
 # --- T9: ProviderDragList drop-to-reorder (headless) ---
 def test_draglist_order_changed():
+    # REVIEW-2026-11-07 (low): PySide6 is an OPTIONAL dependency — a bare
+    # stdlib install has no PySide6, and this test used to hard-fail with
+    # ModuleNotFoundError (the other optional-dep tests skip gracefully).
+    # CI installs requirements.txt, so the test still runs there.
+    try:
+        import PySide6  # noqa: F401
+    except ImportError:
+        import pytest
+        pytest.skip("PySide6 not installed (optional dependency)")
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
@@ -95,6 +104,14 @@ def test_draglist_order_changed():
 if __name__ == "__main__":
     test_llmprovider_coercion()
     test_llmprovider_roundtrip()
-    test_draglist_order_changed()
+    try:
+        test_draglist_order_changed()
+    except BaseException as e:
+        # pytest.skip raises Skipped even in standalone mode — report it
+        # as a skip instead of crashing the runner.
+        if type(e).__name__ == "Skipped":
+            print("SKIP draglist (PySide6 not installed)")
+        else:
+            raise
     print(f"\n--- {_pass} passed, {_fail} failed ---")
     sys.exit(0 if _fail == 0 else 1)

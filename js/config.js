@@ -34,7 +34,13 @@ function rcaClampMaxTokens(v) {
   return Math.max(RCA_CONFIG.minMaxTokens, Math.min(n, RCA_CONFIG.maxMaxTokens));
 }
 
-// Namespaced localStorage keys.
+// Namespaced localStorage keys. Phase L fix: persist the four
+// chart-context settings that the Python GUI persists to JSON
+// (chart_lang, chart_type, enhance, runs) so the JS and Python
+// experiences don't silently diverge when the user switches
+// between them. Key names mirror the Python GUI fields verbatim
+// (NOT prefixed with `rca.`) so a future migration to a single
+// shared settings file is straightforward.
 const RCA_STORE = {
   apiKey: 'rca.apiKey',
   endpoint: 'rca.endpoint',
@@ -45,6 +51,10 @@ const RCA_STORE = {
   runs: 'rca.runs',
   lang: 'rca.lang',
   rememberKey: 'rca.rememberKey',
+  // Phase L: parity with Python GUI ~/.range_chart_analyzer.json
+  chartLang: 'chart_lang',
+  chartType: 'chart_type',
+  enhance: 'enhance',
 };
 
 // F-22 FIX: apiKey ALWAYS uses sessionStorage — never localStorage.

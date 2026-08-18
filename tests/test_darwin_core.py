@@ -3,9 +3,11 @@
 import pytest
 from rca_core.standards.darwin_core import (
     _parse_coordinates,
+    _resolve_age_bounds,
     to_darwin_core_occurrences,
     to_darwin_core_archive,
 )
+from rca_core.standards.ics import ics_resolve_age_bound
 
 
 class TestParseCoordinates:
@@ -46,7 +48,11 @@ class TestToDarwinCoreOccurrences:
         assert len(occs) == 1
         assert occs[0]["scientificName"] == "A"
         assert occs[0]["decimalLatitude"] == "31.0"
-        assert occs[0]["basisOfRecord"] == "MachineExtractedFromImage"
+        # H1 fix (REVIEW-2026-07-25): basisOfRecord must be a valid DwC
+        # vocabulary term. "MachineGenerated" is NOT in the TDWG
+        # basisOfRecord vocabulary; "MachineObservation" is the correct
+        # term for records produced automatically by a machine process.
+        assert occs[0]["basisOfRecord"] == "MachineObservation"
 
     def test_multiple_species(self):
         result = {
@@ -58,4 +64,30 @@ class TestToDarwinCoreOccurrences:
         }
         occs = to_darwin_core_occurrences(result)
         assert len(occs) == 2
+
+    def test_bed_identifiers_are_not_absolute_ages(self):
+        assert ics_resolve_age_bound("Bed 9 (Yinkeng Fm base)") == (None, None)
+        assert ics_resolve_age_bound("Sample 7") == (None, None)
+        assert _resolve_age_bounds({"range_base": "Bed 7", "range_top": "Bed 9"}) == (
+            "",
+            "",
+            None,
+            None,
+        )
+
+    def test_explicit_ma_bounds_are_resolved(self):
+        earliest, latest, earliest_ma, latest_ma = _resolve_age_bounds(
+            {"range_base": "260 Ma", "range_top": "252 Ma"}
+        )
+        assert earliest
+        assert latest
+        assert earliest_ma == 260.0
+        assert latest_ma == 252.0
+
+    def test_reversed_explicit_ma_pair_is_not_exported_as_numeric_range(self):
+        _, _, earliest_ma, latest_ma = _resolve_age_bounds(
+            {"range_base": "252 Ma", "range_top": "260 Ma"}
+        )
+        assert earliest_ma is None
+        assert latest_ma is None
 

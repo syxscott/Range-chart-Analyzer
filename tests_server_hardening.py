@@ -15,6 +15,8 @@ import time
 import urllib.error
 import urllib.request
 
+import pytest
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
@@ -22,6 +24,25 @@ import server as srv
 
 _pass = 0
 _fail = 0
+
+
+@pytest.fixture(autouse=True)
+def _reset_server_rate_limit():
+    """REVIEW-2026-11-07 (low): server.py's rate limiter keeps its
+    per-IP history in a MODULE-level dict (_rate_history, 30 req/60 s).
+    Every test file that imports `server` shares that state within one
+    pytest process, so a combined full-suite run can burn through the
+    window and a later test gets a spurious 429 (seen 2026-11-07 when
+    the root-level server tests were run in a single pytest process).
+    Reset the history around each test. The intentional-burst test
+    (test_get_api_extract_rate_limited) still works: it starts from a
+    clean window and generates the burst itself."""
+    saved = srv._rate_history
+    srv._rate_history = {}
+    try:
+        yield
+    finally:
+        srv._rate_history = saved
 
 
 def check(name, cond, msg=""):

@@ -57,6 +57,13 @@
     const abKeysCjk = ['孢粉', '花粉', '丰度', '百分比'];
     const colKeysAscii = ['column', 'columns', 'columnar', 'col_section', 'col_sections'];
     const colKeysCjk = ['柱状', '柱状図', '柱状图'];
+    // UI fix (2026-08-07): phylogenetic-tree detection was missing entirely
+    // from the auto heuristic (and from the manual mode list), so the web
+    // frontend could never extract a tree. Keywords are deliberately
+    // specific to avoid misclassifying range charts (e.g. a caption that
+    // merely mentions "tree ring data").
+    const phyloKeysAscii = ['phylogen', 'phylogram', 'cladogram', 'dendrogram', 'molecular phylogen'];
+    const phyloKeysCjk = ['系统发育', '进化树', '系统树', '分子系统'];
     const asciiWordBoundary = (haystack, needle) => {
       // Use \b word boundaries around ASCII tokens so 'col' won't match
       // 'colour' but 'col_section' (with underscore) still does. The
@@ -64,8 +71,22 @@
       const re = new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
       return re.test(haystack);
     };
+    // REVIEW-2026-11-07 (low): leading-boundary matcher for STEM keywords.
+    // \bphylogen\b NEVER matched "phylogenetic" / "phylogenies" (the most
+    // common caption form — 'e'/'i' are word chars, no boundary after
+    // 'n'), so auto-detect silently fell back to range_chart. Stems match
+    // on a leading boundary only; 'palyno' matches "palynology" the same
+    // way. Mirrors rca_core/chart_mode.py (_STEMS) so all UIs agree.
+    const asciiWordStart = (haystack, needle) => {
+      const re = new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      return re.test(haystack);
+    };
+    const stemMatch = (blob, k) =>
+      k === 'phylogen' || k === 'molecular phylogen' || k === 'palyno'
+        ? asciiWordStart(blob, k)
+        : asciiWordBoundary(blob, k);
     for (const k of abKeysAscii) {
-      if (asciiWordBoundary(blob, k)) return 'abundance_diagram';
+      if (stemMatch(blob, k)) return 'abundance_diagram';
     }
     for (const k of abKeysCjk) {
       if (blob.indexOf(k) !== -1) return 'abundance_diagram';
@@ -76,6 +97,12 @@
     for (const k of colKeysCjk) {
       if (blob.indexOf(k) !== -1) return 'columnar_section';
     }
+    for (const k of phyloKeysAscii) {
+      if (stemMatch(blob, k)) return 'phylogenetic_tree';
+    }
+    for (const k of phyloKeysCjk) {
+      if (blob.indexOf(k) !== -1) return 'phylogenetic_tree';
+    }
     return 'range_chart';
   }
 
@@ -84,7 +111,8 @@
   function rcaResolveChartMode() {
     const sel = $('chart-mode');
     const choice = sel ? sel.value : 'auto';
-    if (choice === 'range_chart' || choice === 'columnar_section' || choice === 'abundance_diagram') {
+    if (choice === 'range_chart' || choice === 'columnar_section'
+        || choice === 'abundance_diagram' || choice === 'phylogenetic_tree') {
       return choice;
     }
     return rcaAutoDetectChartMode();
@@ -124,6 +152,18 @@
     $('conn-mode').value = rcaStoreGet(RCA_STORE.mode, 'auto');
     $('max-edge').value = rcaStoreGet(RCA_STORE.maxEdge, String(RCA_CONFIG.maxImageEdge));
     $('runs').value = rcaStoreGet(RCA_STORE.runs, '1');
+    // Phase L fix: also restore chart_lang / chart_type / enhance so
+    // the JS frontend matches the Python GUI's persistence behavior.
+    // Defaults mirror rca_core defaults (auto / range_chart / off).
+    if ($('chart-lang')) {
+      $('chart-lang').value = rcaStoreGet(RCA_STORE.chartLang, 'auto');
+    }
+    if ($('chart-mode')) {
+      $('chart-mode').value = rcaStoreGet(RCA_STORE.chartType, 'auto');
+    }
+    if ($('enhance')) {
+      $('enhance').checked = rcaStoreGet(RCA_STORE.enhance, '') === '1';
+    }
     const remember = rcaStoreGet(RCA_STORE.rememberKey, '') === '1';
     const rk0 = $('remember-key');
     if (rk0) rk0.setAttribute('aria-checked', remember ? 'true' : 'false');
@@ -172,6 +212,17 @@
       [RCA_STORE.maxEdge, rcaStoreSet(RCA_STORE.maxEdge, $('max-edge').value.trim() || String(RCA_CONFIG.maxImageEdge))],
       [RCA_STORE.runs, rcaStoreSet(RCA_STORE.runs, $('runs').value.trim() || '1')],
     ];
+    // Phase L fix: persist chart_lang / chart_type / enhance so the
+    // JS settings match what the Python GUI stores in its JSON file.
+    if ($('chart-lang')) {
+      writes.push([RCA_STORE.chartLang, rcaStoreSet(RCA_STORE.chartLang, $('chart-lang').value || 'auto')]);
+    }
+    if ($('chart-mode')) {
+      writes.push([RCA_STORE.chartType, rcaStoreSet(RCA_STORE.chartType, $('chart-mode').value || 'auto')]);
+    }
+    if ($('enhance')) {
+      writes.push([RCA_STORE.enhance, rcaStoreSet(RCA_STORE.enhance, $('enhance').checked ? '1' : '')]);
+    }
     // Phase C: remember-key is a switch button; read aria-checked.
     // SECURITY MODEL (F-22 fix): RCA_STORE.apiKey is ALWAYS stored in
     // sessionStorage (cleared on tab close) — the remember checkbox does NOT
@@ -240,6 +291,7 @@
 
   function showAlert(kind, message, rawDetail) {
     const slot = $('alert-slot');
+    if (!slot) return;
     // M3: error-level alerts need role="alert" so screen readers announce
     // them immediately (aria-live=polite on the parent slot only gets the
     // "next opportunity" announcement). Keep role="status" for warnings —
@@ -256,8 +308,22 @@
       pre.textContent = String(rawDetail).slice(0, 4000);
       div.appendChild(pre);
     }
-    slot.innerHTML = '';
+
+    // UI polish: fade transition for alert appearance.
+    // Fade out any existing alert first, then add new one with fade-in.
+    const existing = slot.querySelector('.alert');
+    if (existing) {
+      existing.classList.add('alert-fade-out');
+      existing.addEventListener('transitionend', () => existing.remove(), { once: true });
+    } else {
+      slot.innerHTML = '';
+    }
+
+    // Append new alert with fade-in
     slot.appendChild(div);
+    // Force reflow so the browser registers the opacity change for animation
+    void div.offsetWidth;
+    div.classList.add('alert-fade-in');
   }
 
   // ---- file handling ----
@@ -287,6 +353,13 @@
     // result from rendering; aborting just stops the underlying network
     // work (otherwise a 2-of-3 multi-run still pays for all 3).
     if (state.abort) state.abort.abort();
+    // REVIEW-2026-11-07 (low): abort the PREVIOUS file's image load as
+    // well — before, its FileReader/Image decode ran to completion in the
+    // background after a newer selection (token check dropped the result,
+    // but not the work).
+    if (state._loadAbort) state._loadAbort.abort();
+    const loadAbort = new AbortController();
+    state._loadAbort = loadAbort;
     // FR1: claim a load token. If the user picks another file before
     // this one's load promise resolves, the new call bumps the token
     // and our async continuation will see a mismatch and silently drop.
@@ -304,7 +377,10 @@
       const edgeEl = $('max-edge');
       let maxEdge = parseInt(edgeEl && edgeEl.value, 10);
       if (!Number.isFinite(maxEdge) || maxEdge < 0) maxEdge = RCA_CONFIG.maxImageEdge;
-      const loaded = await rcaLoadAndMaybeResize(file, maxEdge);
+      const loaded = await rcaLoadAndMaybeResize(file, maxEdge, {
+        enhance: !!state._enhance,
+        signal: loadAbort.signal,
+      });
       if (myToken !== state.loadToken) {
         // A newer file-selection has superseded us; drop this result.
         return;
@@ -322,24 +398,38 @@
       $('preview-wrap').classList.remove('hidden');
     } catch (err) {
       if (myToken === state.loadToken) {
-        showAlert('danger', t('err.imageRead'));
+        // REVIEW-2026-11-07 (low): an aborted load means a newer file
+        // selection superseded this one — showing "image read failed"
+        // would be misleading, so stay silent.
+        if (err && err.message === 'aborted') {
+          /* superseded load, nothing to report */
+        } else {
+          showAlert('danger', t('err.imageRead'));
+        }
       }
     }
   }
 
   // ---- extraction flow ----
-  function setBusy(busy) {
-    state.busy = busy;
+  // UI-REVIEW-2026-08-01 (H1): the force-rerun button visibility depends
+  // on state.result, but setBusy(false) ran in the `finally` BEFORE
+  // `state.result = res.data` was assigned — so after the FIRST successful
+  // extraction the button never appeared (nothing re-evaluated it). The
+  // visibility logic is now a separate function called both from setBusy
+  // and after a result is stored.
+  function updateActionButtons() {
+    const busy = state.busy;
     const btn = $('extract-btn');
-    if (!btn) return;
-    btn.disabled = busy;
-    if (busy) {
-      // M4: keep the data-i18n hook on the inner span so a language switch
-      // mid-extraction still re-translates the spinner label.
-      btn.innerHTML = '<span class="spinner"></span><span data-i18n="upload.extract">' + rcaEsc(t('upload.extract')) + '</span>';
-    } else {
-      // Keep the data-i18n hook so a later language switch re-translates it.
-      btn.innerHTML = '<span id="extract-btn-label" data-i18n="upload.extract">' + rcaEsc(t('upload.extract')) + '</span>';
+    if (btn) {
+      btn.disabled = busy;
+      if (busy) {
+        // M4: keep the data-i18n hook on the inner span so a language
+        // switch mid-extraction still re-translates the spinner label.
+        btn.innerHTML = '<span class="spinner"></span><span data-i18n="upload.extract">' + rcaEsc(t('upload.extract')) + '</span>';
+      } else {
+        // Keep the data-i18n hook so a later language switch re-translates it.
+        btn.innerHTML = '<span id="extract-btn-label" data-i18n="upload.extract">' + rcaEsc(t('upload.extract')) + '</span>';
+      }
     }
     $('loading-slot').classList.toggle('hidden', !busy);
     // FIX-6: show the Cancel button only while an extraction is in flight.
@@ -353,6 +443,11 @@
       $('results-empty').classList.add('hidden');
       $('results-content').classList.add('hidden');
     }
+  }
+
+  function setBusy(busy) {
+    state.busy = busy;
+    updateActionButtons();
   }
 
   async function runExtraction() {
@@ -391,9 +486,12 @@
     // stuck in the busy state.
     let res;
     let extractError = null;
+    // Nit3: hoisted so the post-try error handler can pick the
+    // transport-appropriate message.
+    let connMode = 'backend';
     try {
       const maxTokens = rcaClampMaxTokens($('max-tokens').value);
-      const connMode = rcaResolveMode();  // 'backend' | 'direct' (transport)
+      connMode = rcaResolveMode();  // 'backend' | 'direct' (transport)
       const chartMode = rcaResolveChartMode();  // manual choice or auto-detect heuristic
       const runsEl = $('runs');
       const runs = Math.max(1, Math.min(parseInt(runsEl && runsEl.value, 10) || 1, 5));
@@ -532,7 +630,14 @@
     }
 
     if (!res.ok) {
-      const msg = t(res.errorKey || 'err.http') +
+      // Nit3 (UI-REVIEW-2026-08-01): in backend transport the request is
+      // same-origin, so the CORS/proxy guidance in err.network is
+      // misleading — use the backend-specific message instead.
+      let errKey = res.errorKey || 'err.http';
+      if (errKey === 'err.network' && connMode === 'backend') {
+        errKey = 'err.networkBackend';
+      }
+      const msg = t(errKey) +
         (res.status ? ' (HTTP ' + res.status + ')' : '');
       // H7: prefer upstream error body for 5xx debugging.
       showAlert('danger', msg, res.errorBody || res.raw);
@@ -552,6 +657,23 @@
 
     state.result = res.data;
     state.rawText = res.raw;
+    // Phase K fix: invoke the quality scorer on direct-mode results.
+    // Backend mode already attaches `data.quality` server-side (via
+    // score_range_chart). Without this call the pure-frontend mode
+    // silently drops the quality badge — the entire quality module
+    // was effectively dead code in direct-mode extractions.
+    if (
+      typeof globalThis.scoreRangeChart === 'function'
+      && state.result
+      && typeof state.result === 'object'
+    ) {
+      try {
+        const q = globalThis.scoreRangeChart(state.result);
+        state.result.quality = q;
+      } catch (_e) {
+        // Quality scoring is best-effort; never abort the rendering.
+      }
+    }
 
     // Step 0 (8.0→9.5): surface chimera_warnings so the operator knows
     // when a merged row was not observed in any single run.
@@ -580,6 +702,9 @@
     }
 
     renderCurrentResult();
+    // H1 fix: refresh action-button visibility now that state.result is
+    // stored (setBusy(false) ran before the assignment).
+    updateActionButtons();
   }
 
   // Update just the loading-slot text (used to show per-run progress).
@@ -876,7 +1001,14 @@
     });
 
     $('extract-btn').addEventListener('click', runExtraction);
-    $('reset-btn').addEventListener('click', resetUpload);
+    // UX improvement: confirm before reset to prevent accidental data loss
+    $('reset-btn').addEventListener('click', () => {
+      // Only confirm if there's actual data to lose
+      if (state.result || state.dataUrl) {
+        if (!confirm(t('confirm.reset'))) return;
+      }
+      resetUpload();
+    });
     // FIX-6: cancel the in-flight extraction on demand.
     const cancelBtn = $('cancel-btn');
     if (cancelBtn) {
@@ -997,8 +1129,18 @@ cards.forEach((c, i) => {
       });
       // keep segmented in sync with external programmatic changes
       seg.addEventListener('keydown', (e) => {
-        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
         const order = ['auto', 'backend', 'direct'];
+        if (e.key === 'Home') {
+          seg.querySelector(`button[data-value="${order[0]}"]`).click();
+          e.preventDefault();
+          return;
+        }
+        if (e.key === 'End') {
+          seg.querySelector(`button[data-value="${order[order.length - 1]}"]`).click();
+          e.preventDefault();
+          return;
+        }
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
         const i = order.indexOf(sel.value);
         const next = order[(i + (e.key === 'ArrowRight' ? 1 : -1) + 3) % 3];
         seg.querySelector(`button[data-value="${next}"]`).click();
@@ -1052,6 +1194,8 @@ cards.forEach((c, i) => {
       // this combo.
       if (tag === 'TEXTAREA') return;
       if (tag === 'INPUT' && t.type !== 'button') return;
+      // Guard: skip extraction when already busy to prevent race conditions.
+      if (state.busy) return;
       e.preventDefault();
       runExtraction();
     });

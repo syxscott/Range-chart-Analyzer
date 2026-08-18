@@ -29,7 +29,7 @@ const RCA_I18N = {
     'settings.proxy.hint': '若浏览器直连被 CORS 拦截，填入你自建的代理地址。留空则直连 MiniMax。',
     'settings.proxy.placeholder': '例如 https://your-worker.workers.dev',
     'settings.remember': '在本浏览器记住 API Key',
-    'settings.remember.hint': '勾选后密钥保存在 localStorage；共用电脑请勿勾选。',
+    'settings.remember.hint': '密钥仅保存在当前会话（sessionStorage），关闭标签页即清除；勾选「记住」仅在本会话内保留密钥。',
     'settings.mode': '连接模式',
     'settings.mode.hint': '自动：由本地服务器打开时走后端（避免 CORS），否则浏览器直连。',
     'settings.mode.auto': '自动',
@@ -62,6 +62,8 @@ const RCA_I18N = {
     'settings.save': '保存设置',
     'settings.saved': '设置已保存',
     'settings.saveFailed': '设置保存失败：浏览器可能禁用了 storage（私密模式 / 配额已满）。本次输入仅在当前会话生效。',
+    // UX improvement: reset confirmation
+    'confirm.reset': '确定要重置吗？当前提取结果将被清除。',
 
     'upload.title': '上传地层沿线图',
     'upload.desc': '支持 PNG / JPG / WEBP。图片直接从你的浏览器发送到 MiniMax。支持中 / 英 / 日 / 俄 四种语言的图表。',
@@ -83,7 +85,9 @@ const RCA_I18N = {
     'upload.chartMode.rangeChart': '种属延限图',
     'upload.chartMode.columnarSection': '柱状对比图',
     'upload.chartMode.abundanceDiagram': '丰度/孢粉图',
+    'upload.chartMode.phylogeneticTree': '系统发育树',
     'upload.dz.aria': '点击或拖拽图片到此区域上传，支持 PNG、JPG、WEBP。',
+    'upload.preview.alt': '图片预览',
     'upload.dropOverlay': '松手上传',
     'upload.extract': '开始提取',
     'upload.reset': '清除',
@@ -156,17 +160,29 @@ const RCA_I18N = {
     'col.abundance': '丰度值',
     'col.abundanceUnit': '丰度单位',
     'col.location': '位置',
+    'sec.nodes': '节点 (Nodes)',
+    'col.nodeId': '节点 ID',
+    'col.parent': '父节点',
+    'col.isLeaf': '叶节点',
+    'col.branchLength': '分支长度',
+    'col.nodeAgeMa': '节点年龄 (Ma)',
+    'col.support': '支持率',
     'col.depthUnit': '深度单位',
     'col.levelRange': '层位范围',
 
     'err.noKey': '请先在「API 设置」中填入 MiniMax API Key。',
     'err.noImage': '请先上传一张图片。',
+    'err.noEndpoint': '请先选择并配置一个端点。',
     'err.401': 'API Key 无效或已过期（401）。请检查设置中的密钥。',
     'err.403': '访问被拒绝（403）。请确认密钥权限与端点是否正确。',
     'err.429': '请求过于频繁或额度不足（429）。请稍后再试。',
     'err.timeout': '请求超时。图片可能过大或网络不稳定，请重试。',
     'err.cancelled': '提取已被用户取消。',
     'err.network': '网络请求失败，可能是 CORS 限制。请在设置中填入代理地址后重试。',
+    // UI-REVIEW-2026-08-01 (Nit3): backend transport is same-origin —
+    // CORS cannot be the cause there; the old err.network text pointed
+    // backend users at the proxy setting, which is misleading.
+    'err.networkBackend': '网络请求失败。请检查网络连接或后端服务是否正常运行。',
     'err.http': 'API 返回错误',
     'err.parse': '无法解析模型返回的内容。下方是原始返回，供排查。',
     'err.empty': '模型返回为空。',
@@ -175,6 +191,11 @@ const RCA_I18N = {
     'err.fileTooBig': '图片过大（上限 20 MB），请先压缩后再上传。',
     'err.forbidden': '访问被拒绝（403）。请确认来源 / CSRF 令牌是否有效。',
     'err.badEndpoint': '端点无效或不可达。请检查 API 设置中的 endpoint 与代理地址。',
+    // H2 fix (REVIEW-2026-11-07): both keys were emitted by the code
+    // (minimax.js:832 / server.py:785) but missing here, so users saw raw
+    // key strings like "[?err.badMode]".
+    'err.csrfFetch': '无法获取 CSRF 令牌，请检查后端服务是否正常运行。',
+    'err.badMode': '不支持的图表模式。请在「图表类型」中选择已支持的模式。',
     'err.rateLimit': '请求过于频繁（429）。请稍后再试或降低运行次数。',
     'err.bodyTooLarge': '请求体过大（> 服务器限制）。请压缩图片或降低分辨率后重试。',
     'err.imageTooLarge': '图片过大（> 服务器限制）。请降低「图像分辨率上限」后重试。',
@@ -193,6 +214,9 @@ const RCA_I18N = {
     'quality.agreement_exceeds_runs': 'agreement_count 超过总运行次数',
     'quality.confidence_mismatch': '整体置信度与行置信度不一致',
     'quality.many_extras': '模型输出了较多未定义字段',
+    // H2 fix (REVIEW-2026-11-07): emitted by rca_core/quality.py:1005 and
+    // the JS scorer's exception path; was missing in all three locales.
+    'quality.scoring_failed': '质量评分过程出错，本次结果未评分',
     'quality.null_fields': '部分预期字段为空',
     'quality.invalid_result': '提取结果无效',
     // F-4 (REVIEW-2026-07-25): P1-3 consistency dimension messages
@@ -201,11 +225,19 @@ const RCA_I18N = {
     'quality.agreement_overflow': 'agreement_count 异常大于总运行次数',
     'quality.missing_biozone':    '部分物种缺失生物带归属',
     'quality.empty_result':        '提取结果为空',
-    'quality.bed_index_order_invalid': '岩性段 Bed 编号顺序颠倒',
-    'quality.bed_index_order_swapped': '部分岩性段的 Bed 编号顺序已被自动修正',
+    // M1 fix (REVIEW-2026-11-07): these two keys were defined again below
+    // (the general bed_index_order_* wording matching rca_core/i18n.py).
+    // The first definitions were silently shadowed — removed as dead code.
     // P1-8: abundance sum-to-100
     'quality.abundance_sum_violation': '丰度百分比之和不等于 100%（实测：{sum}%）',
     'quality.abundance_sum_violation_count': '共 {count} 个层位的丰度之和不等于 100%',
+    'quality.range_top_lt_base': '部分物种的 LAD（末现）早于 FAD（首现）',
+    'quality.ages_inconsistent': '{count} 个剖面的年龄跨纪，属界线剖面的可能',
+    'quality.stage_order_reversed': '剖面 {section} 的阶段顺序反了：{detail}',
+    'quality.bed_index_order_invalid': '部分岩性/地层块的 bed_index 顺序无效',
+    'quality.bed_index_order_swapped': '已自动交换上/下 bed_index 以修正顺序',
+    'quality.missing_section_ref': '物种的剖面引用未知',
+    'quality.biozone_order_violation': 'Steno 定律违反：{species} 的生物带 {younger_biozone}（较新）出现在更老的 {older_biozone} 之下',
   },
 };
 
@@ -236,7 +268,7 @@ RCA_I18N.en = {
   'settings.proxy.hint': 'If a direct browser call is blocked by CORS, enter your own proxy URL. Leave blank to call MiniMax directly.',
   'settings.proxy.placeholder': 'e.g. https://your-worker.workers.dev',
   'settings.remember': 'Remember API key in this browser',
-  'settings.remember.hint': 'When checked, the key is stored in localStorage; do not check on shared computers.',
+  'settings.remember.hint': 'The key is kept only in the current session (sessionStorage) and is cleared when the tab is closed; checking "Remember" only keeps the key within this session.',
   'settings.mode': 'Connection mode',
   'settings.mode.hint': 'Auto: use the backend when opened via the local server (avoids CORS), otherwise call the browser directly.',
   'settings.mode.auto': 'Auto',
@@ -269,6 +301,8 @@ RCA_I18N.en = {
   'settings.save': 'Save settings',
   'settings.saved': 'Settings saved',
   'settings.saveFailed': 'Could not persist settings — localStorage may be disabled (private mode / quota exceeded). Settings apply for this session only.',
+  // UX improvement: reset confirmation
+  'confirm.reset': 'Are you sure you want to reset? Current extraction results will be cleared.',
 
   'upload.title': 'Upload range chart',
   'upload.desc': 'Supports PNG / JPG / WEBP. The image is sent directly from your browser to MiniMax. Charts in Chinese / English / Japanese / Russian are supported.',
@@ -290,7 +324,9 @@ RCA_I18N.en = {
   'upload.chartMode.rangeChart': 'Range chart',
   'upload.chartMode.columnarSection': 'Columnar section',
   'upload.chartMode.abundanceDiagram': 'Abundance / pollen diagram',
+  'upload.chartMode.phylogeneticTree': 'Phylogenetic tree',
   'upload.dz.aria': 'Click or drag an image here to upload. PNG, JPG, WEBP supported.',
+  'upload.preview.alt': 'Image preview',
   'upload.dropOverlay': 'Release to upload',
   'upload.extract': 'Extract',
   'upload.reset': 'Clear',
@@ -365,15 +401,24 @@ RCA_I18N.en = {
   'col.location': 'Location',
   'col.depthUnit': 'Depth unit',
   'col.levelRange': 'Level range',
+  'sec.nodes': 'Nodes',
+  'col.nodeId': 'Node ID',
+  'col.parent': 'Parent',
+  'col.isLeaf': 'Leaf',
+  'col.branchLength': 'Branch length',
+  'col.nodeAgeMa': 'Node age (Ma)',
+  'col.support': 'Support',
 
   'err.noKey': 'Please enter your MiniMax API key in "API Settings" first.',
   'err.noImage': 'Please upload an image first.',
+  'err.noEndpoint': 'Please select and configure an endpoint first.',
   'err.401': 'API key is invalid or expired (401). Check the key in settings.',
   'err.403': 'Access denied (403). Verify key permissions and endpoint.',
   'err.429': 'Too many requests or insufficient quota (429). Try again later.',
   'err.timeout': 'Request timed out. The image may be too large or the network unstable. Please retry.',
   'err.cancelled': 'Extraction cancelled by user.',
   'err.network': 'Network request failed, possibly due to CORS. Enter a proxy URL in settings and retry.',
+  'err.networkBackend': 'Network request failed. Check your network connection or whether the backend service is running.',
   'err.http': 'The API returned an error',
   'err.parse': 'Could not parse the model response. The raw response is shown below for debugging.',
   'err.empty': 'The model returned an empty response.',
@@ -382,6 +427,10 @@ RCA_I18N.en = {
   'err.fileTooBig': 'Image is too large (max 20 MB); please compress it first.',
   'err.forbidden': 'Access denied (403). Verify the origin / CSRF token are valid.',
   'err.badEndpoint': 'Endpoint is invalid or unreachable. Check the endpoint / proxy URL in API Settings.',
+  // H2 fix (REVIEW-2026-11-07): emitted by minimax.js:832 / server.py:785
+  // but missing here (raw key shown to the user).
+  'err.csrfFetch': 'Failed to obtain the CSRF token. Check that the backend service is running.',
+  'err.badMode': 'Unsupported chart mode. Pick one of the supported chart types.',
   'err.rateLimit': 'Too many requests (429). Please retry later or reduce the runs count.',
   'err.bodyTooLarge': 'Request body is too large (exceeds the server limit). Compress the image or lower the resolution and retry.',
   'err.imageTooLarge': 'Image is too large (exceeds the server limit). Lower "Max image resolution" in settings and retry.',
@@ -400,6 +449,9 @@ RCA_I18N.en = {
   'quality.agreement_exceeds_runs': 'agreement_count exceeds total runs',
   'quality.confidence_mismatch': 'Overall confidence diverges from row confidences',
   'quality.many_extras': 'Model emitted many undefined fields',
+  // H2 fix (REVIEW-2026-11-07): emitted by quality.py:1005 / the JS scorer
+  // exception path; was missing in all three locales.
+  'quality.scoring_failed': 'Quality scoring failed; this result is unscored',
   'quality.null_fields': 'Some expected fields are null',
   'quality.invalid_result': 'Invalid extraction result',
   // F-4 (REVIEW-2026-07-25): P1-3 consistency dimension messages
@@ -408,11 +460,19 @@ RCA_I18N.en = {
   'quality.agreement_overflow': 'agreement_count abnormally exceeds total number of runs',
   'quality.missing_biozone':   'Some taxa lack biozone assignment',
   'quality.empty_result':       'Extraction result is empty',
-  'quality.bed_index_order_invalid': 'Lithology bed index order is inverted',
-  'quality.bed_index_order_swapped': 'Some lithology bed index order was auto-corrected',
+  // M1 fix (REVIEW-2026-11-07): these two keys were defined again below
+  // (general bed_index_order_* wording matching rca_core/i18n.py); the
+  // first definitions were silently shadowed — removed as dead code.
   // P1-8: abundance sum-to-100
   'quality.abundance_sum_violation': "Abundance percentages for '{sample}' sum to {sum}% (should be 100%)",
   'quality.abundance_sum_violation_count': '{count} level(s) have abundance sums not equal to 100%',
+  'quality.range_top_lt_base': 'Some species have range top younger than their range base',
+  'quality.ages_inconsistent': '{count} section(s) span eras; legitimate for boundary sections',
+  'quality.stage_order_reversed': 'Stage order reversed in section {section}: {detail}',
+  'quality.bed_index_order_invalid': 'Some blocks have invalid bed index order',
+  'quality.bed_index_order_swapped': 'Top/base bed indices swapped automatically',
+  'quality.missing_section_ref': 'Some species reference an unknown section',
+  'quality.biozone_order_violation': "Steno's Law violation: {species} in biozone {younger_biozone} (younger) appears below {older_biozone} (older)",
 };
 
 RCA_I18N.ja = {
@@ -442,7 +502,7 @@ RCA_I18N.ja = {
   'settings.proxy.hint': 'ブラウザからの直接呼び出しが CORS で遮断される場合、自作プロキシの URL を入力します。空欄なら MiniMax に直接接続します。',
   'settings.proxy.placeholder': '例 https://your-worker.workers.dev',
   'settings.remember': 'このブラウザに API キーを記憶する',
-  'settings.remember.hint': 'チェックするとキーは localStorage に保存されます。共用 PC では使用しないでください。',
+  'settings.remember.hint': 'キーは現在のセッション（sessionStorage）にのみ保存され、タブを閉じると削除されます。「記憶する」にチェックしてもキーはこのセッション内にのみ保持されます。',
   'settings.mode': '接続モード',
   'settings.mode.hint': '自動：ローカルサーバー経由で開いた場合はバックエンドを使用（CORS 回避）、それ以外はブラウザから直接呼び出します。',
   'settings.mode.auto': '自動',
@@ -475,6 +535,8 @@ RCA_I18N.ja = {
   'settings.save': '設定を保存',
   'settings.saved': '設定を保存しました',
   'settings.saveFailed': '設定を保存できませんでした。ブラウザのストレージが無効です（プライベートモード / 容量超過）。今回の設定は現在のセッションにのみ適用されます。',
+  // UX improvement: reset confirmation
+  'confirm.reset': 'リセットしてもよろしいですか？現在の抽出結果がクリアされます。',
 
   'upload.title': 'レンジチャートをアップロード',
   'upload.desc': 'PNG / JPG / WEBP に対応。画像はブラウザから直接 MiniMax に送信されます。中国語 / 英語 / 日本語 / ロシア語の図表に対応します。',
@@ -496,7 +558,9 @@ RCA_I18N.ja = {
   'upload.chartMode.rangeChart': 'レンジチャート',
   'upload.chartMode.columnarSection': '柱状図',
   'upload.chartMode.abundanceDiagram': '産出頻度／花粉図',
+  'upload.chartMode.phylogeneticTree': '系統樹',
   'upload.dz.aria': '画像をクリックまたはドラッグしてアップロード。PNG、JPG、WEBP に対応。',
+  'upload.preview.alt': '画像プレビュー',
   'upload.dropOverlay': 'ドロップでアップロード',
   'upload.extract': '抽出開始',
   'upload.reset': 'クリア',
@@ -571,15 +635,24 @@ RCA_I18N.ja = {
   'col.location': '位置',
   'col.depthUnit': '深度単位',
   'col.levelRange': '層準範囲',
+  'sec.nodes': 'ノード',
+  'col.nodeId': 'ノード ID',
+  'col.parent': '親ノード',
+  'col.isLeaf': '葉ノード',
+  'col.branchLength': '枝長',
+  'col.nodeAgeMa': 'ノード年代 (Ma)',
+  'col.support': '支持率',
 
   'err.noKey': 'まず「API 設定」で MiniMax API キーを入力してください。',
   'err.noImage': '先に画像をアップロードしてください。',
+  'err.noEndpoint': '先にエンドポイントを選択して設定してください。',
   'err.401': 'API キーが無効または期限切れです（401）。設定のキーを確認してください。',
   'err.403': 'アクセスが拒否されました（403）。キーの権限とエンドポイントを確認してください。',
   'err.429': 'リクエスト過多またはクォータ不足です（429）。後でもう一度お試しください。',
   'err.timeout': 'リクエストがタイムアウトしました。画像が大きすぎるか通信が不安定な可能性があります。再試行してください。',
   'err.cancelled': 'ユーザーによって抽出がキャンセルされました。',
   'err.network': 'ネットワーク要求に失敗しました。CORS の可能性があります。設定でプロキシ URL を入力して再試行してください。',
+  'err.networkBackend': 'ネットワーク要求に失敗しました。ネットワーク接続またはバックエンドサービスが動作しているか確認してください。',
   'err.http': 'API がエラーを返しました',
   'err.parse': 'モデルの応答を解析できませんでした。デバッグ用に生応答を以下に表示します。',
   'err.empty': 'モデルの応答が空でした。',
@@ -588,6 +661,10 @@ RCA_I18N.ja = {
   'err.fileTooBig': '画像が大きすぎます（上限 20 MB）。圧縮してからアップロードしてください。',
   'err.forbidden': 'アクセスが拒否されました（403）。オリジン / CSRF トークンが有効か確認してください。',
   'err.badEndpoint': 'エンドポイントが無効または到達できません。API 設定の endpoint / プロキシ URL を確認してください。',
+  // H2 fix (REVIEW-2026-11-07): minimax.js:832 / server.py:785 が発火する
+  // key だったが未定義で、生 key が表示されていた。
+  'err.csrfFetch': 'CSRF トークンを取得できませんでした。バックエンドサービスを確認してください。',
+  'err.badMode': 'サポートされていないチャートモードです。「チャートの種類」で対応モードを選択してください。',
   'err.rateLimit': 'リクエスト過多です（429）。しばらくしてから再試行するか、実行回数を減らしてください。',
   'err.bodyTooLarge': 'リクエストボディが大きすぎます（サーバー上限超過）。画像を圧縮するか解像度を下げて再試行してください。',
   'err.imageTooLarge': '画像が大きすぎます（サーバー上限超過）。設定の「画像解像度の上限」を下げて再試行してください。',
@@ -606,6 +683,9 @@ RCA_I18N.ja = {
   'quality.agreement_exceeds_runs': 'agreement_count が総ラン数を超えています',
   'quality.confidence_mismatch': '全体 confidence と行 confidence が一致しません',
   'quality.many_extras': 'モデルが多くの未定義フィールドを出力しました',
+  // H2 fix (REVIEW-2026-11-07): quality.py:1005 / JS スコアラー例外パスが
+  // 発火する key だったが三語とも未定義だった。
+  'quality.scoring_failed': '品質スコアリング中にエラーが発生しました。この結果は未採点です',
   'quality.null_fields': '一部の期待されたフィールドが null です',
   'quality.invalid_result': '無効な抽出結果',
   // F-4 (REVIEW-2026-07-25): P1-3 consistency dimension messages
@@ -614,11 +694,18 @@ RCA_I18N.ja = {
   'quality.agreement_overflow': 'agreement_count が総ラン数を超えています',
   'quality.missing_biozone':    '一部の分類群にbiozone所属がありません',
   'quality.empty_result':       '抽出結果が空です',
-  'quality.bed_index_order_invalid': '岩相層のベッド番号順序が逆順です',
-  'quality.bed_index_order_swapped': '一部の岩相層のベッド番号順序が自動修正されました',
+  // M1 fix (REVIEW-2026-11-07): 以下の2キー（rca_core/i18n.py と同じ
+  // 一般表現）と重複定義だったため、影になる初期定義を削除。
   // P1-8: abundance sum-to-100
   'quality.abundance_sum_violation': '試料「{sample}」の豊度合計は {sum}%（100%であるべき）',
   'quality.abundance_sum_violation_count': '{count} 個の試料の豊度合計が 100% でない',
+  'quality.range_top_lt_base': '一部の種で LAD（最終出現）が FAD（最初出現）より早い',
+  'quality.ages_inconsistent': '{count} 個のセクションが紀をまたぐ',
+  'quality.stage_order_reversed': 'セクション {section} のステージ順が逆：{detail}',
+  'quality.bed_index_order_invalid': '一部の岩相/地層ブロックの bed_index 順が無効',
+  'quality.bed_index_order_swapped': '上/下 bed_index を自動的に入れ替えました',
+  'quality.missing_section_ref': '一部の種が未知のセクションを参照しています',
+  'quality.biozone_order_violation': 'Steno の法則違反：種 {species} の生層帯 {younger_biozone}（新しい）がより古い {older_biozone} の下に出現',
 };
 
 // ==================== i18n runtime ====================
@@ -640,7 +727,16 @@ function t(key, params) {
   const dict = RCA_I18N[RCA_LANG] || {};
   if (key in dict) s = dict[key];
   else if (RCA_I18N.en && key in RCA_I18N.en) s = RCA_I18N.en[key];
-  else s = key;
+  else {
+    // Phase M fix: when a key is missing in BOTH the current language
+    // and English, return a visibly-tagged placeholder rather than
+    // the raw dotted key — which renders to the user as garbled
+    // text noise ("results.partialFailure").
+    if (typeof console !== 'undefined') {
+      console.warn && console.warn('[i18n] missing translation: ' + key);
+    }
+    s = '[?' + key + ']';
+  }
   if (params && typeof params === 'object') {
     for (const k of Object.keys(params)) {
       const v = String(params[k]);
@@ -651,7 +747,7 @@ function t(key, params) {
 }
 
 // Apply translations to all [data-i18n] / [data-i18n-ph] / [data-i18n-title]
-// elements currently in the DOM.
+// / [data-i18n-alt] elements currently in the DOM.
 function rcaApplyI18n(root) {
   const scope = root || document;
   scope.querySelectorAll('[data-i18n]').forEach((el) => {
@@ -662,5 +758,8 @@ function rcaApplyI18n(root) {
   });
   scope.querySelectorAll('[data-i18n-title]').forEach((el) => {
     el.setAttribute('title', t(el.getAttribute('data-i18n-title')));
+  });
+  scope.querySelectorAll('[data-i18n-alt]').forEach((el) => {
+    el.setAttribute('alt', t(el.getAttribute('data-i18n-alt')));
   });
 }

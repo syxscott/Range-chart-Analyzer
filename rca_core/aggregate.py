@@ -12,6 +12,7 @@ auto-detect between range-chart and columnar-section using the row shape
 
 from __future__ import annotations
 
+import copy
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -166,6 +167,47 @@ def _merge_scalar_field(values):
     return _NO_MERGE
 
 
+def _stable_typed_mode(values, expected_type):
+    """Return a deterministic mode while preserving the requested type."""
+    valid = [v for v in values if type(v) is expected_type]
+    if not valid:
+        return _NO_MERGE
+    counts = Counter(valid)
+    top = max(counts.values())
+    tied = [value for value, count in counts.items() if count == top]
+    return sorted(tied)[0]
+
+
+def _merge_confidence(values):
+    """Average valid per-row confidence values without treating missing as zero."""
+    valid = []
+    for value in values:
+        if value is None or value == "" or isinstance(value, bool):
+            continue
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        valid.append(max(0.0, min(1.0, parsed)))
+    if not valid:
+        return _NO_MERGE
+    return round(sum(valid) / len(valid), 4)
+
+
+def _merge_mapping_field(values):
+    """Merge dictionaries recursively while keeping structured data structured."""
+    mappings = [value for value in values if isinstance(value, dict)]
+    if not mappings:
+        return _NO_MERGE
+    keys = sorted({key for mapping in mappings for key in mapping})
+    merged = {}
+    for key in keys:
+        merged_value = _merge_field_across_runs([mapping.get(key) for mapping in mappings])
+        if merged_value is not _NO_MERGE:
+            merged[key] = merged_value
+    return merged
+
+
 def _merge_structured_field(values):
     """Merge a structured field (list of dicts) across runs.
 
@@ -211,12 +253,17 @@ def _merge_field_across_runs(values):
     if non_none and all(isinstance(v, list) and all(isinstance(x, dict) for x in v) for v in non_none):
         merged = _merge_structured_field(values)
         return merged  # always a list (possibly empty)
+    # Dictionaries (notably _extras) are recursively merged and never
+    # stringified. If a malformed run mixes a dict with another shape, keep
+    # the structured observations and ignore the incompatible value.
+    if any(isinstance(v, dict) for v in non_none):
+        return _merge_mapping_field(values)
     # If every non-None value is a primitive → scalar merge.
     if non_none and all(isinstance(v, (str, int, float, bool)) for v in non_none):
         return _merge_scalar_field(values)
-    # Mixed: fall back to plain string _mode (handles "other_fossils"-style
-    # lists of strings, etc.).
-    return _mode([str(v) for v in values if v is not None])
+    # Unsupported mixed structures are omitted instead of leaking repr()/str()
+    # artifacts into scientific data.
+    return _NO_MERGE
 
 
 @dataclass(slots=True)
@@ -336,26 +383,51 @@ def _looks_columnar(data: Optional[dict]) -> bool:
     return isinstance(first, dict) and ("id" in first)
 
 
+def _looks_phylogenetic(data: Optional[dict]) -> bool:
+    """REVIEW-2026-08-17 (P2): phylo detection.
+
+    The phylo extractor emits ``nodes`` (primary rows deduped by id)
+    plus a single ``metadata`` dict and a ``root_ids`` list. The shape
+    is unique to phylo — without this detector, phylo data was silently
+    merged as range_chart when no explicit ``schema=`` was passed."""
+    if not data:
+        return False
+    nodes = data.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        return False
+    first = nodes[0]
+    # M2 fix (REVIEW-2026-11-07): require BOTH id and parent so this
+    # detector agrees with exporter._looks_phylogenetic_tree and the JS
+    # mirror. The normalizer always writes both keys (parent=None for
+    # roots), so normalized data is unaffected; only hand-crafted payloads
+    # lacking ``parent`` change classification (range-chart fallback, the
+    # same result the exporter would have given).
+    return isinstance(first, dict) and "id" in first and "parent" in first
+
+
 def _auto_detect_schema(results):
     """Pick the schema that matches the majority of inputs.
 
     Tie-breaking: when two shape-detectors both meet the threshold
     (or both fall short by the same margin), we apply a deterministic
-    preference order — columnar > abundance > range-chart. Columnar is
-    more specific than abundance (its `sections[].id` field is unique
-    to that mode), so misdetecting it as range-chart is a worse failure
-    than misdetecting abundance as range-chart. The old version fell
-    through to RANGE_CHART for any tie, which silently lost columnar
-    data when 2 runs split evenly.
+    preference order — phylogenetic > columnar > abundance > range-chart.
+    Phylogenetic is the most specific shape (nodes[].id plus a single
+    metadata dict); misdetecting it as range-chart is the worst failure
+    because it destroys the primary row key. The previous version had no
+    phylo branch at all and silently demoted phylo to range-chart.
     """
     if not results:
         return RANGE_CHART_SCHEMA
     n = len(results)
     ab = sum(1 for r in results if _looks_abundance(r))
     col = sum(1 for r in results if _looks_columnar(r))
+    phy = sum(1 for r in results if _looks_phylogenetic(r))
     half = (n + 1) // 2
     ab_passes = ab >= half
     col_passes = col >= half
+    phy_passes = phy >= half
+    if phy_passes:
+        return PHYLOGENETIC_TREE_SCHEMA
     if col_passes and ab_passes:
         # Both detectors agree there's a majority — prefer the more
         # specific one. Counts break the tie if they disagree.
@@ -368,8 +440,12 @@ def _auto_detect_schema(results):
         return COLUMNAR_SECTION_SCHEMA
     if ab_passes:
         return ABUNDANCE_DIAGRAM_SCHEMA
-    # Neither detector hit majority. If they tie on counts, still apply
-    # the same preference so the result is deterministic across runs.
+    # Neither detector hit majority. Apply deterministic preference so
+    # the result is the same across runs. Phylo beats both when at least
+    # one run has it (handles the 1-run / 2-run edge case where no shape
+    # meets majority but phylo is clearly present).
+    if phy > col and phy > ab:
+        return PHYLOGENETIC_TREE_SCHEMA
     if col > ab:
         return COLUMNAR_SECTION_SCHEMA
     if ab > col:
@@ -490,7 +566,14 @@ def _merge_primary_list(runs, schema, n):
                 fields_to_merge.setdefault(k, []).append(v)
         for k, vals in fields_to_merge.items():
             per_run_values = [gi.get(k) for gi in group]
-            merged_v = _merge_field_across_runs(per_run_values)
+            if schema.primary_list_key == "species_ranges" and k in {
+                "range_top_idx", "range_base_idx",
+            }:
+                merged_v = _stable_typed_mode(per_run_values, int)
+            elif schema.primary_list_key == "species_ranges" and k == "confidence":
+                merged_v = _merge_confidence(per_run_values)
+            else:
+                merged_v = _merge_field_across_runs(per_run_values)
             if merged_v is _NO_MERGE:
                 continue
             aggr[k] = merged_v
@@ -686,14 +769,26 @@ def merge_results(
         return _empty_for(sch, n)
 
     if len(runs) == 1 and total_runs in (None, 1):
-        single = dict(runs[0])
+        # P2 fix (2026-08-06): deep-copy the single run instead of a
+        # shallow ``dict(runs[0])`` — the shallow copy aliased every nested
+        # structure (sections[].formations, _extras, lithology_blocks, ...)
+        # with the caller's input run, so a downstream in-place mutation of
+        # the merged result silently rewrote the source data.
+        single = copy.deepcopy(runs[0])
         items = single.get(sch.primary_list_key) or []
         new_items = []
         for it in items:
-            it2 = dict(it)
-            it2["agreement_count"] = 1
-            it2["agreement"] = "1/1"
-            new_items.append(it2)
+            # P2 (2026-08-06) + REVIEW-2026-11-07 (low): `it` is already a
+            # deep copy of the caller's row (root deep-copied above), so it
+            # is NOT aliased with the input. Add the agreement fields in
+            # place instead of a shallow ``dict(it)`` — the shallow copy's
+            # nested values still shared objects with the (now orphaned)
+            # deep copy, which was correct but easy to misread. Guard
+            # non-dict rows so a malformed entry can't crash the merge.
+            if isinstance(it, dict):
+                it["agreement_count"] = 1
+                it["agreement"] = "1/1"
+            new_items.append(it)
         single[sch.primary_list_key] = new_items
         single.setdefault(sch.confidence_field, single.get(sch.confidence_field, 0.0))
         single["runs"] = 1
@@ -712,15 +807,41 @@ def merge_results(
                 out[key] = runs[0][key]
 
     confs = []
+    # M-1 fix (REVIEW-2026-07-25): merged confidence is a SIMPLE AVERAGE of
+    # per-run confidences. The previous comment claimed consensus-rate
+    # weighting (weight each run by the fraction of its primary rows reaching
+    # row-level consensus), but the implementation used `w = int(r.get("runs")
+    # or 1)`, which is always 1 for single-run results, so the math reduces to
+    # a plain mean. Consensus-rate weighting would require row-level agreement
+    # fractions that are not available on the merged `runs` objects, so we
+    # keep the simple average and document it honestly rather than imply a
+    # weighting that isn't computed. This is defensible: in multi-run mode each
+    # run contributes one confidence, and averaging them is the unbiased merge
+    # when no per-row consensus signal is present.
+    weight_n = 0
+    weight_sum = 0.0
     for r in runs:
         raw = r.get(sch.confidence_field)
         if raw is None:
             continue
         try:
-            confs.append(float(raw))
+            c = float(raw)
         except (TypeError, ValueError):
-            pass
-    out[sch.confidence_field] = round(sum(confs) / len(confs), 4) if confs else 0.0
+            continue
+        # Each run is weighted uniformly (its own `runs` count is ~1 here, so
+        # this is effectively a simple average across runs).
+        try:
+            w = int(r.get("runs") or 1)
+        except (TypeError, ValueError):
+            w = 1
+        if w < 1:
+            w = 1
+        weight_sum += c * w
+        weight_n += w
+    if weight_n > 0:
+        out[sch.confidence_field] = round(weight_sum / weight_n, 4)
+    else:
+        out[sch.confidence_field] = 0.0
 
     # Merge "sections" for both range-chart and columnar-section schemas.
     # For range-chart: group by section name and mode-merge scalar fields.

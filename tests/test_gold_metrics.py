@@ -26,16 +26,20 @@ class TestNormalizeTaxon:
         assert _normalize_taxon("Ammonites koslovensis") == "ammonites koslovensis"
 
     def test_iczn_cf(self):
-        assert _normalize_taxon("Ammonites cf. koslovensis") == "ammonites koslovensis"
+        assert _normalize_taxon("Ammonites cf. koslovensis") == "ammonites cf. koslovensis"
+        assert _normalize_taxon("Ammonites cf. koslovensis", preserve_qualifiers=False) == "ammonites koslovensis"
 
     def test_iczn_aff(self):
-        assert _normalize_taxon("Genus aff. species") == "genus species"
+        assert _normalize_taxon("Genus aff. species") == "genus aff. species"
+        assert _normalize_taxon("Genus aff. species", preserve_qualifiers=False) == "genus species"
 
     def test_iczn_question(self):
-        assert _normalize_taxon("Genus? species") == "genus species"
+        assert _normalize_taxon("Genus? species") == "genus ? species"
+        assert _normalize_taxon("Genus? species", preserve_qualifiers=False) == "genus species"
 
     def test_iczn_exgr(self):
-        assert _normalize_taxon("Genus ex gr. species") == "genus species"
+        assert _normalize_taxon("Genus ex gr. species") == "genus ex gr. species"
+        assert _normalize_taxon("Genus ex gr. species", preserve_qualifiers=False) == "genus species"
 
     def test_whitespace(self):
         assert _normalize_taxon("  Genus   species  ") == "genus species"
@@ -79,12 +83,29 @@ class TestSpeciesPrecisionRecall:
         assert m["precision"] == 0.0
         assert m["recall"] == 0.0
 
-    def test_iczn_fuzzy_match(self):
+    def test_iczn_qualifier_changes_strict_identity_but_lenient_is_reported(self):
         pred = [{"species": "Ammonites cf. koslovensis"}]
         true = [{"species": "Ammonites koslovensis"}]
-        m = species_precision_recall(pred, true)
-        assert m["recall"] == 1.0  # GT species found
-        assert m["precision"] == 1.0  # predicted is valid match
+        metrics = species_precision_recall(pred, true)
+        assert metrics["matching_policy"] == "strict"
+        assert metrics["precision"] == 0.0
+        assert metrics["recall"] == 0.0
+        assert metrics["f1"] == 0.0
+        assert metrics["lenient"]["matching_policy"] == "qualifier_insensitive"
+        assert metrics["lenient"]["precision"] == 1.0
+        assert metrics["lenient"]["recall"] == 1.0
+        assert metrics["lenient"]["f1"] == 1.0
+
+    @pytest.mark.parametrize("qualified", [
+        "Genus aff. alpha", "Genus ex gr. alpha", "Genus alpha?",
+        "Genus alpha s.l.", "Genus alpha s.str.",
+    ])
+    def test_open_nomenclature_is_never_silently_equal_in_strict_mode(self, qualified):
+        metrics = species_precision_recall(
+            [{"species": qualified}], [{"species": "Genus alpha"}],
+        )
+        assert metrics["f1"] == 0.0
+        assert metrics["lenient"]["f1"] == 1.0
 
 
 # ---------------------------------------------------------------------------

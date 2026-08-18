@@ -97,16 +97,26 @@ const FORWARDED_RESPONSE_HEADERS = new Set([
 // intended behaviour for a serverless environment.
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 30;
+// Bounded by MAX_RATE_MAP_SIZE so a flood of distinct keys cannot exhaust
+// memory (was previously unbounded — a DoS vector). Mirrors deno-proxy.js.
+const MAX_RATE_MAP_SIZE = 10_000;
 const _rateMap = new Map(); // ip → int[] of timestamps
 
 function rateCheck(ip) {
   const now = Date.now();
-  const key = ip;
-  const slots = _rateMap.get(key);
+  // LRU-style: if we're at the cap, evict the oldest entry (insertion order).
+  if (!_rateMap.has(ip) && _rateMap.size >= MAX_RATE_MAP_SIZE) {
+    const oldestKey = _rateMap.keys().next().value;
+    _rateMap.delete(oldestKey);
+  }
+  const slots = _rateMap.get(ip);
   if (!slots) {
-    _rateMap.set(key, [now]);
+    _rateMap.set(ip, [now]);
     return { allowed: true, remaining: RATE_MAX - 1, resetMs: RATE_WINDOW_MS };
   }
+  // Touch to mark as fresh (LRU).
+  _rateMap.delete(ip);
+  _rateMap.set(ip, slots);
   // Prune entries older than the window.
   const cutoff = now - RATE_WINDOW_MS;
   let idx = 0;
@@ -240,32 +250,32 @@ export default {
     const cors = corsFor(origin);
     const authorized = cors !== null || secretOk(request);
 
-    // RATE LIMIT: apply after computing cors/authorized so 429 can echo
-    // CORS. The rate-limit key is CF-Connecting-IP when available (set by
-    // CF and not client-spoofable) and falls back to the rightmost
-    // X-Forwarded-For when behind another trusted proxy (the leftmost is
-    // client-controlled and trivially rotatable).
+    // Rate-limit key: CF-Connecting-IP when available (set by CF and not
+    // client-spoofable) and falls back to the rightmost X-Forwarded-For when
+    // behind another trusted proxy (the leftmost is client-controlled and
+    // trivially rotatable).
     const fwd = request.headers.get('x-forwarded-for');
     const rightmostFwd = fwd ? fwd.split(',').slice(-1)[0].trim() : '';
     const clientIp = request.headers.get('CF-Connecting-IP') ||
                      rightmostFwd ||
                      'unknown';
+
+    // Reject unauthorized requests BEFORE consuming a rate-limit slot, so a
+    // flood of bogus requests can't fill _rateMap and starve real callers
+    // (was previously counting rejected requests against the quota). The
+    // outbound target stays the hardcoded MiniMax endpoint regardless.
+    if (!authorized) {
+      return new Response('Forbidden', { status: 403 });
+    }
+
+    // RATE LIMIT: now safe to consume a slot — only authorized callers reach
+    // here. The 429 echoes CORS so an authorized browser caller can read it.
     const rl = rateCheck(clientIp);
     if (!rl.allowed) {
       return new Response(JSON.stringify({ error: 'rate_limit_exceeded', retryAfter: rl.resetMs }), {
         status: 429,
         headers: { 'content-type': 'application/json', ...(cors || {}) },
       });
-    }
-
-    // Authorized when the Origin is allowlisted OR a valid secret is
-    // presented. With an empty allowlist and no secret, corsFor() returns
-    // null here and every request is rejected — this is the deliberate
-    // closure of the open-relay footgun. The outbound target is still the
-    // hardcoded MiniMax endpoint, so even an authorized caller can only
-    // reach MiniMax, never an arbitrary URL.
-    if (!authorized) {
-      return new Response('Forbidden', { status: 403 });
     }
 
     // For secret-only mode we still need CORS so the browser can use the

@@ -378,10 +378,13 @@ class HistoryDetailDialog(QDialog):
         # --- Section 1: Basic information ---
         import time as _time
         ts = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(rec.timestamp or 0))
+        # REVIEW-2026-11-07 (low): phylogenetic_tree was missing, so a phylo
+        # record's "mode" row rendered the raw code.
         mode_label = {
             "range_chart": "Range chart",
             "columnar_section": "Columnar section",
             "abundance_diagram": "Abundance / pollen",
+            "phylogenetic_tree": "Phylogenetic tree",
         }.get(rec.mode, rec.mode or "-")
         conf = f"{(rec.confidence or 0) * 100:.0f}%" if rec.confidence else "-"
         rows = [

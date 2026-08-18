@@ -108,8 +108,41 @@ class TestSpeciesFieldsPreserved:
         for k in ("species", "section", "range_top", "range_base", "biozone",
                   "author", "year", "author_year",
                   "range_top_bed", "range_base_bed",
-                  "endpoint_kind", "occurrence_mode", "note"):
+                  "range_top_idx", "range_base_idx",
+                  "endpoint_kind", "occurrence_mode", "confidence", "note"):
             assert k in row, f"field {k!r} missing: {row}"
         # occurrence_mode should be "in_situ" (reworked=False normalized)
         assert row["occurrence_mode"] == "in_situ"
         assert row["endpoint_kind"] == "observed"
+
+    def test_indices_confidence_and_unknowns_are_typed(self):
+        target = []
+        _normalize_species_into({
+            "species": "Genus alpha", "section": "Sec A",
+            "range_top_idx": "9", "range_base_idx": 7.0,
+            "confidence": "1.4", "unexpected": {"source": "caption"},
+        }, target)
+        row = target[0]
+        assert row["range_top_idx"] == 9 and isinstance(row["range_top_idx"], int)
+        assert row["range_base_idx"] == 7 and isinstance(row["range_base_idx"], int)
+        assert row["confidence"] == 1.0
+        assert row["endpoint_kind"] == "unknown"
+        assert row["occurrence_mode"] == "unknown"
+        assert row["_extras"] == {"unexpected": {"source": "caption"}}
+        for field in ("range_top_idx", "range_base_idx", "confidence"):
+            assert field not in row["_extras"]
+
+    def test_non_integral_indices_and_invalid_confidence_remain_missing(self):
+        target = []
+        _normalize_species_into({
+            "species": "Genus alpha", "section": "Sec A",
+            "range_top_idx": "9a", "range_base_idx": 7.5,
+            "confidence": "unclear", "endpoint_kind": "certain",
+            "occurrence_mode": "native",
+        }, target)
+        row = target[0]
+        assert row["range_top_idx"] is None
+        assert row["range_base_idx"] is None
+        assert row["confidence"] is None
+        assert row["endpoint_kind"] == "unknown"
+        assert row["occurrence_mode"] == "unknown"

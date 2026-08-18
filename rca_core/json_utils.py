@@ -11,38 +11,44 @@ def extract_balanced_json_object(text: str) -> str | None:
     """Return the first balanced {...} JSON object substring, or None.
 
     Handles nested braces and braces inside string literals correctly.
+    Fixed: escape sequence handling now correctly skips the character after
+    a backslash so that "\\" (escaped backslash) and "\\"" (escaped quote)
+    are processed correctly.
     """
     start = text.find("{")
     while start != -1:
         depth = 0
         in_string = False
         escape = False
-        for i in range(start, len(text)):
+        i = start
+        while i < len(text):
             c = text[i]
+            if escape:
+                # Any character immediately after a backslash is escaped —
+                # skip it entirely and reset escape state. This correctly
+                # handles \\" (escaped quote), \\\\" (escaped backslash + quote),
+                # and any other escape sequence.
+                escape = False
+                i += 1
+                continue
             if in_string:
-                if escape:
-                    # Fix M-1: any char immediately after backslash is escaped,
-                    # skip normal processing entirely.
-                    escape = False
-                elif c == "\\":
+                if c == "\\":
+                    # Start of an escape sequence — mark and skip next char.
                     escape = True
+                    i += 1
+                    continue
                 elif c == '"':
                     in_string = False
-                # Skip the next character entirely — it is escaped by the
-                # preceding backslash and must not be treated as a structural
-                # marker (e.g. "{\"key\": \"value\"}" must not treat the
-                # inner quotes as string delimiters).
-                if escape:
-                    continue
-                continue
-            if c == '"':
-                in_string = True
-            elif c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0:
-                    return text[start : i + 1]
+            else:
+                if c == '"':
+                    in_string = True
+                elif c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return text[start : i + 1]
+            i += 1
         start = text.find("{", start + 1)
     return None
 
@@ -140,6 +146,7 @@ def extract_all_balanced_json_objects(text: str) -> list[str]:
 
     Adjacent balanced objects (no whitespace between them) are not merged.
     Invalid JSON substrings (e.g. unmatched braces) are skipped.
+    Fixed: same escape-sequence bug as extract_balanced_json_object.
     """
     if not text:
         return []
@@ -149,29 +156,33 @@ def extract_all_balanced_json_objects(text: str) -> list[str]:
         depth = 0
         in_string = False
         escape = False
-        for i in range(start, len(text)):
+        i = start
+        while i < len(text):
             c = text[i]
+            if escape:
+                escape = False
+                i += 1
+                continue
             if in_string:
-                if escape:
-                    escape = False
-                elif c == "\\":
+                if c == "\\":
                     escape = True
+                    i += 1
+                    continue
                 elif c == '"':
                     in_string = False
-                if escape:
-                    continue
-                continue
-            if c == '"':
-                in_string = True
-            elif c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0:
-                    candidate = text[start: i + 1]
-                    if _try_parse_object(candidate) is not None:
-                        results.append(candidate)
-                    break
+            else:
+                if c == '"':
+                    in_string = True
+                elif c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[start: i + 1]
+                        if _try_parse_object(candidate) is not None:
+                            results.append(candidate)
+                        break
+            i += 1
         start = text.find("{", start + 1)
     return results
 
@@ -185,38 +196,38 @@ def extract_balanced_json_array(text: str) -> str | None:
     leave the caller with nothing. The extracted substring is fed back
     to `json.loads`; non-array payloads will fail there with a clear
     error rather than silently being treated as an object.
+    Fixed: same escape-sequence bug as extract_balanced_json_object.
     """
     start = text.find("[")
     while start != -1:
         depth = 0
         in_string = False
         escape = False
-        for i in range(start, len(text)):
+        i = start
+        while i < len(text):
             c = text[i]
+            if escape:
+                # Any escaped character — skip it and reset.
+                escape = False
+                i += 1
+                continue
             if in_string:
-                if escape:
-                    # Fix M-1: any char immediately after backslash is escaped,
-                    # skip normal processing entirely.
-                    escape = False
-                elif c == "\\":
+                if c == "\\":
                     escape = True
+                    i += 1
+                    continue
                 elif c == '"':
                     in_string = False
-                # Skip the next character entirely — it is escaped by the
-                # preceding backslash and must not be treated as a structural
-                # marker (e.g. "{\"key\": \"value\"}" must not treat the
-                # inner quotes as string delimiters).
-                if escape:
-                    continue
-                continue
-            if c == '"':
-                in_string = True
-            elif c == "[":
-                depth += 1
-            elif c == "]":
-                depth -= 1
-                if depth == 0:
-                    return text[start : i + 1]
+            else:
+                if c == '"':
+                    in_string = True
+                elif c == "[":
+                    depth += 1
+                elif c == "]":
+                    depth -= 1
+                    if depth == 0:
+                        return text[start : i + 1]
+            i += 1
         start = text.find("[", start + 1)
     return None
 
@@ -279,6 +290,30 @@ def extract_json_like(text: str) -> str | None:
     return None
 
 
+def _promote_wrapper(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Lift a payload nested one level under a common wrapper key.
+
+    REVIEW-2026-07-31 (M2 regression): the nested-candidate filter keeps
+    the OUTER object when a model wraps the real payload in ``{"data":
+    {...}}`` — but for a PURE wrapper (no sibling metadata fields) the
+    payload ended up nested and the normalizers saw an empty result. When
+    the parsed object has a dict under ``data`` / ``result`` / ``payload``
+    / ``response`` / ``output``, promote that inner dict's keys to the top
+    level (wrapper fields are preserved; inner keys win only when absent).
+    """
+    if not isinstance(parsed, dict):
+        return parsed
+    for key in ("data", "result", "payload", "response", "output"):
+        inner = parsed.get(key)
+        if isinstance(inner, dict) and inner:
+            promoted = dict(parsed)
+            promoted.pop(key, None)
+            for k, v in inner.items():
+                promoted.setdefault(k, v)
+            return promoted
+    return parsed
+
+
 def safe_json_loads(text: str) -> dict[str, Any]:
     """Lenient JSON object parse with a 6-level fallback chain.
 
@@ -314,7 +349,7 @@ def safe_json_loads(text: str) -> dict[str, Any]:
     try:
         parsed = _strict_json_loads(s)
         if isinstance(parsed, dict):
-            return parsed
+            return _promote_wrapper(parsed)
         # H3: a top-level array IS valid JSON; json.loads accepted it.
         # Surface it as a synthetic wrapper so the caller's normalize_*
         # functions (all of which assume a dict) still get something
@@ -329,6 +364,17 @@ def safe_json_loads(text: str) -> dict[str, Any]:
     # Level 4: balanced-object enumeration + scoring (HIGH FIX).
     candidates = extract_all_balanced_json_objects(s)
     if candidates:
+        # M2 fix (REVIEW-2026-07-25): drop candidates that are nested inside
+        # another candidate. When a model wraps the real payload in an outer
+        # object (e.g. {"data": {...}, "confidence": ...}), the inner object
+        # would otherwise win on payload score and the outer wrapper's
+        # sibling fields (metadata / confidence / sections / extra) would be
+        # silently dropped. Keeping only top-level (non-nested) objects
+        # preserves them; the wrapper is what the caller's normalizer expects.
+        candidates = [
+            c for c in candidates
+            if not any(c != d and c in d for d in candidates)
+        ]
         # Parse each and keep only dicts (arrays are surfaced by Level 5).
         parsed_objects = []
         for c in candidates:
@@ -336,26 +382,20 @@ def safe_json_loads(text: str) -> dict[str, Any]:
             if isinstance(p, dict):
                 parsed_objects.append((p, c))
         if parsed_objects:
-            # Score: payload keys heavily, schema/example keys negatively,
-            # size as a small tiebreaker. Stable sort by score descending,
-            # then size descending, then position descending (prefer last).
+            # H8 fix (REVIEW-2026-07-25): score candidates on PAYLOAD
+            # LIKELIHOOD only. The previous score baked string length in via
+            # `_payload_score(p) * 10 + len(src)`, so a long schema/example
+            # string could outscore a small real payload and the parser would
+            # discard the real data. Length is now a TIEBREAKER ONLY: sort by
+            # (payload_score, length, index) descending and pick the top.
             scored = []
             for idx, (p, src) in enumerate(parsed_objects):
-                score = _payload_score(p) * 10 + len(src)
-                scored.append((score, idx, p, src))
-            # Sort by score asc, idx asc — we want the highest score & last,
-            # so reverse after picking on score, ties on idx descending.
-            scored.sort(key=lambda t: (t[0], t[1]))
-            # Pick the maximum-score entry; among ties prefer LATER (higher
-            # idx) and LONGER source (already baked into `score` via len).
-            best_score, _, best_parsed, best_src = scored[-1]
-            # Among equals-on-score, prefer the LAST occurrence (most
-            # often the actual payload written after prose/schema).
-            equal_max = [t for t in scored if t[0] == best_score]
-            if len(equal_max) > 1:
-                # Pick the last one (highest original index).
-                best_parsed = equal_max[-1][2]
-            return best_parsed
+                scored.append((_payload_score(p), len(src), idx, p))
+            # Highest payload score wins; ties broken by longer source, then
+            # by later occurrence in the text (the real payload usually
+            # follows any schema/example prose).
+            scored.sort(key=lambda t: (t[0], t[1], t[2]), reverse=True)
+            return _promote_wrapper(scored[0][3])
 
     # Level 5: balanced-bracket array extraction → wrapped.
     candidate = extract_balanced_json_array(s)
@@ -374,7 +414,7 @@ def safe_json_loads(text: str) -> dict[str, Any]:
         try:
             parsed = _strict_json_loads(candidate)
             if isinstance(parsed, dict):
-                return parsed
+                return _promote_wrapper(parsed)
             if isinstance(parsed, list):
                 return {"_array_root": parsed,
                         "_note": "model returned a top-level array; wrapping for diagnostics"}

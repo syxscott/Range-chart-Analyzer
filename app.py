@@ -223,6 +223,15 @@ def _start_server(host: str, port: int):
     from http.server import ThreadingHTTPServer
     import server  # the existing stdlib backend
 
+    # P2-1 / REVIEW-2026-07-31: this app is local-only and same-origin, but
+    # the CSRF Origin check must still be anchored to a real allowlist.
+    # Previously EXPECTED_HOSTS stayed empty here, so _validate_csrf_and_origin
+    # fell back to comparing the Origin against the client-controlled Host
+    # header (DNS-rebinding). populate_expected_hosts adds the loopback
+    # aliases + local IPs, so the local flow keeps working with the allowlist
+    # populated and the server-side check stays fail-closed.
+    server.populate_expected_hosts(host, port)
+
     try:
         httpd = ThreadingHTTPServer((host, port), server.Handler)
     except OSError:

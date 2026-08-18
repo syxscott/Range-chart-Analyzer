@@ -280,34 +280,27 @@ def test_parity_confidence_skips_missing_runs():
 
 
 def test_parity_extras_dict_stringified():
-    """A field whose value is a dict (e.g. _extras) must be handled
-    consistently across both sides.
-
-    Both sides should drop non-primitive values from the mixed-branch
-    fallback rather than letting Python's repr or JS's "[object Object]"
-    leak into the merged row.
-    """
+    """Structured extras stay dictionaries on both implementations."""
+    row = {
+        'species': 'Genus alpha', 'section': 'A',
+        'range_top': 'Bed 9', 'range_base': 'Bed 7', 'biozone': '',
+    }
     r1 = {
-        'sections': [], 'species_ranges': [], 'biozones': [], 'other_fossils': [],
-        'confidence': 0.5,
-        # simulate an _extras field where one run has a dict and one has a string
-        'extra_field': {'note': 'a'},
+        'sections': [], 'species_ranges': [{**row, '_extras': {'note': 'a'}}],
+        'biozones': [], 'other_fossils': [], 'confidence': 0.5,
     }
     r2 = {
-        'sections': [], 'species_ranges': [], 'biozones': [], 'other_fossils': [],
-        'confidence': 0.5,
-        'extra_field': 'plain_value',
+        'sections': [], 'species_ranges': [{**row, '_extras': 'plain_value'}],
+        'biozones': [], 'other_fossils': [], 'confidence': 0.5,
     }
     py = _py_merge([r1, r2], total_runs=2)
     js = _js_merge([r1, r2], 2)
 
-    # Whichever side keeps extra_field, both sides must agree
-    if 'extra_field' in py:
-        assert 'extra_field' in js, 'parity: python kept extra_field but js dropped it'
-        assert py['extra_field'] == js['extra_field'], \
-            f'extras diverge: py={py["extra_field"]!r} js={js["extra_field"]!r}'
-    else:
-        assert 'extra_field' not in js, 'parity: js kept extra_field but python dropped it'
+    py_extras = py['species_ranges'][0]['_extras']
+    js_extras = js['species_ranges'][0]['_extras']
+    assert py_extras == {'note': 'a'}
+    assert js_extras == {'note': 'a'}
+    assert py_extras == js_extras
 
 
 # ---------------------------------------------------------------------------

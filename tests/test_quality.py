@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from rca_core.quality import score_range_chart
 
@@ -82,6 +83,16 @@ class TestScoreRangeChart(unittest.TestCase):
         result = score_range_chart(_good_result())
         self.assertGreaterEqual(result["score"], 0.0)
         self.assertLessEqual(result["score"], 1.0)
+
+    def test_dimension_failure_degrades_without_raising(self):
+        with patch("rca_core.quality._score_accuracy", side_effect=TypeError("bad row")):
+            result = score_range_chart(_good_result())
+        self.assertGreaterEqual(result["score"], 0.0)
+        self.assertTrue(any(
+            issue.get("msg_key") == "quality.scoring_failed"
+            and issue.get("params", {}).get("dimension") == "accuracy"
+            for issue in result["issues"]
+        ))
 
     def test_grade_thresholds(self):
         # A minimal-but-valid result should score reasonably (B range),

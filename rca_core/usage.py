@@ -418,7 +418,12 @@ class UsageStore:
             # localtime at noon of this UTC day picks the DST rule that
             # affects the *majority* of that day's rows.
             ts_noon = utc_day + 43200
-            local_offset = -_time.localtime(ts_noon).tm_gmtoff
+            # REVIEW-2026-07-31: tm_gmtoff is SECONDS EAST of UTC
+            # (+28800 for UTC+8) — local time = UTC + tm_gmtoff. The
+            # previous negation shifted every row's local day backward,
+            # so for UTC+8 all usage between 00:00-08:00 local landed on
+            # the PREVIOUS day.
+            local_offset = _time.localtime(ts_noon).tm_gmtoff
             local_day = utc_day + local_offset
             bucket = local_buckets.setdefault(
                 local_day, {"day": local_day, "count": 0, "tokens": 0}

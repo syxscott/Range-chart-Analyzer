@@ -38,8 +38,14 @@ p = L.LlmProvider(
 )
 d = p.to_dict()
 check("provider-to-dict-fmt", d["api_format"] == "openai")
-check("provider-to-dict-key", d["api_key"] == "abc")
+# REVIEW-2026-11-07: P2-2 (REVIEW-2026-07-25) obfuscates the key AT REST —
+# to_dict() returns an envelope, not the plaintext. The 2026-07-18-era
+# assertion (== "abc") went stale when that fix landed. Assert the
+# envelope + plaintext recovery on round-trip instead.
+from rca_core.secrets_store import is_obfuscated as _is_obf
+check("provider-to-dict-key-obfuscated", _is_obf(d.get("api_key") or ""))
 p2 = L.LlmProvider.from_dict(d)
+check("provider-to-dict-key-roundtrip", p2.api_key == "abc")
 check("provider-roundtrip-fmt", p2.api_format == L.ApiFormat.OPENAI)
 check("provider-roundtrip-model", p2.model == "gpt-4o")
 check("provider-roundtrip-headers", p2.extra_headers == {"X-Custom": "yes"})

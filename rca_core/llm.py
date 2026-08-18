@@ -38,7 +38,10 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
-from .ssrf import validate_endpoint, validate_endpoint_or_raise, SSRFError
+from .ssrf import (
+    _NoRedirect,
+    make_pinning_opener,
+)
 
 
 class LLMCallError(Exception):
@@ -162,7 +165,11 @@ class LlmProvider:
 
 @dataclass
 class ProviderPreset:
-    """Template for a new provider — presented in the preset grid."""
+    """Template for a new provider — presented in the preset grid.
+
+    Inspired by cc-switch's provider preset design with additional fields
+    for API key URLs and backup endpoint candidates.
+    """
 
     name: str
     api_format: ApiFormat
@@ -172,6 +179,10 @@ class ProviderPreset:
     doc_url: str = ""
     extra_headers: dict[str, str] = field(default_factory=dict)
     api_key_hint: str = "API Key"
+    # cc-switch inspired: direct link to get API key
+    api_key_url: str = ""
+    # cc-switch inspired: backup endpoint candidates for failover
+    endpoint_candidates: list[str] = field(default_factory=list)
 
 
 def _p(
@@ -184,6 +195,8 @@ def _p(
     doc_url: str = "",
     extra_headers: dict[str, str] | None = None,
     api_key_hint: str = "API Key",
+    api_key_url: str = "",
+    endpoint_candidates: list[str] | None = None,
 ) -> ProviderPreset:
     return ProviderPreset(
         name=name,
@@ -194,6 +207,8 @@ def _p(
         doc_url=doc_url,
         extra_headers=extra_headers or {},
         api_key_hint=api_key_hint,
+        api_key_url=api_key_url,
+        endpoint_candidates=endpoint_candidates or [],
     )
 
 
@@ -203,11 +218,14 @@ PROVIDER_PRESETS: list[ProviderPreset] = [
        "https://api.anthropic.com", "claude-opus-4-1",
        category="official",
        doc_url="https://console.anthropic.com/settings/keys",
+       api_key_url="https://console.anthropic.com/settings/keys",
        api_key_hint="sk-ant-..."),
+    # DSH verified: minimaxi.com for CN, minimax.io for international
     _p("MiniMax M3", ApiFormat.ANTHROPIC,
        "https://api.minimaxi.com/anthropic", "MiniMax-M3",
        category="cn_official",
        doc_url="https://platform.minimaxi.com/user-center/payment/token-plan",
+       api_key_url="https://platform.minimaxi.com/subscribe/coding-plan",
        api_key_hint="MiniMax API Key"),
     _p("Shengsuanyun (神算云)", ApiFormat.ANTHROPIC,
        "https://api.shengsuanyun.com", "claude-sonnet-4-20250514",
@@ -241,10 +259,13 @@ PROVIDER_PRESETS: list[ProviderPreset] = [
        "https://api.unity2.ai", "claude-sonnet-4-20250514",
        category="aggregator",
        doc_url="https://unity2.ai", api_key_hint="..."),
+    # cc-switch verified endpoint: api.qnaigc.com (not api.qiniu.com)
     _p("Qiniu (七牛)", ApiFormat.ANTHROPIC,
-       "https://api.qiniu.com", "claude-sonnet-4-20250514",
+       "https://api.qnaigc.com", "claude-sonnet-4-20250514",
        category="cn_official",
-       doc_url="https://portal.qiniu.com", api_key_hint="..."),
+       doc_url="https://portal.qiniu.com",
+       api_key_url="https://portal.qiniu.com",
+       endpoint_candidates=["https://api.qnaigc.com", "https://api.modelink.ai"]),
     _p("FennoAI", ApiFormat.ANTHROPIC,
        "https://api.fenno.ai", "claude-sonnet-4-20250514",
        category="aggregator",
@@ -269,10 +290,14 @@ PROVIDER_PRESETS: list[ProviderPreset] = [
        "https://api.cherryin.ai", "claude-sonnet-4-20250514",
        category="aggregator",
        doc_url="https://cherryin.ai", api_key_hint="..."),
+    # cc-switch verified: SiliconFlow has two endpoints
     _p("SiliconFlow (硅基流动)", ApiFormat.ANTHROPIC,
-       "https://api.siliconflow.cn", "claude-sonnet-4-20250514",
+       "https://api.siliconflow.cn", "Pro/MiniMaxAI/MiniMax-M2.7",
        category="cn_official",
-       doc_url="https://cloud.siliconflow.cn/account/ak", api_key_hint="sk-..."),
+       doc_url="https://cloud.siliconflow.cn/account/ak",
+       api_key_url="https://cloud.siliconflow.cn/account/ak",
+       endpoint_candidates=["https://api.siliconflow.cn", "https://api.siliconflow.com"],
+       api_key_hint="sk-..."),
     _p("DMXAPI", ApiFormat.ANTHROPIC,
        "https://api.dmxapi.cn", "claude-sonnet-4-20250514",
        category="cn_official",
@@ -378,10 +403,13 @@ PROVIDER_PRESETS: list[ProviderPreset] = [
        "https://api.pipellm.com", "claude-sonnet-4-20250514",
        category="aggregator",
        doc_url="https://pipellm.com", api_key_hint="..."),
+    # cc-switch verified
     _p("Longcat (龙猫)", ApiFormat.ANTHROPIC,
-       "https://api.longcat.ai", "claude-sonnet-4-20250514",
+       "https://api.longcat.ai/anthropic", "LongCat-2.0",
        category="cn_official",
-       doc_url="https://longcat.ai", api_key_hint="..."),
+       doc_url="https://longcat.ai",
+       api_key_url="https://longcat.chat/platform/api_keys",
+       api_key_hint="..."),
     _p("BaiLing (百灵)", ApiFormat.ANTHROPIC,
        "https://api.bailing.ai", "claude-sonnet-4-20250514",
        category="cn_official",
@@ -402,30 +430,40 @@ PROVIDER_PRESETS: list[ProviderPreset] = [
        "https://api.xiaomimimo.com", "mimo-v2",
        category="cn_official",
        doc_url="https://xiaomimimo.com", api_key_hint="..."),
+    # cc-switch verified: kimi-k2.7-code is the correct coding model
     _p("Kimi", ApiFormat.ANTHROPIC,
-       "https://api.moonshot.cn/anthropic", "kimi-k2-turbo-preview",
+       "https://api.moonshot.cn/anthropic", "kimi-k2.7-code",
        category="cn_official",
-       doc_url="https://platform.moonshot.cn/console/api-keys", api_key_hint="sk-..."),
+       doc_url="https://platform.moonshot.cn/console/api-keys",
+       api_key_url="https://platform.kimi.com?aff=cc-switch",
+       api_key_hint="sk-..."),
     _p("Kimi For Coding", ApiFormat.ANTHROPIC,
-       "https://api.moonshot.cn/anthropic", "kimi-k2-turbo-preview",
+       "https://api.moonshot.cn/anthropic", "kimi-k2.7-code",
        category="cn_official",
-       doc_url="https://platform.moonshot.cn/console/api-keys", api_key_hint="sk-..."),
+       doc_url="https://platform.moonshot.cn/console/api-keys",
+       api_key_url="https://www.kimi.com/code/?aff=cc-switch",
+       api_key_hint="sk-..."),
 
     # --- OpenAI format (Codex file entries) ---
     _p("OpenAI Official", ApiFormat.OPENAI,
        "https://api.openai.com/v1", "gpt-4o",
        category="official",
        doc_url="https://platform.openai.com/api-keys",
+       api_key_url="https://platform.openai.com/api-keys",
        api_key_hint="sk-..."),
+    # cc-switch verified: use deepseek-v4-pro as the default model
     _p("DeepSeek", ApiFormat.OPENAI,
        "https://api.deepseek.com/v1", "deepseek-chat",
        category="cn_official",
        doc_url="https://platform.deepseek.com/api_keys",
+       api_key_url="https://platform.deepseek.com",
        api_key_hint="sk-..."),
+    # cc-switch verified
     _p("Zhipu GLM (智谱)", ApiFormat.OPENAI,
        "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus",
        category="cn_official",
        doc_url="https://open.bigmodel.cn/usercenter/apikeys",
+       api_key_url="https://open.bigmodel.cn/claude-code?ic=RRVJPB5SII",
        api_key_hint="<public>.<secret>"),
     _p("Zhipu GLM en", ApiFormat.OPENAI,
        "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus",
@@ -958,11 +996,19 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
     except urllib.error.HTTPError as e:
         # Best-effort read of the upstream error body. Don't fail if the
         # server closed the connection.
+        # REVIEW-2026-11-07 (low): the upstream DID answer (4xx/5xx), so the
+        # "thinking" stage is accurate — without this the UI spinner stayed
+        # on "submitting" forever for auth/quota errors.
+        if progress_callback:
+            progress_callback("thinking")
         err_body = b""
         try:
             err_body = e.read() or b""
         except Exception:
             err_body = b""
+        # REVIEW-2026-11-07 (low): every return path of this function yields
+        # bytes for the body slot (b"" / e.read() / msg.encode above) —
+        # keep it that way so _decode_err_body's double-decode stays simple.
         return None, e.code, err_body
     except TimeoutError as e:
         # Python 3.10+ raises TimeoutError from socket.timeout; older code
@@ -1014,32 +1060,16 @@ def _get_json(url: str, headers: dict[str, str], timeout_sec: int):
         return None, None, f"[network] {type(e).__name__}: {e}".encode("utf-8")
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Refuse all 3xx redirects on outbound LLM calls.
-
-    SSRF hardening: the server-side endpoint validator (server.py
-    ``_validate_endpoint``) only vets the *initial* URL host. Without this
-    handler ``urlopen`` would transparently follow a ``302 Location:
-    http://169.254.169.254/…`` (cloud metadata) or an intranet address,
-    bypassing the allowlist entirely. Legitimate LLM APIs answer POSTs
-    directly and never 3xx, so blocking redirects costs nothing.
-    """
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise urllib.error.HTTPError(
-            req.full_url, code,
-            f"redirect to {newurl!r} refused (SSRF guard)",
-            headers, fp,
-        )
-
-
-# Opener that raises on any redirect instead of following it. Installed as
-# urllib's default opener so EVERY outbound call made through
-# ``urllib.request.urlopen`` (including future ones) refuses 3xx redirects.
+# Opener that pins DNS (TOCTOU / DNS-rebinding mitigation) AND raises on any
+# redirect instead of following it. Installed as urllib's default opener so
+# EVERY outbound call made through ``urllib.request.urlopen`` (including future
+# ones) refuses 3xx redirects and connects to the single validated IP. This is
+# the same opener server.py installs, so the GUI path (which imports llm.py
+# directly, without going through server.py) gets identical SSRF protection.
 # urllib openers are thread-safe for concurrent ``.open()`` calls, so a single
 # global opener is fine for the app's thread pool. Tests that monkeypatch
 # ``urllib.request.urlopen`` (tests_llm.py) bypass this opener and keep working.
-urllib.request.install_opener(urllib.request.build_opener(_NoRedirect()))
+urllib.request.install_opener(make_pinning_opener())
 
 
 # Only ``/v1`` is stripped — never ``/v1beta`` (Google's Gemini endpoint is
@@ -1076,10 +1106,16 @@ def _call_anthropic(
     # P0-2 (REVIEW-2026-07-25): validate endpoint before any network call.
     # The server.py path validated before dispatching, but the GUI path loads
     # providers from disk without re-validation. This unifies both paths.
-    try:
-        validate_endpoint_or_raise(provider.endpoint)
-    except SSRFError as e:
-        return None, False, None, f"endpoint rejected by SSRF guard: {e}", None
+    # REVIEW-2026-07-31: use validate_endpoint_local_ok — the SAME policy
+    # as test_llm_connection and _call_gemini. validate_endpoint_or_raise
+    # rejected loopback + plain-http, so a local Ollama
+    # (http://127.0.0.1:11434) passed the connection test but every real
+    # extraction failed — the two paths disagreed (Ollama is a legitimate
+    # desktop use case).
+    from .ssrf import validate_endpoint_local_ok
+    ok_ep, why_ep = validate_endpoint_local_ok(provider.endpoint)
+    if not ok_ep:
+        return None, False, None, f"endpoint rejected by SSRF guard: {why_ep}", None
     if not image_b64:
         return None, False, None, "", None
     target = _api_base(provider.endpoint) + "/v1/messages"
@@ -1131,10 +1167,14 @@ def _call_openai(
     # P0-2 (REVIEW-2026-07-25): validate endpoint before any network call.
     # The server.py path validated before dispatching, but the GUI path loads
     # providers from disk without re-validation. This unifies both paths.
-    try:
-        validate_endpoint_or_raise(provider.endpoint)
-    except SSRFError as e:
-        return None, False, None, f"endpoint rejected by SSRF guard: {e}", None
+    # REVIEW-2026-07-31: validate_endpoint_local_ok — same policy as the
+    # connection test and the Gemini path (loopback + plain-http allowed
+    # for local Ollama-style endpoints; everything else stays
+    # SSRF-rejected).
+    from .ssrf import validate_endpoint_local_ok
+    ok_ep, why_ep = validate_endpoint_local_ok(provider.endpoint)
+    if not ok_ep:
+        return None, False, None, f"endpoint rejected by SSRF guard: {why_ep}", None
     if not image_b64:
         return None, False, None, "", None
     target = _api_base(provider.endpoint) + "/v1/chat/completions"
@@ -1145,7 +1185,10 @@ def _call_openai(
     # native structured-output / json_schema). Without these adjustments the
     # reasoning path 400s every call.
     model = provider.model
-    is_reasoning = bool(model and re.match(r"^o\d", model))
+    # REVIEW-2026-11-07 (low): some aggregators list reasoning models with a
+    # capital letter ("O1"). The case-sensitive regex then missed them, the
+    # request kept `max_tokens` + `role:system`, and OpenAI 400'd it.
+    is_reasoning = bool(model and re.match(r"^o\d", model, re.IGNORECASE))
     messages: list[dict[str, Any]] = []
     if not is_reasoning and system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -1211,22 +1254,22 @@ def _call_openai(
 
 
 def _is_safe_endpoint(endpoint: str) -> bool:
-    """Minimal SSRF check: verify endpoint is a non-empty https URL with a host.
+    """SSRF check for every LLM call path (extract + connection test).
 
-    This is a defense-in-depth guard for the Gemini call path. The server.py
-    caller validates the endpoint before passing the provider here (Bug-6 fix),
-    but the GUI path loads providers from disk without re-validation, and
-    hand-edited providers.json could contain a malformed endpoint.
-    Unlike server.py ``_validate_endpoint``, this does NOT resolve DNS —
-    the global ``_NoRedirect`` opener already blocks redirect-based SSRF.
+    REVIEW-2026-07-31: the policy lives in
+    :func:`rca_core.ssrf.validate_endpoint_local_ok` — the single shared
+    source of truth — so the connection test, ``_call_anthropic``,
+    ``_call_openai`` and ``_call_gemini`` all agree. Private, link-local,
+    reserved, and NAT64-embedded IPv4 addresses are rejected; loopback
+    (127.0.0.0/8, ::1, ``localhost``) is PERMITTED because local models
+    (e.g. Ollama at ``http://127.0.0.1:11434``) are a legitimate desktop
+    use case. The server.py caller also validates the endpoint before
+    dispatch, but the GUI path loads providers from disk without
+    re-validation, so this is defense-in-depth.
     """
-    if not endpoint:
-        return False
-    try:
-        u = urllib.parse.urlparse(endpoint)
-    except ValueError:
-        return False
-    return u.scheme == "https" and bool(u.hostname)
+    from .ssrf import validate_endpoint_local_ok
+    ok, _why = validate_endpoint_local_ok(endpoint)
+    return ok
 
 
 def _call_gemini(
@@ -1366,6 +1409,8 @@ def call_llm_api(
     timeout_sec: int = 120,
     capture_error_body: bool = False,
     progress_callback=None,
+    temperature: float | None = None,
+    seed: int | None = None,
 ) -> tuple[str | None, bool, int | None, str, dict | None]:
     """Dispatch a call on the provider's API format. Never raises.
 
@@ -1384,7 +1429,32 @@ def call_llm_api(
     ``progress_callback``, if given, is called with stage strings
     ``"submitting"``, ``"uploading"``, ``"thinking"`` to allow the UI to
     show granular extraction progress.
+
+    ``temperature`` and ``seed`` (P1 fix): first-class reproducibility
+    parameters. When supplied, they're injected into the request body
+    on top of any ``provider.extra_body`` so the call is reproducible
+    across sessions. ``None`` (default) means "use the API default"
+    — typically what production callers want. The audit trail reads
+    these values out of ``provider.extra_body`` for request_meta.
     """
+    # If temperature/seed were supplied at this layer, fold them into
+    # a copy of the provider's extra_body so the per-call sampling is
+    # auditable in request_meta without mutating the caller's provider.
+    if temperature is not None or seed is not None:
+        provider = LlmProvider(
+            name=provider.name,
+            api_format=provider.api_format,
+            endpoint=provider.endpoint,
+            api_key=provider.api_key,
+            model=provider.model,
+            extra_headers=dict(provider.extra_headers or {}),
+            extra_body={
+                **dict(provider.extra_body or {}),
+                **({"temperature": temperature} if temperature is not None else {}),
+                **({"seed": seed} if seed is not None else {}),
+            },
+            id=provider.id,
+        )
     dispatch = {
         ApiFormat.ANTHROPIC: _call_anthropic,
         ApiFormat.OPENAI: _call_openai,
@@ -1435,6 +1505,11 @@ def call_llm_api(
 # and just wastes quota, so they're excluded.
 _RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
 
+# Lazy import to avoid circular dependency and keep this module importable in isolation.
+def _get_error_utils():
+    from . import error_utils
+    return error_utils
+
 
 def call_llm_api_with_retry(
     *,
@@ -1449,12 +1524,21 @@ def call_llm_api_with_retry(
     retries: int = 3,
     backoff_factor: float = 1.6,
     initial_backoff_sec: float = 0.8,
+    temperature: float | None = None,
+    seed: int | None = None,
 ) -> tuple[str | None, bool, int | None, str, dict | None]:
     """call_llm_api wrapped with exponential-backoff retry on transient errors.
 
     Returns the same 5-tuple as ``call_llm_api``. The retry annotations
     (the ``[retry N/M after Xs]`` suffix) are appended to ``err_body`` so
     the operator can see how many attempts were spent before giving up.
+
+    REVIEW-2026-11-07 (low): temperature/seed are forwarded now — before,
+    the retry chain silently dropped sampling parameters, so callers had
+    to pre-merge them into provider.extra_body to get reproducibility.
+    NOTE for cache-key builders: a call made with top-level temperature/
+    seed differs from one without, so include them in the key (the server
+    path already covers this via the extra_body fields in make_key).
     """
     last: tuple[str | None, bool, int | None, str, dict | None] = (None, False, None, "", None)
     for attempt in range(retries):
@@ -1467,6 +1551,8 @@ def call_llm_api_with_retry(
             max_tokens=max_tokens,
             timeout_sec=timeout_sec,
             capture_error_body=capture_error_body,
+            temperature=temperature,
+            seed=seed,
         )
         text, truncated, status, err_body, usage = last
         if text is not None:
@@ -1487,14 +1573,30 @@ def call_llm_api_with_retry(
             # retry summary so the surfaced message reads "1 attempt, gave up"
             # instead of "single connection failure with no indication of
             # retry behaviour".
-            backoff_final = initial_backoff_sec * (backoff_factor ** attempt)
+            error_utils = _get_error_utils()
+            backoff_final = error_utils.get_retry_delay(
+                status=status,
+                headers=None,
+                attempt=attempt,
+                initial_delay=initial_backoff_sec,
+                backoff_factor=backoff_factor,
+            )
             net_suffix = f"[retry {attempt + 1}/{retries} after {backoff_final:.1f}s — network error, giving up]"
             if err_body:
                 last = (text, truncated, status, err_body + "\n" + net_suffix, usage)
             else:
                 last = (text, truncated, status, net_suffix, usage)
             return last
-        backoff = initial_backoff_sec * (backoff_factor ** attempt)
+        # Use error_utils.get_retry_delay for jitter (DSH pattern: 0.75x-1.0x of base delay)
+        error_utils = _get_error_utils()
+        delay = error_utils.get_retry_delay(
+            status=status,
+            headers=None,  # Headers not available in current call_llm_api flow
+            attempt=attempt,
+            initial_delay=initial_backoff_sec,
+            backoff_factor=backoff_factor,
+        )
+        backoff = delay
         suffix = f"[retry {attempt + 1}/{retries} after {backoff:.1f}s]"
         if err_body:
             err_body = err_body + "\n" + suffix
@@ -1655,6 +1757,14 @@ def _probe_minimal_generate(
     the model name strictly and accept the fallback even when the
     configured name is slightly wrong or unrecognized.
     """
+    # Defense-in-depth: if this probe is ever reached with a bad endpoint
+    # (callers normally validate first), surface err.badEndpoint instead of
+    # letting urllib raise URLError and get masked as err.network. Mirrors the
+    # guard in test_llm_connection / _call_* so every path agrees on the policy.
+    if not _is_safe_endpoint(provider.endpoint):
+        return ConnectionResult(
+            ok=False, latency_ms=0, status=None, error_key="err.badEndpoint"
+        )
     # Canonical fallback models + a slightly larger max_tokens to avoid
     # endpoints that reject max_tokens=1 as too small.
     ANTHROPIC_FALLBACKS = ["claude-3-haiku-20240307", "claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022"]
@@ -1709,16 +1819,19 @@ def _probe_minimal_generate(
 
     last_status = None
     last_err_body = b""
-    best_latency = 0
-    ok_latency = 0
+    # REVIEW-2026-11-07 (low): the failure result used to report
+    # ``best_latency`` which was never assigned — every failed test showed
+    # "0 ms". Track the LAST probe's latency instead so the number the
+    # user sees is a real network measurement.
+    last_latency = 0
 
     for model in candidates:
         payload_bytes, status, err_body, latency = _do_probe(model)
         last_status = status
         last_err_body = err_body
+        last_latency = latency
         if payload_bytes is not None:
             # HTTP 2xx — endpoint accepted the request.
-            ok_latency = latency
             res = ConnectionResult(ok=True, latency_ms=latency, status=status)
             return res
         # Non-2xx or network error: check if we should keep trying.
@@ -1728,10 +1841,13 @@ def _probe_minimal_generate(
         # bad — retrying with fallback models only burns quota and may
         # trigger upstream anti-abuse, so bail immediately. On 400/404
         # the configured model name is the problem — *that's* when the
-        # fallback list is useful. Apply the early-stop only AFTER the
-        # configured model has been tried, so users with a valid key +
-        # wrong model name still get the fallback benefit.
-        if status in (401, 403) and model == configured:
+        # fallback list is useful.
+        # REVIEW-2026-11-07 (low): the early-stop now applies to ANY
+        # candidate, not only the configured model — the same API key
+        # authenticates every probe, so a 401/403 on a fallback model
+        # means the key itself is rejected and the rest of the list is
+        # guaranteed to fail the same way.
+        if status in (401, 403):
             # Key is likely invalid; don't waste quota on fallbacks.
             break
         if status in (400, 404) and model != configured:
@@ -1741,7 +1857,7 @@ def _probe_minimal_generate(
             pass
 
     # All candidates exhausted.
-    res = ConnectionResult(ok=False, latency_ms=best_latency or 0, status=last_status or None)
+    res = ConnectionResult(ok=False, latency_ms=last_latency, status=last_status or None)
     if last_status == 401:
         res.error_key = "err.401"
     elif last_status == 403:
@@ -1760,6 +1876,24 @@ def test_llm_connection(provider: LlmProvider, timeout_sec: int = 10) -> Connect
     Fast path: probe the model-list endpoint. If that's empty/unsupported,
     fall back to a 1-token generate.
     """
+    # NETERR fix (2026-07-27): validate the endpoint *before* any probe so an
+    # empty / malformed / private / blocked endpoint surfaces as err.badEndpoint
+    # rather than being handed to urllib (which would raise URLError and get
+    # masked as err.network down in _post_json / _get_json). This is exactly the
+    # "config was silently changed, now it fails" trap: a bad endpoint must read
+    # as a config error, not a network error.
+    # We deliberately use _is_safe_endpoint (NOT validate_endpoint_or_raise):
+    # _is_safe_endpoint whitelists loopback (local Ollama / dev test servers)
+    # while still rejecting private / link-local / non-https public hosts —
+    # the SAME policy the live extract path uses (_call_anthropic/_call_openai/
+    # _call_gemini). Using validate_endpoint_or_raise would wrongly reject
+    # http://127.0.0.1 (a legitimate desktop LLM), breaking local models and
+    # our own loopback integration tests. _is_safe_endpoint never raises, so
+    # the "Never raises" contract below is preserved without a try/except.
+    if not _is_safe_endpoint(provider.endpoint):
+        return ConnectionResult(
+            ok=False, latency_ms=0, status=None, error_key="err.badEndpoint"
+        )
     dispatch = {
         ApiFormat.ANTHROPIC: _probe_anthropic_models,
         ApiFormat.OPENAI: _probe_openai_models,

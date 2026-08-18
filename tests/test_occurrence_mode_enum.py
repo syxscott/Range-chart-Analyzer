@@ -15,7 +15,7 @@ class TestOccurrenceModeEnum:
         from rca_core.extractor import VALID_OCCURRENCE_MODES
         expected = {
             "in_situ", "reworked", "transported",
-            "cavity_fill", "bioturbated", "derived", "lag_deposit",
+            "unknown", "cavity_fill", "bioturbated", "derived", "lag_deposit",
         }
         assert expected.issubset(VALID_OCCURRENCE_MODES), (
             f"Missing occurrence modes: {expected - VALID_OCCURRENCE_MODES}"
@@ -25,7 +25,7 @@ class TestOccurrenceModeEnum:
         """Valid occurrence_mode string passes through unchanged."""
         from rca_core.extractor import _normalize_occurrence_mode
 
-        for mode in ["in_situ", "reworked", "transported", "cavity_fill",
+        for mode in ["unknown", "in_situ", "reworked", "transported", "cavity_fill",
                      "bioturbated", "derived", "lag_deposit"]:
             result = _normalize_occurrence_mode({"occurrence_mode": mode})
             assert result == mode, f"Valid mode {mode!r} should pass through"
@@ -43,16 +43,16 @@ class TestOccurrenceModeEnum:
         assert result == "in_situ"
 
     def test_normalize_occurrence_mode_default(self):
-        """Missing occurrence_mode and reworked defaults to 'in_situ'."""
+        """Missing occurrence classification remains scientifically unknown."""
         from rca_core.extractor import _normalize_occurrence_mode
         result = _normalize_occurrence_mode({})
-        assert result == "in_situ"
+        assert result == "unknown"
 
     def test_normalize_occurrence_mode_invalid_string(self):
-        """Invalid occurrence_mode string falls back to 'in_situ'."""
+        """Invalid occurrence_mode string remains unknown."""
         from rca_core.extractor import _normalize_occurrence_mode
         result = _normalize_occurrence_mode({"occurrence_mode": "invalid_mode"})
-        assert result == "in_situ"
+        assert result == "unknown"
 
     def test_normalize_species_into_uses_occurrence_mode(self):
         """_normalize_species_into must produce occurrence_mode key, not reworked."""
@@ -111,7 +111,7 @@ class TestOccurrenceModeRoundTrip:
     """All valid occurrence_mode values must round-trip through normalization."""
 
     @pytest.mark.parametrize("mode", [
-        "in_situ", "reworked", "transported", "cavity_fill",
+        "unknown", "in_situ", "reworked", "transported", "cavity_fill",
         "bioturbated", "derived", "lag_deposit",
     ])
     def test_round_trip(self, mode):

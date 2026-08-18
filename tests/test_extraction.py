@@ -25,7 +25,11 @@ class TestClampMaxTokens(unittest.TestCase):
         self.assertEqual(clamp_max_tokens(-100), 1)
 
     def test_clamp_above_max(self):
-        self.assertEqual(clamp_max_tokens(1_000_000), 100000)
+        # Core cap is now 32000, aligned with the web UI (index.html:65
+        # max="32000", js/config.js:17 maxMaxTokens: 32000). The previous
+        # 100000 here was a stale assertion from before the core/UI cap
+        # was reconciled.
+        self.assertEqual(clamp_max_tokens(1_000_000), 32000)
 
     def test_default_on_non_numeric(self):
         self.assertEqual(clamp_max_tokens(None), 4000)

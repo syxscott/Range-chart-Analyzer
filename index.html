@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="light dark">
     <title>Range Chart Analyzer</title>
+    <!-- UI-REVIEW-2026-08-01 (L1): the server whitelists /favicon.ico but
+         no favicon.ico exists at the root, so every page load logged a
+         404 console error. Point the browser at the real logo asset. -->
+    <link rel="icon" type="image/png" href="assets/logo.png">
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -102,7 +106,7 @@
                             <button type="button" role="radio" data-value="backend" aria-checked="false" data-i18n="settings.mode.backend"></button>
                             <button type="button" role="radio" data-value="direct" aria-checked="false" data-i18n="settings.mode.direct"></button>
                         </div>
-                        <select id="conn-mode" hidden>
+                        <select id="conn-mode" hidden aria-hidden="true">
                             <option value="auto" selected></option>
                             <option value="backend"></option>
                             <option value="direct"></option>
@@ -112,8 +116,14 @@
                 </div>
 
                 <div class="form-row">
-                    <span class="field-label" for="remember-key" data-i18n="settings.remember"></span>
-                    <button type="button" id="remember-key" role="switch" aria-checked="true" class="ios-switch">
+                    <!-- UI-REVIEW-2026-08-01 (M2): the old markup used
+                         for="remember-key" on a <span> (invalid — `for`
+                         only works on <label>) and the switch button had
+                         no accessible name, so screen readers announced
+                         an unnamed switch. -->
+                    <span class="field-label" id="remember-key-label" data-i18n="settings.remember"></span>
+                    <button type="button" id="remember-key" role="switch" aria-checked="true"
+                            aria-labelledby="remember-key-label" class="ios-switch">
                         <span class="ios-switch-knob" aria-hidden="true"></span>
                     </button>
                     <p class="field-hint" data-i18n="settings.remember.hint"></p>
@@ -138,7 +148,7 @@
                 <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" class="hidden">
 
                 <div class="preview-wrap hidden" id="preview-wrap">
-                    <img class="preview-img" id="preview-img" alt="">
+                    <img class="preview-img" id="preview-img" alt="图片预览" data-i18n-alt="upload.preview.alt">
                     <div class="preview-meta" id="preview-meta"></div>
                 </div>
 
@@ -150,6 +160,7 @@
                             <option value="range_chart" data-i18n="upload.chartMode.rangeChart"></option>
                             <option value="columnar_section" data-i18n="upload.chartMode.columnarSection"></option>
                             <option value="abundance_diagram" data-i18n="upload.chartMode.abundanceDiagram"></option>
+                            <option value="phylogenetic_tree" data-i18n="upload.chartMode.phylogeneticTree"></option>
                         </select>
                         <p class="field-hint" data-i18n="upload.chartMode.hint"></p>
                     </div>
@@ -205,7 +216,7 @@
                 </div>
 
                 <div id="results-empty" class="empty-state">
-                    <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
+                    <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
                     <p data-i18n="results.empty"></p>
                 </div>
 
@@ -233,8 +244,10 @@
     <script src="js/i18n.js"></script>
     <script src="js/prompt.js"></script>
     <script src="js/json-utils.js"></script>
+    <script src="js/error-utils.js"></script>
     <script src="js/minimax.js"></script>
     <script src="js/aggregate.js"></script>
+    <script src="js/ics_table.js"></script>
     <script src="js/quality.js"></script>
     <script src="js/table.js"></script>
     <script src="js/export.js"></script>
