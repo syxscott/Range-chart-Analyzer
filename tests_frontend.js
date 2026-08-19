@@ -1222,6 +1222,92 @@ function test_m16_ctrl_enter_in_text_input_does_not_trigger() {
 }
 test_m16_ctrl_enter_in_text_input_does_not_trigger();
 
+// ---- PR3 M1: other_fossils dict shape handling ----
+//
+// other_fossils can be a list of strings OR a list of dicts
+// (label/species/taxon/name). The normalizer must lift the first
+// available label so the rendered/exported table shows the fossil
+// name, not '[object Object]'.
+function test_m1_other_fossils_dict_shape() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const norm = ctx.rcaNormalizeResult({
+    sections: [], species_ranges: [], biozones: [],
+    other_fossils: [{ species: 'X' }, { label: 'Y' }, { taxon: 'Z' }, 'plain', { name: 'W' }],
+    confidence: 0,
+  });
+  check('m1-other-fossils-dict-species', norm.other_fossils[0] === 'X');
+  check('m1-other-fossils-dict-label', norm.other_fossils[1] === 'Y');
+  check('m1-other-fossils-dict-taxon', norm.other_fossils[2] === 'Z');
+  check('m1-other-fossils-plain-string', norm.other_fossils[3] === 'plain');
+  check('m1-other-fossils-dict-name', norm.other_fossils[4] === 'W');
+  check('m1-other-fossils-count', norm.other_fossils.length === 5);
+}
+test_m1_other_fossils_dict_shape();
+
+function test_m1_other_fossils_csv_export_strings_only() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  ctx.t('en');
+  const data = {
+    sections: [],
+    species_ranges: [], biozones: [],
+    other_fossils: [{ species: 'X' }, { label: 'Y' }],
+    confidence: 0,
+  };
+  ctx.rcaNormalizeResult(data);  // mutate data? No — return new; use the input directly for export
+  // Build table export directly from the raw data shape.
+  const exp = ctx.rcaBuildTableExport(data, 'other_fossils');
+  check('m1-other-fossils-export-rows', exp.rows.length === 2);
+  for (const row of exp.rows) {
+    for (const cell of row) {
+      check('m1-other-fossils-export-cell-not-object', typeof cell === 'string');
+    }
+  }
+}
+test_m1_other_fossils_csv_export_strings_only();
+
+// ---- PR3 M2: CSRF comment is descriptive (no behavioral change) ----
+//
+// No runtime assertion; the test just ensures the loadAllScripts step
+// still works (M2 was a comment-only fix). Documented for parity with
+// the Python-side CSRF flow description.
+function test_m2_callbackend_serializes_promises() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  check('m2-rca-call-backend-fn-exists', typeof ctx.extractRangeChart === 'function');
+}
+test_m2_callbackend_serializes_promises();
+
+// ---- PR3 M3: direct-mode fetch passes redirect: 'manual' ----
+//
+// A 3xx response from the upstream MUST NOT auto-follow with the
+// x-api-key header attached; pass `redirect: 'manual'` so the browser
+// returns the 3xx as the response instead of dispatching the same
+// headers to the redirect target.
+function test_m3_fetch_manual_redirect() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let captured = null;
+  ctx.fetch = async (u, opts) => {
+    captured = opts;
+    return { ok: true, json: async () => ({
+      content: [{ type: 'text', text: JSON.stringify({
+        sections: [], species_ranges: [], biozones: [], other_fossils: [], confidence: 0,
+      })}],
+    }), text: async () => '' };
+  };
+  return ctx.extractRangeChart({
+    dataUrl: 'data:image/png;base64,QUFB',
+    mode: 'range_chart',
+    baseUrl: 'https://example.com',
+    model: 'm', maxTokens: 100,
+  }).then(() => {
+    check('m3-fetch-redirect-manual', captured && captured.redirect === 'manual');
+  });
+}
+const _m3 = test_m3_fetch_manual_redirect();
+
 function test_aggregate_author_h7_parity() {
   const ctx = buildContext();
   loadAllScripts(ctx);

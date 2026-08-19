@@ -426,8 +426,19 @@ function rcaNormalizeResult(parsed) {
     if (extras) row._extras = extras;
     out.biozones.push(row);
   }
+  // M1 (REVIEW-2026-08-19): other_fossils may be a string OR a dict
+  // shape (label/species/taxon). The previous asStr map silently turned
+  // dicts into '[object Object]'. Lift the first available label so
+  // researchers see the actual fossil name in the export.
   if (Array.isArray(parsed.other_fossils)) {
-    out.other_fossils = parsed.other_fossils.map(asStr).filter((x) => x.trim());
+    out.other_fossils = parsed.other_fossils.map((item) => {
+      if (item == null) return '';
+      if (typeof item === 'string') return item.trim();
+      if (typeof item === 'object') {
+        return String(item.label || item.species || item.taxon || item.name || '').trim();
+      }
+      return '';
+    }).filter(Boolean);
   }
   const conf = Number(parsed.confidence);
   out.confidence = Number.isFinite(conf) ? Math.max(0, Math.min(1, conf)) : 0;
@@ -867,9 +878,11 @@ async function rcaCallBackend(opts, base64) {
     else opts.signal.addEventListener('abort', onExtAbort);
   }
 
-  // Serialize CSRF token acquisition + POST to prevent concurrent requests from
-  // racing on token updates. Each request waits for the previous one to complete.
-  // FIX: this queue prevents token corruption when multiple extractions run concurrently.
+  // Serialize concurrent extractions through a shared pending-promise chain so
+  // a fast user can fire two extractions without the second one's CSRF GET
+  // racing the first's POST (the second will simply queue and execute after).
+  // The promise chain (`_pending`) is reused across calls so we don't race
+  // token updates when multiple extractions run concurrently.
   if (!rcaCallBackend._pending) rcaCallBackend._pending = Promise.resolve();
   const myRequest = rcaCallBackend._pending.then(async () => {
     // Fetch CSRF token before POST. Uses a persistent session token stored
@@ -1170,6 +1183,12 @@ async function extractRangeChart(opts) {
       },
       body: JSON.stringify(body),
       signal: controller.signal,
+      // M3 (REVIEW-2026-08-19): explicit `redirect: 'manual'` so a 3xx
+      // response from the upstream doesn't auto-follow and leak the
+      // `x-api-key` header to the redirect target. Browsers default to
+      // `follow` which can send the same Authorization header to an
+      // attacker-controlled endpoint.
+      redirect: 'manual',
     });
     if (r && r.ok === false && r.status >= 500 && r.status < 600) {
       // 5xx is transient — throw so retryWithBackoff retries.

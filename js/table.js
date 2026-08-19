@@ -306,7 +306,12 @@ function rcaTableConfigs(data) {
       titleKey: 'sec.fossils',
       cols: ['col.fossil'],
       italicCol: -1,
-      row: (f) => [f],
+      // M1 (REVIEW-2026-08-19): other_fossils rows may be a string or
+      // a dict (label/species/taxon/name). Normalize to a string before
+      // export so CSV / JSON don't carry dict-shaped objects.
+      row: (f) => [typeof f === 'object' && f
+        ? String(f.label || f.species || f.taxon || f.name || '')
+        : String(f || '')],
     },
   ];
 }
