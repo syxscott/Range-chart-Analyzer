@@ -1154,6 +1154,31 @@ function test_h1_ics_rhaetian_base_205_7() {
 }
 test_h1_ics_rhaetian_base_205_7();
 
+// ---- PR1 H8: handleFile race fix ----
+//
+// `state.file = file` must be assigned AFTER the `await rcaLoadAndMaybeResize`
+// resolves, not before. Otherwise the new filename is exposed while the
+// preview still shows the old image — a race visible in export filenames
+// and footer labels. Verified by static-source inspection.
+function test_h8_handlefile_state_file_after_await() {
+  const src = fs.readFileSync(path.join(__dirname, 'js/app.js'), 'utf8');
+  // Locate the handleFile body.
+  const handleStart = src.indexOf('async function handleFile(file)');
+  if (handleStart < 0) { check('h8-handleFile-found', false); return; }
+  const handleEnd = src.indexOf('async function handleFileMetaRefresh', handleStart);
+  const body = src.slice(handleStart, handleEnd > 0 ? handleEnd : handleStart + 6000);
+  // Match ACTUAL statements only (start of whitespace then assignment).
+  // Strip line comments first to avoid matching `// ... state.file = file ...`.
+  const code = body.split('\n').filter((ln) => !/^\s*\/\//.test(ln)).join('\n');
+  const fileAssigns = code.match(/state\.file\s*=\s*file\s*;?/g) || [];
+  check('h8-handleFile-single-assign', fileAssigns.length === 1);
+  const loadIdx = code.indexOf('await rcaLoadAndMaybeResize');
+  const assignIdx = code.indexOf('state.file = file');
+  check('h8-assign-after-load',
+    loadIdx >= 0 && assignIdx >= 0 && assignIdx > loadIdx);
+}
+test_h8_handlefile_state_file_after_await();
+
 // H5 end-to-end: extractRangeChart must flip ok=false when the parsed
 // JSON trips the truncated_or_unrecognized_payload warning in range_chart
 // mode, but keep ok=true with the warning attached for the other modes.

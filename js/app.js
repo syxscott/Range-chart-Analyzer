@@ -346,7 +346,13 @@
       showAlert('warning', t('err.fileTooBig'));
       return;
     }
-    state.file = file;
+    // H8 (REVIEW-2026-08-19): defer `state.file = file` until AFTER the
+    // async load promise resolves. The previous synchronous assignment
+    // exposed the NEW filename while the preview was still rendering the
+    // OLD image — a race where export filenames + footer labels drifted
+    // from the displayed preview. Downstream code is null-checked, so
+    // the brief window between `state.dataUrl` set and `state.file` set
+    // is safe.
     // FIX (handlefile-abort): when the user picks a NEW file mid-extraction,
     // abort the in-flight request so we don't waste API calls on the
     // previous image. The token bump below already prevents the stale
@@ -385,6 +391,7 @@
         // A newer file-selection has superseded us; drop this result.
         return;
       }
+      state.file = file;
       state.dataUrl = loaded.dataUrl;
       state.mediaType = loaded.mime;
       // preview
