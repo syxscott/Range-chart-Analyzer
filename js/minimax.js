@@ -172,6 +172,32 @@ function rcaCarryExtras(item, known) {
 }
 
 // Normalize the parsed JSON into the strict result shape.
+// H5 (REVIEW-2026-08-19): Mode-known root keys. When parsed JSON has
+// none of these and no _array_root, the model returned a structurally
+// foreign payload (e.g. truncated mid-stream, schema swap, hallucinated
+// shape) and the result must be flagged as truncated/unrecognized.
+// Mirrors rca_core/extractor.py:_MODE_KNOWN_ROOTS.
+const KNOWN_ROOTS = {
+  range_chart:       new Set(['sections','species_ranges','biozones','other_fossils','confidence','_extras']),
+  columnar_section:  new Set(['sections','fossil_legend','lithology_legend','cross_beds','confidence','overall_confidence','_extras']),
+  abundance_diagram: new Set(['sites','abundances','zones','confidence','_extras']),
+  phylogenetic_tree: new Set(['metadata','nodes','root_ids','legend','confidence']),
+};
+
+// H5 helper: returns a fresh warnings array with the flag if no known
+// root key was found and no _array_root was set. Otherwise returns null.
+function rcaTruncatedWarningIfForeign(parsed, mode) {
+  if (!parsed || typeof parsed !== 'object') return ['truncated_or_unrecognized_payload'];
+  const keys = Object.keys(parsed);
+  const hasArrayRoot = Array.isArray(parsed._array_root);
+  const roots = KNOWN_ROOTS[mode];
+  const matched = roots && keys.some((k) => roots.has(k));
+  if (!matched && !hasArrayRoot) {
+    return ['truncated_or_unrecognized_payload'];
+  }
+  return null;
+}
+
 // P0-5 (REVIEW-2026-07-25): If the model returned a top-level JSON array
 // (already wrapped by json-utils.extractBalancedJsonArray as {_array_root:[...]}),
 // distribute items into the correct tables by structural key, mirroring
@@ -248,6 +274,11 @@ function rcaNormalizeResult(parsed) {
     other_fossils: [],
     confidence: 0,
   };
+  // H5: flag payloads that have no range_chart root keys (and no array
+  // wrapper) as truncated/unrecognized. The Python extractor then
+  // converts this warning into err.parse in the extract_range_chart path.
+  const warn = rcaTruncatedWarningIfForeign(parsed, 'range_chart');
+  if (warn) out._warnings = warn;
   const asStr = (v) => (v === null || v === undefined ? '' : String(v));
   const SEC_KNOWN = ['name', 'age_range', 'formations', 'formation_thickness_m', 'coordinates'];
   // P1-6 (REVIEW-2026-07-25): align SP_KNOWN with rca_core/extractor.py
@@ -532,6 +563,9 @@ function rcaNormalizeColumnarResult(parsed) {
   const overall = Number(parsed.overall_confidence != null ? parsed.overall_confidence : parsed.confidence);
   const ROOT_KNOWN = ['sections', 'fossil_legend', 'lithology_legend', 'cross_beds',
                      'overall_confidence', 'confidence'];
+  // H5: flag foreign payloads as truncated/unrecognized. Checked BEFORE
+  // building `out` so we can attach the warnings array on the same object.
+  const warnCol = rcaTruncatedWarningIfForeign(parsed, 'columnar_section');
   const out = {
     sections,
     fossil_legend: normLegend(normList('fossil_legend')),
@@ -541,6 +575,7 @@ function rcaNormalizeColumnarResult(parsed) {
   };
   const rootEx = rcaCarryExtras(parsed || {}, ROOT_KNOWN);
   if (rootEx) out._extras = rootEx;
+  if (warnCol) out._warnings = warnCol;
   return out;
 }
 
@@ -612,6 +647,8 @@ function rcaNormalizeAbundanceResult(parsed) {
     zones.push(row);
   }
   const conf = Number(parsed.confidence);
+  // H5: flag foreign payloads as truncated/unrecognized.
+  const warnAbd = rcaTruncatedWarningIfForeign(parsed, 'abundance_diagram');
   const out = {
     sites,
     abundances,
@@ -620,6 +657,7 @@ function rcaNormalizeAbundanceResult(parsed) {
   };
   const rootEx = rcaCarryExtras(parsed || {}, ROOT_KNOWN);
   if (rootEx) out._extras = rootEx;
+  if (warnAbd) out._warnings = warnAbd;
   return out;
 }
 
@@ -724,6 +762,10 @@ function rcaNormalizePhylogeneticTreeResult(parsed) {
   const metaRaw = parsed.metadata || {};
   const legendRaw = parsed.legend;
   const conf = Number(parsed.confidence);
+  // H5: flag foreign payloads. Phylo schema requires nodes+root_ids; if
+  // those were missing we already threw above. We still set the warning
+  // here so the surface matches the other 3 normalizers.
+  const warnPhylo = rcaTruncatedWarningIfForeign(parsed, 'phylogenetic_tree');
   return {
     metadata: {
       title: asStr(metaRaw.title || ''),
@@ -737,6 +779,7 @@ function rcaNormalizePhylogeneticTreeResult(parsed) {
     nodes: nodesOut,
     legend: (legendRaw && typeof legendRaw === 'object') ? legendRaw : {},
     confidence: Number.isFinite(conf) ? Math.max(0, Math.min(1, conf)) : 0,
+    ...(warnPhylo ? { _warnings: warnPhylo } : {}),
   };
 }
 
@@ -1210,6 +1253,22 @@ async function extractRangeChart(opts) {
   } catch (err) {
     const why = err && err.message ? err.message : String(err);
     return { ok: false, errorKey: 'err.extract', raw: rawText, truncated, warning: 'normalize failed: ' + why };
+  }
+  // H5 (REVIEW-2026-08-19): mirror rca_core/extractor.py:866-880. A
+  // truncated_or_unrecognized_payload in the range_chart path flips the
+  // result to ok=false with err.parse. The other 3 modes keep ok=true
+  // and surface the warning on data._warnings — same as Python.
+  if (data && Array.isArray(data._warnings) &&
+      data._warnings.indexOf('truncated_or_unrecognized_payload') !== -1 &&
+      (mode === 'range_chart' || !mode)) {
+    return {
+      ok: false,
+      errorKey: 'err.parse',
+      data,
+      raw: rawText,
+      truncated: !!truncated,
+      warning: 'truncated_or_unrecognized_payload',
+    };
   }
   return { ok: true, data, raw: rawText, truncated };
 }

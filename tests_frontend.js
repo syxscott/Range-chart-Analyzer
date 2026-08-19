@@ -1062,6 +1062,118 @@ function test_ui_phylo_i18n_keys() {
 
 test_ui_phylo_i18n_keys();
 
+// ---- PR1 H5: truncated_or_unrecognized_payload guard ----
+//
+// Mirror rca_core/extractor.py:866-880. A payload that has none of the
+// mode-known root keys must trip a `truncated_or_unrecognized_payload`
+// warning, and only the range_chart extract path flips ok=false.
+function test_h5_normalizer_truncated_warning_flag() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // Plain unknown payload — no known range_chart roots.
+  const out = ctx.rcaNormalizeResult({ foo: 1 });
+  check('h5-range-warnings-array', Array.isArray(out._warnings));
+  check('h5-range-warning-flag-set',
+    out._warnings && out._warnings.indexOf('truncated_or_unrecognized_payload') !== -1);
+}
+test_h5_normalizer_truncated_warning_flag();
+
+function test_h5_normalizer_truncated_warning_columnar() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const out = ctx.rcaNormalizeColumnarResult({ foo: 1 });
+  check('h5-columnar-warning-flag-set',
+    out._warnings && out._warnings.indexOf('truncated_or_unrecognized_payload') !== -1);
+}
+test_h5_normalizer_truncated_warning_columnar();
+
+function test_h5_normalizer_truncated_warning_abundance() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const out = ctx.rcaNormalizeAbundanceResult({ foo: 1 });
+  check('h5-abundance-warning-flag-set',
+    out._warnings && out._warnings.indexOf('truncated_or_unrecognized_payload') !== -1);
+}
+test_h5_normalizer_truncated_warning_abundance();
+
+function test_h5_normalizer_truncated_warning_phylo() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // Phylo normalizer throws on missing root_ids/nodes before reaching the
+  // warning — we only verify a known-valid fixture does NOT spuriously
+  // emit the warning. A valid payload must come back warning-free.
+  const out = ctx.rcaNormalizePhylogeneticTreeResult({
+    root_ids: ['n0'],
+    nodes: [{ id: 'n0', parent: null, name: 'Spasmaria', is_leaf: false }],
+  });
+  const flagged = (out._warnings || []).indexOf('truncated_or_unrecognized_payload') !== -1;
+  check('h5-phylo-valid-no-warning', !flagged);
+  // Soft: the throw path is exercised by test_prompt_phylo_parent_and_degradation.
+}
+test_h5_normalizer_truncated_warning_phylo();
+
+// H5 end-to-end: extractRangeChart must flip ok=false when the parsed
+// JSON trips the truncated_or_unrecognized_payload warning in range_chart
+// mode, but keep ok=true with the warning attached for the other modes.
+function test_h5_extract_range_chart_flip_to_error() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // The payload must NOT match any known root (no 'sections' etc.) so the
+  // normalizer flags it. We pre-pend the warning because the warning path
+  // is what extract_range_chart checks post-normalization.
+  const payload = JSON.stringify({ totally_unrelated_key: 1 });
+  const calls = [];
+  ctx.fetch = async (url, opts) => {
+    calls.push({ url, opts });
+    return {
+      ok: true,
+      json: async () => ({ content: [{ type: 'text', text: payload }] }),
+      text: async () => payload,
+    };
+  };
+  return ctx.extractRangeChart({
+    dataUrl: 'data:image/png;base64,QUFB',
+    mode: 'range_chart',
+    baseUrl: 'https://example.com',
+    apiKey: 'test-key',
+  }).then((res) => {
+    check('h5-range-extract-ok-false', res.ok === false);
+    check('h5-range-extract-errorKey-err-parse', res.errorKey === 'err.parse');
+    check('h5-range-extract-warning-flag', res.warning === 'truncated_or_unrecognized_payload');
+    check('h5-range-extract-fetch-called', calls.length >= 1);
+  });
+}
+const _h5E = test_h5_extract_range_chart_flip_to_error();
+if (_h5E && typeof _h5E.then === 'function') {
+  _h5E.catch((e) => { console.log('FAIL h5-range-extract-error', e && e.message); fail++; });
+}
+
+function test_h5_columnar_keeps_ok_true() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const payload = JSON.stringify({ totally_unrelated_key: 1 });
+  ctx.fetch = async () => ({
+    ok: true,
+    json: async () => ({ content: [{ type: 'text', text: payload }] }),
+    text: async () => payload,
+  });
+  return ctx.extractRangeChart({
+    dataUrl: 'data:image/png;base64,QUFB',
+    mode: 'columnar_section',
+    baseUrl: 'https://example.com',
+    apiKey: 'test-key',
+  }).then((res) => {
+    check('h5-columnar-extract-ok-true', res.ok === true);
+    check('h5-columnar-extract-warnings-flagged',
+      res.data && Array.isArray(res.data._warnings) &&
+      res.data._warnings.indexOf('truncated_or_unrecognized_payload') !== -1);
+  });
+}
+const _h5C = test_h5_columnar_keeps_ok_true();
+if (_h5C && typeof _h5C.then === 'function') {
+  _h5C.catch((e) => { console.log('FAIL h5-columnar-extract-error', e && e.message); fail++; });
+}
+
 // Wait for async races to settle before printing summary.
 setTimeout(() => {
   console.log(`\n--- ${pass} passed, ${fail} failed ---`);
