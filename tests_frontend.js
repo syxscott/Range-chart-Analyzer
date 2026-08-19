@@ -1313,6 +1313,130 @@ function test_h2_columnar_csv_includes_patterns() {
 }
 test_h2_columnar_csv_includes_patterns();
 
+// ---- PR1 H3: species_ranges CSV optional columns ----
+//
+// rcaTableConfigs range-chart branch must dynamically expand the species
+// columns based on which fields are populated in the actual rows, so a
+// CSV/TSV export only shows columns with non-default data. Mirrors
+// rca_core/exporter.py's optional column logic.
+//
+// 7 new trilingual keys: col.authorYear, col.rangeTopBed, col.rangeTopIdx,
+// col.endpointKind, col.occurrenceMode, col.colConfidence, col.note.
+//
+// The test asserts the BEHAVIOR (extra header appears iff a row populates
+// the corresponding field) — not the column order — so future column
+// ordering tweaks don't silently break the test.
+function test_h3_species_csv_optional_columns() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // First row populates 5 optional fields; second row only `author_year`.
+  // Expectation: all 5 optional cols present, but the columns triggered by
+  // a row that has `author_year` only (e.g. col.rangeTopBed) MUST also be
+  // present when ANY row triggers them. Conversely, col.note, triggered by
+  // row[1], must also be present.
+  const data = {
+    sections: [{ name: 'S1', age_range: 'Permian', formations: [], formation_thickness_m: '', coordinates: '' }],
+    species_ranges: [
+      { species: 'A. typicus', section: 'S1', range_base: 'Capitanian', range_top: 'Wordian',
+        biozone: '', author_year: 'Smith, 1950', range_top_bed: 'Bed 12', range_top_idx: 4,
+        endpoint_kind: 'observed', occurrence_mode: 'in_situ', confidence: 0.85, note: '' },
+      { species: 'B. decorus', section: 'S1', range_base: 'Roadian', range_top: 'Kungurian',
+        biozone: '', author_year: 'Jones, 1960', note: 'rare' },
+    ],
+    biozones: [], other_fossils: [], confidence: 0,
+  };
+  const cfg = ctx.rcaTableConfigs(data).find((c) => c.id === 'species_ranges');
+  check('h3-species-cfg-exists', !!cfg);
+  // Base 5 cols + 5 optionals + 1 (agreement if multi) — multi is false
+  // here (no data.runs), so exactly 10 cols.
+  check('h3-col-author-year-included',
+    cfg.cols.indexOf('col.authorYear') !== -1);
+  check('h3-col-range-top-bed-included',
+    cfg.cols.indexOf('col.rangeTopBed') !== -1);
+  check('h3-col-range-top-idx-included',
+    cfg.cols.indexOf('col.rangeTopIdx') !== -1);
+  check('h3-col-endpoint-kind-included',
+    cfg.cols.indexOf('col.endpointKind') !== -1);
+  check('h3-col-occurrence-mode-included',
+    cfg.cols.indexOf('col.occurrenceMode') !== -1);
+  check('h3-col-confidence-included',
+    cfg.cols.indexOf('col.colConfidence') !== -1);
+  check('h3-col-note-included',
+    cfg.cols.indexOf('col.note') !== -1);
+  check('h3-no-agreement-column-when-single-run',
+    cfg.cols.indexOf('col.agreement') === -1);
+  // Base columns remain in front.
+  check('h3-base-col-species-first', cfg.cols[0] === 'col.species');
+  check('h3-base-col-biozone-fifth', cfg.cols[4] === 'col.biozone');
+}
+test_h3_species_csv_optional_columns();
+
+function test_h3_species_csv_optional_note() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // Only row[0] has author_year; only row[1] has note. Both optional cols
+  // must be in the headers (because "some row has it").
+  const data = {
+    sections: [], species_ranges: [
+      { species: 'A', section: '', range_base: '', range_top: '', biozone: '', author_year: 'X' },
+      { species: 'B', section: '', range_base: '', range_top: '', biozone: '', note: 'cf.' },
+    ],
+    biozones: [], other_fossils: [], confidence: 0,
+  };
+  const cfg = ctx.rcaTableConfigs(data).find((c) => c.id === 'species_ranges');
+  check('h3-note-col-present', cfg.cols.indexOf('col.note') !== -1);
+  check('h3-author-year-col-present', cfg.cols.indexOf('col.authorYear') !== -1);
+}
+test_h3_species_csv_optional_note();
+
+function test_h3_species_csv_no_optional_when_empty() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // No optional fields populated anywhere → only the 5 base columns.
+  const data = {
+    sections: [], species_ranges: [
+      { species: 'A', section: '', range_base: '', range_top: '', biozone: '' },
+      { species: 'B', section: '', range_base: '', range_top: '', biozone: '' },
+    ],
+    biozones: [], other_fossils: [], confidence: 0,
+  };
+  const cfg = ctx.rcaTableConfigs(data).find((c) => c.id === 'species_ranges');
+  check('h3-base-5-cols', cfg.cols.length === 5);
+  check('h3-no-author-year', cfg.cols.indexOf('col.authorYear') === -1);
+  check('h3-no-range-top-bed', cfg.cols.indexOf('col.rangeTopBed') === -1);
+  check('h3-no-range-top-idx', cfg.cols.indexOf('col.rangeTopIdx') === -1);
+  check('h3-no-endpoint-kind', cfg.cols.indexOf('col.endpointKind') === -1);
+  check('h3-no-occurrence-mode', cfg.cols.indexOf('col.occurrenceMode') === -1);
+  check('h3-no-confidence', cfg.cols.indexOf('col.colConfidence') === -1);
+  check('h3-no-note', cfg.cols.indexOf('col.note') === -1);
+}
+test_h3_species_csv_no_optional_when_empty();
+
+// H3: rcaBuildTableExport must produce rows whose column count matches
+// cfg.cols so CSV/TSV headers align with data. Uses note + author_year
+// (both present) + a row with no optionals.
+function test_h3_species_csv_export_alignment() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  ctx.t('en');
+  const data = {
+    sections: [], species_ranges: [
+      { species: 'A', section: '', range_base: '', range_top: '', biozone: '',
+        author_year: 'X, 1990', note: 'cf.' },
+      { species: 'B', section: '', range_base: '', range_top: '', biozone: '' },
+    ],
+    biozones: [], other_fossils: [], confidence: 0,
+  };
+  ctx.rcaTableConfigs(data);
+  const exp = ctx.rcaBuildTableExport(data, 'species_ranges');
+  const expectedCols = 1 + 5 + 2; // # + 5 base + authorYear + note
+  check('h3-export-headers-count', exp.headers.length === expectedCols);
+  for (const row of exp.rows) {
+    check('h3-export-row-count-matches-headers', row.length === exp.headers.length);
+  }
+}
+test_h3_species_csv_export_alignment();
+
 // M12: leading LF must also trigger the formula guard (PR3 anchored here
 // so the export-side regression is captured with PR1's H2 export change).
 function test_export_newline_injection_guard() {

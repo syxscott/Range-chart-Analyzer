@@ -135,6 +135,15 @@ const RCA_I18N = {
     'col.rangeBase': '延限底 (老)',
     'col.rangeTop': '延限顶 (新)',
     'col.biozone': '生物带',
+    // H3 (REVIEW-2026-08-19): species_ranges CSV optional columns —
+    // only emitted when the corresponding field is populated in the row.
+    'col.authorYear': '作者/年份',
+    'col.rangeTopBed': '顶部床位',
+    'col.rangeTopIdx': '顶部索引',
+    'col.endpointKind': '端点类型',
+    'col.occurrenceMode': '产出方式',
+    'col.colConfidence': '行置信度',
+    'col.note': '备注',
     'col.age': '年代',
     'col.fossil': '化石记录',
     'sec.columnarLithology': '岩性图例 (Lithology Legend)',
@@ -383,6 +392,15 @@ RCA_I18N.en = {
   'col.rangeBase': 'Range base (older)',
   'col.rangeTop': 'Range top (younger)',
   'col.biozone': 'Biozone',
+  // H3 (REVIEW-2026-08-19): species_ranges CSV optional columns —
+  // only emitted when the corresponding field is populated in the row.
+  'col.authorYear': 'Author & year',
+  'col.rangeTopBed': 'Top bed',
+  'col.rangeTopIdx': 'Top index',
+  'col.endpointKind': 'Endpoint kind',
+  'col.occurrenceMode': 'Occurrence mode',
+  'col.colConfidence': 'Row confidence',
+  'col.note': 'Note',
   'col.age': 'Age',
   'col.fossil': 'Fossil record',
     'sec.columnarLithology': 'Lithology Legend',
@@ -626,6 +644,15 @@ RCA_I18N.ja = {
   'col.rangeBase': 'レンジ下限（古）',
   'col.rangeTop': 'レンジ上限（新）',
   'col.biozone': '生層帯',
+  // H3 (REVIEW-2026-08-19): species_ranges CSV 任意列 — 行に該当フィールド
+  // が入っている場合のみ出力される。
+  'col.authorYear': '著者/年',
+  'col.rangeTopBed': '上限層',
+  'col.rangeTopIdx': '上限インデックス',
+  'col.endpointKind': '端点種別',
+  'col.occurrenceMode': '産出様式',
+  'col.colConfidence': '行信頼度',
+  'col.note': '備考',
   'col.age': '年代',
   'col.fossil': '化石記録',
     'sec.columnarLithology': '岩性凡例',

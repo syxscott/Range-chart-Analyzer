@@ -220,12 +220,52 @@ function rcaTableConfigs(data) {
   }
 
   // -------- range-chart mode (default) --------
-  const speciesCols = ['col.species', 'col.section', 'col.rangeBase', 'col.rangeTop', 'col.biozone'];
-  const speciesRow = (r) => [r.species, r.section, r.range_base, r.range_top, r.biozone];
-  const speciesColsFinal = multi ? speciesCols.concat(['col.agreement']) : speciesCols;
-  const speciesRowFinal = multi
-    ? (r) => speciesRow(r).concat([r.agreement || ''])
-    : speciesRow;
+  // H3 (REVIEW-2026-08-19): dynamically expand the species_ranges CSV
+  // columns based on which optional fields are populated. Mirrors the
+  // conditional-column logic in rca_core/exporter.py so a researcher
+  // gets `author_year` / `note` / `confidence` columns in their CSV
+  // only when the model actually emitted them — not blank CSV columns
+  // for every result.
+  const speciesBaseCols = ['col.species', 'col.section', 'col.rangeBase', 'col.rangeTop', 'col.biozone'];
+  const speciesBaseRow = (r) => [r.species, r.section, r.range_base, r.range_top, r.biozone];
+  // (label, predicate) — predicate returns truthy iff AT LEAST ONE row
+  // has a meaningful value for this column.
+  const speciesOptLabels = ['col.authorYear', 'col.rangeTopBed', 'col.rangeTopIdx',
+                            'col.endpointKind', 'col.occurrenceMode',
+                            'col.colConfidence', 'col.note'];
+  const speciesRowsForPred = Array.isArray(data.species_ranges) ? data.species_ranges : [];
+  const speciesOptPreds = [
+    (r) => r.author_year,
+    (r) => r.range_top_bed,
+    (r) => r.range_top_idx != null,
+    (r) => r.endpoint_kind && r.endpoint_kind !== 'unknown',
+    (r) => r.occurrence_mode && r.occurrence_mode !== 'unknown',
+    (r) => r.confidence != null,
+    (r) => r.note,
+  ];
+  const speciesOptCols = [];
+  for (let i = 0; i < speciesOptLabels.length; i += 1) {
+    const pred = speciesOptPreds[i];
+    if (speciesRowsForPred.some(pred)) speciesOptCols.push(speciesOptLabels[i]);
+  }
+  const speciesOptGetters = {
+    'col.authorYear':     (r) => r.author_year || '',
+    'col.rangeTopBed':    (r) => r.range_top_bed || '',
+    'col.rangeTopIdx':    (r) => r.range_top_idx == null ? '' : String(r.range_top_idx),
+    'col.endpointKind':   (r) => r.endpoint_kind || '',
+    'col.occurrenceMode': (r) => r.occurrence_mode || '',
+    'col.colConfidence':  (r) => r.confidence == null ? '' : String(r.confidence),
+    'col.note':           (r) => r.note || '',
+  };
+  const speciesColsFinal = multi
+    ? speciesBaseCols.concat(speciesOptCols, ['col.agreement'])
+    : speciesBaseCols.concat(speciesOptCols);
+  const speciesRowFinal = (r) => {
+    const row = speciesBaseRow(r);
+    for (const c of speciesOptCols) row.push(speciesOptGetters[c](r));
+    if (multi) row.push(r.agreement || '');
+    return row;
+  };
   return [
     {
       id: 'sections',
