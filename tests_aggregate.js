@@ -18,7 +18,10 @@ let src = fs.readFileSync(path.join(__dirname, 'js', 'aggregate.js'), 'utf8');
 src += '\nglobalThis.RCA_DEFAULT_KEYMAP = RCA_DEFAULT_KEYMAP;\n'
   + 'globalThis.RCA_COLUMNAR_KEYMAP = RCA_COLUMNAR_KEYMAP;\n'
   + 'globalThis.RCA_ABUNDANCE_KEYMAP = RCA_ABUNDANCE_KEYMAP;\n'
-  + 'globalThis.rcaMergeResults = rcaMergeResults;\n';
+  + 'globalThis.rcaMergeResults = rcaMergeResults;\n'
+  + 'globalThis.mergeScalarField = mergeScalarField;\n'
+  + 'globalThis.mergeFieldAcrossRuns = mergeFieldAcrossRuns;\n'
+  + 'globalThis.NO_MERGE = NO_MERGE;\n';
 const ctx = {};
 vm.createContext(ctx);
 vm.runInContext(src, ctx);
@@ -27,6 +30,9 @@ const {
   RCA_DEFAULT_KEYMAP,
   RCA_COLUMNAR_KEYMAP,
   RCA_ABUNDANCE_KEYMAP,
+  mergeScalarField,
+  mergeFieldAcrossRuns,
+  NO_MERGE,
 } = ctx;
 
 let pass = 0, fail = 0;
@@ -246,6 +252,72 @@ function test_golden_e2e_range_chart() {
   check('p2-3: golden agreement=2/2', a && a.agreement === '2/2');
 }
 test_golden_e2e_range_chart();
+
+// ---- PR2 H7: mergeScalarField bool preservation ----
+//
+// mergeScalarField must detect all-bool inputs and use Counter-mode to
+// return the most-common boolean (preserving the type). Otherwise
+// mergeFieldAcrossRuns loses boolean fields like `reworked` (or any
+// future stratum-bool field) by coercing them to "true"/"false" strings.
+//
+// Mirrors rca_core/aggregate.py:_merge_scalar_field.
+function test_h7_merge_scalar_bool_true_wins() {
+  const bool = mergeScalarField([true, false, true]);
+  check('h7-bool-2-of-3-true-preserves-type', typeof bool === 'boolean');
+  check('h7-bool-2-of-3-true-wins', bool === true);
+}
+test_h7_merge_scalar_bool_true_wins();
+
+function test_h7_merge_scalar_bool_false_wins() {
+  const bool = mergeScalarField([true, false, false]);
+  check('h7-bool-2-of-3-false-wins', bool === false);
+}
+test_h7_merge_scalar_bool_false_wins();
+
+function test_h7_merge_scalar_bool_tie() {
+  // Python: false wins ties via sort (False < True). Mirror that.
+  const bool = mergeScalarField([true, false]);
+  check('h7-bool-tie-false-wins', bool === false);
+}
+test_h7_merge_scalar_bool_tie();
+
+function test_h7_merge_scalar_single_bool() {
+  check('h7-single-bool-true', mergeScalarField([true]) === true);
+  check('h7-single-bool-false', mergeScalarField([false]) === false);
+}
+test_h7_merge_scalar_single_bool();
+
+function test_h7_merge_scalar_bool_with_null() {
+  // Skip nulls, then majority vote on the remaining bools.
+  check('h7-bool-skip-null-true-wins', mergeScalarField([true, null, true]) === true);
+  check('h7-bool-skip-null-false-wins', mergeScalarField([false, null, false]) === false);
+}
+test_h7_merge_scalar_bool_with_null();
+
+function test_h7_merge_scalar_all_null_bools() {
+  // All null → NO_MERGE (no consensus value).
+  const out = mergeScalarField([null, null]);
+  check('h7-bool-all-null-no-merge', out === NO_MERGE);
+}
+test_h7_merge_scalar_all_null_bools();
+
+function test_h7_merge_scalar_string_unchanged() {
+  // Non-bool scalar path unchanged: strings still go through rcaAggMode.
+  const out = mergeScalarField(['yes', 'no', 'yes']);
+  check('h7-string-mode-still-works', out === 'yes');
+  check('h7-string-stays-string', typeof out === 'string');
+}
+test_h7_merge_scalar_string_unchanged();
+
+function test_h7_merge_field_bool_via_dispatch() {
+  // mergeFieldAcrossRuns must dispatch booleans through mergeScalarField
+  // (not the mapping branch, not the structured branch) and return a
+  // boolean — not the string "true".
+  const out = mergeFieldAcrossRuns([true, false, true]);
+  check('h7-dispatch-returns-boolean', typeof out === 'boolean');
+  check('h7-dispatch-true-wins-via-dispatch', out === true);
+}
+test_h7_merge_field_bool_via_dispatch();
 
 console.log('---', pass, 'passed,', fail, 'failed ---');
 process.exit(fail ? 1 : 0);

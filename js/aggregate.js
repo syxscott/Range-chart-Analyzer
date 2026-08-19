@@ -113,6 +113,32 @@ function rcaAggMode(values) {
 const NO_MERGE = Symbol('rca.no_merge');
 
 function mergeScalarField(values) {
+  // H7 (REVIEW-2026-08-19): detect all-bool inputs and preserve the type
+  // instead of coercing to "true"/"false" strings. Mirrors
+  // rca_core/aggregate.py:_merge_scalar_field. Without this, boolean
+  // fields like `reworked` (or any future boolean column) lose their
+  // type across runs and downstream code that checks `=== true` fails.
+  const nonNull = values.filter((v) => v != null);
+  if (nonNull.length && nonNull.every((v) => typeof v === 'boolean')) {
+    const counts = new Map();
+    for (const v of nonNull) counts.set(v, (counts.get(v) || 0) + 1);
+    let topVal = null;
+    let topC = 0;
+    for (const [v, c] of counts) {
+      if (c > topC) { topVal = v; topC = c; }
+    }
+    // Tie-break: stable ordering. Python's Counter.most_common returns
+    // the first-inserted value on ties; we want deterministic behavior
+    // instead, so pick `false` (False < True) on a tie — matches the
+    // sort-based fallback in rcaAggMode.
+    const tied = Array.from(counts.entries()).filter(([, c]) => c === topC);
+    if (tied.length > 1) {
+      // Sort entries by value (false < true). Use the first.
+      tied.sort((a, b) => (a[0] === b[0] ? 0 : (a[0] ? 1 : -1)));
+      topVal = tied[0][0];
+    }
+    return topVal;
+  }
   const coerced = [];
   for (const v of values) {
     if (v == null) continue;
