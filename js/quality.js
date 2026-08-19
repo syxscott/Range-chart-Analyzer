@@ -530,10 +530,18 @@ function scoreAccuracy(data) {
       }
       found.sort((a, b) => a.idx - b.idx);
       if (found.length < 2) continue;
+      // M6 (REVIEW-2026-08-19): Proportional accuracy — every adjacent
+      // pair contributes one check, and `passed` reflects the fraction
+      // of valid pairs. The previous all-or-nothing binary ("0 or 1")
+      // under-counted a section with 2 inversions in a 4-stage sequence
+      // (would still read 0/1). Mirror rca_core/quality.py:
+      // _score_cross_era_accuracy.
       let stageViolations = 0;
+      let stageChecks = 0;
       for (let i = 0; i < found.length - 1; i += 1) {
         const cmp = icsAgeCompare(found[i].name, found[i + 1].name);
         if (cmp === null) continue;
+        stageChecks += 1;
         if (cmp > 0) {
           stageViolations += 1;
           issues.push({
@@ -542,9 +550,9 @@ function scoreAccuracy(data) {
           });
         }
       }
-      if (stageViolations > 0) {
+      if (stageChecks > 0) {
         checks += 1;
-        passed += 0;
+        passed += stageViolations > 0 ? Math.max(0.0, 1.0 - stageViolations / stageChecks) : 1.0;
       }
     }
   }
@@ -761,6 +769,12 @@ function scoreConsistency(data) {
       }
       let biozoneViol = 0;
       for (const [secName, sps] of bySection) {
+        // M7 (REVIEW-2026-08-19): skip sections that have no age_range
+        // anchor — without it the Steno's-law check is ungrounded and
+        // synthesizes false violations. Mirror rca_core/quality.py
+        // _score_steno_biozone.
+        const secRow = sectsForBio.find((s) => s && s.name && String(s.name).trim() === secName);
+        if (!secRow || !String(secRow.age_range || '').trim()) continue;
         // Only rows with an actual bed position participate (Python
         // excludes unpositioned rows rather than inventing an order).
         const positioned = sps

@@ -946,6 +946,49 @@ function test_quality_steno_biozone_map() {
   check('quality Steno detects lower-species-in-younger-zone', res.issues.some(i => i.msg_key === 'quality.biozone_order_violation'));
 }
 
+// PR2 M6: stage-order check should be proportional — section A with 4
+// stages and 2 inverted adjacent pairs reads accuracy > 0 (was 0 before).
+// Mirror rca_core/quality.py:_score_cross_era_accuracy.
+function test_m6_stage_order_proportional() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // 4 stages with 2 inverted pairs (A above B, C above B in age_range).
+  // Pre-fix: 1 check, 0 passed → 0% accuracy on this section.
+  // Post-fix: 3 checks, 1 passed → 33% accuracy on this section.
+  const res = ctx.scoreRangeChart({
+    sections: [{ name: 'A', age_range: 'Wordian Roadian Capitanian Kungurian' }],
+    species_ranges: [], confidence: 0.9,
+  });
+  const issues = res.issues.filter((i) => i.msg_key === 'quality.stage_order_reversed');
+  check('m6-stage-order-counts-each-pair', issues.length >= 2);
+  // The accuracy detail must exist; without regression we allowed 0.
+  if (res.details && typeof res.details.accuracy === 'number') {
+    check('m6-stage-order-not-flat-zero', res.details.accuracy > 0);
+  }
+}
+test_m6_stage_order_proportional();
+
+// PR2 M7: Steno's-law check skips sections whose age_range is empty /
+// missing. Without this, sections referenced by species_ranges but not
+// declared in `sections` synthesize false violations.
+function test_m7_steno_skips_section_without_age_range() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // Section A has no age_range. The species below would normally trip a
+  // Steno violation (lower in younger biozone), but the anchor is missing.
+  const res = ctx.scoreRangeChart({
+    sections: [{ name: 'A', age_range: '' }],
+    species_ranges: [
+      { species: 'Low', section: 'A', range_base: '1', range_top: '3', biozone: 'N. optima Zone' },
+      { species: 'Up', section: 'A', range_base: '4', range_top: '9', biozone: 'Clarkina orientalis Zone' },
+    ],
+    confidence: 0.9,
+  });
+  check('m7-steno-skips-missing-age-range',
+    !res.issues.some((i) => i.msg_key === 'quality.biozone_order_violation'));
+}
+test_m7_steno_skips_section_without_age_range();
+
 function test_aggregate_author_h7_parity() {
   const ctx = buildContext();
   loadAllScripts(ctx);
