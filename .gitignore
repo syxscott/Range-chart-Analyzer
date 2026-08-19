@@ -13,6 +13,7 @@ _*.txt
 _*.log
 _*.marker
 _*.out
+_*.json
 *.out
 *.log
 .pytest_cache/
