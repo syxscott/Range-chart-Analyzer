@@ -1154,9 +1154,14 @@ async function extractRangeChart(opts) {
     else opts.signal.addEventListener('abort', onExtAbort);
   }
 
-  let resp;
-  try {
-    resp = await fetch(url, {
+  // M11 (REVIEW-2026-08-19): wrap the direct-mode fetch in retryWithBackoff
+  // so transient network failures (5xx, TypeError from fetch, broker reset)
+  // get up to 3 retries before failing. AbortSignal still controls
+  // cancellation at the retry-loop level, so a user Cancel stops the
+  // retry chain mid-flight. Err.parse / err.cancelled are surfaced by
+  // downstream branches — only TRANSPORT errors are retried.
+  const tryOnce = async () => {
+    const r = await fetch(url, {
       method: 'POST',
       headers: {
         'x-api-key': apiKey,
@@ -1166,13 +1171,41 @@ async function extractRangeChart(opts) {
       body: JSON.stringify(body),
       signal: controller.signal,
     });
+    if (r && r.ok === false && r.status >= 500 && r.status < 600) {
+      // 5xx is transient — throw so retryWithBackoff retries.
+      const err = new Error('HTTP ' + r.status);
+      err.status = r.status;
+      throw err;
+    }
+    return r;
+  };
+  const ErrUtils = (typeof window !== 'undefined' && window.RCAErrorUtils) || null;
+
+  let resp;
+  try {
+    if (ErrUtils && typeof ErrUtils.retryWithBackoff === 'function') {
+      resp = await ErrUtils.retryWithBackoff(tryOnce, {
+        maxRetries: 3,
+        initialDelay: 0.8,
+        backoffFactor: 1.6,
+        maxDelay: 30.0,
+        signal: opts.signal || null,
+        onRetry: (attempt, delay, err) => {
+          if (typeof console !== 'undefined' && console.warn) {
+            console.warn('[extractRangeChart] retry', attempt, 'after', delay.toFixed(2), 's —', err && err.message);
+          }
+        },
+      });
+    } else {
+      resp = await tryOnce();
+    }
   } catch (err) {
     clearTimeout(timer);
     if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
     if (err && err.name === 'AbortError') {
       return { ok: false, errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout' };
     }
-    // TypeError from fetch usually means a network/CORS failure.
+    // CORS/TypeError from fetch, or transient 5xx that exhausted retries.
     return { ok: false, errorKey: 'err.network' };
   }
   clearTimeout(timer);

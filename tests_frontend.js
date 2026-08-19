@@ -88,7 +88,38 @@ function buildContext() {
       set src(_) { setImmediate(() => this.onload && this.onload()); }
     },
     fetch: async () => ({ ok: true, json: async () => ({ content: [{type:'text',text:'{}'}]}), text: async () => '' }),
-    AbortController: class { constructor(){ this.signal={}; } abort(){} },
+    // PR2 M11: AbortController stub needs a real signal with
+    // addEventListener so error-utils.js's abortableSleep can listen; the
+    // previous `this.signal = {}` made it impossible to test retry/abort.
+    AbortController: class {
+      constructor() {
+        this.signal = {
+          aborted: false,
+          _listeners: [],
+          addEventListener(_e, cb) { this._listeners.push(cb); },
+          removeEventListener(_e, cb) {
+            this._listeners = this._listeners.filter((l) => l !== cb);
+          },
+        };
+      }
+      abort() {
+        if (this.signal.aborted) return;
+        this.signal.aborted = true;
+        for (const cb of this.signal._listeners) {
+          try { cb(); } catch (_e) { /* ignore */ }
+        }
+      }
+    },
+    // error-utils.js throws `new DOMException('Aborted', 'AbortError')`.
+    // vm context doesn't have a DOMException global — provide a minimal
+    // substitute so the test sandbox exercises the same path.
+    DOMException: class DOMException extends Error {
+      constructor(message, name) {
+        super(message);
+        this.name = name || 'Error';
+        this.message = message || '';
+      }
+    },
     btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
     atob: (s) => Buffer.from(s, 'base64').toString('binary'),
     // Browser-only globals used by rcaResolveMode / syncFooterRuntime etc.
@@ -158,6 +189,9 @@ function loadAllScripts(ctx) {
     'js/aggregate.js',
     'js/table.js',
     'js/export.js',
+    // PR2 M11: error-utils.js is loaded so retryWithBackoff is wired
+    // through extractRangeChart.
+    'js/error-utils.js',
     'js/minimax.js',
     'js/theme.js',
     'js/app.js',
@@ -210,6 +244,7 @@ function loadAllScripts(ctx) {
       'js/aggregate.js': ['rcaMergeResults', 'RCA_DEFAULT_KEYMAP', 'RCA_COLUMNAR_KEYMAP'],
       'js/table.js': ['rcaRenderResults', 'rcaTableConfigs', 'rcaBuildTableExport'],
       'js/export.js': ['rcaToCsv', 'rcaToTsv', 'rcaDownload', 'rcaCopyText'],
+      'js/error-utils.js': ['RCAErrorUtils'],
       'js/theme.js': ['rcaTheme'],
     };
     const toExport = exports[f] || [];
@@ -1436,6 +1471,140 @@ function test_h3_species_csv_export_alignment() {
   }
 }
 test_h3_species_csv_export_alignment();
+
+// ---- PR2 M11: retryWithBackoff wired into extractRangeChart ----
+//
+// Direct-mode fetch should retry on transient network failures (5xx,
+// TypeError from fetch) up to 3 times before failing. The wrapped
+// call must respect the caller-supplied opts.signal so a user cancel
+// stops retries mid-flight.
+function test_m11_retry_with_backoff_importable() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // error-utils.js assigns window.RCAErrorUtils; in vm context "window"
+  // is the context object itself.
+  check('m11-error-utils-on-context', !!ctx.RCAErrorUtils);
+  check('m11-retry-with-backoff-is-function',
+    ctx.RCAErrorUtils && typeof ctx.RCAErrorUtils.retryWithBackoff === 'function');
+}
+test_m11_retry_with_backoff_importable();
+
+function test_m11_retry_succeeds_on_eventual_ok() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let calls = 0;
+  const result = ctx.RCAErrorUtils.retryWithBackoff(async () => {
+    calls += 1;
+    if (calls < 3) throw new Error('transient');
+    return { ok: true, payload: 42 };
+  }, { maxRetries: 3, initialDelay: 0.001, backoffFactor: 1.0, maxDelay: 0.001 });
+  return result.then((r) => {
+    check('m11-retry-eventual-ok-returns', r && r.ok === true);
+    check('m11-retry-attempts-3', calls === 3);
+  });
+}
+const _m11a = test_m11_retry_succeeds_on_eventual_ok();
+
+function test_m11_retry_returns_null_on_unrecoverable() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let calls = 0;
+  const result = ctx.RCAErrorUtils.retryWithBackoff(async () => {
+    calls += 1;
+    throw new Error('always fails');
+  }, { maxRetries: 2, initialDelay: 0.001, backoffFactor: 1.0, maxDelay: 0.001 });
+  return result.then(() => {
+    check('m11-retry-all-fail-attempts-3', calls === 3); // 1 initial + 2 retries
+  }).catch((e) => {
+    // We don't expect catch here — retryWithBackoff rethrows on lastError.
+    check('m11-retry-throws-last-error', !!e);
+  });
+}
+const _m11b = test_m11_retry_returns_null_on_unrecoverable();
+
+function test_m11_retry_aborts_on_signal() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const ctl = new AbortController();
+  let calls = 0;
+  const result = ctx.RCAErrorUtils.retryWithBackoff(async () => {
+    calls += 1;
+    throw new Error('transient');
+  }, { maxRetries: 5, initialDelay: 0.05, backoffFactor: 1.0, maxDelay: 0.05, signal: ctl.signal });
+  // Abort after a tick so the retry loop has time to enter one sleep cycle.
+  setTimeout(() => ctl.abort(), 30);
+  return result.then(() => {
+    // If retry returns a result (no throw), the loop exited cleanly.
+    check('m11-retry-abort-stops-loop', calls < 6);
+  }).catch((e) => {
+    // If it throws, either AbortError or transient Error is acceptable
+    // as long as the loop stopped before exhausting all retries.
+    check('m11-retry-abort-stops-loop', calls < 6);
+  });
+}
+const _m11c = test_m11_retry_aborts_on_signal();
+
+// M11 e2e: extractRangeChart must retry on transient 5xx (and stop retrying
+// on auth/4xx). First 2 attempts return 503, 3rd returns ok. Stub
+// RCAErrorUtils with shorter delays so the test is fast.
+function test_m11_extract_retries_on_5xx() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let calls = 0;
+  ctx.fetch = async () => {
+    calls += 1;
+    if (calls < 3) {
+      return { ok: false, status: 503, text: async () => 'service unavailable' };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'text', text: JSON.stringify({
+          sections: [], species_ranges: [], biozones: [], other_fossils: [],
+          confidence: 0.5,
+        })}],
+      }),
+      text: async () => '',
+    };
+  };
+  // Speed up retries: override the retry helper on the ErrorUtils object.
+  const origRet = ctx.RCAErrorUtils.retryWithBackoff;
+  ctx.RCAErrorUtils.retryWithBackoff = (fn, opts) => origRet(fn, {
+    ...opts,
+    initialDelay: 0.001, backoffFactor: 1.0, maxDelay: 0.001,
+  });
+  return ctx.extractRangeChart({
+    dataUrl: 'data:image/png;base64,QUFB',
+    mode: 'range_chart',
+    baseUrl: 'https://example.com',
+    model: 'm', maxTokens: 100,
+  }).then((res) => {
+    check('m11-extract-retry-eventual-ok', res.ok === true);
+    check('m11-extract-retry-attempts-3', calls === 3);
+  });
+}
+const _m11d = test_m11_extract_retries_on_5xx();
+
+// M11 e2e: 4xx auth errors should NOT retry — first failure surfaces.
+function test_m11_extract_no_retry_on_4xx() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let calls = 0;
+  ctx.fetch = async () => {
+    calls += 1;
+    return { ok: false, status: 401, text: async () => 'unauthorized' };
+  };
+  return ctx.extractRangeChart({
+    dataUrl: 'data:image/png;base64,QUFB',
+    mode: 'range_chart',
+    baseUrl: 'https://example.com',
+    model: 'm', maxTokens: 100,
+  }).then((res) => {
+    check('m11-extract-4xx-no-retry', calls === 1);
+    check('m11-extract-4xx-error-key', res.ok === false && res.errorKey === 'err.401');
+  });
+}
+const _m11e = test_m11_extract_no_retry_on_4xx();
 
 // M12: leading LF must also trigger the formula guard (PR3 anchored here
 // so the export-side regression is captured with PR1's H2 export change).
