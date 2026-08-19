@@ -34,7 +34,24 @@ function buildContext() {
     // shadows the first and the mock loses its backing store. theme.js +
     // app.js both touch document.* at load time.
     document: {
-      addEventListener() {}, removeEventListener() {},
+      _listeners: {},
+      addEventListener(type, cb) {
+        if (!this._listeners[type]) this._listeners[type] = [];
+        this._listeners[type].push(cb);
+      },
+      removeEventListener(type, cb) {
+        if (!this._listeners[type]) return;
+        this._listeners[type] = this._listeners[type].filter((l) => l !== cb);
+      },
+      // PR3 M14/M16: dispatchEvent on document for tests that simulate
+      // animationend / keydown events bubbling up.
+      dispatchEvent(ev) {
+        const list = this._listeners[ev && ev.type] || [];
+        for (const cb of list) {
+          try { cb(ev); } catch (_e) { /* ignore */ }
+        }
+        return true;
+      },
       // UI-REVIEW-2026-08-01: cache elements by id so DOM state (e.g.
       // classList recordings, value) survives repeated getElementById
       // calls — the previous fresh-instance-per-call stub made it
@@ -42,7 +59,19 @@ function buildContext() {
       _els: new Map(),
       getElementById(id) {
         if (!this._els.has(id)) {
-          this._els.set(id, makeEl(id));
+          // Hardcoded tag map for elements whose tagName the test cares
+          // about (api-key is an <input>, caption is <textarea>, etc.).
+          // Everything else defaults to DIV via makeEl.
+          const tagMap = {
+            'api-key': 'INPUT',
+            'caption': 'TEXTAREA',
+            'preview-wrap': 'DIV',
+            'preview-img': 'IMG',
+            'results-content': 'DIV',
+            'alert-slot': 'DIV',
+            'results-empty': 'DIV',
+          };
+          this._els.set(id, makeEl(id, tagMap[id] || 'DIV'));
         }
         return this._els.get(id);
       },
@@ -50,7 +79,7 @@ function buildContext() {
       // empty NodeList matches what theme.js's wireToggleButtons sees when
       // the page hasn't been wired up yet.
       querySelectorAll: () => [],
-      createElement: () => makeEl('el'),
+      createElement: (tag) => makeEl('el', tag),
       documentElement: docEl,
       body: makeEl('body'),
       head: makeEl('head'),
@@ -120,6 +149,27 @@ function buildContext() {
         this.message = message || '';
       }
     },
+    // PR3 M14/M16: Event / KeyboardEvent constructors for dispatching
+    // animationend and keydown events. vm context has no DOM globals.
+    Event: class Event {
+      constructor(type, init) {
+        this.type = type;
+        this.bubbles = !!(init && init.bubbles);
+        this.cancelable = !!(init && init.cancelable);
+      }
+      stopPropagation() {}
+      preventDefault() {}
+    },
+    KeyboardEvent: class KeyboardEvent extends Event {
+      constructor(type, init) {
+        super(type, init);
+        this.key = (init && init.key) || '';
+        this.ctrlKey = !!(init && init.ctrlKey);
+        this.metaKey = !!(init && init.metaKey);
+        this.shiftKey = !!(init && init.shiftKey);
+        this.altKey = !!(init && init.altKey);
+      }
+    },
     btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
     atob: (s) => Buffer.from(s, 'base64').toString('binary'),
     // Browser-only globals used by rcaResolveMode / syncFooterRuntime etc.
@@ -130,16 +180,32 @@ function buildContext() {
   return ctx;
 }
 
-function makeEl(id) {
+function makeEl(id, tagName) {
+  const matches = (node, sel) => {
+    if (!sel) return false;
+    if (sel[0] === '.') {
+      return (node.className || '').split(/\s+/).indexOf(sel.slice(1)) !== -1;
+    }
+    if (sel[0] === '#') return node.id === sel.slice(1);
+    return node.tagName === sel.toUpperCase();
+  };
+  const collectAll = (root, sel, out) => {
+    for (const c of (root.children || [])) {
+      if (matches(c, sel)) out.push(c);
+      collectAll(c, sel, out);
+    }
+  };
+  const listeners = {};
   const el = {
     id,
+    className: '',
     // UI-REVIEW-2026-08-01: record classList calls so tests can assert
     // visibility toggles (e.g. the force-rerun button after a result).
     classList: {
       _calls: [],
-      add(c) { this._calls.push(['add', c]); },
-      remove(c) { this._calls.push(['remove', c]); },
-      toggle(c, f) { this._calls.push(['toggle', c, f]); },
+      add(c) { this._calls.push(['add', c]); el.className = (el.className + ' ' + c).trim(); },
+      remove(c) { this._calls.push(['remove', c]); el.className = el.className.split(/\s+/).filter((x) => x !== c).join(' '); },
+      toggle(c, f) { this._calls.push(['toggle', c, f]); el.className = (el.className + ' ' + c).trim(); },
       contains: () => false,
     },
     style: {},
@@ -155,17 +221,46 @@ function makeEl(id) {
     type: 'text',
     checked: false,
     selected: false,
-    tagName: 'DIV',
+    tagName: (tagName || 'DIV').toUpperCase(),
     title: '',
-    addEventListener() {}, removeEventListener() {},
-    setAttribute() {}, getAttribute() { return null; },
-    querySelector() { return makeEl('sub'); },
-    querySelectorAll: () => [],
+    addEventListener(type, cb) {
+      if (!listeners[type]) listeners[type] = [];
+      listeners[type].push(cb);
+    },
+    removeEventListener(type, cb) {
+      if (!listeners[type]) return;
+      listeners[type] = listeners[type].filter((l) => l !== cb);
+    },
+    setAttribute(k, v) { el.attributes[k] = v; if (k === 'id') el.id = v; },
+    getAttribute(k) { return el.attributes[k] != null ? el.attributes[k] : null; },
+    querySelector(sel) {
+      const out = [];
+      collectAll(el, sel, out);
+      return out[0] || null;
+    },
+    querySelectorAll(sel) {
+      const out = [];
+      collectAll(el, sel, out);
+      return out;
+    },
     appendChild(c) { el.children.push(c); c.parentNode = el; },
-    removeChild() {},
+    removeChild(c) {
+      const idx = el.children.indexOf(c);
+      if (idx !== -1) { el.children.splice(idx, 1); c.parentNode = null; }
+    },
     focus: () => {},
     click: () => {},
     reset() {},
+    // PR3 M14/M16: dispatchEvent for tests that simulate animationend /
+    // keydown events. Calls listeners registered on this element.
+    dispatchEvent(ev) {
+      const type = ev && ev.type;
+      const list = listeners[type] || [];
+      for (const cb of list) {
+        try { cb(ev); } catch (_e) { /* ignore */ }
+      }
+      return true;
+    },
   };
   return el;
 }
@@ -216,6 +311,11 @@ function loadAllScripts(ctx) {
           'globalThis.state = state;\n' +
           'globalThis.saveSettings = saveSettings;\n' +
           'globalThis.updateActionButtons = updateActionButtons;\n' +
+          'globalThis.$ = $;\n' +
+          'globalThis.showAlert = showAlert;\n' +
+          'globalThis.Event = Event;\n' +
+          'globalThis.KeyboardEvent = KeyboardEvent;\n' +
+          'globalThis.document = document;\n' +
           '})();';
       }
     }
@@ -1010,6 +1110,117 @@ function test_m13_range_top_lt_base_en_is_violation() {
   check('m13-ja-mentions-hayai', /早い/.test(ja));
 }
 test_m13_range_top_lt_base_en_is_violation();
+
+// ---- PR3 M14: showAlert removes the old alert on animationend ----
+//
+// The alert fade-out uses a CSS @keyframes animation, not a transition,
+// so listening on `transitionend` never fires. The fix switches to
+// `animationend` (with a setTimeout safety net so a missed event still
+// unblocks the slot).
+function test_m14_alert_removed_on_animationend() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const slot = ctx.$('alert-slot');
+  if (!slot) {
+    check('m14-alert-shown-on-no-key', false);
+    check('m14-old-alert-removed-on-animationend', false);
+    return Promise.resolve(null);
+  }
+  // Show two alerts back-to-back. The first one should be removed via
+  // the animationend listener (post-fix). Pre-fix the transitionend
+  // listener never fired and both stayed in the slot.
+  ctx.showAlert('danger', 'first');
+  ctx.showAlert('danger', 'second');
+  const before = slot.querySelectorAll('.alert');
+  check('m14-alert-shown-on-no-key', before.length >= 1);
+  // The first alert was tagged alert-fade-out and the animationend
+  // listener was registered. Dispatch animationend to trigger removal.
+  // The post-fix uses animationend + 400ms setTimeout safety net.
+  const old = before[0];
+  const ev = new ctx.Event('animationend', { bubbles: true });
+  old.dispatchEvent(ev);
+  return new Promise((resolve) => setTimeout(resolve, 5)).then(() => {
+    const remaining = slot.querySelectorAll('.alert');
+    check('m14-old-alert-removed-on-animationend', remaining.length === 1);
+  });
+}
+const _m14 = test_m14_alert_removed_on_animationend();
+
+// ---- PR3 M15: resetUpload preserves #viz-host ----
+function test_m15_reset_upload_preserves_viz_host() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const resultsContent = ctx.$('results-content');
+  // Manually create the viz-host inside results-content (mirrors index.html).
+  const viz = ctx.document.createElement('div');
+  viz.id = 'viz-host';
+  resultsContent.appendChild(viz);
+  // Add some other content to be cleared.
+  const span = ctx.document.createElement('span');
+  span.textContent = 'old content';
+  resultsContent.appendChild(span);
+  ctx.resetUpload();
+  // After resetUpload, viz-host is preserved (post-fix) and old content
+  // is cleared. Use children directly because the stub querySelector may
+  // not index span.
+  const ids = Array.from(resultsContent.children).map((c) => c.id || c.tagName);
+  check('m15-viz-host-preserved', ids.indexOf('viz-host') !== -1);
+  check('m15-old-content-cleared', ids.filter((t) => t === 'SPAN').length === 0);
+}
+test_m15_reset_upload_preserves_viz_host();
+
+// ---- PR3 M16: Ctrl+Enter in textarea triggers extract ----
+//
+// Caption textarea: pressing Ctrl+Enter should call runExtraction (NOT
+// silently swallow the keystroke). Pre-fix: the listener returned early
+// for textarea, swallowing the shortcut.
+function test_m16_ctrl_enter_in_textarea_triggers_extract() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  ctx.state.busy = false;
+  const caption = ctx.$('caption');
+  check('m16-caption-is-textarea', caption.tagName === 'TEXTAREA');
+  const slot = ctx.$('alert-slot');
+  const beforeAlerts = slot.querySelectorAll('.alert').length;
+  const ev = new ctx.KeyboardEvent('keydown', {
+    key: 'Enter',
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  Object.defineProperty(ev, 'target', { value: caption, configurable: true });
+  ctx.document.dispatchEvent(ev);
+  // runExtraction will trigger err.noKey (api-key is empty) which appends
+  // an .alert to the alert slot. Pre-fix the listener returned early for
+  // textarea so no alert appeared.
+  const afterAlerts = slot.querySelectorAll('.alert').length;
+  check('m16-ctrl-enter-textarea-triggers-extract', afterAlerts > beforeAlerts);
+  // Reset alert slot for downstream tests.
+  slot.innerHTML = '';
+}
+test_m16_ctrl_enter_in_textarea_triggers_extract();
+
+// Ctrl+Enter inside an <input type="text"> should NOT trigger extract.
+function test_m16_ctrl_enter_in_text_input_does_not_trigger() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let called = 0;
+  const origRun = ctx.runExtraction;
+  ctx.runExtraction = () => { called += 1; };
+  ctx.state.busy = false;
+  const apiKey = ctx.$('api-key');
+  const ev = new ctx.KeyboardEvent('keydown', {
+    key: 'Enter',
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  Object.defineProperty(ev, 'target', { value: apiKey });
+  ctx.document.dispatchEvent(ev);
+  check('m16-ctrl-enter-text-input-no-extract', called === 0);
+  ctx.runExtraction = origRun;
+}
+test_m16_ctrl_enter_in_text_input_does_not_trigger();
 
 function test_aggregate_author_h7_parity() {
   const ctx = buildContext();

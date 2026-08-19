@@ -311,10 +311,22 @@
 
     // UI polish: fade transition for alert appearance.
     // Fade out any existing alert first, then add new one with fade-in.
+    // M14 (REVIEW-2026-08-19): the CSS uses keyframes (animation), NOT
+    // transitions, so `transitionend` never fires and the prior alert is
+    // never removed. Listen for `animationend` instead, with a setTimeout
+    // safety net so a missed event doesn't leave the alert stuck.
     const existing = slot.querySelector('.alert');
     if (existing) {
       existing.classList.add('alert-fade-out');
-      existing.addEventListener('transitionend', () => existing.remove(), { once: true });
+      existing.addEventListener('animationend', () => {
+        if (existing.parentNode) existing.parentNode.removeChild(existing);
+      }, { once: true });
+      // Safety net: if animationend never fires (e.g. CSS engine quirk),
+      // force-remove after 400ms so the alert slot never blocks a new
+      // alert from appearing.
+      setTimeout(() => {
+        if (existing.parentNode) existing.parentNode.removeChild(existing);
+      }, 400);
     } else {
       slot.innerHTML = '';
     }
@@ -875,7 +887,15 @@
     $('preview-wrap').classList.add('hidden');
     $('preview-img').src = '';
     $('results-content').classList.add('hidden');
-    $('results-content').innerHTML = '';
+    // M15 (REVIEW-2026-08-19): preserve the #viz-host container so the
+    // next render reuses it instead of re-creating the DOM node. The
+    // previous `$('results-content').innerHTML = ''` evicted the
+    // mount-point, requiring a fresh creation on every render — and any
+    // in-progress ECharts/Plotly init would orphan its event listeners.
+    const resultsContent = $('results-content');
+    const vizHost = resultsContent.querySelector('#viz-host');
+    resultsContent.innerHTML = '';
+    if (vizHost) resultsContent.appendChild(vizHost);
     $('results-empty').classList.remove('hidden');
     clearAlert();
   }
@@ -1195,11 +1215,13 @@ cards.forEach((c, i) => {
       if (e.key !== 'Enter') return;
       const t = e.target;
       const tag = (t && t.tagName) || '';
-      // F-15: Allow Ctrl+Enter inside <textarea> (caption) and contenteditable;
-      // only block when the user is in an <input type="text"> typing (so we don't
-      // hijack newlines) — the caption textarea already wants extraction via
-      // this combo.
-      if (tag === 'TEXTAREA') return;
+      // F-15 / M16 (REVIEW-2026-08-19): Allow Ctrl+Enter inside <textarea>
+      // (caption) — the original F-15 comment described this intent but the
+      // code did the OPPOSITE (`if (tag === 'TEXTAREA') return;`), so the
+      // shortcut silently failed inside the caption box. Keep the
+      // <input type="text"> block (so we don't hijack newlines in field
+      // inputs); drop the textarea return so Ctrl+Enter in the caption
+      // triggers extraction.
       if (tag === 'INPUT' && t.type !== 'button') return;
       // Guard: skip extraction when already busy to prevent race conditions.
       if (state.busy) return;
