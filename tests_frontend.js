@@ -1112,6 +1112,48 @@ function test_h5_normalizer_truncated_warning_phylo() {
 }
 test_h5_normalizer_truncated_warning_phylo();
 
+// ---- PR1 H1: ICS 2024 stage boundaries refresh + Wuliuan ----
+//
+// Refreshed to ICS 2024-09 values. Mirrors the Python
+// rca_core/resources/ics_2024.json exactly. The H1 parity test (Python
+// vs JS) lives in tests_bugfixes.py.
+function test_h1_ics_emsian_base_410_62() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  check('h1-emsian-base-410.62', ctx.RCA_ICS_TABLE.Emsian.base_ma === 410.62);
+}
+test_h1_ics_emsian_base_410_62();
+
+function test_h1_ics_wuliuan_present() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  check('h1-wuliuan-present', 'Wuliuan' in ctx.RCA_ICS_TABLE);
+  check('h1-wuliuan-top-504.5', ctx.RCA_ICS_TABLE.Wuliuan.top_ma === 504.5);
+  check('h1-wuliuan-base-506.5', ctx.RCA_ICS_TABLE.Wuliuan.base_ma === 506.5);
+}
+test_h1_ics_wuliuan_present();
+
+function test_h1_ics_anisian_base_246_7() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  check('h1-anisian-base-246.7', ctx.RCA_ICS_TABLE.Anisian.base_ma === 246.7);
+}
+test_h1_ics_anisian_base_246_7();
+
+function test_h1_ics_drumian_base_504_5() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  check('h1-drumian-base-504.5', ctx.RCA_ICS_TABLE.Drumian.base_ma === 504.5);
+}
+test_h1_ics_drumian_base_504_5();
+
+function test_h1_ics_rhaetian_base_205_7() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  check('h1-rhaetian-base-205.7', ctx.RCA_ICS_TABLE.Rhaetian.base_ma === 205.7);
+}
+test_h1_ics_rhaetian_base_205_7();
+
 // H5 end-to-end: extractRangeChart must flip ok=false when the parsed
 // JSON trips the truncated_or_unrecognized_payload warning in range_chart
 // mode, but keep ok=true with the warning attached for the other modes.

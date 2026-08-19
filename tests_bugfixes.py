@@ -368,6 +368,53 @@ test_bug9_chmod_user_only()
 test_bug15_decode_error_flag()
 test_bug18_clamp_timeout()
 test_bug14_schema_version_derives_from_migrations()
+
+
+# ---- PR1 H1 parity: ICS 2024 stage boundaries (Python ↔ JS) ----
+def test_h1_ics_python_js_parity():
+    """Every Python ICS row must match the JS RCA_ICS_TABLE exactly.
+
+    Mirrors rca_core/resources/ics_2024.json ↔ js/ics_table.js.
+    Stage boundaries and era labels must be byte-for-byte aligned so
+    scoreAccuracy/scoreConsistency produce identical results in the
+    Python backend and the pure-frontend path.
+    """
+    import json
+    import re
+
+    py_path = os.path.join(os.path.dirname(__file__),
+                           "rca_core", "resources", "ics_2024.json")
+    js_path = os.path.join(os.path.dirname(__file__), "js", "ics_table.js")
+
+    with open(py_path, encoding="utf-8") as f:
+        py_data = json.load(f)
+    with open(js_path, encoding="utf-8") as f:
+        js_src = f.read()
+
+    triples = re.findall(
+        r'"([^"]+)":\s*\{top_ma:\s*([\d.]+),\s*base_ma:\s*([\d.]+),\s*era:\s*"([^"]+)"\}',
+        js_src)
+    js_table = {n: {"top_ma": float(t), "base_ma": float(b), "era": e}
+                for n, t, b, e in triples}
+
+    for name, row in py_data.items():
+        assert name in js_table, f"JS missing stage {name}"
+        assert abs(float(row["top_ma"]) - js_table[name]["top_ma"]) < 1e-6, \
+            f"{name}.top_ma py={row['top_ma']} js={js_table[name]['top_ma']}"
+        assert abs(float(row["base_ma"]) - js_table[name]["base_ma"]) < 1e-6, \
+            f"{name}.base_ma py={row['base_ma']} js={js_table[name]['base_ma']}"
+        assert row.get("era") == js_table[name]["era"], \
+            f"{name}.era py={row.get('era')} js={js_table[name]['era']}"
+
+    # Wuliuan must be present on both sides (added in PR1 H1).
+    assert "Wuliuan" in py_data, "Python ICS missing Wuliuan"
+    assert "Wuliuan" in js_table, "JS ICS missing Wuliuan"
+    assert abs(float(py_data["Wuliuan"]["top_ma"]) - 504.5) < 1e-6
+    assert abs(float(py_data["Wuliuan"]["base_ma"]) - 506.5) < 1e-6
+
+
+test_h1_ics_python_js_parity()
+
 if __name__ == "__main__":
     print("--- %d passed, %d failed ---" % (_pass, _fail))
     sys.exit(1 if _fail else 0)
