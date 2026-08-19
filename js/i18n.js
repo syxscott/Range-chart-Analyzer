@@ -502,7 +502,7 @@ RCA_I18N.en = {
   // P1-8: abundance sum-to-100
   'quality.abundance_sum_violation': "Abundance percentages for '{sample}' sum to {sum}% (should be 100%)",
   'quality.abundance_sum_violation_count': '{count} level(s) have abundance sums not equal to 100%',
-  'quality.range_top_lt_base': 'Some species have range top younger than their range base',
+  'quality.range_top_lt_base': 'Some taxa have LAD (last appearance) earlier than FAD (first appearance)',
   'quality.ages_inconsistent': '{count} section(s) span eras; legitimate for boundary sections',
   'quality.stage_order_reversed': 'Stage order reversed in section {section}: {detail}',
   'quality.bed_index_order_invalid': 'Some blocks have invalid bed index order',

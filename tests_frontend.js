@@ -989,6 +989,28 @@ function test_m7_steno_skips_section_without_age_range() {
 }
 test_m7_steno_skips_section_without_age_range();
 
+// PR2 M13: en translation of quality.range_top_lt_base must describe a
+// violation (LAD earlier than FAD), not the normal case. Pre-fix: "Some
+// species have range top younger than their range base" — that describes
+// the LEGAL state (top younger = newer = correct). Post-fix: violation.
+function test_m13_range_top_lt_base_en_is_violation() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const en = ctx.RCA_I18N.en['quality.range_top_lt_base'];
+  check('m13-en-key-exists', typeof en === 'string' && en.length > 0);
+  check('m13-en-mentions-LAD', /LAD/i.test(en));
+  check('m13-en-mentions-FAD', /FAD/i.test(en));
+  check('m13-en-earlier-than', /earlier/i.test(en));
+  // Pre-fix had "younger than" which is the OPPOSITE direction.
+  check('m13-en-not-younger-than', !/younger than/i.test(en));
+  // Parity: zh/ja already correct ("LAD 早于 FAD" / "LAD が FAD より早い").
+  const zh = ctx.RCA_I18N.zh['quality.range_top_lt_base'];
+  const ja = ctx.RCA_I18N.ja['quality.range_top_lt_base'];
+  check('m13-zh-mentions-zhao', /早于/.test(zh));
+  check('m13-ja-mentions-hayai', /早い/.test(ja));
+}
+test_m13_range_top_lt_base_en_is_violation();
+
 function test_aggregate_author_h7_parity() {
   const ctx = buildContext();
   loadAllScripts(ctx);
