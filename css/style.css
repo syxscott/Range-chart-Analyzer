@@ -832,12 +832,12 @@ button.btn.btn-primary:not(:disabled):active {
     padding: 0 4px;
     border-radius: 4px;
 }
-.quality-badge.high { border-color: var(--success-color); }
-.quality-badge.high .qb-grade { color: var(--success-color); }
-.quality-badge.mid { border-color: var(--warning-color); }
-.quality-badge.mid .qb-grade { color: var(--warning-color); }
-.quality-badge.low { border-color: var(--danger-color); }
-.quality-badge.low .qb-grade { color: var(--danger-color); }
+.quality-badge.high { border-color: #1f7a3a; background: #1f7a3a; color: #ffffff; }
+.quality-badge.high .qb-grade { color: #ffffff; }
+.quality-badge.mid  { border-color: #c08400; background: #c08400; color: #ffffff; }
+.quality-badge.mid .qb-grade { color: #ffffff; }
+.quality-badge.low  { border-color: #c0392b; background: #c0392b; color: #ffffff; }
+.quality-badge.low .qb-grade { color: #ffffff; }
 
 /* ==================== Status / alerts ==================== */
 .alert {

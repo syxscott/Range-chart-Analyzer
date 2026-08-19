@@ -1308,6 +1308,53 @@ function test_m3_fetch_manual_redirect() {
 }
 const _m3 = test_m3_fetch_manual_redirect();
 
+// ---- PR3 LOW batch ----
+//
+// LOW 6: quality-badge colors use solid #1f7a3a / #c08400 / #c0392b
+// instead of tokenized vars so the on-screen contrast meets WCAG AA
+// regardless of the user's --surface / --text-base customization.
+function test_low_quality_badge_solid_colors() {
+  // Static source check: css/style.css must include the three solid colors
+  // for .quality-badge.{high,mid,low}.
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, 'css', 'style.css'), 'utf8');
+  check('low-badge-high-color', /\.quality-badge\.high\s*\{[^}]*background:\s*#1f7a3a/i.test(src));
+  check('low-badge-mid-color', /\.quality-badge\.mid\s*\{[^}]*background:\s*#c08400/i.test(src));
+  check('low-badge-low-color', /\.quality-badge\.low\s*\{[^}]*background:\s*#c0392b/i.test(src));
+  check('low-badge-white-text', /\.quality-badge\.(high|mid|low)\s*\{[^}]*color:\s*#ffffff/i.test(src));
+}
+test_low_quality_badge_solid_colors();
+
+// LOW 9: cross-era regex must include paleocene (was missing).
+function test_low_cross_era_paleocene() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const res = ctx.scoreRangeChart({
+    sections: [{ name: 'S1', age_range: 'Paleocene-Eocene', lithology_blocks: [
+      { age: 'Paleocene' }, { age: 'Eocene' },
+    ]}],
+    species_ranges: [], confidence: 0.9,
+  });
+  // Should NOT trigger cross_era violation because both are Cenozoic.
+  // Pre-fix: paleocene wasn't in the Cenozoic regex, only Eocene matched;
+  // paleocene wasn't classified and the era set had size 1 — so the test
+  // passed accidentally. Post-fix: paleocene also resolves to Cenozoic.
+  check('low-cross-era-paleocene-classified-cenozoic',
+    !res.issues.some((i) => i.msg_key === 'quality.ages_inconsistent'));
+}
+test_low_cross_era_paleocene();
+
+// LOW 10: dragend listener hides the page-drop-overlay (static check).
+function test_low_drop_overlay_dragend_listener() {
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, 'js', 'app.js'), 'utf8');
+  check('low-dragend-listener-present',
+    /addEventListener\(['"]dragend['"]/.test(src));
+}
+test_low_drop_overlay_dragend_listener();
+
 function test_aggregate_author_h7_parity() {
   const ctx = buildContext();
   loadAllScripts(ctx);

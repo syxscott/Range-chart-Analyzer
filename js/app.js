@@ -1205,6 +1205,14 @@ cards.forEach((c, i) => {
       const f = e.dataTransfer.files && e.dataTransfer.files[0];
       if (f) handleFile(f);
     });
+    // LOW 10 (REVIEW-2026-08-19): a `dragend` fired outside the window
+    // (e.g. user drags off-screen and releases) leaves the drop overlay
+    // stuck. Listen on `window` and force-hide so the UI never blocks
+    // a fresh file drop.
+    window.addEventListener('dragend', () => {
+      dragDepth = 0;
+      if (dropOverlay) dropOverlay.classList.remove('show');
+    });
 
     // M42: Ctrl+Enter / Cmd+Enter anywhere in the page triggers extraction,
     // so power users don't have to mouse over to the Extract button. We

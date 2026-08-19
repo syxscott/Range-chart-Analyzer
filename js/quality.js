@@ -464,7 +464,7 @@ function scoreAccuracy(data) {
   // sections such as P/T or K/Pg legitimately span eras).
   const paleozoicRe2 = /\b(cambrian|ordovician|silurian|devonian|carboniferous|pennsylvanian|mississippian|permian)\b/i;
   const mesozoicRe2 = /\b(triassic|jurassic|cretaceous)\b/i;
-  const cenozoicRe2 = /\b(paleogene|neogene|quaternary|pleistocene|holocene|eocene|oligocene|miocene|pliocene)\b/i;
+  const cenozoicRe2 = /\b(paleocene|paleogene|neogene|quaternary|pleistocene|holocene|eocene|oligocene|miocene|pliocene)\b/i;
   const sects2 = data && Array.isArray(data.sections) ? data.sections : [];
   const erasBySection = {};
   for (const sec of sects2) {
