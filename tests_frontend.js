@@ -1179,6 +1179,46 @@ function test_h8_handlefile_state_file_after_await() {
 }
 test_h8_handlefile_state_file_after_await();
 
+// ---- PR1 H6: phylo metadata full inheritance ----
+//
+// Mirror rca_core/extractor.py: taxon_group, root_name, total_nodes,
+// version, image_source must be carried onto out.metadata from either
+// parsed.metadata OR the root level. The Python side does this so the
+// frontend can render provenance, license, and dataset identity.
+function test_h6_phylo_metadata_inherits_root_taxonomy() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const out = ctx.rcaNormalizePhylogeneticTreeResult({
+    version: '1',
+    taxon_group: 'Radiolaria',
+    total_nodes: 42,
+    root_ids: ['n0'],
+    nodes: [{ id: 'n0', parent: null, name: 'Spasmaria', is_leaf: false }],
+  });
+  check('h6-taxon_group-present', out.metadata.taxon_group === 'Radiolaria');
+  check('h6-total_nodes-present', out.metadata.total_nodes === 42);
+  check('h6-version-default', out.metadata.version === '1');
+  check('h6-root_name-empty', out.metadata.root_name === '');
+  check('h6-image_source-empty', out.metadata.image_source === '');
+}
+test_h6_phylo_metadata_inherits_root_taxonomy();
+
+function test_h6_phylo_metadata_promotes_image_source_from_root() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const out = ctx.rcaNormalizePhylogeneticTreeResult({
+    image_source: 'file.jpg',
+    metadata: { tree_type: 'cladogram' },
+    root_ids: ['n0'],
+    nodes: [{ id: 'n0', parent: null, name: 'Spasmaria', is_leaf: false }],
+  });
+  // image_source lives on both .source and .image_source after promotion.
+  check('h6-image_source-on-source', out.metadata.source === 'file.jpg');
+  check('h6-image-source-field', out.metadata.image_source === 'file.jpg');
+  check('h6-tree_type-promoted', out.metadata.tree_type === 'cladogram');
+}
+test_h6_phylo_metadata_promotes_image_source_from_root();
+
 // H5 end-to-end: extractRangeChart must flip ok=false when the parsed
 // JSON trips the truncated_or_unrecognized_payload warning in range_chart
 // mode, but keep ok=true with the warning attached for the other modes.

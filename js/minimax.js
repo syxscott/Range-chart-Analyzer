@@ -766,6 +766,11 @@ function rcaNormalizePhylogeneticTreeResult(parsed) {
   // those were missing we already threw above. We still set the warning
   // here so the surface matches the other 3 normalizers.
   const warnPhylo = rcaTruncatedWarningIfForeign(parsed, 'phylogenetic_tree');
+  // H6 (REVIEW-2026-08-19): carry extra taxonomy/version metadata from
+  // either parsed.metadata or the root-level. Mirror rca_core/extractor.py
+  // _normalize_phylogenetic_tree_into metadata block.
+  const lift = (k) => (metaRaw[k] != null ? metaRaw[k]
+                       : (parsed[k] != null ? parsed[k] : null));
   return {
     metadata: {
       title: asStr(metaRaw.title || ''),
@@ -773,7 +778,16 @@ function rcaNormalizePhylogeneticTreeResult(parsed) {
       tree_type: asStr(metaRaw.tree_type || ''),
       scale: asStr(metaRaw.scale || ''),
       rooted: Boolean(metaRaw.rooted !== false),
-      source: asStr(metaRaw.source || metaRaw.image_source || ''),
+      source: asStr(metaRaw.source || metaRaw.image_source || parsed.image_source || ''),
+      // New carries (mirror rca_core/extractor.py):
+      version: asStr(lift('version') || '1'),
+      taxon_group: asStr(lift('taxon_group') || ''),
+      root_name: asStr(lift('root_name') || ''),
+      total_nodes: (function () {
+        const n = Number(lift('total_nodes'));
+        return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : null;
+      })(),
+      image_source: asStr(lift('image_source') || ''),
     },
     root_ids: rootIdsRaw.map(String),
     nodes: nodesOut,
