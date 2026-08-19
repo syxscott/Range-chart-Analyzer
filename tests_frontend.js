@@ -1219,6 +1219,121 @@ function test_h6_phylo_metadata_promotes_image_source_from_root() {
 }
 test_h6_phylo_metadata_promotes_image_source_from_root();
 
+// ---- PR1 H2: columnar 4 new sub-tables (lithology_blocks / age_units /
+// samples / confidence_by_section) ----
+//
+// rcaTableConfigs must emit configs for the 3 new sub-tables in columnar
+// mode, and rcaBuildTableExport must read from the stashed flat row
+// arrays attached to data during config generation. Also covers M12:
+// rcaFormulaSafe must guard a leading LF (\n) the same way it does
+// other formula triggers.
+function test_h2_columnar_lithology_blocks_table() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // rcaTableConfigs is hoisted onto globalThis in table.js.
+  const data = {
+    sections: [{ id: 'S1', lithology_blocks: [{ pattern: 'dots', range_top_idx: 1, range_base_idx: 5 }] }],
+    fossil_legend: [], lithology_legend: [], cross_beds: [],
+    confidence: 0,
+  };
+  // Trigger config generation so data._lithology_blocks_rows is built.
+  ctx.rcaTableConfigs(data);
+  const cfg = ctx.rcaTableConfigs(data).find((c) => c.id === 'lithology_blocks');
+  check('h2-lithology-blocks-cfg', !!cfg);
+  check('h2-lithology-blocks-title', cfg && cfg.titleKey === 'sec.lithologyBlocks');
+  check('h2-lithology-blocks-rows', data._lithology_blocks_rows.length === 1);
+  check('h2-lithology-blocks-row-pattern', data._lithology_blocks_rows[0].pattern === 'dots');
+}
+test_h2_columnar_lithology_blocks_table();
+
+function test_h2_columnar_age_units_table() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const data = {
+    sections: [{ id: 'S1', age_units: [{ label: 'Ypresian', range_top_idx: 0, range_base_idx: 3 }] }],
+    fossil_legend: [], lithology_legend: [], cross_beds: [], confidence: 0,
+  };
+  ctx.rcaTableConfigs(data);
+  const cfg = ctx.rcaTableConfigs(data).find((c) => c.id === 'age_units');
+  check('h2-age-units-cfg', !!cfg);
+  check('h2-age-units-title', cfg && cfg.titleKey === 'sec.ageUnits');
+  check('h2-age-units-rows', data._age_units_rows.length === 1);
+  check('h2-age-units-row-label', data._age_units_rows[0].label === 'Ypresian');
+}
+test_h2_columnar_age_units_table();
+
+function test_h2_columnar_samples_table() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const data = {
+    sections: [{ id: 'S1', samples: [{ bed_idx: 4, fossil_marker: 'A', ref: 'Smith 1950' }] }],
+    fossil_legend: [], lithology_legend: [], cross_beds: [], confidence: 0,
+  };
+  ctx.rcaTableConfigs(data);
+  const cfg = ctx.rcaTableConfigs(data).find((c) => c.id === 'samples');
+  check('h2-samples-cfg', !!cfg);
+  check('h2-samples-title', cfg && cfg.titleKey === 'sec.samples');
+  check('h2-samples-rows', data._samples_rows.length === 1);
+  check('h2-samples-row-ref', data._samples_rows[0].ref === 'Smith 1950');
+}
+test_h2_columnar_samples_table();
+
+function test_h2_columnar_extra_rows_attached() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const data = {
+    sections: [
+      { id: 'S1', lithology_blocks: [{ pattern: 'a' }, { pattern: 'b' }],
+        age_units: [{ label: 'A' }], samples: [{ bed_idx: 1 }, { bed_idx: 2 }, { bed_idx: 3 }] },
+      { id: 'S2', lithology_blocks: [{ pattern: 'c' }],
+        age_units: [], samples: [] },
+    ],
+    fossil_legend: [], lithology_legend: [], cross_beds: [], confidence: 0,
+  };
+  ctx.rcaTableConfigs(data);
+  check('h2-lithology-rows-total', data._lithology_blocks_rows.length === 3);
+  check('h2-age-rows-total', data._age_units_rows.length === 1);
+  check('h2-samples-rows-total', data._samples_rows.length === 3);
+}
+test_h2_columnar_extra_rows_attached();
+
+function test_h2_columnar_csv_includes_patterns() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  ctx.t('zh'); // ensure i18n loaded
+  const data = {
+    sections: [{ id: 'S1', lithology_blocks: [{ pattern: 'dots', range_top_idx: 1, range_base_idx: 5 }] }],
+    fossil_legend: [], lithology_legend: [], cross_beds: [], confidence: 0,
+  };
+  ctx.rcaTableConfigs(data);
+  const exp = ctx.rcaBuildTableExport(data, 'lithology_blocks');
+  check('h2-csv-export-rows', exp.rows.length === 1);
+  check('h2-csv-export-header-section-id', exp.headers.indexOf(ctx.t('col.secId')) !== -1);
+  check('h2-csv-export-row-content', exp.rows[0].indexOf('dots') !== -1);
+}
+test_h2_columnar_csv_includes_patterns();
+
+// M12: leading LF must also trigger the formula guard (PR3 anchored here
+// so the export-side regression is captured with PR1's H2 export change).
+function test_export_newline_injection_guard() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const out = ctx.rcaToCsv(['c1'], [['\n=cmd']]);
+  // rcaCsvCell wraps cells containing \r/\n/" in double quotes, so the
+  // second line is `"'\n=cmd"`. The KEY assertion is that the guard
+  // inserted an apostrophe before the trigger character — the raw `=cmd`
+  // is no longer at the start of the cell.
+  const secondLine = out.split('\r\n')[1] || '';
+  check('export-newline-cell-prefixed-with-quote', secondLine.indexOf("'") === 1);
+  check('export-newline-trigger-not-at-start',
+    secondLine.replace(/^"+|'+/, '').indexOf('=cmd') > 0 ||
+    // The cell is `"'\n=cmd"` — after stripping leading `"` the next char
+    // is `'`, NOT `=`.
+    secondLine[1] === "'");
+}
+test_export_newline_injection_guard();
+test_export_newline_injection_guard();
+
 // H5 end-to-end: extractRangeChart must flip ok=false when the parsed
 // JSON trips the truncated_or_unrecognized_payload warning in range_chart
 // mode, but keep ok=true with the warning attached for the other modes.

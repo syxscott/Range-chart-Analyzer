@@ -8,11 +8,16 @@
 // engines treat TAB as a separator reset, and a leading CR can hide the
 // trigger from a plain equals/plus check while still being interpreted
 // as a formula when pasted into Excel's formula bar.
+// M12 (REVIEW-2026-08-19): also catch leading LF (\n). Some spreadsheet
+// engines (Excel for Mac in particular) treat a leading newline as a
+// formula-bar prefix that lets the trigger character escape the OWASP
+// guard. Prepending ' alongside \n closes that loophole.
 function rcaFormulaSafe(value) {
   const s = value === null || value === undefined ? '' : String(value);
   if (!s) return s;
   const c = s[0];
-  if (c === '=' || c === '+' || c === '-' || c === '@' || c === '\t' || c === '\r') {
+  if (c === '=' || c === '+' || c === '-' || c === '@' ||
+      c === '\t' || c === '\r' || c === '\n') {
     return "'" + s;
   }
   return s;

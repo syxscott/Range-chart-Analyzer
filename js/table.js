@@ -83,6 +83,44 @@ function rcaTableConfigs(data) {
     const secRowFinal = multi
       ? (sec) => cols4(sec).concat([sec.agreement || ''])
       : cols4;
+    // H2 (REVIEW-2026-08-19): flatten section.lithology_blocks /
+    // section.age_units / section.samples into per-table row arrays that
+    // rcaBuildTableExport can read directly. Mirror rca_core/exporter.py
+    // _columnar_section_tables.
+    const lithologyBlocksRows = [];
+    const ageUnitsRows = [];
+    const samplesRows = [];
+    for (const sec of (data.sections || [])) {
+      const sid = sec && sec.id ? String(sec.id) : '';
+      for (const b of (sec && sec.lithology_blocks) || []) {
+        lithologyBlocksRows.push({
+          section_id: sid,
+          pattern: b && b.pattern ? String(b.pattern) : '',
+          top_idx: b ? b.range_top_idx : null,
+          base_idx: b ? b.range_base_idx : null,
+        });
+      }
+      for (const u of (sec && sec.age_units) || []) {
+        ageUnitsRows.push({
+          section_id: sid,
+          label: u && u.label ? String(u.label) : '',
+          top_idx: u ? u.range_top_idx : null,
+          base_idx: u ? u.range_base_idx : null,
+        });
+      }
+      for (const s of (sec && sec.samples) || []) {
+        samplesRows.push({
+          section_id: sid,
+          bed_idx: s ? s.bed_idx : null,
+          fossil_marker: s && s.fossil_marker ? String(s.fossil_marker) : '',
+          ref: s && s.ref ? String(s.ref) : '',
+        });
+      }
+    }
+    // Stash on data so rcaBuildTableExport can pick them up.
+    data._lithology_blocks_rows = lithologyBlocksRows;
+    data._age_units_rows = ageUnitsRows;
+    data._samples_rows = samplesRows;
     return [
       {
         id: 'sections',
@@ -90,6 +128,33 @@ function rcaTableConfigs(data) {
         cols: secColsFinal,
         italicCol: 0,
         row: secRowFinal,
+      },
+      {
+        id: 'lithology_blocks',
+        titleKey: 'sec.lithologyBlocks',
+        cols: ['col.secId', 'col.pattern', 'col.topIdx', 'col.baseIdx'],
+        italicCol: -1,
+        row: (r) => [r.section_id, r.pattern,
+          r.top_idx == null ? '' : String(r.top_idx),
+          r.base_idx == null ? '' : String(r.base_idx)],
+      },
+      {
+        id: 'age_units',
+        titleKey: 'sec.ageUnits',
+        cols: ['col.secId', 'col.label', 'col.topIdx', 'col.baseIdx'],
+        italicCol: -1,
+        row: (r) => [r.section_id, r.label,
+          r.top_idx == null ? '' : String(r.top_idx),
+          r.base_idx == null ? '' : String(r.base_idx)],
+      },
+      {
+        id: 'samples',
+        titleKey: 'sec.samples',
+        cols: ['col.secId', 'col.bedIdx', 'col.fossilMarker', 'col.ref'],
+        italicCol: -1,
+        row: (r) => [r.section_id,
+          r.bed_idx == null ? '' : String(r.bed_idx),
+          r.fossil_marker || '', r.ref || ''],
       },
       {
         id: 'fossil_legend',
@@ -375,7 +440,19 @@ function rcaBuildTableExport(data, tableId) {
   if (!cfg) return { headers: [], rows: [] };
   const headers = [t('col.index')].concat(cfg.cols.map((c) => t(c)));
   const nCols = cfg.cols.length;
-  const items = Array.isArray(data[tableId]) ? data[tableId] : [];
+  // H2: the 3 new columnar sub-tables read from stashed flat row arrays
+  // (data._lithology_blocks_rows / _age_units_rows / _samples_rows), not
+  // from data[tableId] directly. Mirrors rca_core/exporter.py.
+  let items;
+  if (tableId === 'lithology_blocks') {
+    items = Array.isArray(data._lithology_blocks_rows) ? data._lithology_blocks_rows : [];
+  } else if (tableId === 'age_units') {
+    items = Array.isArray(data._age_units_rows) ? data._age_units_rows : [];
+  } else if (tableId === 'samples') {
+    items = Array.isArray(data._samples_rows) ? data._samples_rows : [];
+  } else {
+    items = Array.isArray(data[tableId]) ? data[tableId] : [];
+  }
   // M11: pad/truncate each row to cfg.cols.length so a future custom row
   // extractor can't silently misalign columns between headers and rows on
   // a CSV / Excel paste.
