@@ -18,7 +18,10 @@ import pytest
 _requires_qt = pytest.mark.skipif(not _qt_available(), reason="PySide6/qfluentwidgets unavailable")
 
 
+@_requires_qt
 class TestProvenancePortFallback(unittest.TestCase):
+    # gui_fluent_history_detail imports PySide6 at module level - these
+    # tests need the same skip guard as the Qt-bound classes below.
     """_read_lock_port must return None (not 8000) when no lock exists."""
 
     def test_no_lock_returns_none(self):
@@ -57,6 +60,7 @@ class TestI18nNewKeys(unittest.TestCase):
                 assert TRANSLATIONS[lang][key], (lang, key)
 
 
+@_requires_qt
 class TestDetailDialogInlineCss(unittest.TestCase):
     def test_inline_css_uses_grid_ring(self):
         import gui_fluent_history_detail as hd
