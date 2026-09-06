@@ -5,7 +5,14 @@ from __future__ import annotations
 import io
 import unittest
 
-from PIL import Image
+import pytest
+
+# Pillow is an OPTIONAL dependency (README: thumbnails / client-side
+# compression). Skip the whole module when it is absent instead of
+# erroring the entire pytest collection run (CI failure 2026-09-06).
+pytest.importorskip("PIL")
+
+from PIL import Image  # noqa: E402
 
 from rca_core.extractor import _enhance_image_pil
 

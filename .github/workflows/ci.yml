@@ -24,8 +24,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pytest
-          # Optional deps used by tests (at-rest encryption, XLSX).
-          pip install cryptography keyring openpyxl
+          # Optional deps used by tests (at-rest encryption, XLSX,
+          # image enhancement). UI-REVIEW-2026-09-07: Pillow added -
+          # tests/test_enhance.py used to error the whole collection
+          # run when it was missing (CI red since 2026-08-19).
+          pip install cryptography keyring openpyxl Pillow
 
       - name: Set up Node (frontend parity tests)
         uses: actions/setup-node@v4
