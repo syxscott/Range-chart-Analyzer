@@ -74,6 +74,69 @@ except Exception:
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer.json")
 
+# Sprint B (REVIEW-2026-09-04): per-run LLM extraction timeout (seconds).
+# Neither GUI exposes a settings entry for this; rca_core.extractor
+# clamps the value into [10, 300]. The worker previously computed its
+# budget from params.get("timeout_sec", 120) although NO caller ever put
+# the key into params, so the budget silently depended on an inline magic
+# number. The constant is wired into the params dict at the single
+# construction site (ExtractPage._on_extract) so the request timeout and
+# the worker's collection budget share one source of truth.
+EXTRACT_TIMEOUT_SEC = 120
+
+# Sprint B (REVIEW-2026-09-04): module-level register for worker threads
+# that outlived the window. closeEvent waits a bounded time for QThreads
+# to finish; a thread still inside a urllib/SSL call cannot be cancelled
+# (quit() is a no-op for a QThread that overrides run(), and terminate()
+# is documented by Qt as unsafe). Letting the last Python reference to a
+# still-running QThread be GC'd makes Qt6 abort the whole process with
+# qFatal("Destroyed while thread is still running"), so workers that are
+# still running after the bounded wait are parked here: the list holds a
+# strong reference until the thread finishes naturally; the finished
+# callback (installed by _park_orphaned_worker) then removes the worker
+# and schedules deleteLater() for safe reclamation. No terminate() is
+# ever used.
+_orphaned_workers: list = []
+
+
+def _park_orphaned_worker(w) -> None:
+    """Keep *w* alive until its thread finishes, then free it.
+
+    Must be called from the GUI thread. The strong reference in
+    ``_orphaned_workers`` is what prevents the Qt6 qFatal crash; when the
+    thread finishes naturally the register entry is dropped and
+    ``deleteLater()`` (a slot of *w* itself, so the queued connection is
+    invoked on *w*'s owning thread — the canonical Qt worker-teardown
+    pattern) reclaims the wrapper. Never uses terminate().
+    """
+    if w is None:
+        return
+    if w in _orphaned_workers:
+        return
+    _orphaned_workers.append(w)
+
+    def _drop_ref():
+        try:
+            _orphaned_workers.remove(w)
+        except ValueError:
+            pass
+
+    try:
+        # Order matters: drop the register reference first, then schedule
+        # C++ deletion.
+        w.finished.connect(_drop_ref)
+        w.finished.connect(w.deleteLater)
+    except (RuntimeError, TypeError):
+        # Already-destroyed thread: drop the reference immediately so the
+        # register cannot leak.
+        _drop_ref()
+        return
+    if not w.isRunning():
+        # The thread finished between the caller's isRunning() check and
+        # the signal connections above — finished() already fired, so
+        # release the register entry now.
+        _drop_ref()
+
 
 def load_config() -> dict:
     try:
@@ -143,6 +206,76 @@ def save_config(cfg: dict) -> None:
 # ---------------------------------------------------------------------------
 # Worker threads (extraction + connection test run off the UI thread)
 # ---------------------------------------------------------------------------
+def _collect_extraction_futures(futures, budget, *, should_cancel=None,
+                                on_batch=None):
+    """Sprint B (REVIEW-2026-09-04): collect extraction futures under a
+    REAL whole-batch time budget.
+
+    The previous implementation iterated ``as_completed(futures)`` and
+    called ``fut.result(timeout=...)`` per future — but as_completed only
+    yields futures that have ALREADY finished, so the per-future timeout
+    could never fire and one stalled run pinned the whole batch forever.
+
+    All runs execute concurrently, so ONE budget equal to the per-request
+    LLM timeout (``timeout_sec``) plus a small grace window covers the
+    batch. Futures that overrun it are reported as ``err.timeout``
+    ExtractResults instead of being waited on indefinitely. Running
+    threads cannot be killed safely, so the caller must NOT join the
+    executor after this returns (use ``shutdown(wait=False)``).
+
+    Returns ``(results, cancelled)``. ``cancelled`` is True when
+    ``should_cancel`` fired between batches; every unfinished future was
+    cancel()ed and only the results collected so far are returned.
+    ``on_batch(done_count)`` runs after each completed batch so the caller
+    can stream progress.
+
+    Deliberately Qt-free so the timeout/cancel semantics are unit-testable
+    without a QApplication (see tests/test_gui_sprint_b.py).
+    """
+    import concurrent.futures
+    results: list = []
+    pending = set(futures)
+    deadline = time.perf_counter() + float(budget)
+    while pending:
+        remaining = deadline - time.perf_counter()
+        done_set, pending = concurrent.futures.wait(
+            pending, timeout=max(0.0, remaining),
+            return_when=concurrent.futures.ALL_COMPLETED)
+        for fut in done_set:
+            try:
+                results.append(fut.result())
+            except Exception as exc:
+                # extract() never raises, but defend against unforeseen
+                # bugs in user code. Bug-12 fix: log so the exception
+                # class + traceback is recoverable.
+                log.exception("extract future raised in worker thread")
+                results.append(ExtractResult(
+                    ok=False, error_key="err.http", raw=str(exc)))
+        if on_batch is not None:
+            try:
+                on_batch(len(results))
+            except Exception:
+                pass
+        if pending and deadline - time.perf_counter() <= 0:
+            # Budget exhausted: cancel whatever has not started and
+            # report the still-running runs as timeouts.
+            n_timed_out = len(pending)
+            for unf in pending:
+                unf.cancel()
+            pending.clear()
+            for _ in range(n_timed_out):
+                results.append(ExtractResult(
+                    ok=False, error_key="err.timeout",
+                    error_body=f"per-future timeout after {budget:.0f}s",
+                ))
+            break
+        if pending and should_cancel is not None and should_cancel():
+            for unf in pending:
+                unf.cancel()
+            return results, True
+    return results, False
+
+
 class ExtractWorker(QThread):
     """Runs extract() N times concurrently, merges, emits the result.
 
@@ -151,7 +284,7 @@ class ExtractWorker(QThread):
     finished_ok = Signal(object)   # ExtractResult
     progress = Signal(str)         # status text
 
-    def __init__(self, params, mode, runs):
+    def __init__(self, params, mode, runs, auto_filename=""):
         super().__init__()
         self._params = params
         self._mode = mode
@@ -163,12 +296,21 @@ class ExtractWorker(QThread):
         # GIL or an OpenSSL mutex, deadlocking teardown. We set this flag
         # from closeEvent and check it between work steps; the worker
         # cooperatively exits so the thread is never forcibly terminated.
+        self._auto_filename = auto_filename
         self._cancel_requested = False
 
     def request_cancel(self) -> None:
-        """Ask the worker to stop at the next safe point.
+        """Ask the worker to stop at the next cancellation checkpoint.
 
-        Safe to call from any thread (the flag is a plain Python bool).
+        Sprint B (REVIEW-2026-09-04) honesty note: for a single-run
+        extraction (runs <= 1) there is NO checkpoint inside the blocking
+        urllib request, so the flag is only observed after extract()
+        returns — a cancel during a single run can take up to the full
+        network timeout to take effect. The multi-run path (runs > 1)
+        checks the flag BEFORE each submit and between completion
+        batches, so it stops promptly and reports uncollected runs as
+        cancelled. Safe to call from any thread (the flag is a plain
+        Python bool).
         """
         self._cancel_requested = True
 
@@ -179,6 +321,23 @@ class ExtractWorker(QThread):
     def run(self):
         import concurrent.futures
         params, mode, runs = self._params, self._mode, self._runs
+        # UI-REVIEW-2026-09-07: resolve "auto" on the worker thread —
+        # caption keywords first, then vision classification of the image
+        # when nothing matched. Never on the UI thread.
+        if mode == "auto":
+            from rca_core.chart_mode import auto_detect_chart_mode_ex
+            from rca_core.extractor import resolve_auto_mode
+            self.progress.emit("classifying")
+            mode, matched = auto_detect_chart_mode_ex(
+                (params.get("caption") or "") + " " + (self._auto_filename or ""))
+            if not matched:
+                mode, _cls = resolve_auto_mode(
+                    caption=params.get("caption") or "",
+                    filename=self._auto_filename or "",
+                    image_b64=params.get("image_b64") or "",
+                    media_type=params.get("media_type") or "image/png",
+                    provider=params.get("provider"),
+                )
 
         def prog(stage):
             self.progress.emit(stage)
@@ -188,7 +347,17 @@ class ExtractWorker(QThread):
         try:
             if runs <= 1:
                 self.progress.emit("analyzing")
-                self.finished_ok.emit(extract(mode=mode, **params))
+                # Sprint B (REVIEW-2026-09-04): the single-run fast path
+                # has no cancellation checkpoint inside the blocking
+                # urllib request (see request_cancel). Attach the resolved
+                # mode so history persistence records the real chart kind
+                # instead of the raw "auto" dropdown value (gui.py parity).
+                result = extract(mode=mode, **params)
+                try:
+                    result._mode = mode
+                except Exception:
+                    pass
+                self.finished_ok.emit(result)
                 return
         except Exception as exc:  # BUG13: never let exceptions kill the worker
             # Bug-12 fix: log so an unexpected exception doesn't disappear.
@@ -219,52 +388,62 @@ class ExtractWorker(QThread):
         # parallel runs).
         total_latency = 0
         batch_t0 = time.perf_counter()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=runs) as ex:
-            futures = [ex.submit(extract, mode=mode, **params) for _ in range(runs)]
-            # Per-future hard timeout. The user's `timeout_sec` is the
-            # per-request LLM timeout, but we add a small grace window
-            # (10s) for Python/JIT overhead. A future that exceeds this is
-            # recorded as a timeout failure rather than blocking the UI
-            # forever (the previous version had no per-future timeout —
-            # one stalled run could pin the whole batch indefinitely).
-            per_future_timeout = params.get("timeout_sec", 120) + 10
-            for fut in concurrent.futures.as_completed(futures):
-                # Phase K fix: honour user cancel. Previously
-                # request_cancel() set the flag but run() never read
-                # it, so a click on Cancel would still wait for every
-                # future to finish. We bail out as soon as the flag
-                # is set on the next iteration, recording the remaining
-                # futures as "cancelled" partial failures so the merged
-                # result still has shape consistent with the cancel.
+        # Sprint B (REVIEW-2026-09-04): whole-batch collection budget =
+        # per-request timeout_sec + 10s grace (see _collect_extraction_futures
+        # for why as_completed()+fut.result(timeout=...) could never time out).
+        budget = float(params.get("timeout_sec", EXTRACT_TIMEOUT_SEC)) + 10.0
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=runs)
+        try:
+            futures = []
+            # Sprint B (REVIEW-2026-09-04): check the cooperative-cancel
+            # flag BEFORE each submit so a cancel arriving during start-up
+            # prevents the remaining runs from ever launching (the flag
+            # was previously only read after futures had completed).
+            for _i in range(runs):
                 if self._cancel_requested:
-                    for unf in futures:
-                        if not unf.done():
-                            unf.cancel()
-                    self.finished_ok.emit(ExtractResult(
-                        ok=False, error_key="err.cancelled",
-                        error_body="user cancelled the extraction",
-                    ))
-                    return
-                try:
-                    r = fut.result(timeout=per_future_timeout)
-                except concurrent.futures.TimeoutError:
-                    r = ExtractResult(
-                        ok=False, error_key="err.timeout",
-                        error_body=f"per-future timeout after {per_future_timeout}s",
-                    )
-                except Exception as exc:
-                    # Bug-12 fix: log so the exception class + traceback
-                    # is recoverable when the user reports an empty error.
-                    log.exception("extract future raised in ExtractWorker thread")
-                    r = ExtractResult(ok=False, error_key="err.http", raw=str(exc))
-                done += 1
+                    break
+                futures.append(executor.submit(extract, mode=mode, **params))
+            # Runs never submitted because of the cancel are recorded as
+            # cancelled failures so the merged bookkeeping stays
+            # consistent with ``runs``.
+            for _unstarted in range(runs - len(futures)):
+                last_fail = ExtractResult(
+                    ok=False, error_key="err.cancelled",
+                    error_body="run not started: cancel requested",
+                )
+                partial_fails += 1
+            if not futures:
+                self.finished_ok.emit(ExtractResult(
+                    ok=False, error_key="err.cancelled",
+                    error_body="user cancelled the extraction",
+                ))
+                return
+
+            def _on_batch(n_done):
                 # Emit progress with elapsed seconds so a stalled run
                 # doesn't freeze the UI on "1/N" indefinitely. The label
                 # keeps the language-switch friendly i18n key.
                 elapsed_s = int(time.perf_counter() - batch_t0)
                 self.progress.emit(
-                    f"analyzing:{done}/{runs}:{elapsed_s}s"
+                    f"analyzing:{n_done}/{runs}:{elapsed_s}s"
                 )
+
+            results, cancelled = _collect_extraction_futures(
+                futures, budget,
+                should_cancel=lambda: self._cancel_requested,
+                on_batch=_on_batch,
+            )
+            if cancelled:
+                # Phase K fix + Sprint B: honour user cancel between
+                # completion batches — bail out as soon as the flag is
+                # seen instead of waiting for every future.
+                self.finished_ok.emit(ExtractResult(
+                    ok=False, error_key="err.cancelled",
+                    error_body="user cancelled the extraction",
+                ))
+                return
+            for r in results:
+                done += 1
                 if r.ok and r.data is not None:
                     ok_datas.append(r.data)
                     any_trunc = any_trunc or bool(r.truncated)
@@ -292,6 +471,13 @@ class ExtractWorker(QThread):
                 else:
                     last_fail = r
                     partial_fails += 1
+        finally:
+            # Sprint B (REVIEW-2026-09-04): never join overrunning threads.
+            # shutdown(wait=False) lets this worker QThread finish (and
+            # emit) while runs that already exceeded the budget drain in
+            # the background — they were reported as err.timeout by the
+            # collector and the UI must not stay pinned on them.
+            executor.shutdown(wait=False)
         total_latency = int((time.perf_counter() - batch_t0) * 1000)
         if not ok_datas:
             self.finished_ok.emit(last_fail or ExtractResult(ok=False, error_key="err.empty"))
@@ -309,7 +495,7 @@ class ExtractWorker(QThread):
         }
         if est_in or est_out:
             merged_usage["estimated"] = True
-        self.finished_ok.emit(ExtractResult(
+        merged_res = ExtractResult(
             ok=True, data=merged,
             raw="\n---RUN---\n".join(raws)[:8000],
             truncated=any_trunc or bool(partial_fails),
@@ -321,7 +507,21 @@ class ExtractWorker(QThread):
             # request metadata so _on_result persists a correct audit record.
             image_sha256=first_ok_sha,
             request_meta=first_ok_meta or {},
-        ))
+        )
+        # Sprint B (REVIEW-2026-09-04): the per-run raw responses were
+        # collected but never attached, so the history layer's
+        # getattr(result, "_raws") read a dead attribute and the
+        # raw_responses table only ever saw the joined-truncated string.
+        # ExtractResult is a plain (non-slots) dataclass, so the attribute
+        # can be attached here.
+        merged_res._raws = list(raws)
+        # Sprint B: carry the resolved mode for history persistence parity
+        # with gui.py (see _on_result / _current_mode).
+        try:
+            merged_res._mode = mode
+        except Exception:
+            pass
+        self.finished_ok.emit(merged_res)
 
 
 # NOTE: ConnTestWorker was removed — it was dead code (ProvidersPage
@@ -510,6 +710,11 @@ class ExtractPage(ScrollArea):
         self._last_paste_tmp = None
         self._worker = None
         self.busy = False
+        # Sprint B (REVIEW-2026-09-04): id of the history record currently
+        # loaded into the page (set by load_result). Reset to None whenever
+        # a NEW extraction result arrives (see _on_result) so "Apply Edits"
+        # after a fresh extraction can never write into a stale record.
+        self._loaded_history_id = None
         # Generation counter for stale-result guarding. Bumped on every new
         # extraction start and on reset; the worker stamps the launch value on
         # its result, and _on_result drops results whose generation no longer
@@ -558,8 +763,34 @@ class ExtractPage(ScrollArea):
         self.preview = BodyLabel()
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setFixedHeight(180)
-        self.preview.setStyleSheet("border:1px solid rgba(0,0,0,0.08);border-radius:8px;")
+        self.preview.setCursor(Qt.PointingHandCursor)
+        # UI-REVIEW-2026-09-05: the empty preview doubles as a dropzone —
+        # dashed border + hint text + click-to-choose + drag-and-drop.
+        # The previous flat bordered BodyLabel gave no affordance at all.
+        self.preview.setText(self._t("image.dropHint"))
+        self._style_preview_empty()
+        self.preview.mousePressEvent = lambda _e: self._choose_image()
         ic.addWidget(self.preview)
+        self.setAcceptDrops(True)
+
+        # UI-REVIEW-2026-09-05: chart type / chart language inline next to
+        # the image. The Settings page stays the single source of truth —
+        # both combo pairs mirror each other (see attach_settings_selectors,
+        # called by the main window once the settings page exists) — so
+        # win.chart_type() / win.chart_lang() are unchanged.
+        self._selector_sync = False
+        sel_row = QHBoxLayout()
+        self.lbl_ctype_inline = CaptionLabel(self._t("settings.chartType"))
+        self.cmb_ctype_inline = ComboBox()
+        self.lbl_clang_inline = CaptionLabel(self._t("settings.chartLang"))
+        self.cmb_clang_inline = ComboBox()
+        self.cmb_ctype_inline.currentIndexChanged.connect(self._on_inline_ctype)
+        self.cmb_clang_inline.currentIndexChanged.connect(self._on_inline_clang)
+        sel_row.addWidget(self.lbl_ctype_inline)
+        sel_row.addWidget(self.cmb_ctype_inline, 1)
+        sel_row.addWidget(self.lbl_clang_inline)
+        sel_row.addWidget(self.cmb_clang_inline, 1)
+        ic.addLayout(sel_row)
         left_lay.addWidget(img_card)
 
         # Caption card
@@ -652,6 +883,10 @@ class ExtractPage(ScrollArea):
         self._table_widgets: dict[str, object] = {}
         self._active_table_id: str = ""
         self._last_snapshot: dict | None = None  # for discard
+        # UI-REVIEW-2026-09-05: export + row-edit actions are meaningless
+        # without a result — start disabled and let _update_result_actions()
+        # drive them from the result lifecycle.
+        self._update_result_actions()
 
         self.stack = QFrame()
         # QStackedLayout (not QVBoxLayout) so only the current pivot's
@@ -683,6 +918,108 @@ class ExtractPage(ScrollArea):
         root_lay.addWidget(self._split)
 
     # ---- image ----
+    def _style_preview_empty(self) -> None:
+        """Dashed-border hint look for the dropzone (theme-aware)."""
+        from qfluentwidgets import isDarkTheme
+        if isDarkTheme():
+            self.preview.setStyleSheet(
+                "border:2px dashed rgba(255,255,255,0.25);border-radius:8px;"
+                "background:rgba(255,255,255,0.03);color:rgba(255,255,255,0.55);")
+        else:
+            self.preview.setStyleSheet(
+                "border:2px dashed rgba(0,0,0,0.22);border-radius:8px;"
+                "background:rgba(0,0,0,0.02);color:rgba(0,0,0,0.45);")
+
+    def _style_preview_loaded(self) -> None:
+        from qfluentwidgets import isDarkTheme
+        if isDarkTheme():
+            self.preview.setStyleSheet(
+                "border:1px solid rgba(255,255,255,0.12);border-radius:8px;")
+        else:
+            self.preview.setStyleSheet(
+                "border:1px solid rgba(0,0,0,0.08);border-radius:8px;")
+
+    def dragEnterEvent(self, e) -> None:  # noqa: N802 (Qt naming)
+        if e.mimeData().hasUrls() or e.mimeData().hasImage():
+            e.acceptProposedAction()
+
+    def dropEvent(self, e) -> None:  # noqa: N802 (Qt naming)
+        if not e.mimeData().hasUrls():
+            return
+        for url in e.mimeData().urls():
+            path = url.toLocalFile()
+            if path and os.path.isfile(path):
+                self._cleanup_paste_tmp()
+                self._load_image(path)
+                e.acceptProposedAction()
+                return
+
+    def attach_settings_selectors(self, settings_page) -> None:
+        """Fill the inline chart selector combos and wire two-way sync.
+
+        Called by the main window after SettingsPage exists (ExtractPage is
+        constructed first). Settings stays the source of truth: both combo
+        pairs mirror each other and win.chart_type()/chart_lang() keep
+        reading the Settings page.
+        """
+        sp = settings_page
+        self.cmb_ctype_inline.addItems([self._t(k) for k in sp._ctype_keys])
+        self.cmb_ctype_inline.setCurrentIndex(sp.cmb_ctype.currentIndex())
+        self.cmb_clang_inline.addItems(sp._clang_names())
+        self.cmb_clang_inline.setCurrentIndex(sp.cmb_clang.currentIndex())
+        sp.cmb_ctype.currentIndexChanged.connect(self._on_settings_ctype)
+        sp.cmb_clang.currentIndexChanged.connect(self._on_settings_clang)
+
+    def _on_inline_ctype(self, idx: int) -> None:
+        if self._selector_sync:
+            return
+        self._selector_sync = True
+        try:
+            sp = self.win.settings_page
+            if sp.cmb_ctype.currentIndex() != idx:
+                sp.cmb_ctype.setCurrentIndex(idx)
+        finally:
+            self._selector_sync = False
+
+    def _on_inline_clang(self, idx: int) -> None:
+        if self._selector_sync:
+            return
+        self._selector_sync = True
+        try:
+            sp = self.win.settings_page
+            if sp.cmb_clang.currentIndex() != idx:
+                sp.cmb_clang.setCurrentIndex(idx)
+        finally:
+            self._selector_sync = False
+
+    def _on_settings_ctype(self, idx: int) -> None:
+        if self._selector_sync:
+            return
+        self._selector_sync = True
+        try:
+            if self.cmb_ctype_inline.currentIndex() != idx:
+                self.cmb_ctype_inline.setCurrentIndex(idx)
+        finally:
+            self._selector_sync = False
+
+    def _on_settings_clang(self, idx: int) -> None:
+        if self._selector_sync:
+            return
+        self._selector_sync = True
+        try:
+            if self.cmb_clang_inline.currentIndex() != idx:
+                self.cmb_clang_inline.setCurrentIndex(idx)
+        finally:
+            self._selector_sync = False
+
+    def _update_result_actions(self) -> None:
+        """Enable export / row-edit actions only when a result exists."""
+        has = bool(self.result)
+        for b in (self.btn_export, self.btn_export_xlsx,
+                  self.btn_add_row, self.btn_del_row,
+                  self.btn_discard, self.btn_apply_edits):
+            b.setEnabled(has)
+
     def _cleanup_paste_tmp(self):
         prev = self._last_paste_tmp
         if prev and os.path.isfile(prev):
@@ -708,11 +1045,16 @@ class ExtractPage(ScrollArea):
         tail = " " + self._t("image.resized") if resized else ""
         self.lbl_imginfo.setText(f"{name}\n{dims}{tail}")
         pix = QPixmap(path)
+        self.preview.setText("")
         if not pix.isNull():
+            self._style_preview_loaded()
             w = max(80, self.preview.width()) if self.preview.width() > 0 else 300
             self.preview.setPixmap(pix.scaled(
                 QSize(w, 172),
                 Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            self.preview.setText(self._t("image.dropHint"))
+            self._style_preview_empty()
 
     def _choose_image(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -837,17 +1179,22 @@ class ExtractPage(ScrollArea):
             chart_lang=self.win.chart_lang(),
             base_url=active_endpoint, model=self.win.model(),
             max_tokens=self.win.max_tokens(), provider=provider,
+            # Sprint B (REVIEW-2026-09-04): wire the extraction timeout
+            # into params — the worker's collection budget used to read
+            # params.get("timeout_sec", ...) although no caller ever set
+            # the key. See EXTRACT_TIMEOUT_SEC above (no settings entry
+            # exists for it yet).
+            timeout_sec=EXTRACT_TIMEOUT_SEC,
         )
         runs = self.win.runs()
         mode = self.win.chart_type()
-        if mode == "auto":
-            # REVIEW-2026-11-07 (low): route through the shared
-            # rca_core.chart_mode heuristic — the inline substring copy
-            # diverged from the web frontend's word-boundary matching
-            # (e.g. "Pollinator..." and "phylogenetic" classified
-            # differently per UI).
-            from rca_core.chart_mode import auto_detect_chart_mode
-            mode = auto_detect_chart_mode(params["caption"] + " " + (self.image_path or ""))
+        auto_filename = self.image_path or ""
+        # UI-REVIEW-2026-09-07: when mode == "auto" it is resolved INSIDE
+        # the worker thread (two-stage: caption keywords, then vision
+        # classification of the image). Resolving here on the UI thread
+        # would freeze the window for the length of a vision round-trip —
+        # the same class of bug the settings-page test-connection fix
+        # addressed.
         self.busy = True
         self._set_busy(True)
         # FIX (stale-result guard): bump the generation so any result from a
@@ -859,7 +1206,8 @@ class ExtractPage(ScrollArea):
         # inert because busy serialised extractions; bump on every state
         # change that should cancel an in-flight result.
         launch_gen = self._bump_extract_gen()
-        self._worker = ExtractWorker(params, mode, runs)
+        self._worker = ExtractWorker(params, mode, runs,
+                                     auto_filename=(self.image_path or ""))
         self._worker.progress.connect(self._on_progress)
         self._worker.finished_ok.connect(
             lambda res, _g=launch_gen: (self._on_result(res)
@@ -869,6 +1217,7 @@ class ExtractPage(ScrollArea):
     def _on_progress(self, text):
         # Granular stages: submitting → uploading → thinking → parsing
         STAGE_KEYS = {
+            "classifying": "status.classifying",
             "submitting": "status.submitting",
             "uploading":   "status.uploading",
             "thinking":    "status.thinking",
@@ -898,6 +1247,14 @@ class ExtractPage(ScrollArea):
             return
         self.result = result.data
         self.raw_text = result.raw
+        # Sprint B (REVIEW-2026-09-04): a fresh extraction replaces whatever
+        # history record was loaded into the page. Clear the id NOW (before
+        # persistence below) so a later "Apply Edits" updates/creates a
+        # record for THIS extraction instead of silently overwriting the
+        # record the user had merely been viewing (e.g. #42).
+        self._loaded_history_id = None
+        # UI-REVIEW-2026-09-05: a fresh result enables export / row edits.
+        self._update_result_actions()
         # Push the new payload into the phylogenetic-tree widget so the
         # embeds the result as soon as the WebEngine page is ready (the
         # widget buffers the payload across the page-load race). This
@@ -1034,6 +1391,13 @@ class ExtractPage(ScrollArea):
                 return "phylogenetic_tree"
             if isinstance(self.result.get("abundances"), list):
                 return "abundance_diagram"
+            # UI-REVIEW-2026-09-07: zonation chart payloads must not be
+            # mislabeled as range_chart in saved history records.
+            if isinstance(self.result.get("correlations"), list)                     and self.result["correlations"]:
+                return "zonation_chart"
+            zns = self.result.get("zones")
+            if isinstance(zns, list) and zns and isinstance(zns[0], dict)                     and ("rank" in zns[0] or "zonation" in zns[0]):
+                return "zonation_chart"
             sects = self.result.get("sections") or []
             if sects and isinstance(sects[0], dict) and "id" in sects[0] and "name" not in sects[0]:
                 return "columnar_section"
@@ -1394,6 +1758,7 @@ class ExtractPage(ScrollArea):
             return
         self.result = self._last_snapshot
         self._last_snapshot = None
+        self._update_result_actions()
         self._render_result()
         try:
             self.lbl_dirty.setText("")
@@ -1457,8 +1822,13 @@ class ExtractPage(ScrollArea):
 
         Best-effort: prefers the record we were loaded from (when the user
         reopened a historical entry via the History page) so the same row
-        round-trips; falls back to the most-recent record for this image
-        path when the current result came from a fresh extraction.
+        round-trips. Sprint B (REVIEW-2026-09-04): ``_loaded_history_id``
+        is now reset to None by _on_result when a fresh extraction lands,
+        so the fallback path below runs for fresh extractions — newest
+        record for this image path, or (when nothing matches) a brand-new
+        record. Previously a stale loaded id survived a new extraction and
+        "Apply Edits" silently overwrote the record the user had only been
+        viewing.
         """
         hs = getattr(self.win, "_history_store", None)
         if hs is None:
@@ -1475,9 +1845,14 @@ class ExtractPage(ScrollArea):
                 )
             return
         if not self.image_path:
+            # Sprint B: no loaded record and no source image to match
+            # against — persist the edited result as a NEW record instead
+            # of dropping the edits on the floor.
+            self._save_new_history_record()
             return
         records = hs.list(limit=20, search=os.path.basename(self.image_path))
         if not records:
+            self._save_new_history_record()
             return
         try:
             hs.update_result(records[0].id, self.result)
@@ -1487,6 +1862,34 @@ class ExtractPage(ScrollArea):
                 parent=self.win,
                 position=InfoBarPosition.TOP, duration=5000,
             )
+
+    def _save_new_history_record(self) -> None:
+        """Sprint B (REVIEW-2026-09-04): create a fresh history record for
+        the current (edited) result. Best-effort — failures are logged,
+        never raised into the caller's edit flow."""
+        try:
+            provider = self.win.current_provider()
+        except Exception:
+            provider = None
+        try:
+            self.win.save_to_history(
+                result=self.result,
+                mode=self._current_mode(),
+                image_path=self.image_path or "",
+                image_thumb=self._maybe_thumbnail(),
+                image_w=(self._img_dims[0] if self._img_dims else 0) or 0,
+                image_h=(self._img_dims[1] if self._img_dims else 0) or 0,
+                provider=provider,
+                model=(provider.model if provider else "") or "",
+                runs=int((self.result or {}).get("runs", 1) or 1),
+                confidence=float((self.result or {}).get("confidence", 0) or 0),
+                partial_failures=0,
+                duration_ms=0,
+                status_code=None,
+                raw=self.raw_text or "",
+            )
+        except Exception as exc:
+            log.warning("persist edits (new history record) failed: %s", exc)
 
     def _refresh_conf(self):
         if not self.result:
@@ -1517,17 +1920,28 @@ class ExtractPage(ScrollArea):
         # just loaded *is* the baseline, the old snapshot belongs to the
         # previous in-memory result.
         self._last_snapshot = None
+        # UI-REVIEW-2026-09-05: the loaded result enables export / row edits.
+        self._update_result_actions()
         try:
             self.lbl_dirty.setText("")
         except Exception:
             pass
-        # The loaded record has no image path of its own (we only stored
-        # the result JSON), so wipe the preview path to keep "Export
-        # JSON" honest about which file the result came from. The user
-        # can re-upload to export with a real source_file.
+        # The loaded record has no image of its own (we only stored the
+        # result JSON), so wipe the ENTIRE image state to keep "Export
+        # JSON" honest about which file the result came from.
+        # Sprint B (REVIEW-2026-09-04): only image_path used to be
+        # cleared — image_b64 / media_type / dims stayed populated, so a
+        # user could hit Extract in this apparently image-less state and
+        # silently send the PREVIOUS image ("ghost image" extraction).
+        # The user can re-upload to extract/export with a real source.
         self.image_path = None
+        self.image_b64 = None
+        self.media_type = None
+        self._img_dims = (0, 0, False)
         self.lbl_imginfo.setText(self._t("image.none"))
         self.preview.clear()
+        self.preview.setText(self._t("image.dropHint"))
+        self._style_preview_empty()
         # If the loaded result is a columnar-section shape, update the
         # mode display so the user sees the right table set.
         try:
@@ -1544,6 +1958,8 @@ class ExtractPage(ScrollArea):
             return "columnar_section_"
         if mode == "phylogenetic_tree":
             return "phylogenetic_tree_"
+        if mode == "zonation_chart":
+            return "zonation_chart_"
         return "range_chart_"
 
     def _export_xlsx(self) -> None:
@@ -1616,6 +2032,18 @@ class ExtractPage(ScrollArea):
         self.lbl_title.setText("Extract" if self._t("upload.title") == "upload.title" else self._t("upload.title"))
         self.btn_choose.setText(self._t("image.choose"))
         self.btn_paste.setText(self._t("image.paste"))
+        # UI-REVIEW-2026-09-05: inline chart selectors + dropzone hint.
+        self.lbl_ctype_inline.setText(self._t("settings.chartType"))
+        self.lbl_clang_inline.setText(self._t("settings.chartLang"))
+        sp = getattr(self.win, "settings_page", None)
+        if sp is not None:
+            for i, key in enumerate(sp._ctype_keys):
+                self.cmb_ctype_inline.setItemText(i, self._t(key))
+            for i, name in enumerate(sp._clang_names()):
+                self.cmb_clang_inline.setItemText(i, name)
+        if not self.image_path:
+            self.preview.setText(self._t("image.dropHint"))
+            self._style_preview_empty()
         self.lbl_caption.setText(self._t("caption.label"))
         self.btn_extract.setText(self._t("action.extract"))
         self.btn_export.setText(self._t("action.exportJson"))
@@ -1718,6 +2146,11 @@ class SettingsPage(ScrollArea):
         ca.addLayout(actions)
         lay.addWidget(self.card_active)
 
+        # Sprint B (REVIEW-2026-09-04): in-flight connection-test worker
+        # (kept here so the QThread is never GC'd mid-run) + in-flight
+        # guard so a double-click cannot stack two probes.
+        self._conn_worker = None
+
         # ----- Generation / chart settings (kept; orthogonal to providers) -----
         self.card_advanced = CardWidget()
         cv = QVBoxLayout(self.card_advanced)
@@ -1749,12 +2182,15 @@ class SettingsPage(ScrollArea):
 
         self.lbl_ctype = StrongBodyLabel(self._t("settings.chartType"))
         self.cmb_ctype = ComboBox()
-        self._ctype_codes = ["auto", "range_chart", "columnar_section", "abundance_diagram", "phylogenetic_tree"]
+        # UI-REVIEW-2026-09-05: zonation_chart added (radiolarian
+        # biozonation / correlation charts) — full-stack mode.
+        self._ctype_codes = ["auto", "range_chart", "columnar_section", "abundance_diagram", "phylogenetic_tree", "zonation_chart"]
         self._ctype_keys = ["settings.chartType.auto",
                             "settings.chartType.rangeChart",
                             "settings.chartType.columnarSection",
                             "settings.chartType.abundanceDiagram",
-                            "settings.chartType.phylogeneticTree"]
+                            "settings.chartType.phylogeneticTree",
+                            "settings.chartType.zonationChart"]
         self.cmb_ctype.addItems([self._t(k) for k in self._ctype_keys])
         cur = cfg.get("chart_type", "auto")
         self.cmb_ctype.setCurrentIndex(self._ctype_codes.index(cur) if cur in self._ctype_codes else 0)
@@ -1850,6 +2286,14 @@ class SettingsPage(ScrollArea):
             )
 
     def _on_test_connection(self) -> None:
+        # Sprint B (REVIEW-2026-09-04): the network probe used to run
+        # directly in this button slot on the UI thread (worst case ~2x10s
+        # of a frozen window). Mirror the ProvidersPage QThread _Worker
+        # pattern: run the probe on a worker thread, marshal the result
+        # back via a signal, and disable the button while in flight so
+        # the test cannot be re-triggered.
+        if getattr(self, "_conn_worker", None) is not None:
+            return  # a test is already running
         try:
             current = self.win.current_provider()
         except Exception:
@@ -1866,21 +2310,104 @@ class SettingsPage(ScrollArea):
         typed = self.ipt_key.text().strip()
         if typed:
             current.api_key = typed
-        from rca_core.llm import test_llm_connection
-        result = test_llm_connection(current, timeout_sec=10)
-        if result.ok:
+        self.btn_test.setEnabled(False)
+        from PySide6.QtCore import QThread as _QThread
+
+        class _Worker(_QThread):
+            # (worker, result) — carrying the worker lets the handler be a
+            # BOUND method of this page. A bound QObject method gives a
+            # queued (auto) connection, so the handler runs on the GUI
+            # thread; a plain-lambda connection would execute in the
+            # worker thread (direct connection) and touch widgets
+            # cross-thread.
+            done = Signal(object, object)
+
+            def __init__(self, p, parent=None):
+                super().__init__(parent)
+                self._p = p
+
+            def run(self):
+                from rca_core.llm import test_llm_connection
+                # Parity with the ProvidersPage probe: validate the
+                # endpoint BEFORE dialling so an SSRF/cleartext-key probe
+                # never leaves the machine (same shape as the providers
+                # worker so the handler can render a graceful failure).
+                try:
+                    from rca_core.ssrf import validate_endpoint
+                    ok, why = validate_endpoint(self._p.endpoint)
+                    if not ok:
+                        self.done.emit(self, {
+                            "ok": False,
+                            "error": f"bad endpoint: {why}",
+                        })
+                        return
+                except Exception as e:
+                    log.exception("settings connection-test endpoint validation failed")
+                    self.done.emit(self, {
+                        "ok": False,
+                        "error": f"endpoint validation error: {e}",
+                    })
+                    return
+                try:
+                    self.done.emit(self, test_llm_connection(self._p, timeout_sec=10))
+                except Exception as exc:  # BUG13: never let the thread die silently
+                    log.exception("settings connection test failed")
+                    self.done.emit(self, {"ok": False, "error": str(exc)})
+
+        w = _Worker(current)
+        self._conn_worker = w
+        # Bound methods of this QObject page -> queued connections that run
+        # on the GUI thread (never touch widgets from the worker thread).
+        w.done.connect(self._on_test_done)
+        w.finished.connect(self._on_conn_thread_finished)
+        w.start()
+
+    def _forget_conn_worker(self, worker) -> None:
+        """Drop the strong ref once the thread really finished."""
+        if getattr(self, "_conn_worker", None) is worker:
+            self._conn_worker = None
+
+    def _on_conn_thread_finished(self) -> None:
+        """Safety net (GUI thread): restore the button if the thread ever
+        finished without emitting done() — run() catches everything, so
+        this should not trigger, but a stuck-disabled button is worse."""
+        w = getattr(self, "_conn_worker", None)
+        if w is not None and not w.isRunning():
+            self._forget_conn_worker(w)
+            try:
+                self.btn_test.setEnabled(True)
+            except RuntimeError:
+                pass
+
+    def _on_test_done(self, worker, res) -> None:
+        self._forget_conn_worker(worker)
+        self.btn_test.setEnabled(True)
+        if res is None:
+            InfoBar.error(
+                "", self._t("err.http"),
+                parent=self.win, position=InfoBarPosition.TOP, duration=5000,
+            )
+            return
+        # The SSRF-guard failure path emits a plain dict; normalise it so
+        # the attribute reads below cannot crash inside a Qt slot.
+        if isinstance(res, dict):
+            from types import SimpleNamespace as _NS
+            res = _NS(ok=bool(res.get("ok")), latency_ms=0,
+                      models_sample=[], status=None,
+                      error_key=res.get("error") or "err.http")
+        if res.ok:
             InfoBar.success(
                 "",
-                f"OK · {result.latency_ms} ms · "
-                f"{len(result.models_sample)} models",
+                f"OK · {res.latency_ms} ms · "
+                f"{len(res.models_sample)} models",
                 parent=self.win,
                 position=InfoBarPosition.TOP, duration=3000,
             )
         else:
-            err_key = result.error_key or "err.http"
+            err_key = res.error_key or "err.http"
             msg = self._t(err_key) if err_key.startswith("err.") else (err_key or "fail")
-            if result.status:
-                msg += f" (HTTP {result.status})"
+            if res.status:
+                msg += f" (HTTP {res.status})"
             InfoBar.error(
                 "", msg, parent=self.win,
                 position=InfoBarPosition.TOP, duration=5000,
@@ -1982,6 +2509,10 @@ class RangeChartFluentWindow(FluentWindow):
         self.extract_page = ExtractPage(self)
         self.providers_page = ProvidersPage(self)
         self.settings_page = SettingsPage(self)
+        # UI-REVIEW-2026-09-05: wire the extract page's inline chart
+        # selectors to the settings combos (two-way mirror) now that the
+        # settings page exists.
+        self.extract_page.attach_settings_selectors(self.settings_page)
         self.about_page = self._build_about()
         # History + Usage are lazy-imported so the GUI still starts when
         # the new modules are mid-migration.
@@ -2413,11 +2944,19 @@ class RangeChartFluentWindow(FluentWindow):
         # Stop any in-flight worker so a late signal doesn't reach a
         # destroyed widget. Disconnect the worker's signals first (so the
         # finished_ok/progress/done callbacks can't fire on a teardown page),
-        # then quit the thread with a bounded wait, then terminate() as a
-        # last-resort hard kill — bounded so exit never blocks indefinitely.
-        # NOTE: the old code referenced a cooperative `_abort` cancel event
-        # that neither ExtractWorker nor the test _Worker ever defined — that
-        # branch was dead. Cleanup here is purely disconnect + quit + wait.
+        # then wait a bounded time for the thread to finish.
+        # Sprint B (REVIEW-2026-09-04): quit() is a NO-OP for a QThread
+        # that overrides run() (there is no inner event loop), and the
+        # bounded waits (7s total) are shorter than a typical LLM request,
+        # so a running worker used to be abandoned while the window's
+        # Python objects were torn down — when the GC later collected the
+        # still-running QThread wrapper, Qt6 aborted the whole process
+        # with qFatal("Destroyed while thread is still running"). We now
+        # request cooperative cancellation and, if the thread is STILL
+        # running after the bounded wait, park it in the module-level
+        # _orphaned_workers register which holds a strong reference until
+        # the thread finishes naturally (then deleteLater()s it).
+        # terminate() is never used.
         try:
             w = getattr(self.extract_page, "_worker", None)
             if w is not None:
@@ -2427,22 +2966,13 @@ class RangeChartFluentWindow(FluentWindow):
                 except (TypeError, RuntimeError):
                     pass
                 if w.isRunning():
-                    # Audit fix (LOW): prefer cooperative cancellation over
-                    # QThread.terminate(). terminate() can kill the thread
-                    # while it holds the GIL or an OpenSSL mutex, which is
-                    # documented as dangerous and risks hanging teardown.
+                    # Cooperative cancellation first: the multi-run path
+                    # honours it before each submit / between batches.
                     try:
                         w.request_cancel()
                     except Exception:
                         pass
-                    w.quit()
                     if not w.wait(5000):
-                        # Worker is stuck inside urllib/ssl where Python
-                        # has no safe cancellation point. Disconnect any
-                        # remaining signal connections (so a late emit
-                        # never reaches a destroyed page) and wait one
-                        # more short slice — we deliberately do NOT call
-                        # terminate() anymore.
                         try:
                             log.warning(
                                 "ExtractWorker did not honour cancel within 5s; "
@@ -2450,25 +2980,51 @@ class RangeChartFluentWindow(FluentWindow):
                             )
                         except Exception:
                             pass
-                        w.wait(2000)
+                        if not w.wait(2000):
+                            # Still inside urllib/ssl with no Python-side
+                            # cancellation point: park the worker so the
+                            # wrapper outlives the GC and the thread can
+                            # finish safely (no qFatal, no terminate()).
+                            _park_orphaned_worker(w)
+                    if w.isRunning():
+                        _park_orphaned_worker(w)
+        except Exception:
+            pass
+        # Same deal for the Settings page's connection-test worker (a
+        # QThread with no cancel support; its urllib timeout bounds the
+        # stragglers).
+        try:
+            sw = getattr(self.settings_page, "_conn_worker", None)
+            if sw is not None:
+                try:
+                    sw.done.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+                if sw.isRunning():
+                    if not sw.wait(3000):
+                        _park_orphaned_worker(sw)
+                if sw.isRunning():
+                    _park_orphaned_worker(sw)
         except Exception:
             pass
         # Same deal for the providers page's connection-test workers.
         # _test_workers is a dict[worker, card] (changed from a single
         # _test_worker by the H1 freeze fix) — clean up every live one.
+        # Sprint B (REVIEW-2026-09-04): same orphan-parking as above so a
+        # test still inside its 8s network timeout can never trigger the
+        # Qt6 "Destroyed while thread is still running" qFatal on GC.
         try:
             tw_dict = getattr(self.providers_page, "_test_workers", None)
             if tw_dict is not None:
                 for tw in list(tw_dict.keys()):
                     try:
                         tw.done.disconnect()
+                        tw.finished.disconnect()
                     except (TypeError, RuntimeError):
                         pass
                 for tw in list(tw_dict.keys()):
                     if tw.isRunning():
-                        tw.quit()
                         if not tw.wait(2000):
-                            # Same cooperative-cancel reasoning as above.
                             try:
                                 log.warning(
                                     "Test worker did not finish in time; "
@@ -2476,8 +3032,11 @@ class RangeChartFluentWindow(FluentWindow):
                                 )
                             except Exception:
                                 pass
-                            tw.wait(500)
-                        tw.wait(1000)
+                            if not tw.wait(500):
+                                _park_orphaned_worker(tw)
+                    if tw.isRunning():
+                        _park_orphaned_worker(tw)
+                tw_dict.clear()
         except Exception:
             pass
         self.extract_page.busy = False

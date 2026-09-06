@@ -17,6 +17,7 @@ import json
 import mimetypes
 import re
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -179,6 +180,11 @@ class ExtractResult:
     # complete reproducible provenance record.
     image_sha256: str = ""
     request_meta: dict[str, Any] = field(default_factory=dict)
+    # UI-REVIEW-2026-09-07 (auto mode): the concrete chart type an "auto"
+    # extraction resolved to ("range_chart" / "zonation_chart" / …) and how
+    # it was decided. Empty for explicitly-chosen modes.
+    mode_used: str = ""
+    mode_source: str = ""  # "text" | "vision" | "default" | ""
 
 
 def _enhance_image_pil(img: "Image.Image") -> "Image.Image":
@@ -863,6 +869,10 @@ def extract_range_chart(
             ok=False, error_key="err.extract",
             raw=raw_text, truncated=truncated, usage=usage or {},
             latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+            # Sprint B (REVIEW-2026-09-04): the fingerprint was computed but
+            # dropped on this path, so failed runs could not be correlated
+            # with their source image in history / provenance.
+            image_sha256=image_sha256,
         )
     # MEDIUM fix: truncated VLM output rescued as an inner object produces
     # ok=True with empty arrays (no recognizable root keys). When the
@@ -876,6 +886,9 @@ def extract_range_chart(
             latency_ms=latency_ms, usage=usage or {},
             warning=warning + " | rescued inner object: unusable",
             data=data,
+            # Sprint B (REVIEW-2026-09-04): attach the image fingerprint here
+            # too, same reason as the "normalize failed" path above.
+            image_sha256=image_sha256,
         )
     return ExtractResult(
         ok=True, data=data, raw=raw_text,
@@ -972,32 +985,52 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
     def s(v: Any) -> str:
         return "" if v is None else str(v)
 
-    def fi(v: Any) -> int | None:
-        """Convert a bed-index field to int, or return None if unparseable.
+    def fi(v: Any) -> tuple[int | None, bool]:
+        """Convert a bed-index field to ``(int | None, lossy)``.
 
         LOW fix: previously a numeric string like ``"8.0"`` or a float
         ``8.5`` was silently nulled (resp. floored to 8) without warning.
-        We now try int(v) first and fall back to float→int truncation with
-        a row-level ``_warning`` attached by the caller, so the operator
-        sees a flagged value instead of a silent data loss.
+
+        Sprint B (REVIEW-2026-09-04): the docstring promised a row-level
+        ``_warning`` for the float→int truncation path, but the flag was
+        never surfaced. ``fi`` now returns a second element: ``True`` when
+        the value had to go through float coercion (``"8.5"`` -> 8,
+        ``8.5`` -> 8, and any numeric string ``int()`` rejects), and the
+        callers below attach a row-level ``_warning`` so the operator sees
+        a flagged value instead of a silent data loss.
+
+        Return contract:
+          ``(None, False)``   unparseable / empty / bool input
+          ``(v, False)``      clean int conversion (int or int-string)
+          ``(int(v), True)``  lossy truncation path taken
         """
         if v is None or v == "":
-            return None
+            return None, False
         if isinstance(v, bool):
             # bool is an int subclass — treat True/False as 1/0 is
             # surprising; return None instead so the caller can flag it.
-            return None
+            return None, False
         if isinstance(v, int):
-            return v
+            return v, False
+        if isinstance(v, float):
+            # Sprint B (REVIEW-2026-09-04): int() on a float TRUNCATES
+            # silently (8.5 -> 8, and 9.5 -> 9) without ever raising, so
+            # the old code's float fallback below never saw floats. Flag
+            # every float as the lossy path it is.
+            try:
+                return int(v), True
+            except (TypeError, ValueError, OverflowError):
+                return None, False
         try:
-            return int(v)
+            return int(v), False
         except (TypeError, ValueError):
             pass
-        # Fall back to float coercion (handles "8.5" -> 8, 8.5 -> 8).
+        # Fall back to float coercion (handles "8.5" -> 8, "8.0" -> 8).
+        # This is the lossy path — signal it to the caller.
         try:
-            return int(float(v))
+            return int(float(v)), True
         except (TypeError, ValueError):
-            return None
+            return None, False
 
     def norm_blocks(items):
         out = []
@@ -1006,8 +1039,8 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
                 continue
             raw_top = b.get("range_top_idx")
             raw_base = b.get("range_base_idx")
-            top_idx = fi(raw_top)
-            base_idx = fi(raw_base)
+            top_idx, top_lossy = fi(raw_top)
+            base_idx, base_lossy = fi(raw_base)
             # B-3 fix: enforce top (younger/higher) >= base (older/lower).
             # The prompt says "1-indexed from bottom (oldest=1), top >= base".
             # If the model emitted them reversed, swap and flag so the UI
@@ -1025,10 +1058,17 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
             # LOW fix: flag when fi() silently coerced (numeric-string or
             # float) so the operator can audit the conversion instead of
             # seeing a clean None or floored integer.
+            # Sprint B (REVIEW-2026-09-04): fi() also reports the lossy
+            # float-truncation path ("8.5" -> 8) — surface it here as the
+            # row-level ``_warning`` the fi() docstring always promised.
             if top_idx is None and raw_top not in (None, ""):
                 warnings.append("range_top_idx_unparseable")
+            elif top_lossy:
+                warnings.append("range_top_idx_truncated")
             if base_idx is None and raw_base not in (None, ""):
                 warnings.append("range_base_idx_unparseable")
+            elif base_lossy:
+                warnings.append("range_base_idx_truncated")
             if swapped:
                 warnings.append("index_order_swap")
             if warnings:
@@ -1042,8 +1082,8 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
         for u in items or []:
             if not isinstance(u, dict):
                 continue
-            top_idx = fi(u.get("range_top_idx"))
-            base_idx = fi(u.get("range_base_idx"))
+            top_idx, top_lossy = fi(u.get("range_top_idx"))
+            base_idx, base_lossy = fi(u.get("range_base_idx"))
             # B-3 fix: same swap-logic for age_units.
             swapped = False
             if top_idx is not None and base_idx is not None and top_idx < base_idx:
@@ -1054,8 +1094,17 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
                 "range_top_idx": top_idx,
                 "range_base_idx": base_idx,
             }
+            # Sprint B (REVIEW-2026-09-04): mirror norm_blocks — report the
+            # lossy float-truncation path via row-level ``_warning``.
+            warnings: list[str] = []
             if swapped:
-                row["_warning"] = "index_order_swap"
+                warnings.append("index_order_swap")
+            if top_lossy:
+                warnings.append("range_top_idx_truncated")
+            if base_lossy:
+                warnings.append("range_base_idx_truncated")
+            if warnings:
+                row["_warning"] = warnings[0] if len(warnings) == 1 else warnings
             _carry_extras(u, _KNOWN_UNIT_KEYS, row)
             out.append(row)
         return out
@@ -1065,11 +1114,16 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
         for s_item in items or []:
             if not isinstance(s_item, dict):
                 continue
+            bed_idx, bed_lossy = fi(s_item.get("bed_idx"))
             row = {
-                "bed_idx": fi(s_item.get("bed_idx")),
+                "bed_idx": bed_idx,
                 "fossil_marker": s(s_item.get("fossil_marker")),
                 "ref": s(s_item.get("ref")),
             }
+            # Sprint B (REVIEW-2026-09-04): lossy float truncation must be
+            # visible here too (row-level ``_warning`` per the fi() contract).
+            if bed_lossy:
+                row["_warning"] = "bed_idx_truncated"
             _carry_extras(s_item, _KNOWN_SAMPLE_KEYS, row)
             out.append(row)
         return out
@@ -1106,12 +1160,21 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
         for x in items or []:
             if not isinstance(x, dict):
                 continue
+            from_bed_idx, from_lossy = fi(x.get("from_bed_idx"))
+            to_bed_idx, to_lossy = fi(x.get("to_bed_idx"))
             row = {
                 "from_section": s(x.get("from_section")),
-                "from_bed_idx": fi(x.get("from_bed_idx")),
+                "from_bed_idx": from_bed_idx,
                 "to_section": s(x.get("to_section")),
-                "to_bed_idx": fi(x.get("to_bed_idx")),
+                "to_bed_idx": to_bed_idx,
             }
+            # Sprint B (REVIEW-2026-09-04): lossy float truncation warnings.
+            trunc = [name for name, lossy in (
+                ("from_bed_idx_truncated", from_lossy),
+                ("to_bed_idx_truncated", to_lossy),
+            ) if lossy]
+            if trunc:
+                row["_warning"] = trunc[0] if len(trunc) == 1 else trunc
             _carry_extras(x, _KNOWN_CROSS_KEYS, row)
             out.append(row)
         return out
@@ -1540,13 +1603,19 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
             if pid in children_count:
                 children_count[pid] = children_count.get(pid, 0) + 1
 
-    root_ids = raw.get("root_ids") or []
+    # Sprint B (REVIEW-2026-09-04): normalise root_ids to strings ONCE, up
+    # front. Previously one check used str(rid) while the membership test
+    # below compared a str node id against the RAW list — so
+    # {"root_ids": [1], "nodes": [{"id": "1", "parent": null, ...}]}
+    # mis-classified its only root as a non-root node and raised
+    # "Non-root node 1 must have a parent".
+    root_ids = [str(r) for r in (raw.get("root_ids") or [])]
     if not root_ids:
         raise ValueError("root_ids is empty")
 
     # Validate all root_ids reference actual nodes.
     for rid in root_ids:
-        if str(rid) not in id_to_node:
+        if rid not in id_to_node:
             raise ValueError(f"root_ids contains unknown node id: {rid}")
 
     nodes_out = []
@@ -1571,14 +1640,16 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(f"Root node {nid} must have parent == None, got {parent_val}")
 
         # Reverse-check is_leaf: a node is_leaf iff it has no children.
+        # Sprint B (REVIEW-2026-09-04): the correction used to be written to
+        # a dead local (``extra_flag``) that was never read, so the flag
+        # vanished and the audit trail was lost. The corrected value is now
+        # marked on the row via its ``metadata`` dict — the same channel the
+        # unknown-key extras flow through — so downstream consumers can see
+        # that the model's is_leaf claim was overridden.
         is_leaf_input = bool(n.get("is_leaf"))
         actual_is_leaf = children_count.get(nid, 0) == 0
-        if is_leaf_input != actual_is_leaf:
-            # Override with the correct value; flag the mismatch.
-            is_leaf = actual_is_leaf
-            extra_flag = f"_is_leaf_corrected"
-        else:
-            is_leaf = is_leaf_input
+        leaf_corrected = is_leaf_input != actual_is_leaf
+        is_leaf = actual_is_leaf
 
         support_raw = n.get("support")
         support = fv(support_raw)
@@ -1599,6 +1670,8 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
         extras = {k: v for k, v in n.items()
                    if k not in ("id", "parent", "name", "is_leaf",
                                 "branch_length", "node_age_ma", "support")}
+        if leaf_corrected:
+            extras["_is_leaf_corrected"] = True
         if extras:
             row["metadata"] = extras
         nodes_out.append(row)
@@ -1635,7 +1708,8 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
                                 "confidence", "_array_root")}
     out: dict[str, Any] = {
         "metadata": metadata,
-        "root_ids": [str(r) for r in root_ids],
+        # root_ids is already str-normalised up front (Sprint B REVIEW-2026-09-04).
+        "root_ids": root_ids,
         "nodes": nodes_out,
         "legend": legend,
         "confidence": conf,
@@ -1705,6 +1779,13 @@ def to_newick(tree: dict[str, Any]) -> str:
     - Leaf nodes: name:branch_length
     - support omitted if None; branch_length omitted if None
     - Multiple roots joined by commas (forest) at top level
+
+    Sprint B (REVIEW-2026-09-04): nodes unreachable from any root (dangling
+    parent chain, e.g. a node whose parent is not itself rooted) are still
+    omitted from the output, but the drop is no longer silent — a
+    ``RuntimeWarning`` is emitted naming the dropped ids, following the
+    module's user-visible warning convention. Use ``warnings.catch_warnings``
+    in callers that want to treat it as an error.
     """
     nodes = tree.get("nodes") or []
     root_ids = tree.get("root_ids") or []
@@ -1727,6 +1808,26 @@ def to_newick(tree: dict[str, Any]) -> str:
             if pid_str not in id_to_children:
                 id_to_children[pid_str] = []
             id_to_children[pid_str].append(str(n.get("id") or ""))
+
+    # Sprint B (REVIEW-2026-09-04): detect nodes unreachable from any root
+    # BEFORE serializing, so the silent data loss becomes a visible warning.
+    reachable: set[str] = set()
+    stack = [rid for rid in root_ids if rid in nodes_dict]
+    while stack:
+        cur = stack.pop()
+        if cur in reachable:
+            continue
+        reachable.add(cur)
+        stack.extend(id_to_children.get(cur, []))
+    unreachable = sorted(nid for nid in nodes_dict if nid not in reachable)
+    if unreachable:
+        warnings.warn(
+            f"to_newick: {len(unreachable)} node(s) unreachable from "
+            f"root_ids {list(root_ids)} were dropped from the Newick "
+            f"output: {unreachable}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     parts = [_build_newick_node(rid, id_to_children, nodes_dict) for rid in root_ids]
     return "({});".format(",".join(parts))
@@ -2061,6 +2162,16 @@ _KNOWN_PALEOMAP_ROOT_KEYS = (
     "biogeographic_realms", "fossil_sites", "paleolatitude_indicators", "confidence"
 )
 
+# Sprint B (REVIEW-2026-09-04): per-row known keys so the H8 ``_carry_extras``
+# contract holds for sub-rows too — previously any extra key the model emitted
+# inside a continents/oceans_seas/... row was silently discarded.
+_KNOWN_PALEOMAP_CONTINENT_KEYS = ("name", "type", "coordinates", "paleolatitude", "note")
+_KNOWN_PALEOMAP_SEA_KEYS = ("name", "type", "coordinates", "note")
+_KNOWN_PALEOMAP_TECTONIC_KEYS = ("name", "type", "coordinates", "direction", "description")
+_KNOWN_PALEOMAP_REALM_KEYS = ("name", "type", "coordinates", "characteristic_fauna")
+_KNOWN_PALEOMAP_SITE_KEYS = ("name", "lat_lon", "age", "fossils", "marker_type")
+_KNOWN_PALEOMAP_INDICATOR_KEYS = ("type", "coordinates")
+
 
 def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
     """Coerce the parsed paleogeographic map JSON into the strict result shape.
@@ -2130,6 +2241,8 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "paleolatitude": s(cont.get("paleolatitude")),
             "note": s(cont.get("note")),
         }
+        # H8 (Sprint B REVIEW-2026-09-04): preserve unknown row keys.
+        _carry_extras(cont, _KNOWN_PALEOMAP_CONTINENT_KEYS, row)
         out["continents"].append(row)
 
     # Normalize oceans/seas
@@ -2142,6 +2255,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "coordinates": norm_coords(sea.get("coordinates")),
             "note": s(sea.get("note")),
         }
+        _carry_extras(sea, _KNOWN_PALEOMAP_SEA_KEYS, row)
         out["oceans_seas"].append(row)
 
     # Normalize tectonic features
@@ -2155,6 +2269,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "direction": s(feat.get("direction")),
             "description": s(feat.get("description")),
         }
+        _carry_extras(feat, _KNOWN_PALEOMAP_TECTONIC_KEYS, row)
         out["tectonic_features"].append(row)
 
     # Normalize biogeographic realms
@@ -2167,6 +2282,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "coordinates": norm_coords(realm.get("coordinates")),
             "characteristic_fauna": s(realm.get("characteristic_fauna")),
         }
+        _carry_extras(realm, _KNOWN_PALEOMAP_REALM_KEYS, row)
         out["biogeographic_realms"].append(row)
 
     # Normalize fossil sites
@@ -2180,6 +2296,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "fossils": s(site.get("fossils")),
             "marker_type": s(site.get("marker_type")),
         }
+        _carry_extras(site, _KNOWN_PALEOMAP_SITE_KEYS, row)
         out["fossil_sites"].append(row)
 
     # Normalize paleolatitude indicators
@@ -2190,6 +2307,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "type": s(ind.get("type")),
             "coordinates": norm_coords(ind.get("coordinates")),
         }
+        _carry_extras(ind, _KNOWN_PALEOMAP_INDICATOR_KEYS, row)
         out["paleolatitude_indicators"].append(row)
 
     try:
@@ -2306,6 +2424,12 @@ _KNOWN_SCATTER_PLOT_ROOT_KEYS = (
     "metadata", "groups", "points", "outliers", "statistics", "confidence"
 )
 
+# Sprint B (REVIEW-2026-09-04): per-row known keys for the H8 ``_carry_extras``
+# contract on scatter sub-rows (groups / points / outliers).
+_KNOWN_SCATTER_GROUP_KEYS = ("name", "color", "marker", "n_points_visible", "description")
+_KNOWN_SCATTER_POINT_KEYS = ("x", "y", "z", "group", "label", "note")
+_KNOWN_SCATTER_OUTLIER_KEYS = ("x", "y", "group", "reason")
+
 
 def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
     """Coerce the parsed scatter plot JSON into the strict result shape.
@@ -2360,6 +2484,8 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "n_points_visible": grp.get("n_points_visible") if isinstance(grp.get("n_points_visible"), int) else None,
             "description": s(grp.get("description")),
         }
+        # H8 (Sprint B REVIEW-2026-09-04): preserve unknown row keys.
+        _carry_extras(grp, _KNOWN_SCATTER_GROUP_KEYS, row)
         out["groups"].append(row)
 
     # Normalize points (limit to first 500 for very large outputs)
@@ -2374,6 +2500,7 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "label": s(pt.get("label")),
             "note": s(pt.get("note")),
         }
+        _carry_extras(pt, _KNOWN_SCATTER_POINT_KEYS, row)
         out["points"].append(row)
 
     # Normalize outliers
@@ -2386,6 +2513,7 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "group": s(ot.get("group")),
             "reason": s(ot.get("reason")),
         }
+        _carry_extras(ot, _KNOWN_SCATTER_OUTLIER_KEYS, row)
         out["outliers"].append(row)
 
     # Normalize statistics
@@ -2510,6 +2638,391 @@ _MODE_DISPATCH["chemical_stratigraphy"] = extract_chemical_stratigraphy
 _MODE_DISPATCH["paleomap"] = extract_paleomap
 _MODE_DISPATCH["scatter_plot"] = extract_scatter_plot
 
+# ---------------------------------------------------------------------------
+# ZONATION / BIOSTRATIGRAPHIC CORRELATION CHART (2026-09-05, radiolarian
+# biochronology figures: columns of named zones correlated across regions /
+# against ammonoid-conodont zones and stages — e.g. Gorican et al. 2018).
+# ---------------------------------------------------------------------------
+_KNOWN_ZONATION_ROOT_KEYS = (
+    "zonations", "zones", "correlations", "confidence",
+)
+_KNOWN_ZONATIONS_KEYS = ("name", "region", "framework", "reference")
+_KNOWN_ZONATION_ZONE_KEYS = (
+    "name", "zonation", "rank", "age_span", "base_age", "top_age",
+    "stage", "defined_by", "note",
+)
+_KNOWN_CORRELATION_KEYS = (
+    "from_zone", "to_zone", "from_zonation", "to_zonation", "basis", "note",
+)
+
+
+def normalize_zonation_chart_result(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Coerce the parsed zonation-chart JSON into the strict result shape.
+
+    H8: extra keys the model emits are preserved under ``_extras`` per row.
+    All rows are string-typed, mirroring range-chart so the majority-vote
+    merge machinery in aggregate.py works with no new code path.
+
+    H3-fix: when safe_json_loads wraps a top-level array as
+    ``{"_array_root": [...]}``, we unwrap it and distribute items to the
+    appropriate keys (zonations, zones, correlations).
+    """
+    if "_array_root" in parsed and isinstance(parsed["_array_root"], list):
+        for item in parsed["_array_root"]:
+            if not isinstance(item, dict):
+                parsed.setdefault("_unclassified", []).append(item)
+                continue
+            # Correlations carry from_zone / to_zone.
+            if "from_zone" in item or "to_zone" in item:
+                parsed.setdefault("correlations", []).append(item)
+            # Zone rows carry a name plus rank / zonation / age_span markers.
+            elif "name" in item and (
+                "rank" in item or "zonation" in item or "age_span" in item
+                or "defined_by" in item or "base_age" in item
+            ):
+                parsed.setdefault("zones", []).append(item)
+            # Zonation columns carry name + region / framework / reference.
+            elif "name" in item and (
+                "region" in item or "framework" in item or "reference" in item
+            ):
+                parsed.setdefault("zonations", []).append(item)
+            else:
+                parsed.setdefault("_unclassified", []).append(item)
+
+    def s(v: Any) -> str:
+        return "" if v is None else str(v)
+
+    out: dict[str, Any] = {
+        "zonations": [],
+        "zones": [],
+        "correlations": [],
+        "confidence": 0.0,
+    }
+    if not isinstance(parsed, dict):
+        return out
+    for z in (parsed.get("zonations") if isinstance(parsed.get("zonations"), list) else []):
+        if not isinstance(z, dict):
+            continue
+        row = {
+            "name": s(z.get("name")),
+            "region": s(z.get("region")),
+            "framework": s(z.get("framework")),
+            "reference": s(z.get("reference")),
+        }
+        _carry_extras(z, _KNOWN_ZONATIONS_KEYS, row)
+        out["zonations"].append(row)
+    for z in (parsed.get("zones") if isinstance(parsed.get("zones"), list) else []):
+        if not isinstance(z, dict):
+            continue
+        row = {
+            "name": s(z.get("name")),
+            "zonation": s(z.get("zonation")),
+            "rank": s(z.get("rank")),
+            "age_span": s(z.get("age_span")),
+            "base_age": s(z.get("base_age")),
+            "top_age": s(z.get("top_age")),
+            "stage": s(z.get("stage")),
+            "defined_by": s(z.get("defined_by")),
+            "note": s(z.get("note")),
+        }
+        _carry_extras(z, _KNOWN_ZONATION_ZONE_KEYS, row)
+        out["zones"].append(row)
+    for c in (parsed.get("correlations") if isinstance(parsed.get("correlations"), list) else []):
+        if not isinstance(c, dict):
+            continue
+        row = {
+            "from_zone": s(c.get("from_zone")),
+            "to_zone": s(c.get("to_zone")),
+            "from_zonation": s(c.get("from_zonation")),
+            "to_zonation": s(c.get("to_zonation")),
+            "basis": s(c.get("basis")),
+            "note": s(c.get("note")),
+        }
+        _carry_extras(c, _KNOWN_CORRELATION_KEYS, row)
+        out["correlations"].append(row)
+    try:
+        out["confidence"] = max(0.0, min(1.0, float(parsed.get("confidence", 0.0) or 0.0)))
+    except (TypeError, ValueError):
+        out["confidence"] = 0.0
+    extras_src = {k: v for k, v in parsed.items() if k not in _KNOWN_ZONATION_ROOT_KEYS}
+    if extras_src:
+        out["_extras"] = extras_src
+    return out
+
+
+def extract_zonation_chart(
+    *,
+    api_key: str,
+    image_b64: str,
+    media_type: str,
+    caption: str = "",
+    chart_lang: str = "auto",
+    base_url: str = DEFAULT_ENDPOINT,
+    model: str = DEFAULT_MODEL,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    provider: LlmProvider | None = None,
+    progress_callback=None,
+) -> ExtractResult:
+    """Zonation / correlation chart extraction. Same contract as
+    extract_range_chart."""
+    from .prompt import ZONATION_CHART_SYSTEM_PROMPT
+
+    if not image_b64:
+        return ExtractResult(ok=False, error_key="err.imageRead")
+    max_tokens = clamp_max_tokens(max_tokens)
+    timeout_sec = clamp_timeout_sec(timeout_sec)
+    image_sha256 = compute_image_sha256_from_b64(image_b64)
+    p = provider or LlmProvider(
+        name="Legacy Anthropic-compatible",
+        api_format=ApiFormat.ANTHROPIC,
+        endpoint=base_url,
+        api_key=api_key,
+        model=model,
+    )
+    lang_hint = CHART_LANG_HINT.get(chart_lang, "")
+    user_prompt = (
+        "Caption:\n"
+        + (caption.strip() if caption and caption.strip() else "(no caption)")
+        + "\n\n"
+        + lang_hint
+        + "Extract the biozonation / correlation chart information as the "
+        "strict JSON contract."
+    )
+    t0 = time.perf_counter()
+    try:
+        raw_text, truncated, status, err_body, usage = call_llm_api(
+            provider=p,
+            system_prompt=ZONATION_CHART_SYSTEM_PROMPT,
+            image_b64=image_b64,
+            media_type=media_type,
+            user_text=user_prompt,
+            max_tokens=max_tokens,
+            timeout_sec=timeout_sec,
+            capture_error_body=True,
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw="", latency_ms=latency_ms,
+            warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+            image_sha256=image_sha256,
+        )
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    warning = ("Result may be truncated (model hit max_tokens). "
+               "Try raising the max_tokens setting and re-running.")
+    if raw_text is None:
+        return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
+    try:
+        parsed = safe_json_loads(raw_text)
+    except ValueError:
+        return ExtractResult(
+            ok=False, error_key="err.parse", raw=raw_text,
+            truncated=truncated, latency_ms=latency_ms,
+            usage=usage or {},
+            warning=warning if truncated else "",
+            image_sha256=image_sha256,
+        )
+    try:
+        data = normalize_zonation_chart_result(parsed)
+    except Exception as exc:
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw=raw_text, truncated=truncated, usage=usage or {},
+            latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+            image_sha256=image_sha256,
+        )
+    return ExtractResult(
+        ok=True, data=data, raw=raw_text,
+        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
+        warning=warning if truncated else "",
+        image_sha256=image_sha256,
+        request_meta=_build_request_meta(
+            p, "zonation_chart", max_tokens, image_sha256,
+            prompt_version_for_mode("zonation_chart"),
+        ),
+    )
+
+
+_MODE_DISPATCH["zonation_chart"] = extract_zonation_chart
+
+
+
+# ---------------------------------------------------------------------------
+# VISION CHART-TYPE CLASSIFIER + AUTO MODE (UI-REVIEW-2026-09-07).
+#
+# "auto" used to mean "keyword-match the caption / filename, else fall
+# back to range_chart" — a caption-less abundance or zonation figure was
+# silently extracted with the WRONG prompt. The upgraded auto path:
+#   1. text heuristic on caption + filename (cheap, trusted when it hits);
+#   2. vision classification of the image itself (cheap small-token call);
+#   3. range_chart as the final fallback.
+# ---------------------------------------------------------------------------
+
+KNOWN_CHART_TYPES = frozenset({
+    "range_chart", "columnar_section", "abundance_diagram",
+    "phylogenetic_tree", "zonation_chart", "chemical_stratigraphy",
+    "paleomap", "scatter_plot",
+})
+
+_CLASSIFY_MIN_CONFIDENCE = 0.5
+
+
+def normalize_chart_classification(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Coerce the classifier JSON into {"chart_type", "reason", "confidence"}.
+
+    Unknown / missing chart_type degrades to "unknown" rather than raising
+    — a classification failure must fall back to the text heuristic /
+    range_chart, never abort the extraction."""
+    if not isinstance(parsed, dict):
+        return {"chart_type": "unknown", "reason": "", "confidence": 0.0}
+    chart_type = str(parsed.get("chart_type", "") or "").strip().lower()
+    if chart_type not in KNOWN_CHART_TYPES:
+        chart_type = "unknown"
+    try:
+        conf = max(0.0, min(1.0, float(parsed.get("confidence", 0.0) or 0.0)))
+    except (TypeError, ValueError):
+        conf = 0.0
+    return {
+        "chart_type": chart_type,
+        "reason": "" if parsed.get("reason") is None else str(parsed.get("reason")),
+        "confidence": conf,
+    }
+
+
+def classify_chart_image(
+    *,
+    api_key: str,
+    image_b64: str,
+    media_type: str,
+    caption: str = "",
+    chart_lang: str = "auto",
+    base_url: str = DEFAULT_ENDPOINT,
+    model: str = DEFAULT_MODEL,
+    timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    provider: LlmProvider | None = None,
+    progress_callback=None,
+) -> ExtractResult:
+    """Classify the chart TYPE of an image (never extracts data).
+
+    Uses a dedicated small-token prompt; the result ``data`` carries
+    ``{"chart_type", "reason", "confidence"}``. Cached like any other
+    extraction (mode="chart_classify"), so a multi-run auto job classifies
+    the identical image once."""
+    from .prompt import CHART_CLASSIFY_SYSTEM_PROMPT
+
+    if not image_b64:
+        return ExtractResult(ok=False, error_key="err.imageRead")
+    timeout_sec = clamp_timeout_sec(timeout_sec)
+    image_sha256 = compute_image_sha256_from_b64(image_b64)
+    p = provider or LlmProvider(
+        name="Legacy Anthropic-compatible",
+        api_format=ApiFormat.ANTHROPIC,
+        endpoint=base_url,
+        api_key=api_key,
+        model=model,
+    )
+    lang_hint = CHART_LANG_HINT.get(chart_lang, "")
+    user_prompt = (
+        "Caption:\n"
+        + (caption.strip() if caption and caption.strip() else "(no caption)")
+        + "\n\n"
+        + lang_hint
+        + "Classify the chart type as the strict JSON contract."
+    )
+    t0 = time.perf_counter()
+    try:
+        raw_text, truncated, status, err_body, usage = call_llm_api(
+            provider=p,
+            system_prompt=CHART_CLASSIFY_SYSTEM_PROMPT,
+            image_b64=image_b64,
+            media_type=media_type,
+            user_text=user_prompt,
+            max_tokens=clamp_max_tokens(500),
+            timeout_sec=timeout_sec,
+            capture_error_body=True,
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return ExtractResult(
+            ok=False, error_key="err.extract", raw="", latency_ms=latency_ms,
+            warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+            image_sha256=image_sha256,
+        )
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    if raw_text is None:
+        return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
+    try:
+        parsed = safe_json_loads(raw_text)
+    except ValueError:
+        return ExtractResult(
+            ok=False, error_key="err.parse", raw=raw_text,
+            truncated=truncated, latency_ms=latency_ms, usage=usage or {},
+            image_sha256=image_sha256,
+        )
+    return ExtractResult(
+        ok=True,
+        data=normalize_chart_classification(parsed),
+        raw=raw_text, truncated=truncated, usage=usage or {},
+        latency_ms=latency_ms, image_sha256=image_sha256,
+        request_meta=_build_request_meta(
+            p, "chart_classify", clamp_max_tokens(500), image_sha256,
+            prompt_version_for_mode("chart_classify"),
+        ),
+    )
+
+
+def resolve_auto_mode(
+    caption: str,
+    filename: str,
+    image_b64: str,
+    media_type: str,
+    api_key: str = "",
+    base_url: str = DEFAULT_ENDPOINT,
+    model: str = DEFAULT_MODEL,
+    provider: LlmProvider | None = None,
+    progress_callback=None,
+) -> tuple[str, ExtractResult | None]:
+    """Resolve ``"auto"`` to a concrete chart type.
+
+    Returns ``(mode, classify_result)``. ``classify_result`` is None when
+    the text heuristic matched (no vision call was needed); otherwise it is
+    the (possibly failed) vision classification whose ``chart_type`` and
+    ``reason`` informed the decision. Never raises — any failure falls
+    back to ``range_chart``."""
+    from .chart_mode import auto_detect_chart_mode_ex
+
+    text_mode, matched = auto_detect_chart_mode_ex(
+        f"{caption or ''} {filename or ''}")
+    if matched:
+        return text_mode, None
+    # Vision fallback. A classification failure here must not kill the
+    # extraction — fall back to range_chart. The synthetic failed result
+    # (ok=False) preserves the "vision was attempted" provenance: callers
+    # derive mode_source from `classify_result is not None`, so returning
+    # None here would misreport a vision-default as a text match.
+    try:
+        cls = classify_chart_image(
+            api_key=api_key, image_b64=image_b64, media_type=media_type,
+            caption=caption, provider=provider,
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        cls = ExtractResult(
+            ok=False, error_key="err.classify",
+            data={"chart_type": "unknown", "reason": str(exc), "confidence": 0.0},
+        )
+    if cls.ok and isinstance(cls.data, dict):
+        chart_type = cls.data.get("chart_type") or "unknown"
+        conf = float(cls.data.get("confidence") or 0.0)
+        if (chart_type in KNOWN_CHART_TYPES and chart_type != "unknown"
+                and conf >= _CLASSIFY_MIN_CONFIDENCE):
+            return chart_type, cls
+    return "range_chart", cls
+
 
 def extract(
     *,
@@ -2544,10 +3057,29 @@ def extract(
     ``"submitting"``, ``"uploading"``, ``"thinking"`` to allow the UI to
     show granular extraction progress.
     """
+    # UI-REVIEW-2026-09-07 (auto mode): resolve "auto" through the
+    # two-stage pipeline (text heuristic, then vision classification) and
+    # stamp which chart type actually drove the extraction.
+    mode_source = ""
+    classify_result = None
+    if mode == "auto":
+        mode, classify_result = resolve_auto_mode(
+            caption=caption,
+            filename="",
+            image_b64=image_b64,
+            media_type=media_type,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            provider=provider,
+            progress_callback=progress_callback,
+        )
+        mode_source = "vision" if classify_result is not None else "text"
+
     fn = _MODE_DISPATCH.get(mode)
     if fn is None:
         return ExtractResult(ok=False, error_key="err.http", raw=f"unknown mode: {mode}")
-    return fn(
+    result = fn(
         api_key=api_key,
         image_b64=image_b64,
         media_type=media_type,
@@ -2560,3 +3092,9 @@ def extract(
         provider=provider,
         progress_callback=progress_callback,
     )
+    # UI-REVIEW-2026-09-07: surface which chart type the auto resolver
+    # picked so UIs / history records can show "detected: zonation_chart".
+    if mode_source:
+        result.mode_used = mode
+        result.mode_source = mode_source
+    return result

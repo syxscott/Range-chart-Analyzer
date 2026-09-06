@@ -197,16 +197,24 @@ Deno.serve(async (request) => {
   const clientIp = request.headers.get("cf-connecting-ip") ||
                    rightmostFwd ||
                    "unknown";
+  // Sprint B (REVIEW-2026-09-04) #11: reject unauthorized requests BEFORE
+  // consuming a rate-limit slot, matching cloudflare-worker.js. Previously
+  // the deno variant checked the rate limit first, so a flood of bogus
+  // (unauthorized) requests filled _rateMap and starved real callers of
+  // their quota. The outbound target stays the hardcoded MiniMax endpoint
+  // regardless.
+  if (!authorized) {
+    return new Response("Forbidden", { status: 403 });
+  }
+
+  // RATE LIMIT: now safe to consume a slot — only authorized callers reach
+  // here. The 429 echoes CORS so an authorized browser caller can read it.
   const rl = rateCheck(clientIp);
   if (!rl.allowed) {
     return new Response(JSON.stringify({ error: "rate_limit_exceeded", retryAfter: rl.resetMs }), {
       status: 429,
       headers: { "content-type": "application/json", ...(cors || {}) },
     });
-  }
-
-  if (!authorized) {
-    return new Response("Forbidden", { status: 403 });
   }
 
   // Secret-only mode still emits CORS so the browser can use the proxy.

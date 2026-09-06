@@ -72,6 +72,9 @@ _CONTENT_KEYS: tuple[str, ...] = (
     "species_ranges", "abundances", "sections", "biozones",
     "other_fossils", "cross_beds", "lithology_legend",
     "fossil_legend", "age_units",
+    # UI-REVIEW-2026-09-07: zonation / correlation chart content keys so
+    # _is_pure_extraction_miss also covers that mode.
+    "zones", "correlations", "zonations",
 )
 
 # Columnar-mode marker keys — presence of any of these shifts the active
@@ -106,6 +109,13 @@ def _detect_mode(data: dict[str, Any]) -> str:
     # Abundance mode: abundances present, species_ranges absent.
     if "abundances" in data and "species_ranges" not in data:
         return "abundance"
+    # Zonation mode (UI-REVIEW-2026-09-05): correlations is the unique
+    # marker no other mode emits; zones alone is ambiguous (abundance
+    # results also carry a zones list) so require the pair or a non-empty
+    # correlations list.
+    if "correlations" in data or ("zones" in data and "zonations" in data):
+        if "species_ranges" not in data and "abundances" not in data:
+            return "zonation"
     return "range_chart"
 
 
@@ -234,6 +244,8 @@ def _score_completeness(data: dict[str, Any]) -> tuple[float, list[dict[str, str
         primary = "abundances"
     elif mode == "columnar":
         primary = None  # columnar has no single "primary" — no single penalty
+    elif mode == "zonation":
+        primary = "zones" if "zones" in data else None
     else:  # range_chart
         primary = "species_ranges" if "species_ranges" in data else None
 
@@ -256,6 +268,8 @@ def _score_completeness(data: dict[str, Any]) -> tuple[float, list[dict[str, str
                          "fossil_legend")
     elif mode == "abundance":
         relevant_keys = ("abundances", "sections")
+    elif mode == "zonation":
+        relevant_keys = ("zones", "correlations", "zonations")
     else:
         relevant_keys = ("sections", "biozones", "other_fossils")
 
@@ -901,6 +915,8 @@ def _score_structure(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]
                            "fossil_legend", "confidence")
     elif mode == "abundance":
         null_check_keys = ("sections", "abundances", "confidence")
+    elif mode == "zonation":
+        null_check_keys = ("zones", "correlations", "zonations", "confidence")
     else:
         null_check_keys = ("sections", "biozones", "other_fossils",
                            "confidence")

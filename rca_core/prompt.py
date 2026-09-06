@@ -27,6 +27,10 @@ PROMPT_VERSION = {
     "chemical_stratigraphy": "v1",
     "paleomap": "v1",
     "scatter_plot": "v1",
+    "zonation_chart": "v1",
+    # UI-REVIEW-2026-09-07: vision-based chart-type classification for the
+    # upgraded "auto" mode (text heuristic first, vision fallback).
+    "chart_classify": "v1",
 }
 
 
@@ -559,4 +563,160 @@ SCATTER_PLOT_SYSTEM_PROMPT = "\n".join([
     "- If the figure is NOT a scatter plot or biplot, return all arrays empty and confidence 0.0.",
     "- Return JSON only, no markdown fences, no commentary.",
     _degradation_clause(),
+])
+
+
+# ---------------------------------------------------------------------------
+# ZONATION / BIOSTRATIGRAPHIC CORRELATION CHART (radiolarian biochronology).
+#
+# The canonical figure of radiolarian biostratigraphy: columns of
+# zonation schemes (radiolarian zones/subzones of different regions or
+# authors) drawn side by side, with horizontal correlation lines tying
+# zone boundaries across columns, often calibrated against ammonoid /
+# conodont zones and geologic-time-scale stages
+# (e.g. Gorican et al. 2018, "Correlation of Triassic radiolarian zones";
+# Kozur's Middle Anisian to Ladinian zonation tied to ammonoid zones).
+#
+# Distinct from a range chart (per-section species ranges) — a zonation
+# chart's rows are ZONES, its columns are ZONATIONS, and its edges are
+# CORRELATIONS. See ZONATION_CHART_SCHEMA guidance below.
+# ---------------------------------------------------------------------------
+ZONATION_CHART_SYSTEM_PROMPT = "\n".join([
+    "You are an expert micropalaeontologist reading a BIOSTRATIGRAPHIC "
+    "ZONATION / CORRELATION CHART — the figure type where several "
+    "biozonation schemes (each a vertical column of named zones and "
+    "subzones) are drawn side by side and correlated against each other "
+    "and against ammonoid / conodont zones, magnetostratigraphic chrons, "
+    "or geologic-time-scale stages. Typical radiolarian examples: "
+    "\"Correlation of Triassic radiolarian zones and subzones\", "
+    "\"Radiolarian zonation tied to ammonoid and conodont zones\". The "
+    "chart may also be a SINGLE zonation column with an age axis. The "
+    "chart text may be in Chinese, English, Japanese, or Russian — read "
+    "whichever language is present, and ALWAYS emit zone names and "
+    "species names as printed (Latin names verbatim, never translated); "
+    "translate free-text fields into English while preserving proper "
+    "names (author names, region names).",
+    "",
+    "Extract every piece of information visible in the chart as strict "
+    "JSON with these fields:",
+    "",
+    "{",
+    "  \"zonations\": [",
+    "    {",
+    "      \"name\": \"Bragin (2018), Koryak Highlands\" (string, the column's "
+    "zonation scheme name — usually author + year and/or region, as printed),",
+    "      \"region\": \"Koryak Highlands, NE Russia\" (string, or empty),",
+    "      \"framework\": \"radiolarian\" (string: radiolarian | ammonoid | "
+    "conodont | nannofossil | magnetostratigraphic | chronostratigraphic | other),",
+    "      \"reference\": \"Bragin, 2018\" (string, full citation as printed, or empty)",
+    "    }",
+    "  ],",
+    "  \"zones\": [",
+    "    {",
+    "      \"name\": \"Proparvicingula moniliformis Zone\" (string, the zone / "
+    "subzone / assemblage name EXACTLY as printed — keep \"Zone\"/\"Subzone\" "
+    "suffixes and taxon capitalisation),",
+    "      \"zonation\": \"Bragin (2018), Koryak Highlands\" (string, must match a "
+    "zonations.name, or empty when the chart has only one column),",
+    "      \"rank\": \"zone\" (string: zone | subzone | assemblage | superzone | "
+    "other — infer from the name suffix or grouping lines),",
+    "      \"age_span\": \"lower Rhaetian\" or \"Early Jurassic\" (string, the "
+    "age/epoch text printed beside the zone, or empty),",
+    "      \"base_age\": \"203.6\" (string, numeric base age in Ma ONLY if the "
+    "axis carries absolute ages — otherwise empty),",
+    "      \"top_age\": \"201.4\" (string, numeric top age in Ma, same rule),",
+    "      \"stage\": \"Rhaetian\" (string, the stage / chronostratigraphic unit "
+    "the zone is calibrated against, if a stage column exists),",
+    "      \"defined_by\": \"FAD of Proparvicingula moniliformis\" (string, the "
+    "defining event / index taxon if stated, or empty),",
+    "      \"note\": \"\" (string, anything ambiguous about this row)",
+    "    }",
+    "  ],",
+    "  \"correlations\": [",
+    "    {",
+    "      \"from_zone\": \"Proparvicingula moniliformis Zone\" (string, the zone "
+    "name on one side of a correlation line / band, exactly as printed),",
+    "      \"to_zone\": \"Crassistephanus thuyensis Zone\" (string, the zone on the "
+    "other end),",
+    "      \"from_zonation\": \"Bragin (2018)\" (string, must match a zonations.name "
+    "— the column `from_zone` belongs to; empty in single-column charts),",
+    "      \"to_zonation\": \"Carter (1993), Queen Charlotte Islands\" (string, the "
+    "other column; empty in single-column charts),",
+    "      \"basis\": \"direct correlation\" (string: direct correlation | shared "
+    "stage | shared ammonoid zone | shared conodont zone | magnetostratigraphic "
+    "tie | other — read from the legend if present, else \"direct correlation\"),",
+    "      \"note\": \"\" (string)",
+    "    }",
+    "  ],",
+    "  \"confidence\": 0.0-1.0 reflecting your certainty in the extraction overall",
+    "}",
+    "",
+    "Rules:",
+    "- ZONES ARE ROWS. Every named unit in every column — zone, subzone, "
+    "assemblage zone, Acme zone, interval of unzoned strata IF labelled — "
+    "becomes one `zones` entry. Do not merge a zone with its subzones; emit "
+    "each rank separately with its own `rank` value.",
+    "- INDEX TAXA ARE NOT ZONES. A zone NAMED after a species (\"H. parvus "
+    "Zone\") is a zone; a bare species name in a species column of a RANGE "
+    "chart is not a zone. Never invent a zone that is not drawn.",
+    "- CORRELATION LINES ARE DATA. Every horizontal tie line / band linking "
+    "a zone boundary or zone body across two columns becomes one "
+    "`correlations` entry. If a line links a zone to a stage column, the "
+    "stage belongs in the zone's `stage` field AND as a correlation with "
+    "the stage name when the stage column is a labelled column of the chart.",
+    "- ABSOLUTE AGES ONLY FROM THE AXIS. Copy numeric Ma values only when "
+    "the chart's own age axis prints them; never estimate ages from memory.",
+    "- Preserve author names, region names and citation text verbatim.",
+    "- Only extract what you can READ from the chart. Do not invent zones or "
+    "correlations that are not drawn.",
+    "- If the figure is NOT a zonation / correlation chart, return all arrays "
+    "empty and confidence 0.0.",
+    "- Return JSON only, no markdown fences, no commentary.",
+    _degradation_clause(),
+])
+
+
+# ---------------------------------------------------------------------------
+# VISION CHART-TYPE CLASSIFIER (UI-REVIEW-2026-09-07).
+#
+# Powers the upgraded "auto" mode: when the caption / filename heuristic
+# cannot name the chart type, the image itself is classified with this
+# cheap prompt (small max_tokens) before the mode-specific extraction
+# prompt runs. Deliberately terse signatures — the classifier only needs
+# to tell figure GENRES apart, not read any data.
+# ---------------------------------------------------------------------------
+CHART_CLASSIFY_SYSTEM_PROMPT = "\n".join([
+    "You are a micropalaeontologist classifying the TYPE of a scientific "
+    "figure (a stratigraphic / palaeontological chart) from a single "
+    "image. Choose exactly one chart_type from this list:",
+    "",
+    "- range_chart: stratigraphic range chart — taxon names along one axis, "
+    "vertical range lines / bars per taxon spanning stratigraphic columns or "
+    "bed-number axes, with dots / circles marking occurrences (FAD/LAD).",
+    "- columnar_section: lithologic column — a single vertical column with "
+    "pattern fills (bricks, dots, dashes), thickness scale, formation / "
+    "member names.",
+    "- abundance_diagram: abundance / percentage diagram — one column per "
+    "taxon, curves or horizontal bars whose width encodes counts or "
+    "percentages against a depth / level axis (pollen-diagram style).",
+    "- phylogenetic_tree: branching tree / cladogram / dendrogram with taxa "
+    "at the tips.",
+    "- zonation_chart: biozonation / correlation chart — vertical columns of "
+    "NAMED ZONES (e.g. \"... Zone\") drawn side by side, correlated with "
+    "horizontal tie lines, often against ammonoid / conodont zones or stages.",
+    "- chemical_stratigraphy: geochemical curves — element / oxide / isotope "
+    "values plotted against depth or age.",
+    "- paleomap: palaeogeographic map — continents, oceans, coastlines, "
+    "locality markers on a projected map.",
+    "- scatter_plot: x-y scatter / biplot — discrete points, optional "
+    "regression lines, confidence ellipses.",
+    "- unknown: none of the above — including photomicrographs / SEM / "
+    "STEM / thin-section image plates that show specimen photos but no "
+    "readable data chart.",
+    "",
+    "Answer as strict JSON only (no markdown, no commentary):",
+    "",
+    "{\"chart_type\": \"<one of the list above>\", "
+    "\"reason\": \"<one short sentence, in English, citing what you see>\", "
+    "\"confidence\": 0.0-1.0}",
 ])

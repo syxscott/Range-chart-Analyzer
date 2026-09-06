@@ -1,13 +1,20 @@
-"""Regression test for ICS Cenozoic data corruption (REVIEW-2026-07-25/P1-2).
+"""Regression tests pinning the Cenozoic stages to the official ICS
+International Chronostratigraphic Chart v2024/12.
 
-The shipped `ics_2024.json` originally had every Cenozoic stage mapped to
-wrong Ma boundary ages (Danian mapped to 100.5–83.6 Ma / mid-Cretaceous
-instead of 66.0–61.6 Ma / immediately above K-Pg). The 3 stages
-immediately above the K-Pg boundary (Thanetian, Selandian, Danian) had
-the worst corruption, and Pleistocene/Holocene were missing entirely.
-
-This test pins all 22 Cenozoic stages to their correct ICS 2023/2024
-values so a future data corruption cannot silently regress.
+History:
+  * REVIEW-2026-07-25/P1-2 repaired the wholesale Cenozoic corruption
+    (Danian mapped to mid-Cretaceous, missing Holocene/Thanetian) and
+    pinned 21 stages — but to GTS2016-vintage numbers.
+  * Sprint A (CODE_REVIEW_2026-09-01, 2026-09-01) rebuilt the table on
+    ICS v2024/12, cross-verified against stratigraphy.org, Macrostrat
+    timescale #1 and the Paleobiology Database. Boundary updates:
+    Danian base 61.66 (was 61.6), Thanetian base 59.24 (was 59.2),
+    Ypresian base 48.07 (was 47.8), Lutetian 41.03-48.07 (was
+    41.2-47.8), Bartonian base 41.03 (was 41.2), Chattian base 27.30
+    (was 27.82), Aquitanian 20.45-23.04 (was 20.44-23.03), Burdigalian
+    15.98-20.45, Langhian top 15.98 (was 15.97), base Quaternary 2.58
+    (was 2.588). Gelasian now correctly belongs to the QUATERNARY (ICS
+    2009 redefinition; previously mislabelled Neogene).
 
 Reference: International Commission on Stratigraphy v2024/12
 https://stratigraphy.org/ICSchart/ChronostratChart2024-12.pdf
@@ -26,8 +33,7 @@ def _load_ics():
 
 
 # Reference values (Ma) — top_ma is younger boundary, base_ma is older.
-# (top_ma ≤ base_ma because top_ma < base_ma for all real stages.)
-# NOTE: Pleistocene is an EPOCH (2.588-0.0117 Ma), not a stage; it is NOT
+# NOTE: Pleistocene is an EPOCH (2.58-0.0117 Ma), not a stage; it is NOT
 # a table entry — it resolves through the series map (see
 # TestIcsPleistoceneEpoch below). REVIEW-2026-07-31 removed the bogus
 # stage entry that covered only 0.129-0.0117 Ma (it duplicated Chibanian).
@@ -36,24 +42,24 @@ REFERENCE_CENOZOIC = {
     "Holocene":       (0.0,    0.0117,  "Quaternary"),
     "Chibanian":      (0.129,  0.774,   "Quaternary"),
     "Calabrian":      (0.774,  1.80,    "Quaternary"),
-    "Gelasian":       (1.80,   2.588,   "Neogene"),
-    "Piacenzian":     (2.588,  3.60,    "Neogene"),
+    "Gelasian":       (1.80,   2.58,    "Quaternary"),
+    "Piacenzian":     (2.58,   3.60,    "Neogene"),
     "Zanclean":       (3.60,   5.333,   "Neogene"),
     "Messinian":      (5.333,  7.246,   "Neogene"),
     "Tortonian":      (7.246,  11.63,   "Neogene"),
     "Serravallian":   (11.63,  13.82,   "Neogene"),
-    "Langhian":       (13.82,  15.97,   "Neogene"),
-    "Burdigalian":    (15.97,  20.44,   "Neogene"),
-    "Aquitanian":     (20.44,  23.03,   "Neogene"),
-    "Chattian":       (23.03,  27.82,   "Paleogene"),
-    "Rupelian":       (27.82,  33.9,    "Paleogene"),
+    "Langhian":       (13.82,  15.98,   "Neogene"),
+    "Burdigalian":    (15.98,  20.45,   "Neogene"),
+    "Aquitanian":     (20.45,  23.04,   "Neogene"),
+    "Chattian":       (23.04,  27.30,   "Paleogene"),
+    "Rupelian":       (27.30,  33.9,    "Paleogene"),
     "Priabonian":     (33.9,   37.71,   "Paleogene"),
-    "Bartonian":      (37.71,  41.2,    "Paleogene"),
-    "Lutetian":       (41.2,   47.8,    "Paleogene"),
-    "Ypresian":       (47.8,   56.0,    "Paleogene"),
-    "Thanetian":      (56.0,   59.2,    "Paleogene"),
-    "Selandian":      (59.2,   61.6,    "Paleogene"),
-    "Danian":         (61.6,   66.0,    "Paleogene"),
+    "Bartonian":      (37.71,  41.03,   "Paleogene"),
+    "Lutetian":       (41.03,  48.07,   "Paleogene"),
+    "Ypresian":       (48.07,  56.00,   "Paleogene"),
+    "Thanetian":      (56.00,  59.24,   "Paleogene"),
+    "Selandian":      (59.24,  61.66,   "Paleogene"),
+    "Danian":         (61.66,  66.00,   "Paleogene"),
 }
 
 
@@ -63,12 +69,7 @@ def ics():
 
 
 class TestIcsCenozoicPresence:
-    """Every stage in REFERENCE_CENOZOIC must exist in the table.
-
-    Catches the original bug where Thanetian, Pleistocene, and Holocene
-    were MISSING from the table — `ics_parse_age_range` would silently
-    fail to find them.
-    """
+    """Every stage in REFERENCE_CENOZOIC must exist in the table."""
 
     @pytest.mark.parametrize("stage", REFERENCE_CENOZOIC.keys())
     def test_stage_present(self, ics, stage):
@@ -78,8 +79,7 @@ class TestIcsCenozoicPresence:
 class TestIcsCenozoicBoundaries:
     """Each Cenozoic stage must have the correct top_ma / base_ma / period.
 
-    Tolerances are tight (≤ 0.01 Ma) — the ICS chart is the source of truth,
-    and boundaries do not drift between revisions at the sub-0.01 Ma level.
+    Tolerances are tight (≤ 0.01 Ma) — the ICS chart is the source of truth.
     """
 
     @pytest.mark.parametrize(
@@ -104,21 +104,15 @@ class TestIcsCenozoicBoundaries:
 
 
 class TestIcsCenozoicOrdering:
-    """Within Cenozoic, stage ages must form a non-overlapping staircase.
-
-    A stage's top_ma must equal (within tolerance) the next-younger stage's base_ma.
-    """
+    """Within Cenozoic, stage ages must form a non-overlapping staircase."""
 
     def test_bartonian_top_equals_priabonian_base(self, ics):
-        # The boundary Bartonian|Priabonian is 37.71 Ma. Verify both sides agree.
         bart = ics["Bartonian"]
         priab = ics["Priabonian"]
         assert abs(bart["top_ma"] - priab["base_ma"]) <= 0.02
 
-    def test_danian_base_lt_maastrichtian_top(self, ics):
-        # K-Pg boundary: Danian base = 66.0, Maastrichtian top = 66.0.
-        # They must match within tolerance — this is the boundary that
-        # the original data corruption broke (Danian was mapped to 100.5).
+    def test_danian_base_equals_maastrichtian_top(self, ics):
+        # K-Pg boundary: Danian base = Maastrichtian top = 66.0.
         danian = ics["Danian"]
         maas = ics["Maastrichtian"]
         assert abs(danian["base_ma"] - maas["top_ma"]) <= 0.05, (
@@ -126,21 +120,18 @@ class TestIcsCenozoicOrdering:
             f"Maastrichtian.top={maas['top_ma']}"
         )
 
+    def test_gelasian_belongs_to_quaternary(self, ics):
+        # Sprint A (2026-09-01): the Gelasian was moved into the
+        # Quaternary by ICS in 2009; the old table mislabelled it Neogene.
+        assert ics["Gelasian"]["period"] == "Quaternary"
+
 
 class TestIcsCenozoicLookups:
-    """The downstream lookups must return Cenozoic stages correctly.
-
-    These are the actual consumer-facing behaviour tests — even if the
-    underlying numbers changed, the function must still produce the
-    correct stage for canonical Ma values.
-    """
+    """The downstream lookups must return Cenozoic stages correctly."""
 
     def test_stage_from_age_danian(self, ics):
         from rca_core.standards.ics import ics_stage_from_age
-        assert ics_stage_from_age(64.0) == "Danian", (
-            "64 Ma should be Danian (Paleocene, 66.0–61.6 Ma); the original "
-            "data corruption returned 'Bartonian' for this input."
-        )
+        assert ics_stage_from_age(64.0) == "Danian"
 
     def test_stage_from_age_thanetian(self, ics):
         from rca_core.standards.ics import ics_stage_from_age
@@ -148,22 +139,11 @@ class TestIcsCenozoicLookups:
 
     def test_stage_from_age_holocene(self, ics):
         from rca_core.standards.ics import ics_stage_from_age
-        assert ics_stage_from_age(0.0) == "Holocene", (
-            "0 Ma should be Holocene. Original data missing Holocene "
-            "returned None."
-        )
+        assert ics_stage_from_age(0.0) == "Holocene"
 
     def test_age_compare_danian_older_than_thanetian(self, ics):
         from rca_core.standards.ics import ics_age_compare
-        # In stratigraphic time order (oldest → youngest):
-        #   Danian (Paleocene base, 61.6–66.0) → Selandian (59.2–61.6) →
-        #   Thanetian (56.0–59.2) → Ypresian (47.8–56.0)
-        # So Danian is OLDER than Thanetian.
-        # ics_age_compare: returns -1 if stage1 is older, 1 if younger.
-        assert ics_age_compare("Danian", "Thanetian") < 0, (
-            "Danian (61.6–66.0 Ma, oldest Paleocene) must be reported as "
-            "older than Thanetian (56.0–59.2 Ma, youngest Paleocene)."
-        )
+        assert ics_age_compare("Danian", "Thanetian") < 0
 
     def test_age_compare_holocene_younger_than_danian(self, ics):
         from rca_core.standards.ics import ics_age_compare
@@ -175,14 +155,7 @@ class TestIcsCenozoicLookups:
 
 
 class TestIcsPleistoceneEpoch:
-    """Pleistocene is an Epoch (2.588–0.0117 Ma), not a stage.
-
-    REVIEW-2026-07-31: the old table carried a bogus "Pleistocene" stage
-    entry covering only 0.129–0.0117 Ma (a duplicate of Chibanian). It was
-    removed; the label now resolves through the series map to the real
-    Pleistocene range. A chart labeled "Pleistocene" previously resolved
-    to a ~0.07 Ma midpoint (~1.3 Ma off); it now resolves to 2.588 Ma.
-    """
+    """Pleistocene is an Epoch (2.58-0.0117 Ma), not a stage."""
 
     def test_not_a_stage_entry(self, ics):
         assert "Pleistocene" not in ics, (
@@ -194,13 +167,11 @@ class TestIcsPleistoceneEpoch:
         from rca_core.standards.ics import ics_age_range_bounds, ics_resolve_age_bound
         name, ma = ics_resolve_age_bound("Pleistocene", prefer="older")
         assert name == "Pleistocene"
-        assert abs(ma - 2.588) <= 0.01
+        assert abs(ma - 2.58) <= 0.01
         older, younger = ics_age_range_bounds("Pleistocene")
-        assert abs(older - 2.588) <= 0.01
+        assert abs(older - 2.58) <= 0.01
         assert abs(younger - 0.0117) <= 0.01
 
     def test_midpleistocene_age_resolves_to_chibanian(self):
         from rca_core.standards.ics import ics_stage_from_age
-        # 0.5 Ma is mid-Pleistocene — must be Chibanian, NOT the bogus
-        # "Pleistocene" pseudo-stage.
         assert ics_stage_from_age(0.5) == "Chibanian"

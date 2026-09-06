@@ -26,7 +26,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QDialog, QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy,
@@ -45,8 +45,14 @@ from rca_core.i18n import Translator
 logger = logging.getLogger(__name__)
 
 
-def _read_lock_port() -> int:
-    """Return the server port from the lock file, or 8000 as a fallback."""
+def _read_lock_port() -> int | None:
+    """Return the server port from the lock file, or ``None`` when absent.
+
+    UI-REVIEW-2026-09-05: the previous hard-coded 8000 fallback sent
+    provenance requests to whatever unrelated service happened to occupy
+    that port (and silently failed). Callers now treat ``None`` as "local
+    server not running" and tell the user so instead of dialing a guess.
+    """
     try:
         lock_file = Path(LOCK_PATH)
         content = lock_file.read_text(encoding="utf-8").strip()
@@ -56,7 +62,7 @@ def _read_lock_port() -> int:
             return int(port_str)
     except Exception:
         pass
-    return 8000
+    return None
 
 # Resolve project root (one directory up from this file's directory).
 _PROJECT_ROOT = Path(__file__).resolve().parent
@@ -114,13 +120,17 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
         border-radius: 10px; margin-bottom: 16px; }
 .rt-left { display: flex; align-items: center; gap: 12px; }
 .rt-actions { display: flex; gap: 6px; }
-/* Confidence ring: SVG circle must be hollow (fill:none) or it renders black */
+/* Confidence ring: SVG circle must be hollow (fill:none) or it renders black.
+   UI-REVIEW-2026-09-05: mirror the fixed css/style.css ring layout —
+   inline-grid + both children in cell 1/1. The previous inline-flex +
+   abspos-.num combination rendered the number outside the circle in
+   QWebEngineView (same visual bug style.css had before its grid-area fix). */
 .confidence-ring {
     width: 44px; height: 44px;
-    display: inline-flex; align-items: center; justify-content: center;
-    position: relative; flex-shrink: 0;
+    display: inline-grid; place-items: center;
+    flex-shrink: 0;
 }
-.confidence-ring svg { transform: rotate(-90deg); width: 100%; height: 100%; }
+.confidence-ring svg { grid-area: 1 / 1; transform: rotate(-90deg); width: 100%; height: 100%; }
 .confidence-ring .track { stroke: #e7e5e4; fill: none; stroke-width: 4px; }
 .confidence-ring .bar { stroke: #2563eb; fill: none; stroke-width: 4px;
         stroke-linecap: round; }
@@ -128,7 +138,7 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
 .confidence-ring.mid  .bar { stroke: #b45309; }
 .confidence-ring.low  .bar { stroke: #ef4444; }
 .confidence-ring .num {
-    position: absolute; font-size: 12px; font-weight: 650;
+    grid-area: 1 / 1; font-size: 12px; font-weight: 650;
     font-variant-numeric: tabular-nums; color: #1f2937;
 }
 .confidence-ring .label {
@@ -332,6 +342,51 @@ def _thumbnail_widget(thumb_bytes: bytes) -> QWidget:
     return w
 
 
+class _ProvenanceFetchWorker(QThread):
+    """Sprint B (REVIEW-2026-09-04): fetch the provenance document off the
+    UI thread. Emits ``done(status, body, error)`` exactly once — ``error``
+    is non-empty for transport failures (connection refused, timeout, …),
+    in which case ``status`` is 0 and ``body`` empty.
+
+    The header ``X-RCA-Client: range-chart-analyzer`` accompanies the
+    request: the hardened server endpoint rejects provenance fetches that
+    omit it with 403 (see server.py /api/history/<id>/provenance).
+    """
+
+    done = Signal(int, bytes, str)
+
+    def __init__(self, record_id: int, port: int, path: str, parent=None):
+        super().__init__(parent)
+        self._record_id = record_id
+        self._port = port
+        self._path = path
+
+    def run(self) -> None:
+        import http.client
+        conn = None
+        try:
+            # Short timeout: the provenance doc for one record is small;
+            # this is a local loopback call to our own server process.
+            conn = http.client.HTTPConnection("127.0.0.1", self._port,
+                                              timeout=8)
+            conn.request("GET", self._path, headers={
+                "X-RCA-Client": "range-chart-analyzer",
+            })
+            resp = conn.getresponse()
+            body = resp.read()
+            self.done.emit(int(resp.status), body, "")
+        except Exception as exc:
+            self.done.emit(0, b"", str(exc))
+        finally:
+            # conn may be None if the constructor itself raised (bad port,
+            # resolution failure) — guard instead of UnboundLocalError.
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+
 class HistoryDetailDialog(QDialog):
     """Modal that shows the full content of one HistoryRecord.
 
@@ -386,7 +441,18 @@ class HistoryDetailDialog(QDialog):
             "abundance_diagram": "Abundance / pollen",
             "phylogenetic_tree": "Phylogenetic tree",
         }.get(rec.mode, rec.mode or "-")
-        conf = f"{(rec.confidence or 0) * 100:.0f}%" if rec.confidence else "-"
+        # UI-REVIEW-2026-09-05: columnar payloads store the verdict in
+        # result["overall_confidence"]; rec.confidence (taken from
+        # result["confidence"] at save time) is then 0 and the row showed
+        # "-" while the result-section ring showed "0" — now both fall
+        # back to overall_confidence and agree.
+        _res_conf = rec.confidence
+        if not _res_conf:
+            try:
+                _res_conf = (rec.result or {}).get("overall_confidence") or 0
+            except Exception:
+                _res_conf = 0
+        conf = f"{_res_conf * 100:.0f}%" if _res_conf else "-"
         rows = [
             (self._t("history.detail.time"), ts),
             (self._t("history.detail.provider"), rec.provider_name or "-"),
@@ -463,10 +529,14 @@ class HistoryDetailDialog(QDialog):
         footer = QHBoxLayout()
         footer.addStretch(1)
         # P2-4 (REVIEW-2026-07-25): Provenance PROV-O JSON-LD export.
-        btn_prov = PushButton("Export Provenance (PROV-O JSON-LD)")
-        btn_prov.setToolTip(self._t("history.detail.provenance"))
-        btn_prov.clicked.connect(self._on_export_provenance)
-        footer.addWidget(btn_prov)
+        # Sprint B (REVIEW-2026-09-04): keep a reference (self.btn_prov) so
+        # the fetch handler can disable/re-enable the button, and init the
+        # in-flight worker slot.
+        self._prov_worker = None
+        self.btn_prov = PushButton("Export Provenance (PROV-O JSON-LD)")
+        self.btn_prov.setToolTip(self._t("history.detail.provenance"))
+        self.btn_prov.clicked.connect(self._on_export_provenance)
+        footer.addWidget(self.btn_prov)
         btn_close = PrimaryPushButton(self._t("history.detail.close"))
         btn_close.clicked.connect(self.accept)
         footer.addWidget(btn_close)
@@ -479,44 +549,85 @@ class HistoryDetailDialog(QDialog):
             return key
 
     def _on_export_provenance(self) -> None:
-        """Fetch the PROV-O JSON-LD provenance document and save to disk."""
-        import http.client
-        import json
+        """Fetch the PROV-O JSON-LD provenance document and save to disk.
+
+        Sprint B (REVIEW-2026-09-04): the HTTP fetch used to run inline on
+        the UI thread (up to a 10 s freeze) and ``conn`` was assigned
+        inside the ``try`` while ``finally: conn.close()`` ran
+        unconditionally — an ``http.client`` constructor failure raised
+        UnboundLocalError from the finally block. The request now runs on
+        a small QThread (constructor + request + close all guarded), and
+        the status handling / save dialog stay on the UI thread. The
+        request carries the ``X-RCA-Client: range-chart-analyzer`` header
+        required by the hardened server endpoint (403 without it).
+        """
+        if getattr(self, "_prov_worker", None) is not None:
+            return  # a fetch is already in flight
         port = _read_lock_port()
-        path = f"/api/history/{self._rec.id}/provenance"
-        try:
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-            conn.request("GET", path)
-            resp = conn.getresponse()
-            body = resp.read()
-        except Exception as exc:
+        if port is None:
+            # UI-REVIEW-2026-09-05: no server lock — the previous code fell
+            # back to port 8000 and dialed whatever occupied it, then the
+            # failure InfoBar was easy to miss. Say so plainly and skip the
+            # request entirely.
             from qfluentwidgets import InfoBar, InfoBarPosition
-            InfoBar.error(
-                "", f"Failed to fetch provenance: {exc}",
+            InfoBar.warning(
+                "", self._t("history.detail.provenance.noServer"),
                 parent=self, position=InfoBarPosition.TOP, duration=5000,
             )
             return
-        finally:
-            conn.close()
+        path = f"/api/history/{self._rec.id}/provenance"
+        self.btn_prov.setEnabled(False)
+        worker = _ProvenanceFetchWorker(self._rec.id, port, path, parent=self)
+        self._prov_worker = worker
+        # Bound method of this QDialog -> queued (auto) connection, so the
+        # status handling + save dialog always run on the GUI thread.
+        worker.done.connect(self._on_provenance_fetched)
+        worker.finished.connect(self._on_prov_thread_finished)
+        worker.start()
 
-        if resp.status == 404:
-            from qfluentwidgets import InfoBar, InfoBarPosition
+    def _on_prov_thread_finished(self) -> None:
+        # Safety net: drop the strong ref when the thread finished without
+        # emitting done() (should not happen — run() catches everything).
+        w = getattr(self, "_prov_worker", None)
+        if w is not None and not w.isRunning():
+            self._forget_prov_worker(w)
+
+    def _forget_prov_worker(self, worker) -> None:
+        if getattr(self, "_prov_worker", None) is worker:
+            self._prov_worker = None
+
+    def _on_provenance_fetched(self, status: int, body: bytes, error: str) -> None:
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        self.btn_prov.setEnabled(True)
+        if error:
+            InfoBar.error(
+                "", f"Failed to fetch provenance: {error}",
+                parent=self, position=InfoBarPosition.TOP, duration=5000,
+            )
+            return
+        if status == 404:
             InfoBar.error(
                 "", "Record not found",
                 parent=self, position=InfoBarPosition.TOP, duration=4000,
             )
             return
-        if resp.status >= 500:
-            from qfluentwidgets import InfoBar, InfoBarPosition
+        if status == 403:
+            # Hardened server requires the X-RCA-Client header; getting
+            # here means the client/server headers drifted apart.
+            InfoBar.error(
+                "", "Server rejected the request (missing client header)",
+                parent=self, position=InfoBarPosition.TOP, duration=4000,
+            )
+            return
+        if status >= 500:
             InfoBar.error(
                 "", "Provenance generation failed on server",
                 parent=self, position=InfoBarPosition.TOP, duration=4000,
             )
             return
-        if resp.status != 200:
-            from qfluentwidgets import InfoBar, InfoBarPosition
+        if status != 200:
             InfoBar.error(
-                "", f"Server error {resp.status}",
+                "", f"Server error {status}",
                 parent=self, position=InfoBarPosition.TOP, duration=4000,
             )
             return
@@ -525,7 +636,6 @@ class HistoryDetailDialog(QDialog):
         try:
             json.loads(body.decode("utf-8"))
         except Exception:
-            from qfluentwidgets import InfoBar, InfoBarPosition
             InfoBar.error(
                 "", "Server returned invalid JSON",
                 parent=self, position=InfoBarPosition.TOP, duration=4000,

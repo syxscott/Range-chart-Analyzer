@@ -1,4 +1,13 @@
-"""ICS 2023/2024 International Chronostratigraphic Chart lookup.
+"""ICS International Chronostratigraphic Chart lookup.
+
+Data: official ICS chart v2024/12, rebuilt 2026-09-01 (Sprint A of
+CODE_REVIEW_2026-09-01) and cross-verified against stratigraphy.org,
+Macrostrat timescale #1 and the Paleobiography Database. The bundled
+ics_2024.json previously mixed GTS2012/2016-vintage ages (~20 wrong
+boundaries, 4 internal overlaps/gaps); tests/test_ics_invariants.py now
+guards the table's internal consistency. Known newer chart revisions
+(v2026-06, not yet adopted): Olenekian base 249.9 -> 250.8, Anisian base
+246.7 -> 247.0, Wuchiapingian base 259.51 -> 259.857.
 
 Provides functions to map stage names to/from Ma ages, compare stage
 order, and parse age range strings.
@@ -29,21 +38,40 @@ except (OSError, json.JSONDecodeError) as _exc:  # pragma: no cover - resource i
 def ics_stage_from_age(ma: float) -> Optional[str]:
     """Given a Ma value, return the corresponding ICS Stage name.
 
-
-    Traverses all stages in ICS_2024 and returns the stage whose
-    age range contains the given Ma value.
+    Traverses all stages in ICS_2024 and returns the stage whose age
+    range contains the given Ma value.
     In geological convention: base_ma is older (larger number),
     top_ma is younger (smaller number).
     Returns None if no stage matches.
+
+    Determinism (Sprint A 2026-09-01): the lookup never depends on dict
+    iteration order.
+      1. a strict interior hit (top < ma < base) wins immediately —
+         interior matches are unique in a gapless table;
+      2. at an exact boundary, the boundary belongs to the YOUNGER
+         stage whose base it defines (259.51 Ma -> Wuchiapingian, not
+         Capitanian; 254.14 Ma -> Changhsingian, not Wuchiapingian);
+      3. a value equal to a stage's top (e.g. 0.0 -> Holocene) is the
+         last fallback.
     """
+    interior: Optional[str] = None
+    base_match: Optional[str] = None
+    top_match: Optional[str] = None
     for name, info in ICS_2024.items():
         top = info.get("top_ma", 0)
         base = info.get("base_ma", 0)
-        # In geological convention, base > top (older > younger)
-        # So we check: top <= ma <= base
-        if top <= ma <= base:
-            return name
-    return None
+        if top < ma < base:
+            interior = name
+            break
+        if base_match is None and abs(base - ma) <= 1e-9:
+            base_match = name
+        if top_match is None and abs(top - ma) <= 1e-9:
+            top_match = name
+    if interior is not None:
+        return interior
+    if base_match is not None:
+        return base_match
+    return top_match
 
 
 def ics_age_compare(stage1: str, stage2: str) -> Optional[int]:
@@ -160,8 +188,12 @@ _CN_STAGE_ALIASES: dict[str, str] = {
     "赫南特阶": "Hirnantian", "凯迪阶": "Katian", "桑比阶": "Sandbian",
     "达瑞威尔阶": "Darriwilian", "大坪阶": "Dapingian", "弗洛阶": "Floian",
     "特马豆克阶": "Tremadocian",
-    "排碧阶": "Paibian", "古丈阶": "Guzhangian", "鼓山阶": "Drumian",
-    "乌溜阶": "Stage 5",
+    "排碧阶": "Paibian", "江山阶": "Jiangshanian", "古丈阶": "Guzhangian",
+    "鼓山阶": "Drumian",
+    # Sprint A (CODE_REVIEW_2026-09-01): 乌溜阶 = Wuliuan (= former
+    # "Stage 5"). Previously mapped to the stale "Stage 5" entry, which
+    # carried wrong ages (504.2-509.0 instead of 506.5-504.5).
+    "乌溜阶": "Wuliuan",
     "格拉斯阶": "Gelasian", "卡拉布里阶": "Calabrian", "基班期": "Chibanian",
     "皮亚琴察阶": "Piacenzian", "赞克尔阶": "Zanclean", "梅辛阶": "Messinian",
     "托尔托纳阶": "Tortonian", "塞拉瓦莱阶": "Serravallian", "兰盖阶": "Langhian",
@@ -218,20 +250,45 @@ _SERIES_STAGE_LISTS: dict[str, tuple[str, list[str]]] = {
     "early silurian": ("Llandovery", ["Llandovery"]),
     "middle silurian": ("Wenlock", ["Wenlock"]),
     "late silurian": ("Ludlow", ["Ludlow"]),
-    "lower cambrian": ("Lower Cambrian", ["Fortunian", "Series 2"]),
-    "early cambrian": ("Lower Cambrian", ["Fortunian", "Series 2"]),
-    "middle cambrian": ("Middle Cambrian", ["Stage 5", "Drumian", "Guzhangian"]),
-    "furongian": ("Furongian", ["Paibian", "Stage 9", "Stage 10"]),
-    "late cambrian": ("Furongian", ["Paibian", "Stage 9", "Stage 10"]),
+    # Sprint A (CODE_REVIEW_2026-09-01): Cambrian series maps rebuilt on the
+    # official v2024/12 stage chain — Terreneuvian = Fortunian + Stage 2,
+    # Miaolingian = Wuliuan + Drumian + Guzhangian (base 506.5, not the stale
+    # "Stage 5" 509.0), Furongian = Paibian + Jiangshanian + Stage 10.
+    "lower cambrian": ("Lower Cambrian", ["Fortunian", "Stage 2"]),
+    "early cambrian": ("Lower Cambrian", ["Fortunian", "Stage 2"]),
+    "middle cambrian": ("Miaolingian", ["Wuliuan", "Drumian", "Guzhangian"]),
+    "furongian": ("Furongian", ["Paibian", "Jiangshanian", "Stage 10"]),
+    "late cambrian": ("Furongian", ["Paibian", "Jiangshanian", "Stage 10"]),
+    # Sprint B (2026-09-05): rock-unit series terms ("Upper Permian",
+    # "Lower Jurassic") are ubiquitous in published range charts. Without
+    # these aliases such labels silently degraded to period-level bounds,
+    # losing series precision. Each maps to the same interval as its
+    # early/late sibling (series = time-translated epoch).
+    "upper permian": ("Lopingian", ["Wuchiapingian", "Changhsingian"]),
+    "lower permian": ("Cisuralian", ["Asselian", "Sakmarian", "Artinskian", "Kungurian"]),
+    "upper triassic": ("Upper Triassic", ["Carnian", "Norian", "Rhaetian"]),
+    "lower triassic": ("Lower Triassic", ["Induan", "Olenekian"]),
+    "upper jurassic": ("Upper Jurassic", ["Oxfordian", "Kimmeridgian", "Tithonian"]),
+    "lower jurassic": ("Lower Jurassic", ["Hettangian", "Sinemurian", "Pliensbachian", "Toarcian"]),
+    "upper ordovician": ("Upper Ordovician", ["Sandbian", "Katian", "Hirnantian"]),
+    "lower ordovician": ("Lower Ordovician", ["Tremadocian", "Floian"]),
+    "upper devonian": ("Upper Devonian", ["Frasnian", "Famennian"]),
+    "lower devonian": ("Lower Devonian", ["Lochkovian", "Pragian", "Emsian"]),
+    "upper silurian": ("Ludlow", ["Ludlow"]),
+    "lower silurian": ("Llandovery", ["Llandovery"]),
+    "upper carboniferous": ("Pennsylvanian", ["Bashkirian", "Moscovian", "Kasimovian", "Gzhelian"]),
+    "lower carboniferous": ("Mississippian", ["Tournaisian", "Visean", "Serpukhovian"]),
+    "upper cambrian": ("Furongian", ["Paibian", "Jiangshanian", "Stage 10"]),
 }
 
 # REVIEW-2026-07-31: series/epoch labels whose bounds cannot be derived
-# from named stages alone. The Pleistocene spans 2.588-0.0117 Ma, but its
+# from named stages alone. The Pleistocene spans 2.58-0.0117 Ma, but its
 # formally named stages (Gelasian, Calabrian, Chibanian) end at 0.129 Ma —
 # the upper part (0.129-0.0117) has no formal stage. Without the override
 # the series bounds would truncate the last 0.117 Myr.
+# Sprint A (2026-09-01): base Quaternary updated 2.588 -> 2.58 (v2024/12).
 _SERIES_EXPLICIT_BOUNDS: dict[str, tuple[float, float]] = {
-    "pleistocene": (2.588, 0.0117),
+    "pleistocene": (2.58, 0.0117),
 }
 
 
@@ -263,6 +320,16 @@ _CN_SERIES_ALIASES: dict[str, str] = {
     "早泥盆世": "early devonian", "中泥盆世": "middle devonian", "晚泥盆世": "late devonian",
     "早石炭世": "early carboniferous", "晚石炭世": "late carboniferous",
     "早寒武世": "early cambrian", "中寒武世": "middle cambrian", "晚寒武世": "late cambrian",
+    # Sprint B (2026-09-05): rock-unit 统 forms (下X统/中X统/上X统) as printed
+    # on Chinese range charts. Same time spans as the 世 forms above.
+    "下二叠统": "early permian", "中二叠统": "middle permian", "上二叠统": "late permian",
+    "下三叠统": "early triassic", "中三叠统": "middle triassic", "上三叠统": "late triassic",
+    "下侏罗统": "early jurassic", "中侏罗统": "middle jurassic", "上侏罗统": "late jurassic",
+    "下白垩统": "early cretaceous", "上白垩统": "late cretaceous",
+    "下奥陶统": "early ordovician", "中奥陶统": "middle ordovician", "上奥陶统": "late ordovician",
+    "下泥盆统": "early devonian", "中泥盆统": "middle devonian", "上泥盆统": "late devonian",
+    "下石炭统": "early carboniferous", "上石炭统": "late carboniferous",
+    "下寒武统": "early cambrian", "中寒武统": "middle cambrian", "上寒武统": "late cambrian",
 }
 
 # Period-level fallback: label -> canonical period name. Bounds come from the

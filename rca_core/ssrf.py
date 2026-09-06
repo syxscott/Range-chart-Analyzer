@@ -203,23 +203,51 @@ def validate_endpoint_or_raise(endpoint: str) -> None:
 # TLS handshake and upstream auth succeed. This is the single shared
 # implementation used by both ``server.py`` and ``rca_core/llm.py``.
 
+def _is_loopback_host(host: str) -> bool:
+    """Return True when *host* is a literal loopback IP or a localhost name.
+
+    Sprint B (REVIEW-2026-09-04): mirrors the loopback policy of
+    :func:`validate_endpoint_local_ok` (literal 127.0.0.0/8, ::1 and the
+    RFC 6761 "localhost" / "*.localhost" names) so the DNS-pinning layer
+    and the endpoint validator agree on what a local endpoint is.
+    """
+    if not host:
+        return False
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        low = host.lower()
+        return low == "localhost" or low.endswith(".localhost")
+
+
 def pinned_endpoint_ip(endpoint: str) -> str:
     """Resolve *endpoint* to a single IP literal, validating it is public.
 
     Returns the pinned IP as a string. Raises ``ValueError`` if the host
     can't be resolved to a usable *public* IP (fail closed).
+
+    Sprint B (REVIEW-2026-09-04): loopback hosts are EXEMPT from the
+    public-IP requirement. ``validate_endpoint_local_ok`` explicitly allows
+    loopback endpoints on any scheme (local Ollama-style servers), but this
+    function then raised on the same host and the pinning opener turned that
+    into ``URLError("SSRF: ...")`` — so an ``https://127.0.0.1:...`` endpoint
+    passed validation yet every request failed. Loopback targets carry no
+    SSRF risk (there is nothing "internal" beyond the caller's own machine),
+    so they skip the public-IP pinning check here. Non-loopback private
+    networks keep the exact previous behaviour (still fail closed).
     """
     u = urlparse(endpoint)
     bare = (u.hostname or "").strip("[]")
     if not bare:
         raise ValueError("missing host")
+    loopback_ok = _is_loopback_host(bare)
     # Literal IPv4/IPv6.
     try:
         ip = ipaddress.ip_address(bare)
     except ValueError:
         ip = None
     if ip is not None:
-        if not _ALLOW_PRIVATE and _is_non_public_ip(ip):
+        if not loopback_ok and not _ALLOW_PRIVATE and _is_non_public_ip(ip):
             raise ValueError(
                 f"host {bare!r} is a non-public IP {ip}; "
                 "set RCA_ALLOW_PRIVATE=1 to override"
@@ -235,7 +263,7 @@ def pinned_endpoint_ip(endpoint: str) -> str:
             ip = ipaddress.ip_address(addr)
         except (ValueError, IndexError):
             continue
-        if not _ALLOW_PRIVATE and _is_non_public_ip(ip):
+        if not loopback_ok and not _ALLOW_PRIVATE and _is_non_public_ip(ip):
             raise ValueError(
                 f"host {bare!r} resolves to non-public IP {ip}; "
                 "set RCA_ALLOW_PRIVATE=1 to override"
@@ -331,6 +359,8 @@ def make_pinning_opener():
                 ip = pinned_endpoint_ip(f"https://{host}")
             except ValueError as exc:
                 # Non-public or unresolvable direct target -> refuse.
+                # (Loopback is exempt inside pinned_endpoint_ip, matching
+                # validate_endpoint_local_ok — Sprint B REVIEW-2026-09-04.)
                 raise urllib.error.URLError(f"SSRF: {exc}") from exc
             # Original hostname (strip port / brackets) for SNI + Host.
             orig_host = (

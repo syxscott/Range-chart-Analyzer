@@ -770,6 +770,12 @@ button.btn.btn-primary:not(:disabled):active {
     position: relative;
 }
 .confidence-ring svg {
+    /* UI-REVIEW-2026-09-05: without an explicit grid-area the auto-placed
+       SVG AVOIDS the cell occupied by the explicitly-placed .num (CSS Grid
+       auto-placement never overlaps), pushing the ring into a second
+       implicit row — the number floated above a squashed circle. Stack
+        both children in the same cell as the .num rule below intends. */
+    grid-area: 1 / 1;
     transform: rotate(-90deg);
     width: 100%;
     height: 100%;
@@ -1181,4 +1187,18 @@ table.data-table tbody tr.row-low-agreement td {
 }
 table.data-table tbody tr.row-low-agreement:hover td {
     background: #fde68a;
+}
+/* UI-REVIEW-2026-09-05: the dark-theme zebra rules above
+   (`:root[data-theme="dark"] … :nth-child(even) td` and its
+   prefers-color-scheme twin) have specificity (0,4,4) which beats the base
+   .row-low-agreement rule (0,2,4) — even-numbered warning rows lost their
+   tint in dark mode while odd rows kept it. Re-assert the warning
+   background at (0,4,4) for BOTH dark paths, after the zebra rules. */
+:root[data-theme="dark"] table.data-table tbody tr.row-low-agreement td {
+    background: var(--warning-soft);
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) table.data-table tbody tr.row-low-agreement td {
+        background: var(--warning-soft);
+    }
 }

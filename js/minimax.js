@@ -177,11 +177,18 @@ function rcaCarryExtras(item, known) {
 // foreign payload (e.g. truncated mid-stream, schema swap, hallucinated
 // shape) and the result must be flagged as truncated/unrecognized.
 // Mirrors rca_core/extractor.py:_MODE_KNOWN_ROOTS.
+// Sprint B (REVIEW-2026-09-04): `_extras` removed from the range_chart set
+// to mirror rca_core/extractor.py:629-630 RANGE_CHART_ROOTS
+// ({"sections","species_ranges","biozones","other_fossils","confidence"}).
+// The extra entry made the JS foreign-payload guard accept `_extras`-only
+// payloads that Python (correctly) flags as truncated_or_unrecognized.
 const KNOWN_ROOTS = {
-  range_chart:       new Set(['sections','species_ranges','biozones','other_fossils','confidence','_extras']),
+  range_chart:       new Set(['sections','species_ranges','biozones','other_fossils','confidence']),
   columnar_section:  new Set(['sections','fossil_legend','lithology_legend','cross_beds','confidence','overall_confidence','_extras']),
   abundance_diagram: new Set(['sites','abundances','zones','confidence','_extras']),
   phylogenetic_tree: new Set(['metadata','nodes','root_ids','legend','confidence']),
+  // UI-REVIEW-2026-09-05: radiolarian biozonation / correlation charts.
+  zonation_chart:    new Set(['zonations','zones','correlations','confidence']),
 };
 
 // H5 helper: returns a fresh warnings array with the flag if no known
@@ -201,20 +208,44 @@ function rcaTruncatedWarningIfForeign(parsed, mode) {
 // P0-5 (REVIEW-2026-07-25): If the model returned a top-level JSON array
 // (already wrapped by json-utils.extractBalancedJsonArray as {_array_root:[...]}),
 // distribute items into the correct tables by structural key, mirroring
-// Python rca_core/extractor.py:440-470 (_classify_array_item).
+// Python rca_core/extractor.py:636-661 (the _array_root unwrap in
+// normalize_range_chart).
+// Sprint B (REVIEW-2026-09-04): classification parity with
+// _classify_array_item (extractor.py:344-389) —
+//   * bare non-empty strings go to `other_fossils` (extractor.py:640-642);
+//   * dicts that classify to no bucket are kept under a top-level
+//     `_unclassified` array (extractor.py:648) instead of being silently
+//     dropped;
+//   * key tests use KEY PRESENCE, not truthiness (Python `"species" in item`),
+//     so `{species: ""}` still classifies as a species row.
 function rcaUnwrapArrayRoot(parsed) {
   if (!parsed || typeof parsed !== 'object') return parsed;
   if (!Array.isArray(parsed._array_root)) return parsed;
   const dist = {
     sections: [], species_ranges: [], biozones: [], other_fossils: [],
   };
+  let unclassified = null;
   for (const item of parsed._array_root) {
-    if (!item || typeof item !== 'object') continue;
+    // Non-dict items: bare strings land in other_fossils, everything else
+    // is skipped (mirrors extractor.py:639-643).
+    if (!item || typeof item !== 'object') {
+      if (typeof item === 'string' && item.trim()) {
+        dist.other_fossils.push(item.trim());
+      }
+      continue;
+    }
     const key = rcaClassifyArrayItem(item);
     if (key && dist[key]) dist[key].push(item);
+    else {
+      // Unclassifiable dicts survive under _unclassified so nothing the
+      // model emitted is silently dropped (extractor.py:645-648).
+      if (!unclassified) unclassified = [];
+      unclassified.push(item);
+    }
   }
   // Preserve any other top-level fields the wrapper may have carried.
   const out = { ...dist };
+  if (unclassified) out._unclassified = unclassified;
   for (const k of Object.keys(parsed)) {
     if (k === '_array_root') continue;
     if (k in out) continue;  // already populated from array items
@@ -223,9 +254,17 @@ function rcaUnwrapArrayRoot(parsed) {
   return out;
 }
 
-// Lightweight re-implementation of Python _classify_array_item for the
-// JS normalizers. Used only when unwrapping _array_root payloads.
+// Lightweight re-implementation of Python _classify_array_item
+// (rca_core/extractor.py:344-389) for the JS normalizers. Used only when
+// unwrapping _array_root payloads.
 // P0-4: explicit zone_type wins over all heuristics.
+// Sprint B (REVIEW-2026-09-04): aligned 1:1 with the Python ladder —
+// species via key presence, biozone via name+age presence + zone label,
+// sections via name + (age_range|formations|age) presence, then a
+// name-only fallback. The previous JS ladders (truthiness checks, an
+// id/thickness_m section probe, a label/species/taxon other_fossils probe)
+// dropped rows Python keeps — e.g. `{name:'S1', age_range:'Cretaceous'}`
+// fell through every JS branch and vanished.
 function rcaClassifyArrayItem(item) {
   if (!item || typeof item !== 'object') return null;
   // P0-4: explicit zone_type wins over all heuristics.
@@ -243,23 +282,26 @@ function rcaClassifyArrayItem(item) {
       return 'sections';
     }
   }
-  // species: has species OR (range_top AND range_base together) — C-3 parity with Python
-  if (item.species || (item.range_top && item.range_base)) {
+  // species: "species" in item OR (range_top AND range_base present) —
+  // key-existence test, mirroring extractor.py:365-367.
+  if ('species' in item || ('range_top' in item && 'range_base' in item)) {
     return 'species_ranges';
   }
-  // biozone: requires name passes zone-label pattern AND age is present (H-3 parity)
+  // biozone: requires name + age present AND the name passes the zone-label
+  // pattern (extractor.py:368-378, iron-rule regex).
   const biozoneText = String(item.name || item.label || '');
   const isZoneLabel = /\b(zone|zonule|assemblage|oppel|interval|lineage|range|acme)\b/i.test(biozoneText);
-  if (item.name && item.age && isZoneLabel) {
+  if ('name' in item && 'age' in item && isZoneLabel) {
     return 'biozones';
   }
-  // section: has formations list or id+group or thickness_m only
-  if (Array.isArray(item.formations) || item.id || item.thickness_m) {
+  // section: name + any age/formations signal (extractor.py:379-385).
+  if ('name' in item && ('age_range' in item || 'formations' in item
+      || 'age' in item)) {
     return 'sections';
   }
-  // other_fossils (str or dict)
-  if (item.label || item.species || item.taxon) {
-    return 'other_fossils';
+  // Name-only fallback: still a section (extractor.py:386-388).
+  if ('name' in item) {
+    return 'sections';
   }
   return null;
 }
@@ -274,6 +316,13 @@ function rcaNormalizeResult(parsed) {
     other_fossils: [],
     confidence: 0,
   };
+  // Sprint B (REVIEW-2026-09-04): keep unclassifiable dicts top-level on
+  // the result, mirroring rca_core/extractor.py:645-648
+  // (out.setdefault("_unclassified", []).append(item)). Excluded from the
+  // root _extras carry below so it is not duplicated there.
+  if (Array.isArray(parsed._unclassified)) {
+    out._unclassified = parsed._unclassified;
+  }
   // H5: flag payloads that have no range_chart root keys (and no array
   // wrapper) as truncated/unrecognized. The Python extractor then
   // converts this warning into err.parse in the extract_range_chart path.
@@ -442,7 +491,7 @@ function rcaNormalizeResult(parsed) {
   }
   const conf = Number(parsed.confidence);
   out.confidence = Number.isFinite(conf) ? Math.max(0, Math.min(1, conf)) : 0;
-  const rootExtras = rcaCarryExtras(parsed || {}, ROOT_KNOWN);
+  const rootExtras = rcaCarryExtras(parsed || {}, ROOT_KNOWN.concat(['_unclassified']));
   if (rootExtras) out._extras = rootExtras;
   return out;
 }
@@ -594,9 +643,18 @@ function rcaNormalizeColumnarResult(parsed) {
 // Mirrors rca_core.extractor.normalize_abundance_result (with _extras carry).
 function rcaNormalizeAbundanceResult(parsed) {
   // P0-5 (REVIEW-2026-07-25): unwrap top-level array wrappers.
+  // Sprint B (REVIEW-2026-09-04): the old `parsed = { ...dist }` replaced
+  // the payload wholesale, dropping top-level `confidence` (and every other
+  // non-bucket field such as `_note`) whenever the model emitted a bare
+  // array. Mirror the columnar unwrap above and Python
+  // rca_core/extractor.py:1296-1310, which mutates `parsed` in place with
+  // setdefault so `confidence` survives and unclassifiable dicts are kept
+  // under `_unclassified` (they flow into the root `_extras` carry at the
+  // bottom of this function, exactly like Python's top_extras).
   if (parsed && Array.isArray(parsed._array_root)) {
     const items = parsed._array_root;
     const dist = { sites: [], abundances: [], zones: [] };
+    let unclassified = null;
     for (const item of items) {
       if (!item || typeof item !== 'object') continue;
       if (item.site_id || item.site_name || item.location) {
@@ -605,9 +663,22 @@ function rcaNormalizeAbundanceResult(parsed) {
         dist.abundances.push(item);
       } else if (item.zone || item.assemblage) {
         dist.zones.push(item);
+      } else {
+        if (!unclassified) unclassified = [];
+        unclassified.push(item);
       }
     }
+    const original = parsed || {};
     parsed = { ...dist };
+    // Walk the ORIGINAL (pre-rewrite) payload, not the freshly-built `dist`
+    // copy, so top-level fields that aren't abundance buckets — most
+    // importantly `confidence` — get carried through instead of being
+    // silently dropped.
+    for (const k of Object.keys(original)) {
+      if (k === '_array_root' || k in parsed) continue;
+      parsed[k] = original[k];
+    }
+    if (unclassified) parsed._unclassified = unclassified;
   }
   // original body follows
   const asStr = (v) => (v === null || v === undefined ? '' : String(v));
@@ -683,6 +754,96 @@ function rcaUnwrapArrayRootPhylo(parsed) {
     }
   }
   return parsed;
+}
+
+// UI-REVIEW-2026-09-05: zonation / correlation chart normalizer —
+// mirror of rca_core/extractor.py:normalize_zonation_chart_result. All
+// rows string-typed; H8 extras per row under `_extras`; `_array_root`
+// rescue distributes to zonations / zones / correlations with an
+// `_unclassified` carry for anything else.
+function rcaNormalizeZonationChartResult(parsed) {
+if (parsed && Array.isArray(parsed._array_root)) {
+  const items = parsed._array_root;
+  const dist = { zonations: [], zones: [], correlations: [] };
+  let unclassified = null;
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    if ('from_zone' in item || 'to_zone' in item) {
+      dist.correlations.push(item);
+    } else if ('name' in item &&
+               ('rank' in item || 'zonation' in item || 'age_span' in item ||
+                'defined_by' in item || 'base_age' in item)) {
+      dist.zones.push(item);
+    } else if ('name' in item &&
+               ('region' in item || 'framework' in item || 'reference' in item)) {
+      dist.zonations.push(item);
+    } else {
+      if (!unclassified) unclassified = [];
+      unclassified.push(item);
+    }
+  }
+  const original = parsed || {};
+  parsed = { ...dist };
+  for (const k of Object.keys(original)) {
+    if (k === '_array_root' || k in parsed) continue;
+    parsed[k] = original[k];
+  }
+  if (unclassified) parsed._unclassified = unclassified;
+}
+const asStr = (v) => (v === null || v === undefined ? '' : String(v));
+const normList = (key) => (Array.isArray(parsed[key]) ? parsed[key] : []);
+const out = { zonations: [], zones: [], correlations: [], confidence: 0 };
+const ZONATIONS_KNOWN = ['name', 'region', 'framework', 'reference'];
+const ZONE_KNOWN = ['name', 'zonation', 'rank', 'age_span', 'base_age',
+                    'top_age', 'stage', 'defined_by', 'note'];
+const CORR_KNOWN = ['from_zone', 'to_zone', 'from_zonation',
+                    'to_zonation', 'basis', 'note'];
+const carry = (item, known, row) => {
+  for (const k of Object.keys(item)) {
+    if (known.indexOf(k) === -1) {
+      if (!row._extras) row._extras = {};
+      row._extras[k] = item[k];
+    }
+  }
+};
+for (const z of normList('zonations')) {
+  if (!z || typeof z !== 'object') continue;
+  const row = { name: asStr(z.name), region: asStr(z.region),
+                framework: asStr(z.framework), reference: asStr(z.reference) };
+  carry(z, ZONATIONS_KNOWN, row);
+  out.zonations.push(row);
+}
+for (const z of normList('zones')) {
+  if (!z || typeof z !== 'object') continue;
+  const row = { name: asStr(z.name), zonation: asStr(z.zonation),
+                rank: asStr(z.rank), age_span: asStr(z.age_span),
+                base_age: asStr(z.base_age), top_age: asStr(z.top_age),
+                stage: asStr(z.stage), defined_by: asStr(z.defined_by),
+                note: asStr(z.note) };
+  carry(z, ZONE_KNOWN, row);
+  out.zones.push(row);
+}
+for (const c of normList('correlations')) {
+  if (!c || typeof c !== 'object') continue;
+  const row = { from_zone: asStr(c.from_zone), to_zone: asStr(c.to_zone),
+                from_zonation: asStr(c.from_zonation),
+                to_zonation: asStr(c.to_zonation),
+                basis: asStr(c.basis), note: asStr(c.note) };
+  carry(c, CORR_KNOWN, row);
+  out.correlations.push(row);
+}
+const cf = parseFloat(parsed.confidence);
+out.confidence = Number.isFinite(cf) ? Math.max(0, Math.min(1, cf)) : 0;
+const knownTop = ['zonations', 'zones', 'correlations', 'confidence',
+                  '_array_root', '_unclassified'];
+const extras = {};
+let hasExtras = false;
+for (const k of Object.keys(parsed)) {
+  if (knownTop.indexOf(k) === -1) { extras[k] = parsed[k]; hasExtras = true; }
+}
+if (parsed._unclassified) { extras._unclassified = parsed._unclassified; hasExtras = true; }
+if (hasExtras) out._extras = extras;
+return out;
 }
 
 function rcaNormalizePhylogeneticTreeResult(parsed) {
@@ -877,185 +1038,214 @@ async function rcaCallBackend(opts, base64) {
     if (opts.signal.aborted) controller.abort();
     else opts.signal.addEventListener('abort', onExtAbort);
   }
-
-  // Serialize concurrent extractions through a shared pending-promise chain so
-  // a fast user can fire two extractions without the second one's CSRF GET
-  // racing the first's POST (the second will simply queue and execute after).
-  // The promise chain (`_pending`) is reused across calls so we don't race
-  // token updates when multiple extractions run concurrently.
-  if (!rcaCallBackend._pending) rcaCallBackend._pending = Promise.resolve();
-  const myRequest = rcaCallBackend._pending.then(async () => {
-    // Fetch CSRF token before POST. Uses a persistent session token stored
-    // in memory so subsequent requests reuse the same session.
-    // FIX: pass `signal: controller.signal` so a user cancel or the run-aware
-    // timeout fires for the CSRF GET too.
-    let sessionToken = rcaCallBackend._sessionToken || '';
-    let csrfFetchFailed = false;
-    let csrfErrorBody = '';
-    try {
-      const csrfResp = await fetch('/api/extract', {
-        method: 'GET',
-        headers: { 'X-Session-Token': sessionToken },
-        signal: controller.signal,
-      });
-      if (csrfResp.ok) {
-        const csrfData = await csrfResp.json();
-        // Update stored tokens atomically after successful fetch
-        rcaCallBackend._sessionToken = csrfData.session_token;
-        sessionToken = csrfData.session_token;
-        rcaCallBackend._csrfToken = csrfData.csrf_token;
-      } else {
-        // CSRF fetch returned non-OK - capture the error for better diagnostics
+  // Sprint B (REVIEW-2026-09-04): single cleanup path for the timer and the
+  // external-abort listener. Previously only the happy path and the two
+  // fetch-catch paths cleared them — the three early-error returns (aborted
+  // CSRF GET, CSRF fetch failure, token-acquisition error object) leaked
+  // both: the timer stayed armed and would abort an unrelated future
+  // controller, and the listener kept the caller's AbortSignal alive.
+  const cleanup = () => {
+    clearTimeout(timer);
+    if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
+  };
+  try {
+    // Serialize concurrent extractions through a shared pending-promise chain so
+    // a fast user can fire two extractions without the second one's CSRF GET
+    // racing the first's POST (the second will simply queue and execute after).
+    // The promise chain (`_pending`) is reused across calls so we don't race
+    // token updates when multiple extractions run concurrently.
+    if (!rcaCallBackend._pending) rcaCallBackend._pending = Promise.resolve();
+    const myRequest = rcaCallBackend._pending.then(async () => {
+      // Fetch CSRF token before POST. Uses a persistent session token stored
+      // in memory so subsequent requests reuse the same session.
+      // FIX: pass `signal: controller.signal` so a user cancel or the run-aware
+      // timeout fires for the CSRF GET too.
+      let sessionToken = rcaCallBackend._sessionToken || '';
+      let csrfFetchFailed = false;
+      let csrfErrorBody = '';
+      try {
+        const csrfResp = await fetch('/api/extract', {
+          method: 'GET',
+          headers: { 'X-Session-Token': sessionToken },
+          signal: controller.signal,
+        });
+        if (csrfResp.ok) {
+          const csrfData = await csrfResp.json();
+          // Update stored tokens atomically after successful fetch
+          rcaCallBackend._sessionToken = csrfData.session_token;
+          sessionToken = csrfData.session_token;
+          rcaCallBackend._csrfToken = csrfData.csrf_token;
+        } else {
+          // CSRF fetch returned non-OK - capture the error for better diagnostics
+          csrfFetchFailed = true;
+          try {
+            const errText = await csrfResp.text();
+            csrfErrorBody = errText.substring(0, 500);
+          } catch (_e) { /* ignore */ }
+        }
+      } catch (_e) {
+        // Network error on CSRF fetch - capture for better error message
         csrfFetchFailed = true;
-        try {
-          const errText = await csrfResp.text();
-          csrfErrorBody = errText.substring(0, 500);
-        } catch (_e) { /* ignore */ }
+        csrfErrorBody = _e && _e.message ? _e.message : 'network error';
+        // REVIEW-2026-11-07 (low): an ABORTED CSRF GET (user pressed Cancel
+        // mid-flight) is not a fetch failure. Without this the catch above
+        // fell through to the err.csrfFetch branch below and the UI showed
+        // "CSRF token failed" for what was really a user cancel.
+        if (_e && _e.name === 'AbortError' && controller.signal.aborted) {
+          return {
+            ok: false,
+            errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout',
+            status: null,
+            errorBody: 'CSRF fetch aborted',
+          };
+        }
       }
-    } catch (_e) {
-      // Network error on CSRF fetch - capture for better error message
-      csrfFetchFailed = true;
-      csrfErrorBody = _e && _e.message ? _e.message : 'network error';
-      // REVIEW-2026-11-07 (low): an ABORTED CSRF GET (user pressed Cancel
-      // mid-flight) is not a fetch failure. Without this the catch above
-      // fell through to the err.csrfFetch branch below and the UI showed
-      // "CSRF token failed" for what was really a user cancel.
-      if (_e && _e.name === 'AbortError' && controller.signal.aborted) {
+
+      // If CSRF fetch failed and we have no valid token, return error early
+      if (csrfFetchFailed && !rcaCallBackend._csrfToken) {
         return {
           ok: false,
-          errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout',
+          errorKey: 'err.csrfFetch',
           status: null,
-          errorBody: 'CSRF fetch aborted',
+          errorBody: 'Failed to obtain CSRF token: ' + csrfErrorBody,
         };
       }
+
+      const csrfToken = rcaCallBackend._csrfToken || '';
+      return { sessionToken, csrfToken };
+    });
+
+    // Wait for token acquisition (and any prior request) to complete
+    let tokenResult;
+    try {
+      tokenResult = await myRequest;
+    } catch (_e) {
+      if (_e && _e.name === 'AbortError') {
+        return { ok: false, errorKey: opts.signal && opts.signal.aborted ? 'err.cancelled' : 'err.timeout' };
+      }
+      return { ok: false, errorKey: 'err.network', errorBody: String(_e) };
     }
 
-    // If CSRF fetch failed and we have no valid token, return error early
-    if (csrfFetchFailed && !rcaCallBackend._csrfToken) {
+    // If token acquisition returned an error object, propagate it
+    if (tokenResult && tokenResult.errorKey) {
+      return tokenResult;
+    }
+
+    const { sessionToken, csrfToken } = tokenResult;
+
+    try {
+      resp = await fetch('/api/extract', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'X-CSRF-Token': csrfToken,
+          'X-Session-Token': sessionToken,
+        },
+        body: JSON.stringify({
+          api_key: opts.apiKey,
+          image_b64: base64,
+          media_type: opts.mediaType || 'image/png',
+          caption: opts.caption || '',
+          chart_lang: opts.chartLang || 'auto',
+          endpoint: opts.baseUrl,
+          model: opts.model,
+          max_tokens: opts.maxTokens,
+          mode: opts.mode || 'range_chart',
+          runs: runs,
+          force_rerun: !!opts.force_rerun,
+          enhance: opts.enhance === true,
+        }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (err && err.name === 'AbortError') {
+        return { ok: false, errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout' };
+      }
+      return { ok: false, errorKey: 'err.network', errorBody: String(err) };
+    }
+
+    // FIX 1: JSON parse failure now captures HTTP status and response text
+    let payload;
+    let parseErrorBody = '';
+    let parseErrorStatus = resp.status;
+    try {
+      payload = await resp.json();
+    } catch (_e) {
+      // Try to capture the response text for better error diagnostics
+      try {
+        const rawText = await resp.text();
+        parseErrorBody = rawText.substring(0, 500);
+      } catch (_e2) {
+        parseErrorBody = 'could not read response body';
+      }
       return {
         ok: false,
-        errorKey: 'err.csrfFetch',
-        status: null,
-        errorBody: 'Failed to obtain CSRF token: ' + csrfErrorBody,
+        errorKey: 'err.parse',
+        status: parseErrorStatus,
+        errorBody: parseErrorBody,
+        raw: parseErrorBody,
       };
     }
 
-    const csrfToken = rcaCallBackend._csrfToken || '';
-    return { sessionToken, csrfToken };
-  });
-
-  // Wait for token acquisition (and any prior request) to complete
-  let tokenResult;
-  try {
-    tokenResult = await myRequest;
-  } catch (_e) {
-    clearTimeout(timer);
-    if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
-    if (_e && _e.name === 'AbortError') {
-      return { ok: false, errorKey: opts.signal && opts.signal.aborted ? 'err.cancelled' : 'err.timeout' };
+    // FIX 2: Check for server-side CSRF/auth errors and auto-recover by clearing tokens.
+    // REVIEW-2026-11-07 (low): naming note — 'err.forbidden' is the BACKEND
+    // mode's 403 (same-origin CSRF/origin rejection, token-clearable), while
+    // 'err.403' (set in the direct-mode !resp.ok branch below) is a raw
+    // upstream 403 that needs no token handling. Both are intentionally
+    // distinct keys; the similar names are historical, don't merge them.
+    if (payload.error_key === 'err.forbidden' && payload.error_body && payload.error_body.includes('CSRF')) {
+      // CSRF token was invalid/expired - clear cached tokens so next request fetches fresh ones
+      rcaCallBackend._csrfToken = null;
+      rcaCallBackend._sessionToken = null;
     }
-    return { ok: false, errorKey: 'err.network', errorBody: String(_e) };
-  }
 
-  // If token acquisition returned an error object, propagate it
-  if (tokenResult && tokenResult.errorKey) {
-    return tokenResult;
-  }
-
-  const { sessionToken, csrfToken } = tokenResult;
-
-  try {
-    resp = await fetch('/api/extract', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'X-CSRF-Token': csrfToken,
-        'X-Session-Token': sessionToken,
-      },
-      body: JSON.stringify({
-        api_key: opts.apiKey,
-        image_b64: base64,
-        media_type: opts.mediaType || 'image/png',
-        caption: opts.caption || '',
-        chart_lang: opts.chartLang || 'auto',
-        endpoint: opts.baseUrl,
-        model: opts.model,
-        max_tokens: opts.maxTokens,
-        mode: opts.mode || 'range_chart',
-        runs: runs,
-        force_rerun: !!opts.force_rerun,
-        enhance: opts.enhance === true,
-      }),
-      signal: controller.signal,
-    });
-  } catch (err) {
-    clearTimeout(timer);
-    if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
-    if (err && err.name === 'AbortError') {
-      return { ok: false, errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout' };
-    }
-    return { ok: false, errorKey: 'err.network', errorBody: String(err) };
-  }
-  clearTimeout(timer);
-  if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
-
-  // FIX 1: JSON parse failure now captures HTTP status and response text
-  let payload;
-  let parseErrorBody = '';
-  let parseErrorStatus = resp.status;
-  try {
-    payload = await resp.json();
-  } catch (_e) {
-    // Try to capture the response text for better error diagnostics
-    try {
-      const rawText = await resp.text();
-      parseErrorBody = rawText.substring(0, 500);
-    } catch (_e2) {
-      parseErrorBody = 'could not read response body';
-    }
+    // The server mirrors the ExtractResult shape with snake_case keys.
     return {
-      ok: false,
-      errorKey: 'err.parse',
-      status: parseErrorStatus,
-      errorBody: parseErrorBody,
-      raw: parseErrorBody,
+      ok: !!payload.ok,
+      data: payload.data,
+      errorKey: payload.error_key,
+      status: payload.status,
+      raw: payload.raw || '',
+      truncated: !!payload.truncated,
+      errorBody: payload.error_body || '',
+      partialFailures: payload.partial_failures || 0,
+      usage: payload.usage || null,
+      latencyMs: payload.latency_ms || 0,
+      warning: payload.warning || '',
     };
+  } finally {
+    cleanup();
   }
-
-  // FIX 2: Check for server-side CSRF/auth errors and auto-recover by clearing tokens.
-  // REVIEW-2026-11-07 (low): naming note — 'err.forbidden' is the BACKEND
-  // mode's 403 (same-origin CSRF/origin rejection, token-clearable), while
-  // 'err.403' (set in the direct-mode !resp.ok branch below) is a raw
-  // upstream 403 that needs no token handling. Both are intentionally
-  // distinct keys; the similar names are historical, don't merge them.
-  if (payload.error_key === 'err.forbidden' && payload.error_body && payload.error_body.includes('CSRF')) {
-    // CSRF token was invalid/expired - clear cached tokens so next request fetches fresh ones
-    rcaCallBackend._csrfToken = null;
-    rcaCallBackend._sessionToken = null;
-  }
-
-  // The server mirrors the ExtractResult shape with snake_case keys.
-  return {
-    ok: !!payload.ok,
-    data: payload.data,
-    errorKey: payload.error_key,
-    status: payload.status,
-    raw: payload.raw || '',
-    truncated: !!payload.truncated,
-    errorBody: payload.error_body || '',
-    partialFailures: payload.partial_failures || 0,
-    usage: payload.usage || null,
-    latencyMs: payload.latency_ms || 0,
-    warning: payload.warning || '',
-  };
 }
 
 // Main entry. opts: { apiKey, baseUrl, model, maxTokens, proxyUrl, mode,
 // dataUrl, mediaType, caption, chartLang }.
 // mode defaults to 'range_chart'; 'columnar_section' switches prompt and
 // normalizer to the columnar-section variants.
+// UI-REVIEW-2026-09-07: vision chart-type classification (auto mode).
+// Mirror of rca_core/extractor.py:normalize_chart_classification —
+// unknown / missing chart_type degrades to "unknown" instead of raising.
+function rcaNormalizeChartClassification(parsed) {
+  const KNOWN = ['range_chart', 'columnar_section', 'abundance_diagram',
+                 'phylogenetic_tree', 'zonation_chart',
+                 'chemical_stratigraphy', 'paleomap', 'scatter_plot'];
+  if (!parsed || typeof parsed !== 'object') {
+    return { chart_type: 'unknown', reason: '', confidence: 0 };
+  }
+  let chartType = String(parsed.chart_type || '').trim().toLowerCase();
+  if (KNOWN.indexOf(chartType) === -1) chartType = 'unknown';
+  const conf = parseFloat(parsed.confidence);
+  return {
+    chart_type: chartType,
+    reason: parsed.reason == null ? '' : String(parsed.reason),
+    confidence: Number.isFinite(conf) ? Math.max(0, Math.min(1, conf)) : 0,
+  };
+}
+
 async function extractRangeChart(opts) {
-  const mode = (opts && opts.mode) || 'range_chart';
+  // UI-REVIEW-2026-09-07: "auto" may be re-assigned from the vision
+  // classifier on the direct path (backend path resolves server-side).
+  let mode = (opts && opts.mode) || 'range_chart';
   const {
     apiKey,
     baseUrl,
@@ -1116,6 +1306,62 @@ async function extractRangeChart(opts) {
   }
   const url = target + '/v1/messages';
 
+  // UI-REVIEW-2026-09-07 (auto mode, direct transport): the caption
+  // heuristic matched nothing (app.js only forwards "auto" when that is
+  // the case), so classify the image itself with a cheap small-token
+  // call, then continue extraction with the detected chart type.
+  // Confidence < 0.5 or "unknown" falls back to range_chart. The backend
+  // transport never reaches here — rcaCallBackend sent mode:"auto" and
+  // the server resolved it.
+  if (mode === 'auto') {
+    // UI-REVIEW-2026-09-07: surface the classification stage so the busy
+    // label can show "Detecting chart type…" during the extra round-trip.
+    if (opts.onStage) opts.onStage('classifying');
+    try {
+      const clsBody = {
+        model: model,
+        max_tokens: 500,
+        system: (typeof CHART_CLASSIFY_SYSTEM_PROMPT !== 'undefined')
+          ? CHART_CLASSIFY_SYSTEM_PROMPT : '',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image',
+              source: { type: 'base64', media_type: mediaType || 'image/png', data: base64 } },
+            { type: 'text',
+              text: 'Caption:\n' + (caption && caption.trim() ? caption.trim() : '(no caption)')
+                    + '\n\nClassify the chart type as the strict JSON contract.' },
+          ],
+        }],
+      };
+      const clsResp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(clsBody),
+        redirect: 'manual',
+      });
+      if (clsResp && clsResp.ok) {
+        const clsJson = await clsResp.json();
+        const clsText = clsJson && clsJson.content && clsJson.content.length
+          ? clsJson.content.filter((b) => b.type === 'text').map((b) => b.text).join('')
+          : '';
+        const cls = rcaNormalizeChartClassification(safeJsonLoads(clsText));
+        if (cls.chart_type !== 'unknown' && cls.confidence >= 0.5) {
+          mode = cls.chart_type;
+        }
+      }
+      // classification failure -> keep "auto"; the modeInstruction fallback
+      // below treats any non-listed mode as range_chart, matching Python.
+    } catch (_e) {
+      // swallow — fall back to range_chart prompt, same as Python.
+    }
+    if (mode === 'auto') mode = 'range_chart';
+  }
+
   const langHint = (CHART_LANG_HINT && CHART_LANG_HINT[chartLang]) || '';
   let modeInstruction;
   if (mode === 'columnar_section') {
@@ -1124,6 +1370,8 @@ async function extractRangeChart(opts) {
     modeInstruction = 'Extract the abundance-diagram information as the strict JSON contract.';
   } else if (mode === 'phylogenetic_tree') {
     modeInstruction = 'Extract the phylogenetic-tree information as the strict JSON contract.';
+  } else if (mode === 'zonation_chart') {
+    modeInstruction = 'Extract the biozonation / correlation chart information as the strict JSON contract.';
   } else {
     modeInstruction = 'Extract the geological information as the strict JSON contract.';
   }
@@ -1138,6 +1386,8 @@ async function extractRangeChart(opts) {
     sysPrompt = ABUNDANCE_DIAGRAM_SYSTEM_PROMPT;
   } else if (mode === 'phylogenetic_tree' && typeof PHYLOGENETIC_TREE_SYSTEM_PROMPT !== 'undefined') {
     sysPrompt = PHYLOGENETIC_TREE_SYSTEM_PROMPT;
+  } else if (mode === 'zonation_chart' && typeof ZONATION_CHART_SYSTEM_PROMPT !== 'undefined') {
+    sysPrompt = ZONATION_CHART_SYSTEM_PROMPT;
   }
 
   const body = {
@@ -1313,6 +1563,8 @@ async function extractRangeChart(opts) {
       data = rcaNormalizeAbundanceResult(parsed);
     } else if (mode === 'phylogenetic_tree' && typeof rcaNormalizePhylogeneticTreeResult === 'function') {
       data = rcaNormalizePhylogeneticTreeResult(parsed);
+    } else if (mode === 'zonation_chart' && typeof rcaNormalizeZonationChartResult === 'function') {
+      data = rcaNormalizeZonationChartResult(parsed);
     } else {
       data = rcaNormalizeResult(parsed);
     }

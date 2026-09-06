@@ -120,6 +120,10 @@ class HistoryPage(ScrollArea):
             ("history.filter.all", "all"),
             ("history.filter.rangeChart", "range_chart"),
             ("history.filter.columnar", "columnar_section"),
+            # UI-REVIEW-2026-09-05: abundance/phylo records could previously
+            # only be reached via "all" — the filter silently hid them.
+            ("history.filter.abundance", "abundance_diagram"),
+            ("history.filter.phylo", "phylogenetic_tree"),
         ]:
             self.filter_combo.addItem(routeKey=key, text=self._t(label))
         self.filter_combo.setCurrentItem("all")
@@ -199,6 +203,10 @@ class HistoryPage(ScrollArea):
             ("history.filter.all", "all"),
             ("history.filter.rangeChart", "range_chart"),
             ("history.filter.columnar", "columnar_section"),
+            # UI-REVIEW-2026-09-05: abundance/phylo records could previously
+            # only be reached via "all" — the filter silently hid them.
+            ("history.filter.abundance", "abundance_diagram"),
+            ("history.filter.phylo", "phylogenetic_tree"),
         ]:
             self.filter_combo.setItemText(key, self._t(label))
         if cur:
@@ -252,7 +260,13 @@ class HistoryPage(ScrollArea):
                 rec.provider_name or "-",
                 rec.model or "-",
                 mode_label,
-                f"{(rec.confidence or 0) * 100:.0f}%" if rec.confidence else "-",
+                # UI-REVIEW-2026-09-05: columnar payloads keep the verdict
+                # in result["overall_confidence"] — without the fallback the
+                # column showed "-" for every columnar record.
+                (lambda c: f"{c * 100:.0f}%" if c else "-")(
+                    rec.confidence
+                    or ((rec.result or {}).get("overall_confidence") or 0)
+                ),
                 "",  # actions cell filled below
             ]
             for ci, txt in enumerate(cells):

@@ -340,8 +340,11 @@ function loadAllScripts(ctx) {
     const exports = {
       'js/config.js': ['RCA_CONFIG', 'RCA_STORE', 'rcaStoreGet', 'rcaStoreSet', 'rcaClampMaxTokens'],
       'js/i18n.js': ['RCA_I18N', 'rcaSetLang', 'rcaApplyI18n', 't'],
-      'js/json-utils.js': ['safeJsonLoads', 'extractBalancedJsonObject'],
-      'js/aggregate.js': ['rcaMergeResults', 'RCA_DEFAULT_KEYMAP', 'RCA_COLUMNAR_KEYMAP'],
+      'js/json-utils.js': ['safeJsonLoads', 'extractBalancedJsonObject'], // truncation-repair fixture test uses safeJsonLoads
+      'js/aggregate.js': ['rcaMergeResults', 'RCA_DEFAULT_KEYMAP', 'RCA_COLUMNAR_KEYMAP', 'RCA_ZONATION_KEYMAP'],
+      // UI-REVIEW-2026-09-05: zonation_chart normalizer.
+      // UI-REVIEW-2026-09-07: chart-type classification normalizer.
+      'js/minimax.js': ['rcaNormalizeZonationChartResult', 'rcaNormalizeChartClassification'],
       'js/table.js': ['rcaRenderResults', 'rcaTableConfigs', 'rcaBuildTableExport'],
       'js/export.js': ['rcaToCsv', 'rcaToTsv', 'rcaDownload', 'rcaCopyText'],
       'js/error-utils.js': ['RCAErrorUtils'],
@@ -1380,10 +1383,13 @@ function test_ics_table_data_parity() {
   loadAllScripts(ctx);
   const t = ctx.RCA_ICS_TABLE;
   check('ics_table Campanian base 83.6', t.Campanian && t.Campanian.base_ma === 83.6);
-  check('ics_table Santonian base 86.3', t.Santonian && t.Santonian.base_ma === 86.3);
+  // Sprint A (CODE_REVIEW_2026-09-01): values updated to ICS v2024/12
+  // (Santonian base 85.7, Dapingian base 471.3-side top 469.4; was
+  // GTS2016-vintage 86.3 / 470.0).
+  check('ics_table Santonian base 85.7', t.Santonian && t.Santonian.base_ma === 85.7);
   check('ics_table Turonian base 93.9', t.Turonian && t.Turonian.base_ma === 93.9);
   check('ics_table no Pleistocene pseudo-stage', !('Pleistocene' in t));
-  check('ics_table Dapingian base 470.0', t.Dapingian && t.Dapingian.base_ma === 470.0);
+  check('ics_table Dapingian base 471.3', t.Dapingian && t.Dapingian.base_ma === 471.3);
 }
 
 test_json_utils_wrapper_promotion();
@@ -1666,65 +1672,79 @@ test_h6_phylo_metadata_promotes_image_source_from_root();
 // ---- PR1 H2: columnar 4 new sub-tables (lithology_blocks / age_units /
 // samples / confidence_by_section) ----
 //
-// rcaTableConfigs must emit configs for the 3 new sub-tables in columnar
-// mode, and rcaBuildTableExport must read from the stashed flat row
-// arrays attached to data during config generation. Also covers M12:
-// rcaFormulaSafe must guard a leading LF (\n) the same way it does
-// other formula triggers.
+// Sprint B (REVIEW-2026-09-04): the three sub-tables no longer stash flat
+// row arrays on `data` (data._lithology_blocks_rows / _age_units_rows /
+// _samples_rows) — that stash made rendering and export diverge (render
+// read data[cfg.id], always empty; export read the stash) and leaked
+// underscore keys into the JSON export. Both now read the single derived
+// source rcaColumnarSubTableRows/rcaRowsForTable, so these tests assert
+// rendering + export directly: row counts AND visible copy/CSV buttons.
+// Also covers M12: rcaFormulaSafe must guard a leading LF (\n) the same
+// way it does other formula triggers.
 function test_h2_columnar_lithology_blocks_table() {
   const ctx = buildContext();
   loadAllScripts(ctx);
+  ctx.t('zh'); // ensure i18n loaded for rcaRenderResults
   // rcaTableConfigs is hoisted onto globalThis in table.js.
   const data = {
     sections: [{ id: 'S1', lithology_blocks: [{ pattern: 'dots', range_top_idx: 1, range_base_idx: 5 }] }],
     fossil_legend: [], lithology_legend: [], cross_beds: [],
     confidence: 0,
   };
-  // Trigger config generation so data._lithology_blocks_rows is built.
-  ctx.rcaTableConfigs(data);
   const cfg = ctx.rcaTableConfigs(data).find((c) => c.id === 'lithology_blocks');
   check('h2-lithology-blocks-cfg', !!cfg);
   check('h2-lithology-blocks-title', cfg && cfg.titleKey === 'sec.lithologyBlocks');
-  check('h2-lithology-blocks-rows', data._lithology_blocks_rows.length === 1);
-  check('h2-lithology-blocks-row-pattern', data._lithology_blocks_rows[0].pattern === 'dots');
+  // Render must produce one data row (was 0 before the same-source fix).
+  const html = ctx.rcaRenderResults(data, '');
+  check('h2-lithology-blocks-rows', ctx.rcaBuildTableExport(data, 'lithology_blocks').rows.length === 1);
+  check('h2-lithology-blocks-render-row', /data-table="lithology_blocks"[\s\S]*?<td[^>]*>dots<\/td>/.test(html));
+  check('h2-lithology-blocks-no-stash', data._lithology_blocks_rows === undefined);
+  // Copy/CSV buttons are only emitted when rows.length > 0.
+  check('h2-lithology-blocks-copy-btn', html.indexOf('data-copy="lithology_blocks"') !== -1);
+  check('h2-lithology-blocks-csv-btn', html.indexOf('data-csv="lithology_blocks"') !== -1);
 }
 test_h2_columnar_lithology_blocks_table();
 
 function test_h2_columnar_age_units_table() {
   const ctx = buildContext();
   loadAllScripts(ctx);
+  ctx.t('zh');
   const data = {
     sections: [{ id: 'S1', age_units: [{ label: 'Ypresian', range_top_idx: 0, range_base_idx: 3 }] }],
     fossil_legend: [], lithology_legend: [], cross_beds: [], confidence: 0,
   };
-  ctx.rcaTableConfigs(data);
   const cfg = ctx.rcaTableConfigs(data).find((c) => c.id === 'age_units');
   check('h2-age-units-cfg', !!cfg);
   check('h2-age-units-title', cfg && cfg.titleKey === 'sec.ageUnits');
-  check('h2-age-units-rows', data._age_units_rows.length === 1);
-  check('h2-age-units-row-label', data._age_units_rows[0].label === 'Ypresian');
+  check('h2-age-units-rows', ctx.rcaBuildTableExport(data, 'age_units').rows.length === 1);
+  const html = ctx.rcaRenderResults(data, '');
+  check('h2-age-units-render-row', /data-table="age_units"[\s\S]*?<td[^>]*>Ypresian<\/td>/.test(html));
+  check('h2-age-units-copy-btn', html.indexOf('data-copy="age_units"') !== -1);
 }
 test_h2_columnar_age_units_table();
 
 function test_h2_columnar_samples_table() {
   const ctx = buildContext();
   loadAllScripts(ctx);
+  ctx.t('zh');
   const data = {
     sections: [{ id: 'S1', samples: [{ bed_idx: 4, fossil_marker: 'A', ref: 'Smith 1950' }] }],
     fossil_legend: [], lithology_legend: [], cross_beds: [], confidence: 0,
   };
-  ctx.rcaTableConfigs(data);
   const cfg = ctx.rcaTableConfigs(data).find((c) => c.id === 'samples');
   check('h2-samples-cfg', !!cfg);
   check('h2-samples-title', cfg && cfg.titleKey === 'sec.samples');
-  check('h2-samples-rows', data._samples_rows.length === 1);
-  check('h2-samples-row-ref', data._samples_rows[0].ref === 'Smith 1950');
+  check('h2-samples-rows', ctx.rcaBuildTableExport(data, 'samples').rows.length === 1);
+  const html = ctx.rcaRenderResults(data, '');
+  check('h2-samples-render-row', /data-table="samples"[\s\S]*?<td[^>]*>Smith 1950<\/td>/.test(html));
+  check('h2-samples-csv-btn', html.indexOf('data-csv="samples"') !== -1);
 }
 test_h2_columnar_samples_table();
 
 function test_h2_columnar_extra_rows_attached() {
   const ctx = buildContext();
   loadAllScripts(ctx);
+  ctx.t('zh');
   const data = {
     sections: [
       { id: 'S1', lithology_blocks: [{ pattern: 'a' }, { pattern: 'b' }],
@@ -1734,10 +1754,16 @@ function test_h2_columnar_extra_rows_attached() {
     ],
     fossil_legend: [], lithology_legend: [], cross_beds: [], confidence: 0,
   };
-  ctx.rcaTableConfigs(data);
-  check('h2-lithology-rows-total', data._lithology_blocks_rows.length === 3);
-  check('h2-age-rows-total', data._age_units_rows.length === 1);
-  check('h2-samples-rows-total', data._samples_rows.length === 3);
+  // Multi-section flatten (sections concatenated in order) — same numbers
+  // the export path must produce.
+  check('h2-lithology-rows-total', ctx.rcaBuildTableExport(data, 'lithology_blocks').rows.length === 3);
+  check('h2-age-rows-total', ctx.rcaBuildTableExport(data, 'age_units').rows.length === 1);
+  check('h2-samples-rows-total', ctx.rcaBuildTableExport(data, 'samples').rows.length === 3);
+  // Render count badges agree with export ("(3)" / "(1)").
+  const html = ctx.rcaRenderResults(data, '');
+  check('h2-render-count-badge-litho',
+    /data-table="lithology_blocks"[\s\S]{0,400}?result-count">\(3\)<\/span>/.test(html));
+  check('h2-flatten-section-id-carried', ctx.rcaBuildTableExport(data, 'lithology_blocks').rows[2].indexOf('S2') !== -1);
 }
 test_h2_columnar_extra_rows_attached();
 
@@ -2097,6 +2123,379 @@ const _h5C = test_h5_columnar_keeps_ok_true();
 if (_h5C && typeof _h5C.then === 'function') {
   _h5C.catch((e) => { console.log('FAIL h5-columnar-extract-error', e && e.message); fail++; });
 }
+
+// ---------------------------------------------------------------------------
+// Sprint B (REVIEW-2026-09-04) regression tests
+// ---------------------------------------------------------------------------
+
+// Item 2: _array_root classification parity with rca_core/extractor.py
+// _classify_array_item (extractor.py:344-389) + the unwrap rules at
+// extractor.py:636-661 — key-existence checks, name-only section fallback,
+// bare strings -> other_fossils, unclassifiable dicts -> _unclassified
+// (kept, never dropped).
+function test_sprintb_array_root_classification_parity() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const wrapped = { _array_root: [
+    { name: 'S1', age_range: 'Cretaceous' },  // section: name + age_range signal
+    { name: 'S2' },                            // section: name-only fallback
+    'bare string',                             // other_fossils (stripped)
+    { foo: 1 },                                // _unclassified
+  ] };
+  const out = ctx.rcaNormalizeResult(wrapped);
+  check('sprintb-array-root-section-s1',
+    out.sections.length === 2 && out.sections[0].name === 'S1');
+  check('sprintb-array-root-section-name-only', out.sections[1].name === 'S2');
+  check('sprintb-array-root-bare-string-fossil',
+    out.other_fossils.length === 1 && out.other_fossils[0] === 'bare string');
+  check('sprintb-array-root-unclassified-kept',
+    Array.isArray(out._unclassified) && out._unclassified.length === 1
+    && out._unclassified[0].foo === 1);
+}
+test_sprintb_array_root_classification_parity();
+
+// Item 11: KNOWN_ROOTS.range_chart no longer contains _extras, mirroring
+// rca_core/extractor.py:629-630 RANGE_CHART_ROOTS. An _extras-only payload
+// must now trip truncated_or_unrecognized_payload exactly like Python.
+function test_sprintb_range_chart_roots_exclude_extras() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const out = ctx.rcaNormalizeResult({ _extras: { foo: 1 } });
+  check('sprintb-extras-only-flagged-truncated',
+    Array.isArray(out._warnings)
+    && out._warnings.indexOf('truncated_or_unrecognized_payload') !== -1);
+}
+test_sprintb_range_chart_roots_exclude_extras();
+
+// Item 9: abundance-mode array rescue must preserve top-level confidence
+// (and other non-bucket fields) and keep unclassifiable dicts under
+// _unclassified, mirroring rca_core/extractor.py:1296-1310 in-place
+// setdefault behavior.
+function test_sprintb_abundance_unwrap_keeps_top_level() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const out = ctx.rcaNormalizeAbundanceResult({
+    _array_root: [
+      { site_id: 'S1', location: 'Loc1' },
+      { abundance: 'A', count: 5 },
+      { zone: 'Z1', assemblage: 'ass' },
+      { foo: 1 },
+    ],
+    confidence: 0.7,
+    _note: 'wrap',
+  });
+  check('sprintb-abundance-confidence-kept', out.confidence === 0.7);
+  check('sprintb-abundance-unclassified-in-extras',
+    out._extras && out._extras._unclassified
+    && out._extras._unclassified.length === 1);
+}
+test_sprintb_abundance_unwrap_keeps_top_level();
+
+// Item 3: multi-fence payload selection in safeJsonLoads. The model
+// restates the JSON schema in a FIRST fence and emits the real payload in a
+// SECOND fence; the first fence that strictly parses to a dict carrying a
+// known root key must win; no qualifying block falls back to the first
+// block (old behavior).
+function test_sprintb_multifence_selects_payload_block() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const schemaBlock = '{"properties": {"sections": {"type": "array"}}, "required": ["sections"], "format": "rca-v1"}';
+  const payloadBlock = '{"sections": [{"id": "A", "group": "G", "thickness_m": "10"}], "overall_confidence": 0.9}';
+  const text = 'Schema:\n```json\n' + schemaBlock + '\n```\nResult:\n```json\n' + payloadBlock + '\n```\n';
+  const r = ctx.safeJsonLoads(text);
+  check('sprintb-multifence-payload-selected',
+    Array.isArray(r.sections) && r.sections.length === 1 && r.sections[0].id === 'A');
+  // Single qualifying fence keeps working (back-compat with prose-wrapped fences).
+  const single = ctx.safeJsonLoads('Here:\n```json\n' + payloadBlock + '\n```\nThanks');
+  check('sprintb-multifence-single-block-ok',
+    Array.isArray(single.sections) && single.sections.length === 1);
+  // No block qualifies -> fall back to the FIRST block (pre-existing rule).
+  const noneQualify = '```json\n{"properties": {"a": 1}}\n```\nand\n```json\n{"required": ["x"]}\n```';
+  const r3 = ctx.safeJsonLoads(noneQualify);
+  check('sprintb-multifence-fallback-first-block',
+    r3 && r3.properties && r3.properties.a === 1);
+}
+test_sprintb_multifence_selects_payload_block();
+
+// Item 8: boundary Ma determinism in _resolveAgeBound — mirror
+// ics_stage_from_age (rca_core/standards/ics.py:38-74): strict interior hit
+// first, then the first base match (boundary belongs to the YOUNGER stage
+// whose base it defines), then the top match. Values below are verified
+// against the Python oracle directly.
+function test_sprintb_resolve_age_bound_boundary_determinism() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const r1 = ctx._resolveAgeBound('259.51 Ma', 'older');
+  check('sprintb-boundary-259.51-wuchiapingian',
+    r1 && r1.name === 'Wuchiapingian' && r1.ma === 259.51);
+  const r2 = ctx._resolveAgeBound('254.14 Ma', 'older');
+  check('sprintb-boundary-254.14-changhsingian', r2 && r2.name === 'Changhsingian');
+  // Parity note: the review text suggested 251.902 -> Changhsingian, but
+  // the Python oracle (ics_stage_from_age(251.902)) deterministically
+  // returns 'Induan' — 251.902 is Induan's BASE, and base matches outrank
+  // top matches. We lock the Python-verified value.
+  const r3 = ctx._resolveAgeBound('251.902 Ma', 'older');
+  check('sprintb-boundary-251.902-induan', r3 && r3.name === 'Induan');
+  // Strict interior hits are unaffected.
+  const r4 = ctx._resolveAgeBound('255 Ma', 'older');
+  check('sprintb-interior-255-wuchiapingian', r4 && r4.name === 'Wuchiapingian');
+  const r5 = ctx._resolveAgeBound('253 Ma', 'older');
+  check('sprintb-interior-253-changhsingian', r5 && r5.name === 'Changhsingian');
+}
+test_sprintb_resolve_age_bound_boundary_determinism();
+
+// Item 14: retryWithBackoff must implement the documented retryable
+// predicate semantics (mirrors the parallel Python error_utils fix):
+// retryable(result) === false -> accept the result immediately (no more
+// retries); === true -> keep retrying until retries are exhausted, then
+// return the LAST result without throwing.
+function test_sprintb_retryable_predicate_semantics() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // (a) retryable always false -> exactly 1 call, result returned.
+  let callsA = 0;
+  const pa = ctx.RCAErrorUtils.retryWithBackoff(async () => {
+    callsA += 1;
+    return { ok: true, value: 'immediate' };
+  }, { maxRetries: 3, initialDelay: 0.001, backoffFactor: 1.0, maxDelay: 0.001, retryable: () => false });
+  // (b) retryable always true -> 1 + maxRetries calls, LAST result returned.
+  let callsB = 0;
+  const pb = ctx.RCAErrorUtils.retryWithBackoff(async () => {
+    callsB += 1;
+    return { attempt: callsB };
+  }, { maxRetries: 2, initialDelay: 0.001, backoffFactor: 1.0, maxDelay: 0.001, retryable: () => true });
+  // (c) mixed: first result warrants retry, second is accepted.
+  let callsC = 0;
+  const pc = ctx.RCAErrorUtils.retryWithBackoff(async () => {
+    callsC += 1;
+    return { n: callsC };
+  }, { maxRetries: 3, initialDelay: 0.001, backoffFactor: 1.0, maxDelay: 0.001, retryable: (r) => r.n < 2 });
+  return Promise.all([pa, pb, pc]).then(([ra, rb, rc]) => {
+    check('sprintb-retryable-false-immediate', callsA === 1 && ra.value === 'immediate');
+    check('sprintb-retryable-true-retries-then-last-result', callsB === 3 && rb.attempt === 3);
+    check('sprintb-retryable-mixed-accepted-midway', callsC === 2 && rc.n === 2);
+  });
+}
+const _sprintbRetry = test_sprintb_retryable_predicate_semantics();
+if (_sprintbRetry && typeof _sprintbRetry.then === 'function') {
+  _sprintbRetry.catch((e) => { console.log('FAIL sprintb-retryable-semantics', e && e.message); fail++; });
+}
+
+// Item 15: ICS Sprint B data sync — 15 English rock-unit series labels in
+// RCA_ICS_SERIES + the Chinese 统 aliases in RCA_ICS_CN_SERIES, mirroring
+// rca_core/standards/ics.py _SERIES_STAGE_LISTS / _CN_SERIES_ALIASES.
+function test_sprintb_ics_series_rock_units() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const series = ctx.RCA_ICS_SERIES;
+  const added = ['upper permian', 'lower permian', 'upper triassic', 'lower triassic',
+    'upper jurassic', 'lower jurassic', 'upper ordovician', 'lower ordovician',
+    'upper devonian', 'lower devonian', 'upper silurian', 'lower silurian',
+    'upper carboniferous', 'lower carboniferous', 'upper cambrian'];
+  check('sprintb-ics-15-rock-unit-labels', added.every((k) => k in series));
+  // Each rock-unit label must equal its early/late sibling exactly
+  // (series = time-translated epoch).
+  check('sprintb-ics-upper-permian-sibling',
+    JSON.stringify(series['upper permian']) === JSON.stringify(series['late permian']));
+  check('sprintb-ics-lower-jurassic-sibling',
+    JSON.stringify(series['lower jurassic']) === JSON.stringify(series['early jurassic']));
+  check('sprintb-ics-upper-cambrian-furongian',
+    series['upper cambrian'] && series['upper cambrian'].name === 'Furongian');
+  check('sprintb-ics-lower-carboniferous-mississippian',
+    series['lower carboniferous'] && series['lower carboniferous'].name === 'Mississippian');
+  const cn = ctx.RCA_ICS_CN_SERIES;
+  const tongKeys = Object.keys(cn).filter((k) => k.indexOf('统') !== -1);
+  check('sprintb-ics-cn-22-tong-aliases', tongKeys.length === 22);
+  check('sprintb-ics-cn-tong-maps',
+    cn['下白垩统'] === 'early cretaceous' && cn['上寒武统'] === 'late cambrian'
+    && cn['中奥陶统'] === 'middle ordovician' && cn['下二叠统'] === 'early permian');
+}
+test_sprintb_ics_series_rock_units();
+
+// Item 6: the three CSRF early-return paths must run the same cleanup as
+// the happy path. Behavioral check: a failed CSRF GET with no cached token
+// returns err.csrfFetch, and BOTH the timeout timer (clearTimeout called on
+// the live timer id) and the caller's abort listener are released.
+function test_sprintb_csrf_early_return_cleans_up() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // CSRF GET fails with a non-OK response and there is no cached token ->
+  // early return err.csrfFetch (previously leaked timer + listener).
+  ctx.fetch = async () => ({ ok: false, status: 500, json: async () => ({}), text: async () => 'boom' });
+  ctx.rcaCallBackend._sessionToken = '';
+  ctx.rcaCallBackend._csrfToken = '';
+  // Spy on the context's clearTimeout AFTER the scripts are loaded (the vm
+  // resolves globals at call time), so we observe the cleanup call itself.
+  const realClearTimeout = ctx.clearTimeout;
+  const cleared = [];
+  ctx.clearTimeout = (t) => { cleared.push(t); return realClearTimeout(t); };
+  const removed = [];
+  const opts = {
+    apiKey: 'sk', baseUrl: 'https://e', model: 'm', maxTokens: 100,
+    mode: 'range_chart', transport: 'backend',
+    dataUrl: 'data:image/png;base64,QUFB', mediaType: 'image/png',
+    caption: '', chartLang: 'auto',
+    signal: {
+      aborted: false,
+      addEventListener() {},
+      removeEventListener(_t, cb) { removed.push(cb); },
+    },
+  };
+  return ctx.extractRangeChart(opts).then((res) => {
+    check('sprintb-csrf-early-error-key', res.ok === false && res.errorKey === 'err.csrfFetch');
+    check('sprintb-csrf-early-clears-timer', cleared.length === 1);
+    check('sprintb-csrf-early-removes-abort-listener', removed.length === 1);
+  });
+}
+const _sprintbCsrf = test_sprintb_csrf_early_return_cleans_up();
+if (_sprintbCsrf && typeof _sprintbCsrf.then === 'function') {
+  _sprintbCsrf.catch((e) => { console.log('FAIL sprintb-csrf-cleanup', e && e.message); fail++; });
+}
+
+// ---- UI-REVIEW-2026-09-05: low-agreement flag must parse the "n/m"
+// agreement string when agreement_count is absent, so a "3/3" row is not
+// flagged low (cream row + green pill contradiction). ----
+function test_ui_low_agreement_fallback() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  ctx.t('zh');
+  const data = {
+    sections: [{ name: 'S1' }],
+    species_ranges: [
+      { species: 'Alpha alpha', section: 'S1', range_base: '1', range_top: '2', biozone: '', agreement_count: 3, agreement: '3/3' },
+      { species: 'Beta beta', section: 'S1', range_base: '1', range_top: '2', biozone: '', agreement: '3/3' },
+      { species: 'Gamma gamma', section: 'S1', range_base: '1', range_top: '2', biozone: '', agreement: '1/3' },
+      { species: 'Delta delta', section: 'S1', range_base: '1', range_top: '2', biozone: '' },
+    ],
+    biozones: [], other_fossils: [], confidence: 0.8, runs: 3,
+  };
+  const html = ctx.rcaRenderResults(data, '');
+  function rowHasFlag(name) {
+    const i = html.indexOf(name);
+    if (i === -1) return null;
+    const start = html.lastIndexOf('<tr', i);
+    return html.slice(start, i).includes('row-low-agreement');
+  }
+  check('ui-lowagreement-count3-not-flagged', rowHasFlag('Alpha alpha') === false);
+  check('ui-lowagreement-string3-not-flagged', rowHasFlag('Beta beta') === false);
+  check('ui-lowagreement-string1-flagged', rowHasFlag('Gamma gamma') === true);
+  check('ui-lowagreement-missing-flagged', rowHasFlag('Delta delta') === true);
+}
+test_ui_low_agreement_fallback();
+
+// ---- UI-REVIEW-2026-09-05: zonation_chart (radiolarian biozonation /
+// correlation charts) — normalizer, table render, and merge keymap. ----
+function test_zonation_chart_support() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  ctx.t('zh');
+  check('zon-normalizer-exported', typeof ctx.rcaNormalizeZonationChartResult === 'function');
+  check('zon-keymap-exported', !!ctx.RCA_ZONATION_KEYMAP && ctx.RCA_ZONATION_KEYMAP.primary === 'zones');
+
+  const data = ctx.rcaNormalizeZonationChartResult({
+    zonations: [
+      { name: 'Bragin (2018), Koryak', region: 'Koryak Highlands', framework: 'radiolarian',
+        reference: 'Bragin, 2018', legacy_key: 'keepme' },
+    ],
+    zones: [
+      { name: 'Proparvicingula moniliformis Zone', zonation: 'Bragin (2018), Koryak',
+        rank: 'zone', age_span: 'lower Rhaetian', base_age: '', top_age: '',
+        stage: 'Rhaetian', defined_by: 'FAD P. moniliformis', note: '' },
+    ],
+    correlations: [
+      { from_zone: 'Proparvicingula moniliformis Zone', to_zone: 'Crassistephanus thuyensis Zone',
+        from_zonation: 'Bragin (2018), Koryak', to_zonation: 'Carter (1993)',
+        basis: 'shared stage', note: '' },
+    ],
+    confidence: 0.9,
+  });
+  check('zon-normalize-3-tables', data.zonations.length === 1 && data.zones.length === 1 && data.correlations.length === 1);
+  check('zon-normalize-row', data.zones[0].name === 'Proparvicingula moniliformis Zone' && data.zones[0].stage === 'Rhaetian');
+  check('zon-normalize-extras', data.zonations[0]._extras && data.zonations[0]._extras.legacy_key === 'keepme');
+  check('zon-normalize-confidence', data.confidence === 0.9);
+
+  // array-root rescue
+  const rescued = ctx.rcaNormalizeZonationChartResult({ _array_root: [
+    { from_zone: 'A Zone', to_zone: 'B Zone' },
+    { name: 'C Zone', zonation: 'Z1' },
+    { name: 'Z2', framework: 'ammonoid' },
+    { something: 'else' },
+  ] });
+  check('zon-array-root-rescue', rescued.correlations.length === 1 && rescued.zones.length === 1 && rescued.zonations.length === 1);
+  check('zon-array-root-unclassified', rescued._extras && Array.isArray(rescued._extras._unclassified) && rescued._extras._unclassified.length === 1);
+
+  // table render: 3 tables with the right rows
+  const html = ctx.rcaRenderResults(data, '');
+  check('zon-render-zonations-table', html.indexOf('data-table="zonations"') !== -1);
+  check('zon-render-zones-table', html.indexOf('data-table="zones"') !== -1);
+  check('zon-render-correlations-table', html.indexOf('data-table="correlations"') !== -1);
+  check('zon-render-zone-row', html.indexOf('Proparvicingula moniliformis Zone') !== -1);
+  check('zon-render-corr-row', html.indexOf('Crassistephanus thuyensis Zone') !== -1);
+  check('zon-export-zones-rows', ctx.rcaBuildTableExport(data, 'zones').rows.length === 1);
+  check('zon-export-corr-rows', ctx.rcaBuildTableExport(data, 'correlations').rows.length === 1);
+
+  // merge via keymap: two identical runs → agreement 2/2
+  const merged = ctx.rcaMergeResults([data, data], 2, ctx.RCA_ZONATION_KEYMAP);
+  check('zon-merge-zones', merged && Array.isArray(merged.zones) && merged.zones.length === 1);
+  check('zon-merge-agreement', merged.zones[0].agreement === '2/2');
+  check('zon-merge-correlations', merged.correlations.length === 1);
+}
+test_zonation_chart_support();
+
+// ---- UI-REVIEW-2026-09-07: vision chart-type classifier normalizer +
+// auto-forwarding wiring (app.js detailed heuristic -> 'auto' passthrough;
+// minimax.js direct-mode classify -> effective mode). ----
+function test_auto_classify() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  check('cls-normalizer-exported', typeof ctx.rcaNormalizeChartClassification === 'function');
+
+  const good = ctx.rcaNormalizeChartClassification(
+    { chart_type: 'zonation_chart', reason: 'tie lines', confidence: 0.9 });
+  check('cls-valid', good.chart_type === 'zonation_chart' && good.confidence === 0.9);
+
+  const unknown = ctx.rcaNormalizeChartClassification({ chart_type: 'banana', confidence: 0.9 });
+  check('cls-unknown-degrades', unknown.chart_type === 'unknown');
+
+  const empty = ctx.rcaNormalizeChartClassification({});
+  check('cls-empty-degrades', empty.chart_type === 'unknown' && empty.confidence === 0);
+
+  // source-level wiring: app.js forwards unmatched auto; minimax classifies
+  const appSrc = require('fs').readFileSync(path.join(__dirname, 'js/app.js'), 'utf8');
+  check('cls-app-detailed-heuristic', appSrc.indexOf('rcaAutoDetectChartModeDetailed') !== -1);
+  check('cls-app-auto-forward', /return detected\.matched \? detected\.mode : 'auto';/.test(appSrc));
+  const mmSrc = require('fs').readFileSync(path.join(__dirname, 'js/minimax.js'), 'utf8');
+  check('cls-minimax-classify-direct', mmSrc.indexOf('rcaNormalizeChartClassification(safeJsonLoads(clsText))') !== -1);
+  check('cls-minimax-conf-threshold', mmSrc.indexOf("cls.confidence >= 0.5") !== -1);
+  check('cls-server-auto-whitelisted',
+        require('fs').readFileSync(path.join(__dirname, 'server.py'), 'utf8').indexOf("'auto',") !== -1);
+}
+test_auto_classify();
+
+// ---- UI-REVIEW-2026-09-07: truncation repair (Level 3.5) must recover
+// completed rows above a max_tokens cut — real fig_19 fixture. ----
+function test_truncation_repair() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const fs2 = require('fs');
+  const fixture = JSON.parse(fs2.readFileSync(
+    path.join(__dirname, 'tests', 'fixtures', 'truncation', 'fig19_truncated_raw.json'),
+    'utf8'));
+  const out = ctx.safeJsonLoads(fixture.raw);
+  check('trunc-repair-sites', (out.sites || []).length === 3);
+  check('trunc-repair-abundances', (out.abundances || []).length === 61);
+  check('trunc-repair-first-row', out.abundances[0]
+    && out.abundances[0].taxon === 'Amphimelissa setosa'
+    && out.abundances[0].abundance === '100');
+
+  // synthetic: partial last row is kept (data-maximizing semantics)
+  const syn = ctx.safeJsonLoads(
+    '{"sites": [{"name": "S1"}], "abundances": [{"taxon": "A", "abundance": "10"}, {"taxon": "B", "abun');
+  check('trunc-syn-sites', (syn.sites || []).length === 1);
+  check('trunc-syn-rows', (syn.abundances || []).length === 2
+    && syn.abundances[1].taxon === 'B');
+}
+test_truncation_repair();
 
 // Wait for async races to settle before printing summary.
 setTimeout(() => {

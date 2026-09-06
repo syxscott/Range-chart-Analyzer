@@ -1,17 +1,17 @@
-"""Regression test for ICS Cretaceous boundary corruption (REVIEW-2026-07-31).
+"""Regression tests pinning the Cretaceous stage boundaries to the official
+ICS International Chronostratigraphic Chart v2024/12.
 
-The shipped ics_2024.json had three wrong Late Cretaceous stage bases:
-
-    Campanian  79.9  (official ICS v2024: 83.6)
-    Santonian  84.9  (official ICS v2024: 86.3)
-    Turonian   94.0  (official ICS v2024: 93.9)
-
-Consequences verified in the audit:
-  * ics_stage_from_age(82) returned "Santonian" (must be Campanian)
-  * ics_stage_from_age(85) returned "Coniacian" (must be Santonian)
-  * every numeric age between 79.9 and 86.3 Ma was exported to the wrong
-    stage in Darwin Core / PBDB output
-  * js/ics_table.js mirrored the same wrong values
+History:
+  * REVIEW-2026-07-31 fixed the corrupted Late Cretaceous bases
+    (Campanian 79.9, Santonian 84.9, Turonian 94.0) but locked the
+    remaining stages to GTS2016-vintage numbers.
+  * Sprint A (CODE_REVIEW_2026-09-01, 2026-09-01) rebuilt the whole table
+    on ICS v2024/12 after the audit found ~20 wrong boundaries. The
+    v2024/12 official values below were cross-verified against
+    stratigraphy.org, Macrostrat timescale #1 and the Paleobiology
+    Database: Campanian base 72.2 (was 72.1), Santonian/Coniacian 85.7
+    (was 86.3), Albian base 113.2 (was 113.0), Valanginian 132.6-137.05
+    (was 132.9-139.8), Berriasian base 143.1 (was 145.0).
 
 Reference: International Commission on Stratigraphy v2024/12
 https://stratigraphy.org/ICSchart/ChronostratChart2024-12.pdf
@@ -28,20 +28,20 @@ def _load_ics():
     return json.loads(p.read_text(encoding="utf-8"))
 
 
-# stage          : (top_ma,  base_ma)  — official ICS v2024
+# stage          : (top_ma,  base_ma)  — official ICS v2024/12
 REFERENCE_CRETACEOUS = {
-    "Maastrichtian": (66.0, 72.1),
-    "Campanian":     (72.1, 83.6),
-    "Santonian":     (83.6, 86.3),
-    "Coniacian":     (86.3, 89.8),
+    "Maastrichtian": (66.0, 72.2),
+    "Campanian":     (72.2, 83.6),
+    "Santonian":     (83.6, 85.7),
+    "Coniacian":     (85.7, 89.8),
     "Turonian":      (89.8, 93.9),
     "Cenomanian":    (93.9, 100.5),
-    "Albian":        (100.5, 113.0),
-    "Aptian":        (113.0, 121.4),
+    "Albian":        (100.5, 113.2),
+    "Aptian":        (113.2, 121.4),
     "Barremian":     (121.4, 125.77),
-    "Hauterivian":   (125.77, 132.9),
-    "Valanginian":   (132.9, 139.8),
-    "Berriasian":    (139.8, 145.0),
+    "Hauterivian":   (125.77, 132.6),
+    "Valanginian":   (132.6, 137.05),
+    "Berriasian":    (137.05, 143.1),
 }
 
 
@@ -72,13 +72,15 @@ class TestCretaceousLookups:
     @pytest.mark.parametrize(
         "ma,expected",
         [
-            (80.0, "Campanian"),   # 79.9-83.6 used to mis-assign to Santonian
-            (82.0, "Campanian"),
-            (85.0, "Santonian"),   # used to resolve to Coniacian
+            (80.0, "Campanian"),
+            (82.0, "Campanian"),   # 72.2-83.6 (v2024/12)
+            (85.0, "Santonian"),   # 83.6-85.7 (v2024/12; 85.7 is Coniacian base)
             (88.0, "Coniacian"),
             (92.0, "Turonian"),
             (95.0, "Cenomanian"),
             (105.0, "Albian"),
+            (143.0, "Berriasian"),  # base Cretaceous is now 143.1
+            (144.0, "Tithonian"),   # Jurassic side of the moved boundary
         ],
     )
     def test_stage_from_age(self, ma, expected):
@@ -95,26 +97,29 @@ class TestCretaceousLookups:
 
     def test_age_compare_santonian_younger_than_coniacian(self):
         from rca_core.standards.ics import ics_age_compare
-        # Coniacian (89.8-86.3) is OLDER than Santonian (86.3-83.6).
+        # Coniacian (89.8-85.7) is OLDER than Santonian (85.7-83.6).
         assert ics_age_compare("Coniacian", "Santonian") == -1
         assert ics_age_compare("Santonian", "Coniacian") == 1
 
 
 class TestOrdovicianBoundaries:
-    """Mid-Ordovician bases were also off (468.1/464.8/456.7/451.8).
+    """Mid-Ordovician bases were locked to GTS2012-vintage values by the
+    previous regression test (453.0/458.4/467.3/470.0/477.7).
 
-    Official GTS2020 / ICS v2024: Dapingian 470.0, Darriwilian 467.3,
-    Sandbian 458.4, Katian 453.0.
+    Official ICS v2024/12: Katian base 452.8, Sandbian 458.2,
+    Darriwilian 469.4, Dapingian 471.3, Floian 477.1, base Ordovician
+    486.85 (base Silurian 443.1).
     """
 
     @pytest.mark.parametrize(
         "stage,expected",
         [
-            ("Katian", (445.2, 453.0)),
-            ("Sandbian", (453.0, 458.4)),
-            ("Darriwilian", (458.4, 467.3)),
-            ("Dapingian", (467.3, 470.0)),
-            ("Floian", (470.0, 477.7)),
+            ("Katian", (445.2, 452.8)),
+            ("Sandbian", (452.8, 458.2)),
+            ("Darriwilian", (458.2, 469.4)),
+            ("Dapingian", (469.4, 471.3)),
+            ("Floian", (471.3, 477.1)),
+            ("Tremadocian", (477.1, 486.85)),
         ],
     )
     def test_boundaries(self, ics, stage, expected):
@@ -125,10 +130,9 @@ class TestOrdovicianBoundaries:
 
     def test_stage_from_age(self):
         from rca_core.standards.ics import ics_stage_from_age
-        # Katian 445.2-453.0, Sandbian 453.0-458.4, Darriwilian 458.4-467.3,
-        # Dapingian 467.3-470.0, Floian 470.0-477.7.
         assert ics_stage_from_age(448.0) == "Katian"
         assert ics_stage_from_age(455.0) == "Sandbian"
         assert ics_stage_from_age(462.0) == "Darriwilian"
-        assert ics_stage_from_age(468.5) == "Dapingian"
+        assert ics_stage_from_age(470.0) == "Dapingian"
         assert ics_stage_from_age(474.0) == "Floian"
+        assert ics_stage_from_age(480.0) == "Tremadocian"

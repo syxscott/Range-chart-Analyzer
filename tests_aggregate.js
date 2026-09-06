@@ -319,5 +319,37 @@ function test_h7_merge_field_bool_via_dispatch() {
 }
 test_h7_merge_field_bool_via_dispatch();
 
+// --- Sprint B (REVIEW-2026-09-04): dedup key separator collision ---
+// The per-run dedup key used to be parts.join('') (in fact an invisible
+// '\x01' byte until this sprint), so the id tuples ("ab","c") and
+// ("a","bc") collapsed to the same key and the second row was silently
+// dropped inside a single run. Python keys on a tuple (aggregate.py:521)
+// and never had the problem. The key now joins on an explicit NUL
+// ('\u0000'), so both rows must survive as separate groups.
+{
+  const runA = {
+    sections: [],
+    species_ranges: [
+      { species: 'c', section: 'ab', range_base: '1', range_top: '2', biozone: '' },
+      { species: 'bc', section: 'a', range_base: '3', range_top: '4', biozone: '' },
+    ],
+    biozones: [],
+    other_fossils: [],
+    confidence: 0.5,
+  };
+  const runB = {
+    sections: [],
+    species_ranges: [],
+    biozones: [],
+    other_fossils: [],
+    confidence: 0.5,
+  };
+  const m = rcaMergeResults([runA, runB]);
+  check('dedup-nul-separator-no-collision', m.species_ranges.length === 2);
+  check('dedup-collision-rows-keep-own-values',
+    m.species_ranges.some((s) => s.species === 'c' && s.section === 'ab') &&
+    m.species_ranges.some((s) => s.species === 'bc' && s.section === 'a'));
+}
+
 console.log('---', pass, 'passed,', fail, 'failed ---');
 process.exit(fail ? 1 : 0);

@@ -92,6 +92,71 @@ except Exception:
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer.json")
 
+# Sprint B (REVIEW-2026-09-04): per-run LLM extraction timeout (seconds).
+# Neither GUI exposes a settings entry for this; rca_core.extractor
+# clamps the value into [10, 300]. The worker previously computed its
+# budget from params.get("timeout_sec", 120) although NO caller ever put
+# the key into params, so the budget silently depended on an inline magic
+# number. The constant is wired into the params dict at the single
+# construction site (RangeChartApp._on_extract) so the request timeout
+# and the worker's collection budget share one source of truth.
+EXTRACT_TIMEOUT_SEC = 120
+
+
+def _collect_extraction_futures(futures, budget):
+    """Sprint B (REVIEW-2026-09-04): collect extraction futures under a
+    REAL whole-batch time budget.
+
+    The previous implementation iterated ``as_completed(futures)`` and
+    called ``fut.result(timeout=...)`` per future — but as_completed only
+    yields futures that have ALREADY finished, so the per-future timeout
+    was dead code and one stalled run pinned the whole batch forever.
+
+    All runs execute concurrently, so ONE budget equal to the per-request
+    LLM timeout (``timeout_sec``) plus a small grace window covers the
+    batch. Futures that overrun it are reported as ``err.timeout``
+    ExtractResults instead of being waited on indefinitely. Running
+    threads cannot be killed safely, so the caller must NOT join the
+    executor after this returns (use ``shutdown(wait=False)``).
+
+    Returns the flat list of ExtractResults. Deliberately Tk-free so the
+    timeout semantics are unit-testable without a display (see
+    tests/test_gui_sprint_b.py; Qt twin lives in gui_fluent.py).
+    """
+    results = []
+    pending = set(futures)
+    deadline = time.monotonic() + float(budget)
+    while pending:
+        remaining = deadline - time.monotonic()
+        done_set, pending = concurrent.futures.wait(
+            pending, timeout=max(0.0, remaining),
+            return_when=concurrent.futures.ALL_COMPLETED)
+        for fut in done_set:
+            try:
+                results.append(fut.result())
+            except Exception as exc:
+                # extract() never raises, but defend against unforeseen
+                # bugs in user code. Bug-12 fix: log so the exception
+                # class + traceback is recoverable when the user reports
+                # "nothing happened".
+                log.exception("extract future raised in worker thread")
+                results.append(ExtractResult(
+                    ok=False, error_key="err.http", raw=str(exc)))
+        if pending and deadline - time.monotonic() <= 0:
+            # Budget exhausted: cancel whatever has not started and
+            # report the still-running runs as timeouts.
+            n_timed_out = len(pending)
+            for unf in pending:
+                unf.cancel()
+            pending.clear()
+            for _ in range(n_timed_out):
+                results.append(ExtractResult(
+                    ok=False, error_key="err.timeout",
+                    error_body=f"per-future timeout after {budget:.0f}s",
+                ))
+            break
+    return results
+
 # UI-Mod-1: 极简现代风 Palette (Morandi / "性冷淡"色系).
 # 深层石板灰主按钮 + 蓝灰点缀 + 冷白背景. 配合 sv_ttk 主题后整体
 # 呈现 Windows 11 Fluent + 莫兰迪柔感的高级感.
@@ -907,6 +972,9 @@ class RangeChartApp:
             # keyword could never reach the mode (auto-detection only).
             # Fluent GUI and the web frontend both offer it.
             ("phylogenetic_tree", "Phylogenetic Tree"),
+            # UI-REVIEW-2026-09-05: radiolarian biozonation / correlation
+            # charts — full-stack mode (merge schema + quality + export).
+            ("zonation_chart", "Zonation Chart"),
         ]
         self.cmb_chart_type = ttk.Combobox(
             adv_frame, state="readonly", width=14,
@@ -1070,6 +1138,22 @@ class RangeChartApp:
     # NOTE: the compact header intentionally drops the subtitle to keep the
     # top bar thin. The 'app.subtitle' key is still translated for web mode.
     # ----------
+    def _purge_i18n_subtree(self, root_widget):
+        """Sprint B (REVIEW-2026-09-04): drop _i18n registrations for every
+        widget under *root_widget* (about to be destroyed). Mirrors the
+        gui_fluent deleteLater + clear-dict pattern; without this the
+        registry grows without bound across result rebuilds and retranslate
+        keeps touching destroyed widgets inside its try/except."""
+        try:
+            def _collect(w):
+                yield w
+                for child in w.winfo_children():
+                    yield from _collect(child)
+            dead = {str(w) for w in _collect(root_widget)}
+            self._i18n = [t for t in self._i18n if str(t[0]) not in dead]
+        except Exception:
+            pass
+
     def retranslate(self):
         for widget, kind, key in self._i18n:
             try:
@@ -1176,7 +1260,6 @@ class RangeChartApp:
         if not path:
             return
         self._cleanup_paste_tmp()
-        self.image_path = path
         # Load + encode in a thread-free quick step (files are local).
         try:
             b64, mime, w, h, resized, decode_error = load_image_b64(path, self._max_edge(), enhance=self.var_enhance.get())
@@ -1188,6 +1271,14 @@ class RangeChartApp:
             # instead of silently going through with a 0×0 thumbnail.
             self.var_status.set(self._t("err.imageDecode"))
             return None
+        # Sprint B (REVIEW-2026-09-04): assign ALL image state only after
+        # the load fully succeeded. The previous code assigned
+        # self.image_path BEFORE load_image_b64, so a failed load left
+        # image_path pointing at the new file while image_b64/_img_dims
+        # still held the OLD image — the next Extract would send the old
+        # pixels labelled with the new filename. Mirrors the (correct)
+        # gui_fluent._load_image ordering.
+        self.image_path = path
         self.image_b64 = b64
         self.media_type = mime
         self._img_dims = (w, h, resized)
@@ -1489,20 +1580,31 @@ class RangeChartApp:
 
     def _test_provider_connection(self, provider: LlmProvider):
         """Spin up a thread that calls test_llm_connection. The button shows
-        a "Testing..." spinner until the result arrives."""
+        a "Testing..." spinner until the result arrives.
+
+        Sprint B (REVIEW-2026-09-04): every test carries a monotonically
+        increasing request token. The shared result label used to be
+        guarded only by ``_testing_id`` (the provider under test), so
+        starting test B while A was still in flight let A's late callback
+        overwrite the label with A's result and clear B's in-flight
+        state. The callback now touches the UI only while its token is
+        still the newest one.
+        """
         if getattr(self, "_testing_id", None) == provider.id:
             return
         self._testing_id = provider.id
+        self._test_token = getattr(self, "_test_token", 0) + 1
+        token = self._test_token
         # Spinner state on the result label.
         if hasattr(self, "lbl_test_result"):
             self.lbl_test_result.configure(text="⏳ " + self._t("settings.testing"), foreground=COLORS["muted"])
         thread = threading.Thread(
             target=self._run_connection_test,
-            args=(provider,),
+            args=(provider, token),
             daemon=True)
         thread.start()
 
-    def _run_connection_test(self, provider: LlmProvider):
+    def _run_connection_test(self, provider: LlmProvider, token: int):
         from rca_core.llm import test_llm_connection
         res = test_llm_connection(provider, timeout_sec=8)
         if res.ok:
@@ -1521,6 +1623,10 @@ class RangeChartApp:
             bg = "#fef2f2"
 
         def _apply():
+            # Sprint B: stale-result guard — only the NEWEST test may
+            # write the shared label / clear the in-flight state.
+            if token != getattr(self, "_test_token", None):
+                return
             self._testing_id = None
             lbl = getattr(self, "lbl_test_result", None)
             if lbl is None:
@@ -1648,25 +1754,53 @@ class RangeChartApp:
             "model": self.var_model.get().strip() or DEFAULT_MODEL,
             "max_tokens": self._max_tokens(),
             "provider": provider,
+            # Sprint B (REVIEW-2026-09-04): wire the extraction timeout into
+            # params — the worker's budget used to read
+            # params.get("timeout_sec", ...) although no caller ever set
+            # the key. See EXTRACT_TIMEOUT_SEC above (no settings entry
+            # exists for it yet).
+            "timeout_sec": EXTRACT_TIMEOUT_SEC,
         }
         runs = self._runs()
         # Mode routing: explicit user selection wins; auto uses a lightweight
         # caption/path heuristic (column chart -> columnar_section).
         mode = (self.var_chart_type.get() or "auto").strip()
-        if mode == "auto":
-            # REVIEW-2026-11-07 (low): route through the shared
-            # rca_core.chart_mode heuristic — the inline substring copy
-            # diverged from the web frontend's word-boundary matching
-            # (e.g. "Pollinator..." and "phylogenetic" classified
-            # differently per UI).
-            from rca_core.chart_mode import auto_detect_chart_mode
-            cap = self.txt_caption.get("1.0", "end").strip() + " " + (self.image_path or "")
-            mode = auto_detect_chart_mode(cap)
-        threading.Thread(target=self._worker, args=(params, mode, runs), daemon=True).start()
+        # UI-REVIEW-2026-09-07: when mode == "auto" it is resolved inside
+        # _worker (which runs on a daemon thread) — two-stage: caption
+        # keywords, then vision classification of the image when the text
+        # heuristic matches nothing. Resolving here would freeze the
+        # window for the length of a vision round-trip.
+        threading.Thread(target=self._worker,
+                         args=(params, mode, runs, (self.image_path or "")),
+                         daemon=True).start()
 
-    def _worker(self, params, mode="range_chart", runs=1):
+    def _worker(self, params, mode="range_chart", runs=1, auto_filename=""):
+        # UI-REVIEW-2026-09-07: resolve "auto" here (worker thread) —
+        # caption keywords first, then vision classification of the image.
+        if mode == "auto":
+            from rca_core.chart_mode import auto_detect_chart_mode_ex
+            from rca_core.extractor import resolve_auto_mode
+            mode, matched = auto_detect_chart_mode_ex(
+                (params.get("caption") or "") + " " + (auto_filename or ""))
+            if not matched:
+                mode, _cls = resolve_auto_mode(
+                    caption=params.get("caption") or "",
+                    filename=auto_filename or "",
+                    image_b64=params.get("image_b64") or "",
+                    media_type=params.get("media_type") or "image/png",
+                    provider=params.get("provider"),
+                )
         if runs <= 1:
-            self.msg_queue.put(extract(mode=mode, **params))
+            r = extract(mode=mode, **params)
+            # Sprint B (REVIEW-2026-09-04): attach the resolved mode so
+            # _save_to_history records the REAL chart kind instead of the
+            # raw "auto" dropdown value (which the Fluent history-page
+            # filter never matches).
+            try:
+                r._mode = mode
+            except Exception:
+                pass
+            self.msg_queue.put(r)
             return
         # Multi-run: extract N times IN PARALLEL via a thread pool, then
         # merge the successful runs. Concurrent execution trims total wait
@@ -1684,31 +1818,16 @@ class RangeChartApp:
         # "" / the empty-bytes hash, breaking get_by_sha256 grouping).
         first_ok_sha = ""
         first_ok_meta = None
-        with concurrent.futures.ThreadPoolExecutor(max_workers=runs) as ex:
-            futures = [ex.submit(extract, mode=mode, **params) for _ in range(runs)]
-            # Phase K fix: per-future hard timeout. The user's
-            # ``timeout_sec`` is the per-request LLM timeout, plus a
-            # small grace window (10s) for Python / JIT overhead. A
-            # future that exceeds this is recorded as a timeout failure
-            # rather than blocking the UI forever (the previous version
-            # called fut.result() with no timeout - one stalled run
-            # could pin the whole batch indefinitely).
-            per_future_timeout = params.get("timeout_sec", 120) + 10
-            for fut in concurrent.futures.as_completed(futures):
-                try:
-                    r = fut.result(timeout=per_future_timeout)
-                except concurrent.futures.TimeoutError:
-                    r = ExtractResult(
-                        ok=False, error_key="err.timeout",
-                        error_body=f"per-future timeout after {per_future_timeout}s",
-                    )
-                except Exception as exc:
-                    # extract() never raises, but defend against unforeseen
-                    # bugs in user code. Bug-12 fix: log so the exception
-                    # class + traceback is recoverable when the user reports
-                    # "nothing happened".
-                    log.exception("extract future raised in worker thread")
-                    r = ExtractResult(ok=False, error_key="err.http", raw=str(exc))
+        # Sprint B (REVIEW-2026-09-04): whole-batch collection budget =
+        # per-request timeout_sec + 10s grace. See _collect_extraction_futures
+        # for why the old as_completed()+fut.result(timeout=...) loop could
+        # never time out (as_completed only yields finished futures).
+        budget = float(params.get("timeout_sec", EXTRACT_TIMEOUT_SEC)) + 10.0
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=runs)
+        try:
+            futures = [executor.submit(extract, mode=mode, **params)
+                       for _ in range(runs)]
+            for r in _collect_extraction_futures(futures, budget):
                 if r.ok and r.data is not None:
                     ok_datas.append(r.data)
                     any_truncated = any_truncated or bool(r.truncated)
@@ -1723,12 +1842,17 @@ class RangeChartApp:
                 else:
                     last_fail = r
                     partial_fails += 1
+        finally:
+            # Sprint B: never join overrunning threads — shutdown(wait=False)
+            # lets timed-out runs drain in the background instead of pinning
+            # the result (they were already reported as err.timeout).
+            executor.shutdown(wait=False)
         if not ok_datas:
             self.msg_queue.put(last_fail if last_fail else extract(mode=mode, **params))
             return
         schema = SCHEMA_BY_MODE.get(mode, RANGE_CHART_SCHEMA)
         merged = merge_results(ok_datas, total_runs=runs, schema=schema)
-        self.msg_queue.put(ExtractResult(
+        merged_res = ExtractResult(
             ok=True, data=merged, raw="\n---RUN---\n".join(raws)[:8000],
             truncated=any_truncated or bool(partial_fails),
             partial_failures=partial_fails,
@@ -1736,7 +1860,19 @@ class RangeChartApp:
             # metadata so _save_to_history writes a correct audit record.
             image_sha256=first_ok_sha,
             request_meta=first_ok_meta or {},
-        ))
+        )
+        # Sprint B (REVIEW-2026-09-04): the per-run raw responses were
+        # collected but never attached, so _save_to_history's
+        # getattr(result, "_raws") read a dead attribute and the
+        # raw_responses table lost the per-slot texts. ExtractResult is a
+        # plain (non-slots) dataclass, so the attribute can be attached.
+        merged_res._raws = list(raws)
+        # Sprint B: resolved mode for _save_to_history (see runs<=1 above).
+        try:
+            merged_res._mode = mode
+        except Exception:
+            pass
+        self.msg_queue.put(merged_res)
 
     def _poll_queue(self):
         try:
@@ -1814,8 +1950,18 @@ class RangeChartApp:
 
         # Rebuild the notebook tabs so the active result shape
         # (range-chart vs columnar-section) drives which tables show.
+        # Sprint B (REVIEW-2026-09-04): forget() alone leaked the old tab
+        # frames (alive but unreferenced) and let self._i18n grow without
+        # bound on every extraction / retranslate. Purge the registry
+        # entries for each dead subtree, then destroy the frame.
         for tab_id in list(self.nb.tabs()):
             self.nb.forget(tab_id)
+        for old_frame in list(self.tab_frames.values()):
+            self._purge_i18n_subtree(old_frame)
+            try:
+                old_frame.destroy()
+            except Exception:
+                pass
         self.tab_frames = {}
         self.trees = {}
         for cfg in configs:
@@ -1977,6 +2123,35 @@ class RangeChartApp:
         self.root.destroy()
 
 
+    def _resolved_mode(self) -> str:
+        """Sprint B (REVIEW-2026-09-04): resolve the chart mode from the
+        current result's shape (mirrors gui_fluent ExtractPage._current_mode)
+        so history records store a real mode (range_chart / columnar_section
+        / abundance_diagram / phylogenetic_tree). Previously the raw "auto"
+        dropdown value was persisted, which the Fluent history-page filter
+        (it only offers range_chart / columnar_section) can never match."""
+        r = self.result if isinstance(self.result, dict) else {}
+        # Phylogenetic-tree results carry a ``nodes`` list (the primary
+        # list_key for PHYLOGENETIC_TREE_SCHEMA); detect that before the
+        # columnar/abundance fallbacks.
+        if isinstance(r.get("nodes"), list):
+            return "phylogenetic_tree"
+        if isinstance(r.get("abundances"), list):
+            return "abundance_diagram"
+        # UI-REVIEW-2026-09-07: zonation / correlation chart payloads
+        # (zones with rank/zonation markers + correlations) previously fell
+        # through to range_chart in the saved history record, so the
+        # history-page filter could never match them.
+        if isinstance(r.get("correlations"), list) and r["correlations"]:
+            return "zonation_chart"
+        zns = r.get("zones")
+        if isinstance(zns, list) and zns and isinstance(zns[0], dict)                 and ("rank" in zns[0] or "zonation" in zns[0]):
+            return "zonation_chart"
+        sects = r.get("sections") or []
+        if sects and isinstance(sects[0], dict) and "id" in sects[0] and "name" not in sects[0]:
+            return "columnar_section"
+        return "range_chart"
+
     def _save_to_history(self, result) -> None:
         """Phase J fix: persist the extraction to the history DB.
 
@@ -2015,7 +2190,11 @@ class RangeChartApp:
                 provider_id=(self._active_provider.id if getattr(self, "_active_provider", None) else "") or "",
                 provider_name=(self._active_provider.name if getattr(self, "_active_provider", None) else "") or "",
                 model=(self._active_provider.model if getattr(self, "_active_provider", None) else "") or "",
-                mode=str(getattr(self, "var_chart_type", tk.StringVar(value="range_chart")).get()),
+                # Sprint B (REVIEW-2026-09-04): store the mode RESOLVED BY
+                # THE WORKER (attached to the result by _worker) and fall
+                # back to shape-based resolution — never the raw "auto"
+                # dropdown value.
+                mode=str(getattr(result, "_mode", "") or self._resolved_mode()),
                 runs=int((self.result or {}).get("runs", 1) or 1),
                 result=self.result if isinstance(self.result, dict) else {},
                 raw=(result.raw or "")[:8192],

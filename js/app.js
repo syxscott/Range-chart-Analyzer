@@ -43,6 +43,68 @@
   // Heuristic only — if the user knows better, they can hide the chart
   // entirely and let the model decide (range_chart is the safe fallback).
   // Mirrors the GUI's caption-based heuristic in gui.py.
+  // UI-REVIEW-2026-09-07: detailed variant - {mode, matched} so the
+  // caller can distinguish a POSITIVE keyword hit from the range_chart
+  // default. Unmatched "auto" is forwarded to the extraction layer,
+  // which classifies the image itself (vision) instead of guessing.
+  function rcaAutoDetectChartModeDetailed() {
+    const blob = (function () {
+      const cap = ($('caption') && $('caption').value || '').toLowerCase();
+      const fileName = (state.file && state.file.name || '').toLowerCase();
+      return cap + ' ' + fileName;
+    })();
+    const asciiWordBoundary = (haystack, needle) => {
+      const re = new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+      return re.test(haystack);
+    };
+    const asciiWordStart = (haystack, needle) => {
+      const re = new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      return re.test(haystack);
+    };
+    const stemMatch = (blob2, k) =>
+      k === 'phylogen' || k === 'molecular phylogen' || k === 'palyno'
+        ? asciiWordStart(blob2, k)
+        : asciiWordBoundary(blob2, k);
+    const zonKeysAscii = ['zonation', 'biozonation', 'zone correlation', 'correlation of', 'correlation chart'];
+    const zonKeysCjk = ['生物带', '化石带', '带状对比', '对比图'];
+    const abKeysAscii = ['pollen', 'abundance', 'percentage diagram', 'palyno'];
+    const abKeysCjk = ['孢粉', '花粉', '丰度', '百分比'];
+    const colKeysAscii = ['column', 'columns', 'columnar', 'col_section', 'col_sections'];
+    const colKeysCjk = ['柱状', '柱状図', '柱状图'];
+    const phyloKeysAscii = ['phylogen', 'phylogram', 'cladogram', 'dendrogram', 'molecular phylogen'];
+    const phyloKeysCjk = ['系统发育', '进化树', '系统树', '分子系统'];
+    const zonHit = zonKeysAscii.some((k) => (k === 'zonation' ? asciiWordStart(blob, k) : stemMatch(blob, k)))
+      || zonKeysCjk.some((k) => blob.indexOf(k) !== -1);
+    if (zonHit) {
+      // UI-REVIEW-2026-09-07 (E2E fig_23): a caption mixing "range chart"
+      // with zonation keywords routes to range_chart — the extractor's
+      // biozone fields still capture zonation columns.
+      if (asciiWordBoundary(blob, 'range chart') || blob.indexOf('延限') !== -1) {
+        return { mode: 'range_chart', matched: true };
+      }
+      return { mode: 'zonation_chart', matched: true };
+    }
+    for (const k of abKeysAscii) {
+      if (stemMatch(blob, k)) return { mode: 'abundance_diagram', matched: true };
+    }
+    for (const k of abKeysCjk) {
+      if (blob.indexOf(k) !== -1) return { mode: 'abundance_diagram', matched: true };
+    }
+    for (const k of colKeysAscii) {
+      if (asciiWordBoundary(blob, k)) return { mode: 'columnar_section', matched: true };
+    }
+    for (const k of colKeysCjk) {
+      if (blob.indexOf(k) !== -1) return { mode: 'columnar_section', matched: true };
+    }
+    for (const k of phyloKeysAscii) {
+      if (stemMatch(blob, k)) return { mode: 'phylogenetic_tree', matched: true };
+    }
+    for (const k of phyloKeysCjk) {
+      if (blob.indexOf(k) !== -1) return { mode: 'phylogenetic_tree', matched: true };
+    }
+    return { mode: 'range_chart', matched: false };
+  }
+
   function rcaAutoDetectChartMode() {
     const cap = ($('caption') && $('caption').value || '').toLowerCase();
     const fileName = (state.file && state.file.name || '').toLowerCase();
@@ -64,6 +126,11 @@
     // merely mentions "tree ring data").
     const phyloKeysAscii = ['phylogen', 'phylogram', 'cladogram', 'dendrogram', 'molecular phylogen'];
     const phyloKeysCjk = ['系统发育', '进化树', '系统树', '分子系统'];
+    // UI-REVIEW-2026-09-05: biozonation / correlation charts (radiolarian
+    // biochronology). Matched BEFORE abundance (mirrors chart_mode.py).
+    // 'zonation' is a stem: also matches 'zonations' / 'zonal'.
+    const zonKeysAscii = ['zonation', 'biozonation', 'zone correlation', 'correlation of', 'correlation chart'];
+    const zonKeysCjk = ['生物带', '化石带', '带状对比', '对比图'];
     const asciiWordBoundary = (haystack, needle) => {
       // Use \b word boundaries around ASCII tokens so 'col' won't match
       // 'colour' but 'col_section' (with underscore) still does. The
@@ -85,6 +152,12 @@
       k === 'phylogen' || k === 'molecular phylogen' || k === 'palyno'
         ? asciiWordStart(blob, k)
         : asciiWordBoundary(blob, k);
+    for (const k of zonKeysAscii) {
+      if (k === 'zonation' ? asciiWordStart(blob, k) : stemMatch(blob, k)) return 'zonation_chart';
+    }
+    for (const k of zonKeysCjk) {
+      if (blob.indexOf(k) !== -1) return 'zonation_chart';
+    }
     for (const k of abKeysAscii) {
       if (stemMatch(blob, k)) return 'abundance_diagram';
     }
@@ -107,24 +180,42 @@
   }
 
   // Resolve the chart extraction mode. Manual choice wins over the
-  // heuristic; 'auto' falls back to rcaAutoDetectChartMode().
+  // heuristic. UI-REVIEW-2026-09-07: when the user picks "auto" and the
+  // caption heuristic matches NOTHING, forward "auto" to the extraction
+  // layer - the vision classifier decides (direct: classify here;
+  // backend: the server resolves before dispatching). Previously an
+  // unmatched auto silently became range_chart, extracting a zonation or
+  // abundance figure with the wrong prompt.
   function rcaResolveChartMode() {
     const sel = $('chart-mode');
     const choice = sel ? sel.value : 'auto';
     if (choice === 'range_chart' || choice === 'columnar_section'
-        || choice === 'abundance_diagram' || choice === 'phylogenetic_tree') {
+        || choice === 'abundance_diagram' || choice === 'phylogenetic_tree'
+        || choice === 'zonation_chart') {
       return choice;
     }
-    return rcaAutoDetectChartMode();
+    const detected = rcaAutoDetectChartModeDetailed();
+    return detected.matched ? detected.mode : 'auto';
   }
 
   // Map a result object's shape to an export filename prefix. Mirrors the
   // shape detection in table.js / rca_core.exporter so exported files are
   // labeled by the chart kind they actually hold.
   function rcaResultFilePrefix(result) {
-    if (result && Array.isArray(result.abundances)) return 'abundance_diagram_';
+    // Sprint B (REVIEW-2026-09-04): require a non-empty abundances list,
+    // mirroring rca_core/exporter.py:_looks_abundance (exporter.py:186-191)
+    // — an empty `abundances: []` placeholder must not mislabel a range-chart
+    // export as abundance_diagram.
+    if (result && Array.isArray(result.abundances) && result.abundances.length > 0) return 'abundance_diagram_';
     if (result && Array.isArray(result.sections) && !Array.isArray(result.species_ranges)) {
       return 'columnar_section_';
+    }
+    // UI-REVIEW-2026-09-07: zonation / correlation chart exports get a
+    // proper prefix (previously named range_chart_*).
+    if (result && ((Array.isArray(result.correlations) && result.correlations.length > 0)
+        || (Array.isArray(result.zones) && result.zones.length > 0
+            && result.zones[0] && ('rank' in result.zones[0] || 'zonation' in result.zones[0])))) {
+      return 'zonation_chart_';
     }
     return 'range_chart_';
   }
@@ -199,7 +290,13 @@
     el.textContent = t(i18nKey);
   }
 
-  function saveSettings() {
+  // Sprint B (REVIEW-2026-09-04): `silent` suppresses the "settings saved"
+  // toast for IMPLICIT saves. runExtraction used to call saveSettings()
+  // before every extraction, so each run popped a "设置已保存" toast even
+  // though the user never pressed Save. Explicit saves (the Save button)
+  // keep the toast. A persistence FAILURE still toasts in both modes —
+  // FR3's private-mode/quota warning is actionable and must not be muted.
+  function saveSettings(silent) {
     // FR3: collect per-write results so we can warn when localStorage is
     // unavailable (private mode / quota exceeded) instead of falsely
     // claiming "settings saved".
@@ -244,7 +341,7 @@
     // detail.
     const failedKeys = writes.filter(([_, status]) => status === false).map(([k]) => k);
     if (failedKeys.length === 0) {
-      toast(t('settings.saved'));
+      if (!silent) toast(t('settings.saved'));
       syncFooterModel();
       syncFooterRuntime();
     } else {
@@ -289,9 +386,25 @@
     slot.innerHTML = '';
   }
 
-  function showAlert(kind, message, rawDetail) {
+  // UI-REVIEW-2026-09-05: remember how the visible alert was built so
+  // switchLang() can re-translate it. Alerts are rendered once with t()
+  // and are NOT covered by rcaApplyI18n's static data-i18n walk — without
+  // this, switching language left the old banner in the previous language.
+  // Pure t() messages store {key, params, status}; callers that pass a
+  // pre-composed string store it verbatim (fmt = null).
+  let _currentAlertSpec = null;
+
+  function _alertMessage(spec) {
+    if (!spec || !spec.fmt) return spec ? spec.message : '';
+    let msg = t(spec.fmt.key, spec.fmt.params);
+    if (spec.fmt.status) msg += ' (HTTP ' + spec.fmt.status + ')';
+    return msg;
+  }
+
+  function showAlert(kind, message, rawDetail, fmt) {
     const slot = $('alert-slot');
     if (!slot) return;
+    _currentAlertSpec = { kind, message, rawDetail, fmt: fmt || null };
     // M3: error-level alerts need role="alert" so screen readers announce
     // them immediately (aria-live=polite on the parent slot only gets the
     // "next opportunity" announcement). Keep role="status" for warnings —
@@ -347,7 +460,7 @@
 
   async function handleFile(file) {
     if (!file || !file.type.startsWith('image/')) {
-      showAlert('warning', t('err.noImage'));
+      showAlert('warning', t('err.noImage'), null, { key: 'err.noImage' });
       return;
     }
     // FIX (file-too-big): reject oversized files before the base64 read blows
@@ -355,7 +468,7 @@
     // dragged-in multi-hundred-MB TIFF can't hang the browser.
     var _maxFileBytes = (RCA_CONFIG.maxFileBytes) || (20 * 1024 * 1024);
     if (file.size > _maxFileBytes) {
-      showAlert('warning', t('err.fileTooBig'));
+      showAlert('warning', t('err.fileTooBig'), null, { key: 'err.fileTooBig' });
       return;
     }
     // H8 (REVIEW-2026-08-19): defer `state.file = file` until AFTER the
@@ -406,6 +519,10 @@
       state.file = file;
       state.dataUrl = loaded.dataUrl;
       state.mediaType = loaded.mime;
+      // Sprint B (REVIEW-2026-09-04): record the decoded dimensions so a
+      // language switch can still show them while a large image is still
+      // decoding (img.naturalWidth reads 0 until then).
+      state._previewDims = { width: loaded.width, height: loaded.height };
       // preview
       $('preview-img').src = loaded.dataUrl;
       const meta = [];
@@ -423,7 +540,7 @@
         if (err && err.message === 'aborted') {
           /* superseded load, nothing to report */
         } else {
-          showAlert('danger', t('err.imageRead'));
+          showAlert('danger', t('err.imageRead'), null, { key: 'err.imageRead' });
         }
       }
     }
@@ -473,23 +590,26 @@
     if (state.busy) return;
     const apiKey = $('api-key').value.trim();
     if (!apiKey) {
-      showAlert('warning', t('err.noKey'));
+      showAlert('warning', t('err.noKey'), null, { key: 'err.noKey' });
       return;
     }
     if (!state.dataUrl) {
-      showAlert('warning', t('err.noImage'));
+      showAlert('warning', t('err.noImage'), null, { key: 'err.noImage' });
       return;
     }
     const endpoint = $('endpoint').value.trim();
     if (!endpoint) {
-      showAlert('warning', t('err.noEndpoint'));
+      showAlert('warning', t('err.noEndpoint'), null, { key: 'err.noEndpoint' });
       return;
     }
     clearAlert();
     // M42: persist any settings edits the user made since the last explicit
     // Save so the in-flight extraction always uses the values currently in
     // the form (rather than the last saved snapshot).
-    saveSettings();
+    // Sprint B (REVIEW-2026-09-04): silent=true — this is an IMPLICIT save
+    // on the extract path; the user never pressed Save, so the success
+    // toast must not fire (previously every extraction popped "设置已保存").
+    saveSettings(true);
     // FR2: bump token so any concurrent Reset / new file selection
     // invalidates this in-flight request.
     state.expectedToken += 1;
@@ -530,6 +650,11 @@
         caption: $('caption').value,
         chartLang: $('chart-lang').value,
         signal: abort.signal,
+        // UI-REVIEW-2026-09-07: direct-mode "auto" classification stage —
+        // show "Detecting chart type…" while the classifier round-trip runs.
+        onStage: (stage) => {
+          if (stage === 'classifying') setBusyLabel({ i18nKey: 'status.classifying' });
+        },
         // FIX (force-rerun): bypass server cache on explicit user request.
         force_rerun: !!state._forceRerun,
         // FIX (enhance): pre-process image to boost VLM recognition.
@@ -553,8 +678,10 @@
         // so total wait is ~one latency rather than N. Each promise resolves
         // independently; a failure in one run doesn't cancel the others.
         setBusyLabel({ i18nKey: 'loading.analyzing', params: { done: 0, total: runs } });
-        const km = (typeof RCA_KEYMAP_BY_MODE !== 'undefined' && RCA_KEYMAP_BY_MODE[chartMode])
-          || RCA_DEFAULT_KEYMAP;
+        // Sprint B (REVIEW-2026-09-04): removed the dead `const km =
+        // RCA_KEYMAP_BY_MODE[chartMode] || RCA_DEFAULT_KEYMAP` lookup — it
+        // was never read (the merge below re-detects the keymap from the
+        // actual data shape via rcaAutoDetectKeymap(okDatas)).
         const promises = [];
         for (let i = 0; i < runs; i++) {
           promises.push(
@@ -631,7 +758,7 @@
       if (myToken !== state.extractToken) return;
       // FIX-6: user cancelled — no error alert.
       if (abort.signal.aborted) return;
-      showAlert('danger', t('err.network'), String(extractError));
+      showAlert('danger', t('err.network'), String(extractError), { key: 'err.network' });
       return;
     }
 
@@ -659,7 +786,7 @@
       const msg = t(errKey) +
         (res.status ? ' (HTTP ' + res.status + ')' : '');
       // H7: prefer upstream error body for 5xx debugging.
-      showAlert('danger', msg, res.errorBody || res.raw);
+      showAlert('danger', msg, res.errorBody || res.raw, { key: errKey, status: res.status || 0 });
       // FIX (results-empty): setBusy(true) hid both #results-empty and
       // #results-content. On failure there is nothing to render, so restore
       // the empty-state placeholder — otherwise the previous result (if any)
@@ -678,13 +805,16 @@
     state.rawText = res.raw;
     // Phase K fix: invoke the quality scorer on direct-mode results.
     // Backend mode already attaches `data.quality` server-side (via
-    // score_range_chart). Without this call the pure-frontend mode
-    // silently drops the quality badge — the entire quality module
-    // was effectively dead code in direct-mode extractions.
+    // score_range_chart). UI-REVIEW-2026-09-05: only fill the gap when the
+    // payload has NO server-provided quality — the previous unconditional
+    // recompute overwrote the server's verdict with the client scorer's,
+    // and while the two scorers' weights drift the user could see "85% B"
+    // turn into "91% A" for the same payload depending on transport.
     if (
       typeof globalThis.scoreRangeChart === 'function'
       && state.result
       && typeof state.result === 'object'
+      && !state.result.quality
     ) {
       try {
         const q = globalThis.scoreRangeChart(state.result);
@@ -700,7 +830,9 @@
     if (chimeraWarnings && chimeraWarnings.length > 0) {
       showAlert(
         'warning',
-        t('results.chimera_warning', { n: chimeraWarnings.length })
+        t('results.chimera_warning', { n: chimeraWarnings.length }),
+        null,
+        { key: 'results.chimera_warning', params: { n: chimeraWarnings.length } }
       );
     }
 
@@ -714,10 +846,12 @@
       // hardcoded English sentence that ignored the active language.
       showAlert(
         'warning',
-        t('results.partialFailure', { pf, total, succeeded: total - pf })
+        t('results.partialFailure', { pf, total, succeeded: total - pf }),
+        null,
+        { key: 'results.partialFailure', params: { pf, total, succeeded: total - pf } }
       );
     } else if (res.truncated) {
-      showAlert('warning', t('err.truncated'));
+      showAlert('warning', t('err.truncated'), null, { key: 'err.truncated' });
     }
 
     renderCurrentResult();
@@ -934,6 +1068,17 @@
       // meta is language-dependent; rebuild it cheaply.
       handleFileMetaRefresh();
     }
+    // UI-REVIEW-2026-09-05: re-translate the visible alert. It was rendered
+    // once with t() at creation time, so a language switch left it in the
+    // previous language (e.g. a zh chimera banner under an EN interface).
+    if (_currentAlertSpec) {
+      showAlert(
+        _currentAlertSpec.kind,
+        _alertMessage(_currentAlertSpec),
+        _currentAlertSpec.rawDetail,
+        _currentAlertSpec.fmt || undefined
+      );
+    }
     // BUGFIX: the loading-slot label is a plain <p> (not data-i18n), so
     // rcaApplyI18n doesn't refresh it. Re-render it from the cached
     // (i18nKey, params) so a language switch mid-extraction picks up
@@ -946,8 +1091,13 @@
   function handleFileMetaRefresh() {
     if (!state.file) return;
     const img = $('preview-img');
-    const w = img.naturalWidth || 0;
-    const h = img.naturalHeight || 0;
+    // Sprint B (REVIEW-2026-09-04): img.naturalWidth reads 0 while a large
+    // image is still decoding, so a language switch mid-decode previously
+    // rendered "0 x 0". Fall back to the dimensions recorded at load time;
+    // only show the placeholder when neither source has a value.
+    const dims = state._previewDims || null;
+    const w = img.naturalWidth || (dims && dims.width) || 0;
+    const h = img.naturalHeight || (dims && dims.height) || 0;
     const meta = [];
     meta.push('<div><strong>' + rcaEsc(state.file.name) + '</strong></div>');
     meta.push('<div>' + rcaEsc(t('upload.fileSize')) + ': ' + humanSize(state.file.size) + '</div>');

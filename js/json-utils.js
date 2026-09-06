@@ -219,6 +219,77 @@ function promoteWrapper(parsed) {
   return parsed;
 }
 
+// Sprint B (REVIEW-2026-09-04): known root keys used to decide whether a
+// fenced block carries the real payload. Mirrors the Python side's
+// _KNOWN_ROOT_KEYS in rca_core/json_utils.py (union of the per-mode ROOTS
+// constants). `_extras` is deliberately NOT in the set on either side: it
+// is an artifact the normalizers ATTACH to their output and is never a
+// root key of a raw model payload. The paleomap / scatter_plot /
+// chemical_stratigraphy keys are inert for JS normalization (the browser
+// frontend does not expose those modes) but kept for exact two-sided
+// parity of the fence-selection decision.
+const RCA_KNOWN_ROOT_KEYS = new Set([
+  // range_chart (RANGE_CHART_ROOTS)
+  'sections', 'species_ranges', 'biozones', 'other_fossils', 'confidence',
+  // columnar_section (_KNOWN_COLUMNAR_ROOT_KEYS)
+  'fossil_legend', 'lithology_legend', 'cross_beds', 'overall_confidence',
+  // abundance_diagram (_KNOWN_ABUNDANCE_ROOT_KEYS)
+  'sites', 'abundances', 'zones',
+  // chemical_stratigraphy (_KNOWN_CHEMICAL_STRAT_ROOT_KEYS)
+  'data_points', 'events', 'intervals',
+  // paleomap (_KNOWN_PALEOMAP_ROOT_KEYS)
+  'continents', 'oceans_seas', 'tectonic_features', 'biogeographic_realms',
+  'fossil_sites', 'paleolatitude_indicators',
+  // scatter_plot (_KNOWN_SCATTER_PLOT_ROOT_KEYS)
+  'groups', 'points', 'outliers', 'statistics',
+  // phylogenetic_tree
+  'metadata', 'nodes', 'root_ids', 'legend',
+]);
+
+// Collect the inner content of every complete markdown fence block, in
+// order. Mirrors the fence regex strip_markdown_fence already uses
+// (```json-tagged or bare); blocks that are never closed are ignored (the
+// caller falls back to the old strip path, which handles truncation).
+function _collectFenceBlocks(s) {
+  const blocks = [];
+  const re = /```(?:json)?[ \t]*\r?\n?([\s\S]*?)\r?\n?```/gi;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    blocks.push(m[1].trim());
+    if (m.index === re.lastIndex) re.lastIndex += 1; // safety against zero-width loops
+  }
+  return blocks;
+}
+
+// Sprint B (REVIEW-2026-09-04): multi-fence payload selection. When a model
+// restates the JSON schema as one fenced example and then emits the real
+// payload in a SECOND fenced block, the old "strip first fence" behavior
+// fed the schema example to the parser and the real data was lost.
+// Rule (kept identical to the Python json_utils implementation being landed
+// in parallel): collect every fence block, strictly parse each, and return
+// the FIRST block that (a) parses as a JSON object (not an array) and
+// (b) contains at least one known root key. If no block qualifies, fall
+// back to the FIRST block — the pre-existing behavior. Returns null when
+// the text contains no complete fence block at all.
+function selectPayloadFenceBlock(text) {
+  const s = String(text == null ? '' : text);
+  const blocks = _collectFenceBlocks(s);
+  if (blocks.length === 0) return null;
+  for (const b of blocks) {
+    try {
+      const parsed = JSON.parse(b);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        for (const k of Object.keys(parsed)) {
+          if (RCA_KNOWN_ROOT_KEYS.has(k)) return b;
+        }
+      }
+    } catch (_e) {
+      // Not strict JSON — try the next block.
+    }
+  }
+  return blocks[0];
+}
+
 // Lenient JSON object parse with a 6-level fallback chain.
 // Chain (each runs only if prior failed):
 //   1. Strip markdown fences (```json ... ```)
@@ -228,10 +299,61 @@ function promoteWrapper(parsed) {
 //   5. Balanced-bracket array extraction ([...]) → wrapped
 //   6. Prose-embedded JSON (extractJsonLike) — last resort
 // Throws on failure.
+// UI-REVIEW-2026-09-07: best-effort repair of a TRUNCATED JSON object/array.
+// Mirror of rca_core/json_utils._repair_truncated_json: record every element
+// boundary with its open-bracket stack, then close the stack at the longest
+// boundary backwards until strict JSON.parse succeeds. Recovers completed
+// rows above a max_tokens cut instead of letting Level 4 pick one stray row.
+function repairTruncatedJson(text) {
+  const s = String(text).trim();
+  if (!s || (s[0] !== '{' && s[0] !== '[')) return null;
+  const stack = [];
+  const boundaries = [];
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (escape) { escape = false; continue; }
+    if (inString) {
+      if (c === '\\') { escape = true; }
+      else if (c === '"') {
+        inString = false;
+        if (stack.length === 0) return null; // outer already closed: stray prose, not truncation
+        boundaries.push([i + 1, stack.slice()]);
+      }
+      continue;
+    }
+    if (c === '"') { inString = true; continue; }
+    if (c === '{' || c === '[') { stack.push(c); continue; }
+    if (c === '}' || c === ']') {
+      if (stack.length) stack.pop();
+      if (stack.length === 0) return null; // outer closed mid-text: not truncation
+      boundaries.push([i + 1, stack.slice()]);
+      continue;
+    }
+    if (c === ',') { boundaries.push([i + 1, stack.slice()]); }
+  }
+  for (let b = boundaries.length - 1; b >= 0; b--) {
+    const [idx, openStack] = boundaries[b];
+    if (openStack.length === 0) continue;
+    const closers = openStack.slice().reverse()
+      .map((o) => (o === '{' ? '}' : ']')).join('');
+    const candidate = s.slice(0, idx).replace(/[,\s]+$/, '') + closers;
+    try { JSON.parse(candidate); return candidate; } catch (_e) { /* try shorter */ }
+  }
+  return null;
+}
+
 function safeJsonLoads(text) {
   if (!text) throw new Error('empty text');
+  // Sprint B (REVIEW-2026-09-04): multi-fence selection runs BEFORE the
+  // generic strip. With 0 fence blocks it returns null and the old
+  // stripMarkdownFence path (incl. truncated-fence handling) applies
+  // unchanged; with >=1 blocks it returns either the first qualifying
+  // payload block or the first block (old behavior).
+  const fenced = selectPayloadFenceBlock(String(text));
   // Level 1: strip markdown fences.
-  let s = stripMarkdownFence(String(text).trim());
+  let s = stripMarkdownFence(fenced !== null ? fenced : String(text).trim());
   // Level 2: strip raw control chars that JSON.parse rejects.
   s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
   // Level 3: strict parse.
@@ -249,6 +371,23 @@ function safeJsonLoads(text) {
     }
   } catch (_e) {
     /* fall through to balanced-object extraction */
+  }
+  // Level 3.5 (UI-REVIEW-2026-09-07): truncated-payload repair. Mirrors
+  // rca_core/json_utils safe_json_loads Level 3.5 — close the brackets at
+  // the last complete element instead of letting Level 4 pick one stray
+  // row from inside the unbalanced outer payload. Only repairs yielding a
+  // recognizable payload root are accepted.
+  if (s && (s[0] === '{' || s[0] === '[')) {
+    const repaired = repairTruncatedJson(s);
+    if (repaired !== null) {
+      try {
+        const parsed = JSON.parse(repaired);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            && [...RCA_KNOWN_ROOT_KEYS].some((k) => k in parsed)) {
+          return promoteWrapper(parsed);
+        }
+      } catch (_e2) { /* fall through */ }
+    }
   }
   // Level 4: enumerate ALL balanced {...} objects, score each, pick best.
   // This is the key parity fix with Python's safe_json_loads Level 4.

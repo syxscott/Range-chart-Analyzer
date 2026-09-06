@@ -74,9 +74,9 @@ class TestToXlsxFormulaInjection(unittest.TestCase):
                  "formation_thickness_m": "10m", "coordinates": ""},
             ],
             "species_ranges": [
-                # F-1 fix: added biozone="B Zone" to satisfy
-                # has_biozone_or_age invariant; without it to_xlsx
-                # raises ValueError before reaching the formula guard.
+                # Sprint B (REVIEW-2026-09-04): has_biozone_or_age was removed
+                # from EXPORT_INVARIANTS, so biozone-less rows export fine;
+                # this row keeps a biozone anyway (realistic payload).
                 {"species": "=cmd|'/C calc'!A0", "section": "S1",
                  "range_base": "B1", "range_top": "B2", "biozone": "B Zone"},
             ],
@@ -100,8 +100,9 @@ class TestToXlsxFormulaInjection(unittest.TestCase):
             "sections": [{"name": "S1", "age_range": "", "formations": [],
                           "formation_thickness_m": "", "coordinates": ""}],
             "species_ranges": [
-                # F-1 fix: added biozone + non-empty range_base/range_top
-                # to satisfy has_biozone_or_age and required-field invariants.
+                # Sprint B (REVIEW-2026-09-04): biozone/age no longer required
+                # by EXPORT_INVARIANTS (has_biozone_or_age removed); only the
+                # required fields + range order constraints remain.
                 {"species": "=HYPERLINK(\"http://evil/\")",
                  "section": "S1", "range_base": "B1", "range_top": "B2",
                  "biozone": "B Zone"},
@@ -356,7 +357,6 @@ class TestNaNSanitization(unittest.TestCase):
             "species_ranges": [
                 # NaN slips in via a float field; verify it doesn't
                 # end up in the XLSX as the literal text "nan".
-                # F-1 fix: added biozone to satisfy has_biozone_or_age invariant.
                 {"species": "A", "section": "S1", "range_base": float("nan"),
                  "range_top": float("inf"), "biozone": "Zone A"},
             ],

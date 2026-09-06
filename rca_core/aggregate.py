@@ -288,6 +288,14 @@ class MergeSchema:
         (e.g. "biozones" and "other_fossils").
     confidence_field : str
         Top-level key whose float is averaged into "confidence".
+    list_key_id_fields : dict[str, tuple[str, ...]]
+        UI-REVIEW-2026-09-07: optional per-key business identity fields for
+        named lists whose items have NO natural "name" field (e.g.
+        zonation correlations keyed by both endpoints and their columns).
+        When present, _merge_named_lists groups the key's items by these
+        fields (majority-vote per field) instead of the content-signature
+        fallback, so the same edge reported across runs with a differing
+        free-text note merges into ONE row instead of duplicating.
     """
 
     primary_list_key: str
@@ -296,6 +304,7 @@ class MergeSchema:
     sort_keys: list[tuple[str, Any]] = field(default_factory=list)
     list_keys: list[str] = field(default_factory=list)
     confidence_field: str = "confidence"
+    list_key_id_fields: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 # Backward-compatible default for range-chart results.
@@ -352,11 +361,36 @@ PHYLOGENETIC_TREE_SCHEMA = MergeSchema(
 )
 
 
+# Schema for zonation / biostratigraphic correlation chart results
+# (radiolarian biochronology). Zone rows are the primary rows (deduped by
+# their column (zonation) + name); correlations are a second deduped list
+# keyed by both endpoints and their columns; zonation column descriptors
+# dedupe by name. All string rows — the majority-vote machinery applies.
+ZONATION_CHART_SCHEMA = MergeSchema(
+    primary_list_key="zones",
+    primary_id_keys=["zonation", "name"],
+    primary_str_mode_fields=[
+        "name", "zonation", "rank", "age_span", "base_age", "top_age",
+        "stage", "defined_by", "note",
+    ],
+    sort_keys=[("agreement_count", "desc"), ("name", "asc")],
+    list_keys=["zonations", "correlations"],
+    confidence_field="confidence",
+    # UI-REVIEW-2026-09-07: correlations have no "name" — without business
+    # identity fields the content-signature fallback treated the same edge
+    # with a differing free-text note across runs as two separate rows.
+    list_key_id_fields={
+        "correlations": ("from_zonation", "from_zone", "to_zonation", "to_zone"),
+    },
+)
+
+
 SCHEMA_BY_MODE = {
     "range_chart": RANGE_CHART_SCHEMA,
     "columnar_section": COLUMNAR_SECTION_SCHEMA,
     "abundance_diagram": ABUNDANCE_DIAGRAM_SCHEMA,
     "phylogenetic_tree": PHYLOGENETIC_TREE_SCHEMA,
+    "zonation_chart": ZONATION_CHART_SCHEMA,
 }
 
 
@@ -587,12 +621,18 @@ def _merge_primary_list(runs, schema, n):
             species_mode = aggr.get("species") or ""
             if species_mode:
                 # Count original species strings that normalised to the mode value
+                # Sprint B (REVIEW-2026-09-04): compare _norm-to-_norm. The
+                # old `_norm(sp_val) == species_mode` matched a normalised
+                # value against the RAW mode, so any mode string that wasn't
+                # already lowercase/single-spaced ("Genus  species" etc.)
+                # matched nothing and this whole restoration block no-op'd.
+                species_mode_norm = _norm(species_mode)
                 species_counter: dict[str, int] = {}
                 for g in group:
                     sp_val = (g.get("species") or "").strip()
                     if not sp_val:
                         continue
-                    if _norm(sp_val) == species_mode:
+                    if _norm(sp_val) == species_mode_norm:
                         species_counter[sp_val] = species_counter.get(sp_val, 0) + 1
                 if species_counter:
                     most_common_original = max(
@@ -668,6 +708,23 @@ def _merge_named_lists(runs, schema):
             for it in items:
                 if not isinstance(it, dict):
                     continue
+                # UI-REVIEW-2026-09-07: business-identity fields for keys
+                # whose items have no natural name (zonation correlations).
+                # When configured, group by those fields (normalized, joined)
+                # so the same edge across runs merges into one row with
+                # majority-voted free-text fields. Items missing any id
+                # field fall through to the content-signature path below.
+                id_fields = schema.list_key_id_fields.get(key)
+                if id_fields:
+                    parts = [_norm(it.get(f)) for f in id_fields]
+                    if all(parts):
+                        label = "".join(parts)
+                        if label not in groups:
+                            groups[label] = []
+                            order.append(label)
+                        groups[label].append(it)
+                        continue
+
                 # B-1 fix: include qualifiers (sp./cf./aff./?) in the dedup
                 # label so "N. optima Zone (cf.)" and "N. optima Zone" are not
                 # silently collapsed.  Extract from whichever field is non-empty.

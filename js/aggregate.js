@@ -289,11 +289,33 @@ const RCA_PHYLO_KEYMAP = {
   extraSections: null,
 };
 
+// Keymap for zonation / correlation chart results
+// (UI-REVIEW-2026-09-05). Mirrors rca_core/aggregate.ZONATION_CHART_SCHEMA:
+// zone rows deduped by their column (zonation) + name; correlations and
+// zonation column descriptors merge as named lists.
+const RCA_ZONATION_KEYMAP = {
+  primary: 'zones',
+  idKeys: ['zonation', 'name'],
+  strModeFields: ['name', 'zonation', 'rank', 'age_span', 'base_age',
+                  'top_age', 'stage', 'defined_by', 'note'],
+  sortKeys: [['agreement_count', 'desc'], ['name', 'asc']],
+  listKeys: ['zonations', 'correlations'],
+  // UI-REVIEW-2026-09-07: correlations have no "name" — group them by
+  // their business identity (both endpoints + both columns) so the same
+  // edge across runs merges into one row (majority note/basis) instead of
+  // duplicating via the content-signature fallback. Mirrors
+  // rca_core/aggregate.MergeSchema.list_key_id_fields.
+  listKeyIdFields: { correlations: ['from_zonation', 'from_zone', 'to_zonation', 'to_zone'] },
+  confidence: 'confidence',
+  extraSections: null,
+};
+
 const RCA_KEYMAP_BY_MODE = {
   range_chart: RCA_DEFAULT_KEYMAP,
   columnar_section: RCA_COLUMNAR_KEYMAP,
   abundance_diagram: RCA_ABUNDANCE_KEYMAP,
   phylogenetic_tree: RCA_PHYLO_KEYMAP,
+  zonation_chart: RCA_ZONATION_KEYMAP,
 };
 
 // Deep clone helper (REVIEW-2026-08-17 P1-5): used by the single-run
@@ -420,7 +442,15 @@ function mergePrimaryList(runs, km, n) {
       const speciesRaw = it['species'] || it['id'] || '';
       const quals = rcaExtractQualifiers(speciesRaw);
       const qualsSuffix = quals.length ? '\x1f' + quals.join('|') : '';
-      const key = parts.join('') + icznSuffix + qualsSuffix;
+      // Sprint B (REVIEW-2026-09-04): join with an explicit NUL ('\u0000')
+      // delimiter. The review flagged `parts.join('')` as collision-prone —
+      // the source actually carried an INVISIBLE '\x01' byte there (same
+      // collision class: a control char nobody could see or lint), so it is
+      // now a visible escape. ("ab","c") vs ("a","bc") no longer merge;
+      // Python never had the problem because it keys on a tuple
+      // (aggregate.py:521). The iczn / qualifier suffixes below keep their
+      // own \x1e / \x1f delimiters and are unaffected.
+      const key = parts.join('\u0000') + icznSuffix + qualsSuffix;
       if (seenInRun.has(key)) continue;
       seenInRun.add(key);
       if (!groups.has(key)) { groups.set(key, []); order.push(key); }
@@ -556,6 +586,23 @@ function mergeNamedLists(runs, km) {
     for (const r of runs) {
       for (const it of r[key] || []) {
         if (!it || typeof it !== 'object') continue;
+        // UI-REVIEW-2026-09-07: business-identity fields for keys whose
+        // items have no natural name (zonation correlations) — group by
+        // those so the same edge across runs merges into one row. Mirrors
+        // the id_fields branch in rca_core.aggregate._merge_named_lists.
+        const idFields = km.listKeyIdFields && km.listKeyIdFields[key];
+        if (idFields) {
+          const parts = idFields.map((f) => rcaAggNorm(it[f] || ''));
+          if (parts.every((s) => s)) {
+            const idLabel = parts.join('');
+            if (!groups.has(idLabel)) {
+              groups.set(idLabel, []);
+              order.push(idLabel);
+            }
+            groups.get(idLabel).push(it);
+            continue;
+          }
+        }
         // B-1 fix: include qualifiers (sp./cf./aff./?) in the dedup
         // label so "N. optima Zone (cf.)" and "N. optima Zone" are not
         // silently collapsed.

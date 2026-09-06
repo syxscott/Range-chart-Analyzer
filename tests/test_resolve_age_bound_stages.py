@@ -34,7 +34,7 @@ from rca_core.standards.ics import ics_resolve_age_bound
 WUCHIAPINGIAN_BASE = 259.51
 WUCHIAPINGIAN_TOP = 254.14
 CHANGSHINGIAN_BASE = 254.14
-CHANGSHINGIAN_TOP = 251.9
+CHANGSHINGIAN_TOP = 251.902
 
 
 def _midpoint(base: float, top: float) -> float:

@@ -28,7 +28,13 @@ function rcaEscAttr(value) {
 // "agreement" column showing how many runs produced each row.
 function rcaTableConfigs(data) {
   const multi = data && Number(data.runs) > 1;
-  const hasAbundanceShape = data && Array.isArray(data.abundances);
+  // Sprint B (REVIEW-2026-09-04): require at least one abundance row, not
+  // just `Array.isArray(data.abundances)`. Mirrors rca_core/exporter.py
+  // _looks_abundance (exporter.py:186-191): every freshly-normalized result
+  // carries an empty `abundances: []` placeholder, so accepting empty lists
+  // misroutes pure range-chart results to the abundance renderer/exporter.
+  const hasAbundanceShape = data && Array.isArray(data.abundances)
+    && data.abundances.length > 0;
   const hasColumnarShape = data
     && Array.isArray(data.sections)
     && !Array.isArray(data.species_ranges)
@@ -83,44 +89,16 @@ function rcaTableConfigs(data) {
     const secRowFinal = multi
       ? (sec) => cols4(sec).concat([sec.agreement || ''])
       : cols4;
-    // H2 (REVIEW-2026-08-19): flatten section.lithology_blocks /
-    // section.age_units / section.samples into per-table row arrays that
-    // rcaBuildTableExport can read directly. Mirror rca_core/exporter.py
-    // _columnar_section_tables.
-    const lithologyBlocksRows = [];
-    const ageUnitsRows = [];
-    const samplesRows = [];
-    for (const sec of (data.sections || [])) {
-      const sid = sec && sec.id ? String(sec.id) : '';
-      for (const b of (sec && sec.lithology_blocks) || []) {
-        lithologyBlocksRows.push({
-          section_id: sid,
-          pattern: b && b.pattern ? String(b.pattern) : '',
-          top_idx: b ? b.range_top_idx : null,
-          base_idx: b ? b.range_base_idx : null,
-        });
-      }
-      for (const u of (sec && sec.age_units) || []) {
-        ageUnitsRows.push({
-          section_id: sid,
-          label: u && u.label ? String(u.label) : '',
-          top_idx: u ? u.range_top_idx : null,
-          base_idx: u ? u.range_base_idx : null,
-        });
-      }
-      for (const s of (sec && sec.samples) || []) {
-        samplesRows.push({
-          section_id: sid,
-          bed_idx: s ? s.bed_idx : null,
-          fossil_marker: s && s.fossil_marker ? String(s.fossil_marker) : '',
-          ref: s && s.ref ? String(s.ref) : '',
-        });
-      }
-    }
-    // Stash on data so rcaBuildTableExport can pick them up.
-    data._lithology_blocks_rows = lithologyBlocksRows;
-    data._age_units_rows = ageUnitsRows;
-    data._samples_rows = samplesRows;
+    // Sprint B (REVIEW-2026-09-04): the three columnar sub-table rows now
+    // come from rcaColumnarSubTableRows (below), the SINGLE row source
+    // shared by rendering and export. The old code flattened them here and
+    // stashed `data._lithology_blocks_rows` / `_age_units_rows` /
+    // `_samples_rows` on the result — but rcaRenderResults read
+    // `data[cfg.id]` (always undefined for these nested keys), so all three
+    // tables rendered "no rows" and never showed copy/CSV buttons, while
+    // export read the stash. The stash also leaked underscore-prefixed
+    // internal keys into the "export all (JSON)" payload. Both problems are
+    // gone now that render and export read the same derived arrays.
     return [
       {
         id: 'sections',
@@ -214,6 +192,67 @@ function rcaTableConfigs(data) {
           n.branch_length == null ? '' : String(n.branch_length),
           n.node_age_ma == null ? '' : String(n.node_age_ma),
           n.support == null ? '' : String(n.support),
+        ],
+      },
+    ];
+  }
+
+  // -------- zonation / correlation chart mode (UI-REVIEW-2026-09-05) --------
+  // Mirrors rca_core.exporter._looks_zonation_chart + _zonation_chart_tables.
+  const hasZonationShape = data
+    && ((Array.isArray(data.correlations) && data.correlations.length > 0)
+        || (Array.isArray(data.zonations) && data.zonations.length > 0)
+        || (Array.isArray(data.zones) && data.zones.length > 0
+            && data.zones[0] && typeof data.zones[0] === 'object'
+            && ('rank' in data.zones[0] || 'zonation' in data.zones[0])));
+
+  // -------- zonation-chart mode --------
+  if (hasZonationShape) {
+    return [
+      {
+        id: 'zonations',
+        titleKey: 'sec.zonations',
+        cols: ['col.name', 'col.region', 'col.framework', 'col.reference'],
+        italicCol: -1,
+        row: (z) => [
+          z.name || '',
+          z.region || '',
+          z.framework || '',
+          z.reference || '',
+        ],
+      },
+      {
+        id: 'zones',
+        titleKey: 'sec.zonesTable',
+        cols: ['col.name', 'col.zonation', 'col.rank', 'col.ageSpan',
+               'col.baseAge', 'col.topAge', 'col.stage', 'col.definedBy',
+               'col.note'],
+        italicCol: 0,
+        row: (r) => [
+          r.name || '',
+          r.zonation || '',
+          r.rank || '',
+          r.age_span || '',
+          r.base_age || '',
+          r.top_age || '',
+          r.stage || '',
+          r.defined_by || '',
+          r.note || '',
+        ],
+      },
+      {
+        id: 'correlations',
+        titleKey: 'sec.correlations',
+        cols: ['col.fromZone', 'col.fromZonation', 'col.toZone',
+               'col.toZonation', 'col.basis', 'col.note'],
+        italicCol: -1,
+        row: (c) => [
+          c.from_zone || '',
+          c.from_zonation || '',
+          c.to_zone || '',
+          c.to_zonation || '',
+          c.basis || '',
+          c.note || '',
         ],
       },
     ];
@@ -316,6 +355,61 @@ function rcaTableConfigs(data) {
   ];
 }
 
+// Sprint B (REVIEW-2026-09-04): single row source for the three columnar
+// sub-tables (lithology_blocks / age_units / samples). The rows live nested
+// inside each `sections[i]` entry, so they must be flattened (sections
+// concatenated, in order) before rendering or export. Mirrors
+// rca_core/exporter.py _columnar_section_tables. Returns an object keyed by
+// table id so both consumers resolve rows identically:
+//   render: rcaRenderResults  -> rcaRowsForTable(data, cfg.id)
+//   export: rcaBuildTableExport -> rcaRowsForTable(data, tableId)
+// Pure function — never mutates `data` (the old stash did, leaking
+// underscore-prefixed internal keys into the JSON export).
+function rcaColumnarSubTableRows(data) {
+  const lithology_blocks = [];
+  const age_units = [];
+  const samples = [];
+  for (const sec of (data && data.sections) || []) {
+    const sid = sec && sec.id ? String(sec.id) : '';
+    for (const b of (sec && sec.lithology_blocks) || []) {
+      lithology_blocks.push({
+        section_id: sid,
+        pattern: b && b.pattern ? String(b.pattern) : '',
+        top_idx: b ? b.range_top_idx : null,
+        base_idx: b ? b.range_base_idx : null,
+      });
+    }
+    for (const u of (sec && sec.age_units) || []) {
+      age_units.push({
+        section_id: sid,
+        label: u && u.label ? String(u.label) : '',
+        top_idx: u ? u.range_top_idx : null,
+        base_idx: u ? u.range_base_idx : null,
+      });
+    }
+    for (const s of (sec && sec.samples) || []) {
+      samples.push({
+        section_id: sid,
+        bed_idx: s ? s.bed_idx : null,
+        fossil_marker: s && s.fossil_marker ? String(s.fossil_marker) : '',
+        ref: s && s.ref ? String(s.ref) : '',
+      });
+    }
+  }
+  return { lithology_blocks, age_units, samples };
+}
+
+// Resolve the row array for a table id. The three columnar sub-tables read
+// from the flattened per-section arrays; every other table reads
+// `data[tableId]` directly.
+function rcaRowsForTable(data, tableId) {
+  if (tableId === 'lithology_blocks' || tableId === 'age_units'
+      || tableId === 'samples') {
+    return rcaColumnarSubTableRows(data)[tableId];
+  }
+  return Array.isArray(data && data[tableId]) ? data[tableId] : [];
+}
+
 // Render the whole result. `data` is the normalized result object.
 function rcaRenderResults(data, rawText) {
   const configs = rcaTableConfigs(data);
@@ -325,7 +419,13 @@ function rcaRenderResults(data, rawText) {
   // The ring is an inline SVG: two stacked circles (track + bar) with the
   // bar's stroke-dasharray advancing toward `confPct`. The numeric label
   // inside ticks up from 0 → confPct on first paint.
-  const confPct = Math.max(0, Math.min(100, Math.round((data.confidence || 0) * 100)));
+  // UI-REVIEW-2026-09-05: columnar-section payloads carry the verdict in
+  // `overall_confidence`, not `confidence` — without the fallback every
+  // columnar extraction (web AND the Fluent history dialog, which reuses
+  // this renderer via QWebEngineView) showed an empty 0% ring.
+  const _confRaw = (data.confidence !== undefined && data.confidence !== null && data.confidence !== '')
+    ? data.confidence : data.overall_confidence;
+  const confPct = Math.max(0, Math.min(100, Math.round((_confRaw || 0) * 100)));
   let confLevel = 'low';
   if (confPct >= 70) confLevel = 'high';
   else if (confPct >= 40) confLevel = 'mid';
@@ -381,7 +481,11 @@ function rcaRenderResults(data, rawText) {
   parts.push('</div>');
 
   for (const cfg of configs) {
-    const rows = Array.isArray(data[cfg.id]) ? data[cfg.id] : [];
+    // Sprint B (REVIEW-2026-09-04): read rows through rcaRowsForTable so
+    // the three columnar sub-tables resolve the same flattened arrays the
+    // export path uses (previously `data[cfg.id]` was always undefined for
+    // them and every sub-table rendered empty with no copy/CSV buttons).
+    const rows = rcaRowsForTable(data, cfg.id);
     const safeId = rcaEscAttr(cfg.id);
     parts.push('<div class="result-section" data-table="' + safeId + '">');
     parts.push('<div class="result-section-head">');
@@ -417,7 +521,16 @@ function rcaRenderResults(data, rawText) {
       // operator knows to double-check them.
       let rowCls = '';
       if ((cfg.id === 'species_ranges' || cfg.id === 'sections') && data && Number(data.runs) > 1) {
-        const ac = Number(item.agreement_count) || 0;
+        // UI-REVIEW-2026-09-05: fall back to parsing the "n/m" agreement
+        // string when agreement_count is absent. Previously a row carrying
+        // agreement "3/3" without agreement_count was treated as count 0
+        // and flagged low — a cream warning row right next to a green 3/3
+        // pill (contradictory review signals).
+        let ac = Number(item.agreement_count);
+        if (!Number.isFinite(ac)) {
+          const m = String(item.agreement || '').trim().match(/^(\d+)\s*\/\s*(\d+)$/);
+          ac = m ? Number(m[1]) : 0;
+        }
         const half = Number(data.runs) / 2;
         if (ac <= half) rowCls = ' class="row-low-agreement"';
       }
@@ -485,19 +598,11 @@ function rcaBuildTableExport(data, tableId) {
   if (!cfg) return { headers: [], rows: [] };
   const headers = [t('col.index')].concat(cfg.cols.map((c) => t(c)));
   const nCols = cfg.cols.length;
-  // H2: the 3 new columnar sub-tables read from stashed flat row arrays
-  // (data._lithology_blocks_rows / _age_units_rows / _samples_rows), not
-  // from data[tableId] directly. Mirrors rca_core/exporter.py.
-  let items;
-  if (tableId === 'lithology_blocks') {
-    items = Array.isArray(data._lithology_blocks_rows) ? data._lithology_blocks_rows : [];
-  } else if (tableId === 'age_units') {
-    items = Array.isArray(data._age_units_rows) ? data._age_units_rows : [];
-  } else if (tableId === 'samples') {
-    items = Array.isArray(data._samples_rows) ? data._samples_rows : [];
-  } else {
-    items = Array.isArray(data[tableId]) ? data[tableId] : [];
-  }
+  // Sprint B (REVIEW-2026-09-04): same row source as the renderer
+  // (rcaRowsForTable). The old stash-based lookup
+  // (data._lithology_blocks_rows / ...) only worked when rcaTableConfigs
+  // had mutated `data` beforehand and leaked internal keys into JSON export.
+  const items = rcaRowsForTable(data, tableId);
   // M11: pad/truncate each row to cfg.cols.length so a future custom row
   // extractor can't silently misalign columns between headers and rows on
   // a CSV / Excel paste.

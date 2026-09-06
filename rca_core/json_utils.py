@@ -232,6 +232,47 @@ def extract_balanced_json_array(text: str) -> str | None:
     return None
 
 
+# Sprint B (REVIEW-2026-09-04): payload root keys used to tell a REAL data
+# fence apart from a JSON-Schema / example fence the model restated in prose
+# before its actual answer. This is the union of the per-mode root-key
+# constants declared in rca_core/extractor.py:
+#   * RANGE_CHART_ROOTS                (extractor.normalize_result)
+#   * _KNOWN_COLUMNAR_ROOT_KEYS        (columnar-section mode)
+#   * _KNOWN_ABUNDANCE_ROOT_KEYS       (abundance-diagram mode)
+#   * _KNOWN_CHEMICAL_STRAT_ROOT_KEYS  (chemical-stratigraphy mode)
+#   * _KNOWN_PALEOMAP_ROOT_KEYS        (paleomap mode)
+#   * _KNOWN_SCATTER_PLOT_ROOT_KEYS    (scatter-plot mode)
+#   * phylo-tree root keys             (_normalize_phylogenetic_tree_into:
+#                                      metadata / nodes / root_ids / legend)
+# Deliberately NOT part of the set:
+#   * "_extras"    — an artifact the normalizers ATTACH to their output;
+#                    it is never a root key of a raw model payload.
+#   * "_array_root" — an internal safe_json_loads wrapper, likewise never
+#                    present in the raw model text.
+_KNOWN_ROOT_KEYS: frozenset[str] = frozenset({
+    # range_chart (RANGE_CHART_ROOTS)
+    "sections", "species_ranges", "biozones", "other_fossils", "confidence",
+    # columnar_section (_KNOWN_COLUMNAR_ROOT_KEYS)
+    "fossil_legend", "lithology_legend", "cross_beds", "overall_confidence",
+    # abundance_diagram (_KNOWN_ABUNDANCE_ROOT_KEYS)
+    "sites", "abundances", "zones",
+    # chemical_stratigraphy (_KNOWN_CHEMICAL_STRAT_ROOT_KEYS)
+    "data_points", "events", "intervals",
+    # paleomap (_KNOWN_PALEOMAP_ROOT_KEYS)
+    "continents", "oceans_seas", "tectonic_features", "biogeographic_realms",
+    "fossil_sites", "paleolatitude_indicators",
+    # scatter_plot (_KNOWN_SCATTER_PLOT_ROOT_KEYS)
+    "groups", "points", "outliers", "statistics",
+    # phylogenetic_tree (inline tuple in _normalize_phylogenetic_tree_into)
+    "metadata", "nodes", "root_ids", "legend",
+})
+
+
+def _looks_like_payload_root(parsed: Any) -> bool:
+    """True when *parsed* is a dict containing at least one known root key."""
+    return isinstance(parsed, dict) and bool(_KNOWN_ROOT_KEYS & parsed.keys())
+
+
 def strip_markdown_fence(text: str) -> str:
     """Strip markdown code fences (```json ... ```) from a model response.
 
@@ -240,7 +281,18 @@ def strip_markdown_fence(text: str) -> str:
       - ```json ... ```  (fence with language tag)
       - ``` ... ```       (bare fence)
       - leading ``` with no trailing fence (truncated response)
-      - multiple fences (take content between first opening and last closing)
+      - multiple fences (see below)
+
+    Sprint B (REVIEW-2026-09-04): with MULTIPLE fences the previous
+    non-greedy regex returned only the FIRST block, so a reply that restated
+    a JSON-Schema example in one fence and put the real payload in a later
+    fence had the schema evict the real data. Now ALL fenced blocks are
+    collected and strictly parsed one by one; the FIRST block that parses to
+    a dict containing one of the ``_KNOWN_ROOT_KEYS`` is returned. If no
+    block qualifies (unparseable blocks, or dicts without any known root
+    key) the original behaviour is preserved and the FIRST block is
+    returned, so existing single-fence callers see no change.
+
     Returns the cleaned string unchanged if no fence is present.
     """
     if not text:
@@ -252,15 +304,22 @@ def strip_markdown_fence(text: str) -> str:
     )
     if fence_block:
         return fence_block.group(1).strip()
-    # FIX (fenced+prose): also handle a fenced block surrounded by prose on
-    # either side, e.g. "Here:\n```json\n{...}\n```\nThanks". The stricter
-    # regex above requires the fence to span the whole string; this one
-    # locates the first fenced block anywhere in the text.
-    fence_block = re.search(
-        r"```(?:json)?\s*\n?(.*?)\n?```", s, re.DOTALL | re.IGNORECASE
-    )
-    if fence_block:
-        return fence_block.group(1).strip()
+    # Sprint B (REVIEW-2026-09-04): collect every fenced block in the text
+    # and prefer the first one that actually looks like the real payload.
+    blocks = [
+        b.strip()
+        for b in re.findall(
+            r"```(?:json)?\s*\n?(.*?)\n?```", s, re.DOTALL | re.IGNORECASE
+        )
+    ]
+    if blocks:
+        for block in blocks:
+            if _looks_like_payload_root(_try_parse_object(block)):
+                return block
+        # No block carries a known root key — keep the historical
+        # first-block behaviour (safe_json_loads' later fallback chain
+        # still gets a chance to rescue the right object).
+        return blocks[0]
     # Otherwise strip any leading/trailing fence lines defensively.
     s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.MULTILINE | re.IGNORECASE)
     s = re.sub(r"\s*```$", "", s, flags=re.MULTILINE)
@@ -314,6 +373,77 @@ def _promote_wrapper(parsed: dict[str, Any]) -> dict[str, Any]:
     return parsed
 
 
+def _repair_truncated_json(text: str) -> str | None:
+    """Best-effort repair of a TRUNCATED JSON object/array.
+
+    E2E finding (UI-REVIEW-2026-09-07, fig_19): when the model hits the
+    max_tokens ceiling mid-array, Level 4's balanced-substring enumeration
+    only sees the inner ROW objects and picks an arbitrary one — the
+    dozens of completed rows above the cut were discarded with the
+    unbalanced outer object.
+
+    Strategy: single forward scan tracking the bracket/string state and
+    recording every "element boundary" (position right after a ``}``, `]``,
+    ``"``-closed string, or ``,``) together with the open-bracket stack at
+    that point. Then, from the LONGEST boundary backwards, close the stack
+    and strict-parse; the first repair that succeeds wins. ``null`` when
+    nothing repairs.
+
+    """
+    s = text.strip()
+    if not s or s[0] not in "{[":
+        return None
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    outer_ever_closed = False
+    boundaries: list[tuple[int, tuple[str, ...]]] = []
+    for i, c in enumerate(s):
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+                if not stack:
+                    # UI-REVIEW-2026-09-07: the outer object already closed
+                    # (only stray prose remains) - not a truncation; Level 4
+                    # handles this correctly, so do not repair.
+                    return None
+                boundaries.append((i + 1, tuple(stack)))
+            continue
+        if c == '"':
+            in_string = True
+        elif c in "{[":
+            stack.append(c)
+        elif c in "}]":
+            if stack:
+                stack.pop()
+            if not stack:
+                # Outer object fully closed mid-text (stray prose after it):
+                # not a truncation either.
+                return None
+            boundaries.append((i + 1, tuple(stack)))
+        elif c == ",":
+            boundaries.append((i + 1, tuple(stack)))
+    if not boundaries:
+        return None
+    for idx, open_stack in reversed(boundaries):
+        if not open_stack:
+            # The prefix is already balanced — Level 3 would have parsed it.
+            continue
+        closers = "".join("}" if o == "{" else "]" for o in reversed(open_stack))
+        candidate = s[:idx].rstrip().rstrip(",") + closers
+        try:
+            _strict_json_loads(candidate)
+        except Exception:
+            continue
+        return candidate
+    return None
+
+
 def safe_json_loads(text: str) -> dict[str, Any]:
     """Lenient JSON object parse with a 6-level fallback chain.
 
@@ -360,6 +490,22 @@ def safe_json_loads(text: str) -> dict[str, Any]:
                     "_note": "model returned a top-level array; wrapping for diagnostics"}
     except Exception:
         pass
+
+    # Level 3.5 (UI-REVIEW-2026-09-07): truncated-payload repair. When the
+    # model hit max_tokens mid-array, Level 3 fails and Level 4 would only
+    # find the inner ROW objects of the (now unbalanced) outer payload —
+    # discarding every completed row above the cut. Close the brackets at
+    # the last complete element instead; only accept repairs that yield a
+    # recognizable payload root (otherwise fall through to Level 4).
+    if s and s[0] in "{[":
+        repaired = _repair_truncated_json(s)
+        if repaired is not None:
+            try:
+                parsed = _strict_json_loads(repaired)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict) and _looks_like_payload_root(parsed):
+                return _promote_wrapper(parsed)
 
     # Level 4: balanced-object enumeration + scoring (HIGH FIX).
     candidates = extract_all_balanced_json_objects(s)

@@ -47,9 +47,22 @@ def launch_server(host: str, port: int, open_browser: bool) -> int:
         import threading
         import webbrowser
 
-        url = f"http://{host}:{port}/"
-        # Open the browser shortly after the server starts serving.
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+        # Sprint B (REVIEW-2026-09-04) #10: 0.0.0.0 / :: / empty are bind
+        # wildcards, not addresses a browser can open — normalize them to
+        # loopback so we don't launch an unreachable http://0.0.0.0:port/.
+        browser_host = host.strip() if host else ""
+        if browser_host in ("", "0.0.0.0", "::"):
+            browser_host = "127.0.0.1"
+        if ":" in browser_host and not browser_host.startswith("["):
+            # Bare IPv6 literal needs brackets in a URL.
+            url = f"http://[{browser_host}]:{port}/"
+        else:
+            url = f"http://{browser_host}:{port}/"
+        # daemon=True so a pending timer can't keep the process alive
+        # (Timer.__init__ takes no daemon kwarg — set the attribute).
+        timer = threading.Timer(1.0, lambda: webbrowser.open(url))
+        timer.daemon = True
+        timer.start()
 
     sys.argv = ["server.py", "--host", host, "--port", str(port)]
     server.main()

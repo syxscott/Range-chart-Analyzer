@@ -24,6 +24,10 @@ const PROMPT_VERSION = {
   chemical_stratigraphy: 'v1',
   paleomap: 'v1',
   scatter_plot: 'v1',
+  // UI-REVIEW-2026-09-05: radiolarian biozonation / correlation charts.
+  zonation_chart: 'v1',
+  // UI-REVIEW-2026-09-07: vision chart-type classification for auto mode.
+  chart_classify: 'v1',
 };
 
 function promptVersionForMode(mode) {
@@ -541,4 +545,87 @@ const SCATTER_PLOT_SYSTEM_PROMPT = [
 '- If the figure is NOT a scatter plot or biplot, return all arrays empty and confidence 0.0.',
 '- Return JSON only, no markdown fences, no commentary.',
 _degradationClause()
+].join('\n');
+
+// ---------------------------------------------------------------------------
+// Mirror of rca_core/prompt.py:ZONATION_CHART_SYSTEM_PROMPT
+// (UI-REVIEW-2026-09-05): biozonation / correlation charts — the canonical
+// radiolarian biochronology figure (e.g. "Correlation of Triassic
+// radiolarian zones", zonation tied to ammonoid/conodont zones).
+// ---------------------------------------------------------------------------
+const ZONATION_CHART_SYSTEM_PROMPT = [
+'You are an expert micropalaeontologist reading a BIOSTRATIGRAPHIC zonation / correlation chart — the figure type where several biozonation schemes (each a vertical column of named zones and subzones) are drawn side by side and correlated against each other and against ammonoid / conodont zones, magnetostratigraphic chrons, or geologic-time-scale stages. Typical radiolarian examples: "Correlation of Triassic radiolarian zones and subzones", "Radiolarian zonation tied to ammonoid and conodont zones". The chart may also be a SINGLE zonation column with an age axis. The chart text may be in Chinese, English, Japanese, or Russian — read whichever language is present, and ALWAYS emit zone names and species names as printed (Latin names verbatim, never translated); translate free-text fields into English while preserving proper names (author names, region names).',
+'',
+'Extract every piece of information visible in the chart as strict JSON with these fields:',
+'',
+'{',
+'  "zonations": [',
+'    {',
+'      "name": "Bragin (2018), Koryak Highlands" (string, the zonation scheme name of the column — usually author + year and/or region, as printed),',
+'      "region": "Koryak Highlands, NE Russia" (string, or empty),',
+'      "framework": "radiolarian" (string: radiolarian | ammonoid | conodont | nannofossil | magnetostratigraphic | chronostratigraphic | other),',
+'      "reference": "Bragin, 2018" (string, full citation as printed, or empty)',
+'    }',
+'  ],',
+'  "zones": [',
+'    {',
+'      "name": "Proparvicingula moniliformis Zone" (string, the zone / subzone / assemblage name EXACTLY as printed — keep "Zone"/"Subzone" suffixes and taxon capitalisation),',
+'      "zonation": "Bragin (2018), Koryak Highlands" (string, must match a zonations.name, or empty when the chart has only one column),',
+'      "rank": "zone" (string: zone | subzone | assemblage | superzone | other — infer from the name suffix or grouping lines),',
+'      "age_span": "lower Rhaetian" or "Early Jurassic" (string, the age/epoch text printed beside the zone, or empty),',
+'      "base_age": "203.6" (string, numeric base age in Ma ONLY if the axis carries absolute ages — otherwise empty),',
+'      "top_age": "201.4" (string, numeric top age in Ma, same rule),',
+'      "stage": "Rhaetian" (string, the stage / chronostratigraphic unit the zone is calibrated against, if a stage column exists),',
+'      "defined_by": "FAD of Proparvicingula moniliformis" (string, the defining event / index taxon if stated, or empty),',
+'      "note": "" (string, anything ambiguous about this row)',
+'    }',
+'  ],',
+'  "correlations": [',
+'    {',
+'      "from_zone": "Proparvicingula moniliformis Zone" (string, the zone name on one side of a correlation line / band, exactly as printed),',
+'      "to_zone": "Crassistephanus thuyensis Zone" (string, the zone on the other end),',
+'      "from_zonation": "Bragin (2018)" (string, must match a zonations.name — the column from_zone belongs to; empty in single-column charts),',
+'      "to_zonation": "Carter (1993), Queen Charlotte Islands" (string, the other column; empty in single-column charts),',
+'      "basis": "direct correlation" (string: direct correlation | shared stage | shared ammonoid zone | shared conodont zone | magnetostratigraphic tie | other — read from the legend if present, else "direct correlation"),',
+'      "note": "" (string)',
+'    }',
+'  ],',
+'  "confidence": 0.0-1.0 reflecting your certainty in the extraction overall',
+'}',
+'',
+'Rules:',
+'- ZONES ARE ROWS. Every named unit in every column — zone, subzone, assemblage zone, Acme zone, interval of unzoned strata IF labelled — becomes one `zones` entry. Do not merge a zone with its subzones; emit each rank separately with its own `rank` value.',
+'- INDEX TAXA ARE NOT ZONES. A zone NAMED after a species ("H. parvus Zone") is a zone; a bare species name in a species column of a RANGE chart is not a zone. Never invent a zone that is not drawn.',
+'- CORRELATION LINES ARE DATA. Every horizontal tie line / band linking a zone boundary or zone body across two columns becomes one `correlations` entry. If a line links a zone to a stage column, the stage belongs in the `stage` field of that zone AND as a correlation with the stage name when the stage column is a labelled column of the chart.',
+'- ABSOLUTE AGES ONLY FROM THE AXIS. Copy numeric Ma values only when the age axis of the chart prints them; never estimate ages from memory.',
+'- Preserve author names, region names and citation text verbatim.',
+'- Only extract what you can READ from the chart. Do not invent zones or correlations that are not drawn.',
+'- If the figure is NOT a zonation / correlation chart, return all arrays empty and confidence 0.0.',
+'- Return JSON only, no markdown fences, no commentary.',
+_degradationClause()
+].join('\n');
+
+
+// ---------------------------------------------------------------------------
+// Mirror of rca_core/prompt.py:CHART_CLASSIFY_SYSTEM_PROMPT
+// (UI-REVIEW-2026-09-07): vision chart-type classification for the
+// upgraded auto mode (direct transport only — the backend classifies
+// server-side). Terse genre signatures; small max_tokens; strict JSON.
+// ---------------------------------------------------------------------------
+const CHART_CLASSIFY_SYSTEM_PROMPT = [
+'You are a micropalaeontologist classifying the TYPE of a scientific figure (a stratigraphic / palaeontological chart) from a single image. Choose exactly one chart_type from this list:',
+'',
+'- range_chart: stratigraphic range chart — taxon names along one axis, vertical range lines / bars per taxon spanning stratigraphic columns or bed-number axes, with dots / circles marking occurrences (FAD/LAD).',
+'- columnar_section: lithologic column — a single vertical column with pattern fills (bricks, dots, dashes), thickness scale, formation / member names.',
+'- abundance_diagram: abundance / percentage diagram — one column per taxon, curves or horizontal bars whose width encodes counts or percentages against a depth / level axis (pollen-diagram style).',
+'- phylogenetic_tree: branching tree / cladogram / dendrogram with taxa at the tips.',
+'- zonation_chart: biozonation / correlation chart — vertical columns of NAMED ZONES (e.g. "... Zone") drawn side by side, correlated with horizontal tie lines, often against ammonoid / conodont zones or stages.',
+'- chemical_stratigraphy: geochemical curves — element / oxide / isotope values plotted against depth or age.',
+'- paleomap: palaeogeographic map — continents, oceans, coastlines, locality markers on a projected map.',
+'- scatter_plot: x-y scatter / biplot — discrete points, optional regression lines, confidence ellipses.',
+'- unknown: none of the above — including photomicrographs / SEM / STEM / thin-section image plates that show specimen photos but no readable data chart.',
+'',
+'Answer as strict JSON only (no markdown, no commentary):',
+'',
+'{"chart_type": "<one of the list above>", "reason": "<one short sentence, in English, citing what you see>", "confidence": 0.0-1.0}',
 ].join('\n');

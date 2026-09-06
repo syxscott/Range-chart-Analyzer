@@ -229,15 +229,24 @@ def retry_with_backoff(
         backoff_factor: Exponential backoff multiplier.
         max_delay: Maximum delay cap in seconds.
         retryable: Optional predicate to determine if result warrants retry.
+            ``None`` means every result is acceptable (return immediately).
         on_retry: Optional callback called before each retry.
 
     Returns:
-        The function's return value.
+        The function's return value. When ``retryable`` keeps returning
+        True and the attempts are exhausted without an exception, the LAST
+        observed result is returned.
 
     Raises:
         The last exception if all retries fail and an exception occurred.
-        Returns None if all retries failed without an exception (should not happen
-        in normal use since retryable check should eventually pass or exhaust retries).
+
+    Sprint B (REVIEW-2026-09-04): implemented the documented predicate
+    semantics. The previous code returned ``result`` in BOTH branches of
+    the check (``if retryable(result): return result`` / ``return result``),
+    so a result the predicate deemed retry-worthy never actually triggered
+    another attempt — the retryable parameter was dead logic. Now:
+    ``retryable(result)`` False -> return the result immediately (final);
+    True -> keep retrying until the attempts are exhausted.
     """
     last_exc: Exception | None = None
     last_result: T | None = None
@@ -245,11 +254,12 @@ def retry_with_backoff(
     for attempt in range(max_retries + 1):
         try:
             result = func()
-            # Check if result is acceptable (retryable=None means all results are acceptable)
-            if retryable is None or retryable(result):
+            # Check if result is acceptable (retryable=None means all results
+            # are acceptable). A non-retryable result is final, NOT an error:
+            # return it directly. A retryable result means "keep trying".
+            if retryable is None or not retryable(result):
                 return result
-            # Result is not retryable - this is NOT an error, return it directly
-            return result
+            last_result = result
         except Exception as exc:
             last_exc = exc
             if attempt >= max_retries:
@@ -269,9 +279,9 @@ def retry_with_backoff(
     # All retries exhausted
     if last_exc is not None:
         raise last_exc
-    # No exception occurred but also no successful result.
-    # This happens when retryable never returns True and no exception was raised.
-    # Return the last result if available, otherwise return None.
+    # No exception occurred but every result was deemed retryable.
+    # Return the last observed result (None only if func never returned,
+    # which cannot happen without raising).
     return last_result
 
 

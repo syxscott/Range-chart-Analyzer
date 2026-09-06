@@ -142,6 +142,37 @@ function _looksLikeAge(v) {
 
 function _regExpEscape(s) { return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'); }
 
+// Sprint B (REVIEW-2026-09-04): deterministic stage lookup for a Ma value,
+// mirroring rca_core/standards/ics.py:ics_stage_from_age (ics.py:38-74).
+// The previous `top_ma <= ma <= base_ma` first-hit loop depended on object
+// key order, so a Ma exactly on a stage boundary resolved differently in
+// JS vs Python (259.51 Ma -> Capitanian in JS, Wuchiapingian in Python).
+// Python semantics reproduced here:
+//   1. a strict interior hit (top < ma < base) wins immediately — interior
+//      matches are unique in a gapless table;
+//   2. at an exact boundary the boundary belongs to the YOUNGER stage whose
+//      base it defines — first base match (abs(base-ma) <= 1e-9) wins
+//      (259.51 -> Wuchiapingian; 254.14 -> Changhsingian);
+//   3. a value equal to a stage's top (e.g. 0.0 -> Holocene) is the last
+//      fallback.
+// Returns null when no stage matches (same as the Python None).
+function _icsStageFromAge(stages, ma) {
+  let interior = null;
+  let baseMatch = null;
+  let topMatch = null;
+  for (const name of Object.keys(stages)) {
+    const info = stages[name];
+    const top = typeof info.top_ma === 'number' ? info.top_ma : 0;
+    const base = typeof info.base_ma === 'number' ? info.base_ma : 0;
+    if (top < ma && ma < base) { interior = name; break; }
+    if (baseMatch === null && Math.abs(base - ma) <= 1e-9) baseMatch = name;
+    if (topMatch === null && Math.abs(top - ma) <= 1e-9) topMatch = name;
+  }
+  if (interior !== null) return interior;
+  if (baseMatch !== null) return baseMatch;
+  return topMatch;
+}
+
 // Resolve a bound label to {name, ma} or null. Mirrors
 // ics_resolve_age_bound: explicit Ma literals (range-aware, prefer picks
 // older/younger end), Chinese stage aliases, series/epoch labels,
@@ -155,11 +186,10 @@ function _resolveAgeBound(text, prefer) {
   const vals = _explicitMaValues(s);
   if (vals.length > 0) {
     const ma = prefer === 'younger' ? Math.min.apply(null, vals) : Math.max.apply(null, vals);
-    let name = null;
-    for (const k of Object.keys(stages)) {
-      if (stages[k].top_ma <= ma && ma <= stages[k].base_ma) { name = k; break; }
-    }
-    return { name, ma };
+    // Sprint B (REVIEW-2026-09-04): deterministic boundary resolution via
+    // _icsStageFromAge (mirrors ics.py:ics_stage_from_age) instead of the
+    // key-order-dependent first `top <= ma <= base` hit.
+    return { name: _icsStageFromAge(stages, ma), ma };
   }
 
   const cnStages = globalThis.RCA_ICS_CN_STAGES;

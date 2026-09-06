@@ -1190,13 +1190,24 @@ def _call_openai(
     # request kept `max_tokens` + `role:system`, and OpenAI 400'd it.
     is_reasoning = bool(model and re.match(r"^o\d", model, re.IGNORECASE))
     messages: list[dict[str, Any]] = []
+    # Sprint B (REVIEW-2026-09-04): reasoning models reject `role:system`,
+    # but the previous code silently DROPPED the system prompt on this path,
+    # losing the strict-JSON contract that keeps outputs parseable. Merge it
+    # into the head of the user message instead. We deliberately avoid the
+    # `developer` role: aggregator/relay providers ("中转") commonly forward
+    # to whatever upstream they happen to route to, and `developer` is not
+    # universally accepted there, while a leading text block always is.
+    user_text_full = (
+        f"{system_prompt}\n\n{user_text}"
+        if (is_reasoning and system_prompt) else user_text
+    )
     if not is_reasoning and system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     user_msg: dict[str, Any] = {
         "role": "user",
         "content": [
             {"type": "image_url", "image_url": {"url": f"data:{media_type or 'image/png'};base64,{image_b64}"}},
-            {"type": "text", "text": user_text},
+            {"type": "text", "text": user_text_full},
         ],
     }
     messages.append(user_msg)

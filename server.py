@@ -37,6 +37,28 @@ _rate_lock = threading.Lock()
 # clients minting tokens faster than they use them.
 _CSRF_STORE_MAX = 4096
 
+# Sprint B (REVIEW-2026-09-04) #2: GET /api/history/<id>/provenance serves
+# audit data with no authentication, so it now requires this custom header.
+# A custom header forces any cross-origin *browser* request through a CORS
+# preflight (which a malicious page cannot pass), and casual port scanners
+# hitting the endpoint with curl never send it. Callers must send the exact
+# value: ``X-RCA-Client: range-chart-analyzer``.
+# NOTE (GUI follow-up, tracked by the review lead): the only current caller
+# is gui_fluent_history_detail.py::_on_export_provenance — it must add this
+# header to its GET (one line) or provenance export from the Fluent GUI
+# will get 403 after this change.
+_PROVENANCE_CLIENT_HEADER = "X-RCA-Client"
+_PROVENANCE_CLIENT_VALUE = "range-chart-analyzer"
+
+# Sprint B (REVIEW-2026-09-04) #1: per-request timeout clamp + the slack
+# added on top of timeout_sec to form the multi-run *batch* budget.
+# Module-level so regression tests can shrink them (the clamps inline in
+# the handler would otherwise force a >=20 s wait to reach the timeout
+# path in tests).
+_MIN_EXTRACT_TIMEOUT_SEC = 10
+_MAX_EXTRACT_TIMEOUT_SEC = 300
+_MULTI_RUN_TIMEOUT_SLACK_SEC = 10
+
 
 # S8 fix: redact API-key-like patterns from error_body before echoing to the UI.
 # Upstream servers may echo back request headers (including Authorization)
@@ -75,6 +97,46 @@ def _validate_image_b64(data):
     return True, ""
 
 
+# Sprint B (REVIEW-2026-09-04) #12: the web UI sends ``enhance: true`` in
+# the POST body when the user opts into image pre-processing, but the
+# server silently dropped the field. This is the server-side equivalent of
+# the GUI path's Pillow enhancement (reference: rca_core/extractor.py
+# ``_enhance_image_pil`` — unsharp mask + gentle contrast boost; server.py
+# must not import gui.py). Best-effort: any failure falls back to the
+# original bytes so enhancement can never break an extraction.
+def _enhance_image_b64(image_b64: str) -> str:
+    """Return an enhanced copy of a base64 image, or the input unchanged.
+
+    Applies a light unsharp mask + contrast boost with Pillow's
+    ImageEnhance/ImageFilter (same recipe as the GUI path). Pillow missing,
+    undecodable bytes, or a re-encode that would blow past the request size
+    budget all return the original input unchanged.
+    """
+    try:
+        import io
+        from PIL import Image, ImageEnhance, ImageFilter  # type: ignore
+    except Exception:
+        return image_b64
+    try:
+        raw = base64.b64decode(image_b64, validate=True)
+        img = Image.open(io.BytesIO(raw))
+        # Unsharp mask sharpens thin lines and small species names.
+        img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
+        # Gentle contrast boost helps faint pencil lines stand out.
+        img = ImageEnhance.Contrast(img).enhance(1.15)
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        enhanced = base64.b64encode(out.getvalue()).decode("ascii")
+        # Keep the payload inside the same budget _validate_image_b64
+        # enforces (~4/3 of the 10 MB decoded cap); otherwise prefer the
+        # original image over a ballooned PNG re-encode.
+        if len(enhanced) > 14_000_000:
+            return image_b64
+        return enhanced
+    except Exception:
+        return image_b64
+
+
 # Allow running as `python server.py` from the project root.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -86,6 +148,7 @@ from rca_core.extractor import (  # noqa: E402
     DEFAULT_TIMEOUT_SEC,
     ExtractResult,
     clamp_max_tokens,
+    resolve_auto_mode,
 )
 from rca_core.aggregate import (  # noqa: E402
     COLUMNAR_SECTION_SCHEMA,
@@ -128,26 +191,33 @@ except Exception:  # noqa: BLE001 — defensive
     _HAS_HISTORY = False
 
 
+# Sprint B (REVIEW-2026-09-04) #3: the lazy singleton used a bare
+# ``try: ... except NameError`` pattern, which is not thread-safe — two
+# request threads could race past the check and each construct a
+# HistoryStore (each opening its own sqlite connection). Guard with a
+# module-level lock (double-checked style, mirroring rca_core.cache.
+# get_cache()). The cache variable is declared up-front so there is no
+# NameError path at all.
+_HISTORY_STORE_SINGLETON_CACHE: "HistoryStore | None" = None
+_history_store_lock = threading.Lock()
+
+
 def _history_store_singleton():
     """Return a HistoryStore if history is available, else None.
 
     Created lazily to avoid a hard sqlite dependency at server import.
     Cached at module level so every extraction hits the same db.
     """
+    global _HISTORY_STORE_SINGLETON_CACHE
     if not _HAS_HISTORY:
         return None
-    global _HISTORY_STORE_SINGLETON_CACHE
-    try:
-        store = _HISTORY_STORE_SINGLETON_CACHE
-    except NameError:
-        store = None
-    if store is None:
-        try:
-            store = HistoryStore(db=Database())
-            _HISTORY_STORE_SINGLETON_CACHE = store
-        except Exception:
-            return None
-    return store
+    with _history_store_lock:
+        if _HISTORY_STORE_SINGLETON_CACHE is None:
+            try:
+                _HISTORY_STORE_SINGLETON_CACHE = HistoryStore(db=Database())
+            except Exception:
+                return None
+        return _HISTORY_STORE_SINGLETON_CACHE
 
 
 def _write_history_record(result, mode, runs, provider, max_tokens,
@@ -375,6 +445,12 @@ def _check_rate_limit(ip: str) -> tuple[bool, int]:
         cutoff = now - _RATE_WINDOW_SEC
         while window and window[0] < cutoff:
             window.popleft()
+        # Sprint B (REVIEW-2026-09-04) #7: when the window has slid fully
+        # empty, recycle the entry so ``_rate_history`` cannot grow without
+        # bound across many distinct (or rotating) client IPs.
+        if not window:
+            del _rate_history[ip]
+            return True, 0
         if len(window) >= _RATE_MAX_REQUESTS:
             oldest = window[0]
             wait = int(oldest + _RATE_WINDOW_SEC - now) + 1
@@ -592,14 +668,43 @@ class Handler(BaseHTTPRequestHandler):
             return
         # P2-4 (REVIEW-2026-07-25): PROV-O JSON-LD provenance export endpoint.
         # Pattern: GET /api/history/<id>/provenance
+        #
+        # Sprint B (REVIEW-2026-09-04) #2: this endpoint previously had NO
+        # guards at all — any process that could reach the port could dump
+        # the whole audit trail — and it built a fresh ``Database()`` per
+        # request (running executescript DDL + commit every time, on a
+        # thread-shared file). It now (a) requires the custom
+        # ``X-RCA-Client`` header (blocks browser cross-origin reads via
+        # preflight + trivial scanners), (b) shares the per-IP sliding
+        # window rate limiter, and (c) reuses the thread-safe
+        # ``_history_store_singleton()`` instead of per-request DDL.
         from urllib.parse import urlparse as _urlparse
-        from rca_core import Database, HistoryStore
         _parsed_path = _urlparse(self.path).path
         _prov_match = re.match(r"^/api/history/(\d+)/provenance$", _parsed_path)
         if _prov_match:
+            client_header = (
+                self.headers.get(_PROVENANCE_CLIENT_HEADER) or ""
+            ).strip()
+            if client_header != _PROVENANCE_CLIENT_VALUE:
+                self._send_json(403, {"error": "forbidden"})
+                return
+            try:
+                client_ip = self.client_address[0]
+            except Exception:
+                client_ip = "unknown"
+            allowed, wait_sec = _check_rate_limit(client_ip)
+            if not allowed:
+                self._send_json(429, {
+                    "ok": False,
+                    "error_key": "err.rateLimit",
+                    "error_body": f"Rate limit exceeded. Retry after {wait_sec} seconds.",
+                })
+                return
+            store = _history_store_singleton()
+            if store is None:
+                self._send_json(503, {"error": "history store unavailable"})
+                return
             record_id = int(_prov_match.group(1))
-            db = Database()
-            store = HistoryStore(db=db)
             rec = store.get(record_id)
             if rec is None:
                 self._send_json(404, {"error": "not found"})
@@ -704,7 +809,12 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
         stored_csrf = _get_csrf_for_session(session_token)
-        if stored_csrf is None or not secrets.compare_digest(csrf_token, stored_csrf):
+        # Sprint B (REVIEW-2026-09-04) #6: compare_digest(str, str) raises
+        # TypeError on non-ASCII input (header values decode as latin-1, so
+        # a client sending e.g. "café" crashed the handler and dropped the
+        # connection). Compare bytes so any input yields a clean 403.
+        if stored_csrf is None or not secrets.compare_digest(
+                csrf_token.encode("utf-8"), stored_csrf.encode("utf-8")):
             self._send_json(403, {
                 "ok": False, "error_key": "err.forbidden",
                 "error_body": "Invalid or expired CSRF token.",
@@ -787,6 +897,14 @@ class Handler(BaseHTTPRequestHandler):
             'columnar_section',
             'abundance_diagram',
             'phylogenetic_tree',
+            # UI-REVIEW-2026-09-05: radiolarian biozonation / correlation
+            # charts — wired through the full stack (MergeSchema, quality,
+            # exporter tables, GUI + web entry points).
+            'zonation_chart',
+            # UI-REVIEW-2026-09-07: "auto" resolves server-side — caption
+            # keyword heuristic first, vision classification as fallback —
+            # before the runs loop dispatches to the concrete mode.
+            'auto',
         })
         _requested_mode = (req.get('mode') or 'range_chart').strip()
         if _requested_mode not in _SUPPORTED_MODES:
@@ -887,9 +1005,35 @@ class Handler(BaseHTTPRequestHandler):
             timeout_sec = int(req.get("timeout_sec") or DEFAULT_TIMEOUT_SEC)
         except (TypeError, ValueError):
             timeout_sec = DEFAULT_TIMEOUT_SEC
-        timeout_sec = max(10, min(timeout_sec, 300))
+        timeout_sec = max(_MIN_EXTRACT_TIMEOUT_SEC,
+                          min(timeout_sec, _MAX_EXTRACT_TIMEOUT_SEC))
 
         mode = _requested_mode
+        mode_source = ""
+        if mode == "auto":
+            # UI-REVIEW-2026-09-07: resolve "auto" ONCE per request (not per
+            # run): caption keyword heuristic first; when nothing matches,
+            # classify the image itself with the cheap vision classifier.
+            # The resolved mode then drives cache keys, extraction prompt,
+            # merge schema and quality scoring for every run.
+            caption_txt = req.get("caption") or ""
+            mode, classify_result = resolve_auto_mode(
+                caption=caption_txt,
+                filename=str(req.get("source_file") or ""),
+                image_b64=image_b64,
+                media_type=req.get("media_type") or "image/png",
+                provider=provider,
+            )
+            mode_source = "vision" if classify_result is not None else "text"
+
+        # Sprint B (REVIEW-2026-09-04) #12: honour the optional ``enhance``
+        # flag from the web UI (it was previously dropped silently). The
+        # enhancement runs BEFORE the cache key is derived so enhanced and
+        # un-enhanced variants of the same upload never share a cache
+        # entry. Pillow missing or any enhancement failure falls back to
+        # the original image silently.
+        if req.get("enhance"):
+            image_b64 = _enhance_image_b64(image_b64)
 
         common = dict(
             image_b64=image_b64,
@@ -964,6 +1108,8 @@ class Handler(BaseHTTPRequestHandler):
                 # scorer if an older client wrote it.
                 if isinstance(cache_hit, dict) and "quality" not in cache_hit:
                     cache_hit["quality"] = _safe_score_range_chart(cache_hit)
+                if mode_source:
+                    cache_hit["_auto_mode"] = {"mode": mode, "source": mode_source}
                 self._send_json(200, {"ok": True, "data": cache_hit,
                                       "cached": True})
                 return
@@ -971,6 +1117,8 @@ class Handler(BaseHTTPRequestHandler):
             # FIX (quality): score single-run results too for a consistent
             # quality badge in the UI.
             if result.ok and result.data and isinstance(result.data, dict):
+                if mode_source:
+                    result.data["_auto_mode"] = {"mode": mode, "source": mode_source}
                 result.data["quality"] = _safe_score_range_chart(result.data)
                 # Write the scored result back to the cache.
                 if not force_rerun:
@@ -1035,7 +1183,7 @@ class Handler(BaseHTTPRequestHandler):
         est_in, est_out = False, False
         max_run_latency = 0
         batch_t0 = time.perf_counter()
-        per_future_timeout = timeout_sec + 10
+        per_future_timeout = timeout_sec + _MULTI_RUN_TIMEOUT_SLACK_SEC
 
         # CRITICAL fix (audit): each multi-run slot must have its OWN cache
         # key. Previously the per-slot loop produced identical keys
@@ -1099,32 +1247,60 @@ class Handler(BaseHTTPRequestHandler):
             # incorrectly skipping true misses whenever cache hits were
             # non-contiguous (e.g. hits at slot 0 + 2 but miss at slot 1).
             # Now we check slot_results membership directly.
-            with concurrent.futures.ThreadPoolExecutor(max_workers=misses) as ex:
+            # Sprint B (REVIEW-2026-09-04) #1: batch-level timeout. The old
+            # loop called ``fut.result(timeout=...)`` while iterating
+            # ``as_completed``, which only yields futures that are ALREADY
+            # finished — the timeout argument never fired, so one hung
+            # provider call stalled the whole request forever. We now wait
+            # ONCE for the whole batch (``concurrent.futures.wait``) with a
+            # budget measured from submission time, and synthesize an
+            # ``err.timeout`` failure for every run that did not finish.
+            #
+            # The executor is managed explicitly instead of via ``with``:
+            # leaving a ThreadPoolExecutor context manager blocks on exit
+            # (shutdown(wait=True)) for the very hung calls we are
+            # abandoning. With ``shutdown(wait=False, cancel_futures=True)``
+            # we return immediately; the already-running stragglers keep
+            # their threads until the underlying LLM socket timeout
+            # (<= timeout_sec, clamped to <= 300 s) fires, and queued
+            # not-yet-started runs are cancelled.
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=misses)
+            try:
                 pending = []  # list of (run_idx, future)
                 for run_idx in range(runs):
                     if run_idx in slot_results:
                         continue  # cache hit — already in slot_results
-                    pending.append((run_idx, ex.submit(extract, mode=mode, **common)))
-                # as_completed yields futures in completion order, not
-                # original order. We use the stored run_idx to map back.
+                    pending.append((run_idx, executor.submit(extract, mode=mode, **common)))
                 futures = [f for _, f in pending]
-                for fut in concurrent.futures.as_completed(futures):
-                    # Reverse-lookup: find the run_idx for this future.
-                    run_idx = next(
-                        (ri for ri, f in pending if f is fut),
-                        None,
-                    )
-                    if run_idx is None:
-                        continue
-                    try:
-                        r = fut.result(timeout=per_future_timeout)
-                    except concurrent.futures.TimeoutError:
+                _, not_done = concurrent.futures.wait(
+                    futures,
+                    timeout=per_future_timeout,
+                    return_when=concurrent.futures.ALL_COMPLETED,
+                )
+                for run_idx, fut in pending:
+                    if fut in not_done:
+                        # Batch budget exhausted before this run finished —
+                        # record a synthetic timeout failure instead of
+                        # blocking the client indefinitely.
                         r = ExtractResult(
                             ok=False, error_key="err.timeout",
-                            error_body=f"per-future timeout after {per_future_timeout}s",
+                            error_body=(
+                                f"batch timeout after {per_future_timeout}s "
+                                f"(run {run_idx} did not finish)"
+                            ),
                         )
-                    except Exception as exc:
-                        r = ExtractResult(ok=False, error_key="err.http", raw=str(exc))
+                    else:
+                        try:
+                            r = fut.result()
+                        except Exception as exc:
+                            # Sprint B (REVIEW-2026-09-04) #1: align with
+                            # the single-run error structure — exception
+                            # text belongs in error_body (redacted before
+                            # it reaches the client), not in raw.
+                            r = ExtractResult(
+                                ok=False, error_key="err.http",
+                                error_body=str(exc),
+                            )
                     # H-1 fix: update max_run_latency regardless of r.ok — only
                     # skip when latency_ms is None/0 (no request was made).
                     if r.latency_ms not in (None, 0):
@@ -1161,6 +1337,8 @@ class Handler(BaseHTTPRequestHandler):
                         partial_fails += 1
                         if not merged_warning and getattr(r, "warning", ""):
                             merged_warning = r.warning
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
         total_latency = int((time.perf_counter() - batch_t0) * 1000)
         if not ok_datas:
             r = last_fail
@@ -1185,6 +1363,8 @@ class Handler(BaseHTTPRequestHandler):
         # quality badge ("0.87 / B-Good") and flag low-confidence rows.
         quality = _safe_score_range_chart(merged)
         merged["quality"] = quality
+        if mode_source:
+            merged["_auto_mode"] = {"mode": mode, "source": mode_source}
         # REVIEW-2026-07-31: build the aggregated usage BEFORE the audit
         # write. The previous code referenced ``merged_usage`` inside the
         # try below but only assigned it AFTER the except block, so every
@@ -1204,7 +1384,10 @@ class Handler(BaseHTTPRequestHandler):
         # raw_responses table so a researcher can repare the exact LLM
         # reply for each slot years later.
         try:
-            from rca_core.extractor import ExtractResult
+            # ExtractResult comes from the module-level import; a local
+            # ``from ... import ExtractResult`` here would make the name
+            # function-local for ALL of do_POST and break the earlier
+            # executor block with UnboundLocalError (Sprint B #1).
             multi_result = ExtractResult(
                 ok=True,
                 data=merged,
@@ -1321,6 +1504,18 @@ class _BoundedThreadingHTTPServer(ThreadingHTTPServer):
     threads and submit each accepted connection to it; additional
     connections are queued (bounded by ``request_queue_size``) and the
     OS will refuse further SYN once the listen backlog fills.
+
+    Sprint B (REVIEW-2026-09-04) #5: the executor's internal queue is
+    itself unbounded, so "queued" previously meant unbounded memory. A
+    ``threading.BoundedSemaphore`` now bounds outstanding submissions to
+    ``max_workers + request_queue_size``; when the cap is reached,
+    ``process_request`` answers the excess connection with an immediate
+    503 and closes it instead of queueing it forever. The semaphore slot
+    is released when the request's handler thread finishes. Also:
+    ``request_queue_size`` is now assigned BEFORE ``super().__init__()``
+    — the stdlib base class calls ``listen(self.request_queue_size)``
+    internally, so the post-construction assignment never took effect
+    (listen(5) always applied).
     """
 
     daemon_threads = True
@@ -1328,19 +1523,53 @@ class _BoundedThreadingHTTPServer(ThreadingHTTPServer):
     def __init__(self, server_address, RequestHandlerClass,
                  max_workers: int = 32,
                  request_queue_size: int = 64):
+        # Must precede super().__init__(): TCPServer.__init__ runs
+        # bind_and_activate → server_activate → listen(request_queue_size).
+        self.request_queue_size = max(1, request_queue_size)
         super().__init__(server_address, RequestHandlerClass,
                          bind_and_activate=True)
-        # Cap the listen backlog so we don't hold thousands of half-open
-        # connections in the kernel queue.
-        self.request_queue_size = request_queue_size
+        self._max_workers = max(max_workers, 2)
         self._executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=max(max_workers, 2),
+            max_workers=self._max_workers,
             thread_name_prefix="rca-http",
+        )
+        # One slot per in-flight or queued connection. Capacity matches the
+        # documented model: max_workers running + request_queue_size queued.
+        self._submit_slots = threading.BoundedSemaphore(
+            self._max_workers + self.request_queue_size
         )
 
     def process_request(self, request, client_address):
-        self._executor.submit(self.process_request_thread,
+        if not self._submit_slots.acquire(blocking=False):
+            # Overload: refuse instead of queueing without bound. A raw
+            # 503 is safe here — the socket is still untouched at this
+            # point (finish_request has not run).
+            try:
+                request.sendall(
+                    b"HTTP/1.1 503 Service Unavailable\r\n"
+                    b"Content-Type: text/plain\r\n"
+                    b"Content-Length: 0\r\n"
+                    b"Connection: close\r\n"
+                    b"\r\n"
+                )
+            except Exception:
+                pass
+            self.shutdown_request(request)
+            return
+        self._executor.submit(self._process_request_bounded,
                               request, client_address)
+
+    def _process_request_bounded(self, request, client_address):
+        try:
+            self.process_request_thread(request, client_address)
+        finally:
+            try:
+                self._submit_slots.release()
+            except ValueError:
+                # Defensive: release() beyond the initial value would raise;
+                # cannot happen (one acquire per submit) but never let a
+                # bookkeeping slip kill the worker thread.
+                pass
 
     def server_close(self):
         try:

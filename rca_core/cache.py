@@ -177,18 +177,37 @@ class ResultCache:
         and retry rather than silently dropping the cache write. (The
         in-process ``RLock`` already serialises accesses within one process;
         WAL file locking handles cross-process concurrency.)
+
+        Sprint B (REVIEW-2026-09-04): a second cross-process race is the
+        lost-INSERT race — both processes run ``_rowid_for`` (both see no
+        row) and both attempt the INSERT; the UNIQUE constraint on ``k``
+        makes the loser raise ``sqlite3.IntegrityError``, which previously
+        propagated out of ``put()`` and surfaced as a 500 in the server.
+        This is a benign "someone else cached it first" event, so it is
+        caught here and handled with a plain UPDATE (best-effort refresh of
+        the winner's row); it must never bubble up to callers.
         """
         with self._lock:
             ts = time.time()
             blob = json.dumps(value, ensure_ascii=False, default=str)
 
             def _work() -> None:
-                existing = _rowid_for(self._conn, key)
-                if existing is None:
-                    self._conn.execute(
-                        "INSERT INTO extract_cache (k, v, ts) VALUES (?, ?, ?)",
-                        (key, blob, ts))
-                else:
+                try:
+                    existing = _rowid_for(self._conn, key)
+                    if existing is None:
+                        self._conn.execute(
+                            "INSERT INTO extract_cache (k, v, ts) VALUES (?, ?, ?)",
+                            (key, blob, ts))
+                    else:
+                        self._conn.execute(
+                            "UPDATE extract_cache SET v = ?, ts = ? WHERE k = ?",
+                            (blob, ts, key))
+                except sqlite3.IntegrityError:
+                    # Cross-process race: the other process inserted the same
+                    # key between our SELECT and our INSERT. Treat it as
+                    # "already exists" and fall back to UPDATE; even if that
+                    # UPDATE matches 0 rows (winner rolled back), a cache
+                    # miss downstream is harmless — never a 500.
                     self._conn.execute(
                         "UPDATE extract_cache SET v = ?, ts = ? WHERE k = ?",
                         (blob, ts, key))

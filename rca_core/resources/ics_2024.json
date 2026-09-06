@@ -1,272 +1,82 @@
 {
-  "Gelasian": {
-    "rank": "Stage",
-    "abbrev": "Ge",
-    "top_ma": 1.8,
-    "base_ma": 2.588,
-    "period": "Neogene",
-    "period_top_ma": 2.588,
-    "period_base_ma": 23.03,
-    "era": "Cenozoic"
-  },
-  "Calabrian": {
-    "rank": "Stage",
-    "abbrev": "Cl",
-    "top_ma": 0.774,
-    "base_ma": 1.8,
-    "period": "Quaternary",
-    "period_top_ma": 0.0,
-    "period_base_ma": 2.588,
-    "era": "Cenozoic"
-  },
-  "Chibanian": {
-    "rank": "Stage",
-    "abbrev": "Ch",
-    "top_ma": 0.129,
-    "base_ma": 0.774,
-    "period": "Quaternary",
-    "period_top_ma": 0.0,
-    "period_base_ma": 2.588,
-    "era": "Cenozoic"
-  },
-  "Piacenzian": {
-    "rank": "Stage",
-    "abbrev": "Pi",
-    "top_ma": 2.588,
-    "base_ma": 3.6,
-    "period": "Neogene",
-    "period_top_ma": 2.588,
-    "period_base_ma": 23.03,
-    "era": "Cenozoic"
-  },
-  "Zanclean": {
-    "rank": "Stage",
-    "abbrev": "Za",
-    "top_ma": 3.6,
-    "base_ma": 5.333,
-    "period": "Neogene",
-    "period_top_ma": 2.588,
-    "period_base_ma": 23.03,
-    "era": "Cenozoic"
-  },
-  "Messinian": {
-    "rank": "Stage",
-    "abbrev": "Ms",
-    "top_ma": 5.333,
-    "base_ma": 7.246,
-    "period": "Neogene",
-    "period_top_ma": 2.588,
-    "period_base_ma": 23.03,
-    "era": "Cenozoic"
-  },
-  "Tortonian": {
-    "rank": "Stage",
-    "abbrev": "To",
-    "top_ma": 7.246,
-    "base_ma": 11.63,
-    "period": "Neogene",
-    "period_top_ma": 2.588,
-    "period_base_ma": 23.03,
-    "era": "Cenozoic"
-  },
-  "Serravallian": {
-    "rank": "Stage",
-    "abbrev": "Sr",
-    "top_ma": 11.63,
-    "base_ma": 13.82,
-    "period": "Neogene",
-    "period_top_ma": 2.588,
-    "period_base_ma": 23.03,
-    "era": "Cenozoic"
-  },
-  "Langhian": {
-    "rank": "Stage",
-    "abbrev": "La",
-    "top_ma": 13.82,
-    "base_ma": 15.97,
-    "period": "Neogene",
-    "period_top_ma": 2.588,
-    "period_base_ma": 23.03,
-    "era": "Cenozoic"
-  },
-  "Burdigalian": {
-    "rank": "Stage",
-    "abbrev": "Bu",
-    "top_ma": 15.97,
-    "base_ma": 20.44,
-    "period": "Neogene",
-    "period_top_ma": 2.588,
-    "period_base_ma": 23.03,
-    "era": "Cenozoic"
-  },
   "Aquitanian": {
     "rank": "Stage",
     "abbrev": "Aq",
-    "top_ma": 20.44,
-    "base_ma": 23.03,
+    "top_ma": 20.45,
+    "base_ma": 23.04,
     "period": "Neogene",
-    "period_top_ma": 2.588,
-    "period_base_ma": 23.03,
+    "period_top_ma": 2.58,
+    "period_base_ma": 23.04,
     "era": "Cenozoic"
   },
-  "Chattian": {
+  "Aalenian": {
     "rank": "Stage",
-    "abbrev": "Ct",
-    "top_ma": 23.03,
-    "base_ma": 27.82,
-    "period": "Paleogene",
-    "period_top_ma": 23.03,
-    "period_base_ma": 66.0,
-    "era": "Cenozoic"
-  },
-  "Rupelian": {
-    "rank": "Stage",
-    "abbrev": "Rp",
-    "top_ma": 27.82,
-    "base_ma": 33.9,
-    "period": "Paleogene",
-    "period_top_ma": 23.03,
-    "period_base_ma": 66.0,
-    "era": "Cenozoic"
-  },
-  "Priabonian": {
-    "rank": "Stage",
-    "abbrev": "Pr",
-    "top_ma": 33.9,
-    "base_ma": 37.71,
-    "period": "Paleogene",
-    "period_top_ma": 23.03,
-    "period_base_ma": 66.0,
-    "era": "Cenozoic"
-  },
-  "Bartonian": {
-    "rank": "Stage",
-    "abbrev": "Bt",
-    "top_ma": 37.71,
-    "base_ma": 41.2,
-    "period": "Paleogene",
-    "period_top_ma": 23.03,
-    "period_base_ma": 66.0,
-    "era": "Cenozoic"
-  },
-  "Lutetian": {
-    "rank": "Stage",
-    "abbrev": "Lu",
-    "top_ma": 41.2,
-    "base_ma": 47.8,
-    "period": "Paleogene",
-    "period_top_ma": 23.03,
-    "period_base_ma": 66.0,
-    "era": "Cenozoic"
-  },
-  "Ypresian": {
-    "rank": "Stage",
-    "abbrev": "Yp",
-    "top_ma": 47.8,
-    "base_ma": 56.0,
-    "period": "Paleogene",
-    "period_top_ma": 23.03,
-    "period_base_ma": 66.0,
-    "era": "Cenozoic"
-  },
-  "Selandian": {
-    "rank": "Stage",
-    "abbrev": "Sl",
-    "top_ma": 59.2,
-    "base_ma": 61.6,
-    "period": "Paleogene",
-    "period_top_ma": 23.03,
-    "period_base_ma": 66.0,
-    "era": "Cenozoic"
-  },
-  "Danian": {
-    "rank": "Stage",
-    "abbrev": "Da",
-    "top_ma": 61.6,
-    "base_ma": 66.0,
-    "period": "Paleogene",
-    "period_top_ma": 23.03,
-    "period_base_ma": 66.0,
-    "era": "Cenozoic"
-  },
-  "Maastrichtian": {
-    "rank": "Stage",
-    "abbrev": "Mt",
-    "top_ma": 66.0,
-    "base_ma": 72.1,
-    "period": "Cretaceous",
-    "period_top_ma": 66.0,
-    "period_base_ma": 145.0,
-    "era": "Mesozoic"
-  },
-  "Campanian": {
-    "rank": "Stage",
-    "abbrev": "Cm",
-    "top_ma": 72.1,
-    "base_ma": 83.6,
-    "period": "Cretaceous",
-    "period_top_ma": 66.0,
-    "period_base_ma": 145.0,
-    "era": "Mesozoic"
-  },
-  "Santonian": {
-    "rank": "Stage",
-    "abbrev": "Sa",
-    "top_ma": 83.6,
-    "base_ma": 86.3,
-    "period": "Cretaceous",
-    "period_top_ma": 66.0,
-    "period_base_ma": 145.0,
-    "era": "Mesozoic"
-  },
-  "Coniacian": {
-    "rank": "Stage",
-    "abbrev": "Cn",
-    "top_ma": 86.3,
-    "base_ma": 89.8,
-    "period": "Cretaceous",
-    "period_top_ma": 66.0,
-    "period_base_ma": 145.0,
-    "era": "Mesozoic"
-  },
-  "Turonian": {
-    "rank": "Stage",
-    "abbrev": "Tu",
-    "top_ma": 89.8,
-    "base_ma": 93.9,
-    "period": "Cretaceous",
-    "period_top_ma": 66.0,
-    "period_base_ma": 145.0,
-    "era": "Mesozoic"
-  },
-  "Cenomanian": {
-    "rank": "Stage",
-    "abbrev": "Ce",
-    "top_ma": 93.9,
-    "base_ma": 100.5,
-    "period": "Cretaceous",
-    "period_top_ma": 66.0,
-    "period_base_ma": 145.0,
+    "abbrev": "Aa",
+    "top_ma": 170.9,
+    "base_ma": 174.7,
+    "period": "Jurassic",
+    "period_top_ma": 143.1,
+    "period_base_ma": 201.4,
     "era": "Mesozoic"
   },
   "Albian": {
     "rank": "Stage",
     "abbrev": "Ab",
     "top_ma": 100.5,
-    "base_ma": 113.0,
+    "base_ma": 113.2,
     "period": "Cretaceous",
     "period_top_ma": 66.0,
-    "period_base_ma": 145.0,
+    "period_base_ma": 143.1,
+    "era": "Mesozoic"
+  },
+  "Anisian": {
+    "rank": "Stage",
+    "abbrev": "An",
+    "top_ma": 241.464,
+    "base_ma": 246.7,
+    "period": "Triassic",
+    "period_top_ma": 201.4,
+    "period_base_ma": 251.902,
     "era": "Mesozoic"
   },
   "Aptian": {
     "rank": "Stage",
     "abbrev": "Ap",
-    "top_ma": 113.0,
+    "top_ma": 113.2,
     "base_ma": 121.4,
     "period": "Cretaceous",
     "period_top_ma": 66.0,
-    "period_base_ma": 145.0,
+    "period_base_ma": 143.1,
+    "era": "Mesozoic"
+  },
+  "Artinskian": {
+    "rank": "Stage",
+    "abbrev": "Ar",
+    "top_ma": 283.3,
+    "base_ma": 290.1,
+    "period": "Permian",
+    "period_top_ma": 251.902,
+    "period_base_ma": 298.9,
+    "era": "Paleozoic"
+  },
+  "Asselian": {
+    "rank": "Stage",
+    "abbrev": "As",
+    "top_ma": 293.52,
+    "base_ma": 298.9,
+    "period": "Permian",
+    "period_top_ma": 251.902,
+    "period_base_ma": 298.9,
+    "era": "Paleozoic"
+  },
+  "Bajocian": {
+    "rank": "Stage",
+    "abbrev": "Bj",
+    "top_ma": 168.2,
+    "base_ma": 170.9,
+    "period": "Jurassic",
+    "period_top_ma": 143.1,
+    "period_base_ma": 201.4,
     "era": "Mesozoic"
   },
   "Barremian": {
@@ -276,238 +86,88 @@
     "base_ma": 125.77,
     "period": "Cretaceous",
     "period_top_ma": 66.0,
-    "period_base_ma": 145.0,
+    "period_base_ma": 143.1,
     "era": "Mesozoic"
   },
-  "Hauterivian": {
+  "Bartonian": {
     "rank": "Stage",
-    "abbrev": "Hv",
-    "top_ma": 125.77,
-    "base_ma": 132.9,
-    "period": "Cretaceous",
-    "period_top_ma": 66.0,
-    "period_base_ma": 145.0,
-    "era": "Mesozoic"
+    "abbrev": "Bt",
+    "top_ma": 37.71,
+    "base_ma": 41.03,
+    "period": "Paleogene",
+    "period_top_ma": 23.04,
+    "period_base_ma": 66.0,
+    "era": "Cenozoic"
   },
-  "Valanginian": {
+  "Bashkirian": {
     "rank": "Stage",
-    "abbrev": "Va",
-    "top_ma": 132.9,
-    "base_ma": 139.8,
-    "period": "Cretaceous",
-    "period_top_ma": 66.0,
-    "period_base_ma": 145.0,
+    "abbrev": "Bk",
+    "top_ma": 315.2,
+    "base_ma": 323.4,
+    "period": "Carboniferous",
+    "period_top_ma": 298.9,
+    "period_base_ma": 358.86,
+    "era": "Paleozoic"
+  },
+  "Bathonian": {
+    "rank": "Stage",
+    "abbrev": "Bt",
+    "top_ma": 165.3,
+    "base_ma": 168.2,
+    "period": "Jurassic",
+    "period_top_ma": 143.1,
+    "period_base_ma": 201.4,
     "era": "Mesozoic"
   },
   "Berriasian": {
     "rank": "Stage",
     "abbrev": "Be",
-    "top_ma": 139.8,
-    "base_ma": 145.0,
+    "top_ma": 137.05,
+    "base_ma": 143.1,
     "period": "Cretaceous",
     "period_top_ma": 66.0,
-    "period_base_ma": 145.0,
+    "period_base_ma": 143.1,
     "era": "Mesozoic"
   },
-  "Tithonian": {
+  "Burdigalian": {
     "rank": "Stage",
-    "abbrev": "Ti",
-    "top_ma": 145.0,
-    "base_ma": 149.2,
-    "period": "Jurassic",
-    "period_top_ma": 145.0,
-    "period_base_ma": 201.4,
-    "era": "Mesozoic"
+    "abbrev": "Bu",
+    "top_ma": 15.98,
+    "base_ma": 20.45,
+    "period": "Neogene",
+    "period_top_ma": 2.58,
+    "period_base_ma": 23.04,
+    "era": "Cenozoic"
   },
-  "Kimmeridgian": {
+  "Calabrian": {
     "rank": "Stage",
-    "abbrev": "Km",
-    "top_ma": 149.2,
-    "base_ma": 154.8,
-    "period": "Jurassic",
-    "period_top_ma": 145.0,
-    "period_base_ma": 201.4,
-    "era": "Mesozoic"
-  },
-  "Oxfordian": {
-    "rank": "Stage",
-    "abbrev": "Ox",
-    "top_ma": 154.8,
-    "base_ma": 161.5,
-    "period": "Jurassic",
-    "period_top_ma": 145.0,
-    "period_base_ma": 201.4,
-    "era": "Mesozoic"
+    "abbrev": "Cl",
+    "top_ma": 0.774,
+    "base_ma": 1.8,
+    "period": "Quaternary",
+    "period_top_ma": 0.0,
+    "period_base_ma": 2.58,
+    "era": "Cenozoic"
   },
   "Callovian": {
     "rank": "Stage",
     "abbrev": "Ca",
     "top_ma": 161.5,
-    "base_ma": 165.5,
+    "base_ma": 165.3,
     "period": "Jurassic",
-    "period_top_ma": 145.0,
+    "period_top_ma": 143.1,
     "period_base_ma": 201.4,
     "era": "Mesozoic"
   },
-  "Bathonian": {
+  "Campanian": {
     "rank": "Stage",
-    "abbrev": "Bt",
-    "top_ma": 165.5,
-    "base_ma": 168.3,
-    "period": "Jurassic",
-    "period_top_ma": 145.0,
-    "period_base_ma": 201.4,
+    "abbrev": "Cm",
+    "top_ma": 72.2,
+    "base_ma": 83.6,
+    "period": "Cretaceous",
+    "period_top_ma": 66.0,
+    "period_base_ma": 143.1,
     "era": "Mesozoic"
-  },
-  "Bajocian": {
-    "rank": "Stage",
-    "abbrev": "Bj",
-    "top_ma": 168.3,
-    "base_ma": 170.9,
-    "period": "Jurassic",
-    "period_top_ma": 145.0,
-    "period_base_ma": 201.4,
-    "era": "Mesozoic"
-  },
-  "Aalenian": {
-    "rank": "Stage",
-    "abbrev": "Aa",
-    "top_ma": 170.9,
-    "base_ma": 174.7,
-    "period": "Jurassic",
-    "period_top_ma": 145.0,
-    "period_base_ma": 201.4,
-    "era": "Mesozoic"
-  },
-  "Toarcian": {
-    "rank": "Stage",
-    "abbrev": "To",
-    "top_ma": 174.7,
-    "base_ma": 182.7,
-    "period": "Jurassic",
-    "period_top_ma": 145.0,
-    "period_base_ma": 201.4,
-    "era": "Mesozoic"
-  },
-  "Pliensbachian": {
-    "rank": "Stage",
-    "abbrev": "Pl",
-    "top_ma": 182.7,
-    "base_ma": 190.8,
-    "period": "Jurassic",
-    "period_top_ma": 145.0,
-    "period_base_ma": 201.4,
-    "era": "Mesozoic"
-  },
-  "Sinemurian": {
-    "rank": "Stage",
-    "abbrev": "Si",
-    "top_ma": 190.8,
-    "base_ma": 199.5,
-    "period": "Jurassic",
-    "period_top_ma": 145.0,
-    "period_base_ma": 201.4,
-    "era": "Mesozoic"
-  },
-  "Hettangian": {
-    "rank": "Stage",
-    "abbrev": "He",
-    "top_ma": 199.5,
-    "base_ma": 201.4,
-    "period": "Jurassic",
-    "period_top_ma": 145.0,
-    "period_base_ma": 201.4,
-    "era": "Mesozoic"
-  },
-  "Rhaetian": {
-    "rank": "Stage",
-    "abbrev": "Rh",
-    "top_ma": 201.4,
-    "base_ma": 205.7,
-    "period": "Triassic",
-    "period_top_ma": 201.4,
-    "period_base_ma": 251.9,
-    "era": "Mesozoic"
-  },
-  "Norian": {
-    "rank": "Stage",
-    "abbrev": "No",
-    "top_ma": 208.5,
-    "base_ma": 227.0,
-    "period": "Triassic",
-    "period_top_ma": 201.4,
-    "period_base_ma": 251.9,
-    "era": "Mesozoic"
-  },
-  "Carnian": {
-    "rank": "Stage",
-    "abbrev": "Ca",
-    "top_ma": 227.0,
-    "base_ma": 236.2,
-    "period": "Triassic",
-    "period_top_ma": 201.4,
-    "period_base_ma": 251.9,
-    "era": "Mesozoic"
-  },
-  "Ladinian": {
-    "rank": "Stage",
-    "abbrev": "Ld",
-    "top_ma": 236.2,
-    "base_ma": 241.5,
-    "period": "Triassic",
-    "period_top_ma": 201.4,
-    "period_base_ma": 251.9,
-    "era": "Mesozoic"
-  },
-  "Anisian": {
-    "rank": "Stage",
-    "abbrev": "An",
-    "top_ma": 241.5,
-    "base_ma": 246.7,
-    "period": "Triassic",
-    "period_top_ma": 201.4,
-    "period_base_ma": 251.9,
-    "era": "Mesozoic"
-  },
-  "Olenekian": {
-    "rank": "Stage",
-    "abbrev": "Ol",
-    "top_ma": 245.9,
-    "base_ma": 251.2,
-    "period": "Triassic",
-    "period_top_ma": 201.4,
-    "period_base_ma": 251.9,
-    "era": "Mesozoic"
-  },
-  "Induan": {
-    "rank": "Stage",
-    "abbrev": "In",
-    "top_ma": 249.7,
-    "base_ma": 251.9,
-    "period": "Triassic",
-    "period_top_ma": 201.4,
-    "period_base_ma": 251.9,
-    "era": "Mesozoic"
-  },
-  "Changhsingian": {
-    "rank": "Stage",
-    "abbrev": "Cg",
-    "top_ma": 251.9,
-    "base_ma": 254.14,
-    "period": "Permian",
-    "period_top_ma": 251.9,
-    "period_base_ma": 298.9,
-    "era": "Paleozoic"
-  },
-  "Wuchiapingian": {
-    "rank": "Stage",
-    "abbrev": "Wu",
-    "top_ma": 254.14,
-    "base_ma": 259.51,
-    "period": "Permian",
-    "period_top_ma": 251.9,
-    "period_base_ma": 298.9,
-    "era": "Paleozoic"
   },
   "Capitanian": {
     "rank": "Stage",
@@ -515,68 +175,198 @@
     "top_ma": 259.51,
     "base_ma": 264.28,
     "period": "Permian",
-    "period_top_ma": 251.9,
+    "period_top_ma": 251.902,
     "period_base_ma": 298.9,
     "era": "Paleozoic"
   },
-  "Wordian": {
+  "Carnian": {
     "rank": "Stage",
-    "abbrev": "Wo",
-    "top_ma": 265.1,
-    "base_ma": 266.9,
+    "abbrev": "Ca",
+    "top_ma": 227.3,
+    "base_ma": 237.0,
+    "period": "Triassic",
+    "period_top_ma": 201.4,
+    "period_base_ma": 251.902,
+    "era": "Mesozoic"
+  },
+  "Cenomanian": {
+    "rank": "Stage",
+    "abbrev": "Ce",
+    "top_ma": 93.9,
+    "base_ma": 100.5,
+    "period": "Cretaceous",
+    "period_top_ma": 66.0,
+    "period_base_ma": 143.1,
+    "era": "Mesozoic"
+  },
+  "Changhsingian": {
+    "rank": "Stage",
+    "abbrev": "Cg",
+    "top_ma": 251.902,
+    "base_ma": 254.14,
     "period": "Permian",
-    "period_top_ma": 251.9,
+    "period_top_ma": 251.902,
     "period_base_ma": 298.9,
     "era": "Paleozoic"
   },
-  "Roadian": {
+  "Chattian": {
     "rank": "Stage",
-    "abbrev": "Rd",
-    "top_ma": 268.8,
-    "base_ma": 273.0,
-    "period": "Permian",
-    "period_top_ma": 251.9,
-    "period_base_ma": 298.9,
+    "abbrev": "Ct",
+    "top_ma": 23.04,
+    "base_ma": 27.3,
+    "period": "Paleogene",
+    "period_top_ma": 23.04,
+    "period_base_ma": 66.0,
+    "era": "Cenozoic"
+  },
+  "Chibanian": {
+    "rank": "Stage",
+    "abbrev": "Ch",
+    "top_ma": 0.129,
+    "base_ma": 0.774,
+    "period": "Quaternary",
+    "period_top_ma": 0.0,
+    "period_base_ma": 2.58,
+    "era": "Cenozoic"
+  },
+  "Coniacian": {
+    "rank": "Stage",
+    "abbrev": "Cn",
+    "top_ma": 85.7,
+    "base_ma": 89.8,
+    "period": "Cretaceous",
+    "period_top_ma": 66.0,
+    "period_base_ma": 143.1,
+    "era": "Mesozoic"
+  },
+  "Danian": {
+    "rank": "Stage",
+    "abbrev": "Da",
+    "top_ma": 61.66,
+    "base_ma": 66.0,
+    "period": "Paleogene",
+    "period_top_ma": 23.04,
+    "period_base_ma": 66.0,
+    "era": "Cenozoic"
+  },
+  "Dapingian": {
+    "rank": "Stage",
+    "abbrev": "Dp",
+    "top_ma": 469.4,
+    "base_ma": 471.3,
+    "period": "Ordovician",
+    "period_top_ma": 443.1,
+    "period_base_ma": 486.85,
     "era": "Paleozoic"
   },
-  "Kungurian": {
+  "Darriwilian": {
     "rank": "Stage",
-    "abbrev": "Ku",
-    "top_ma": 273.0,
-    "base_ma": 283.3,
-    "period": "Permian",
-    "period_top_ma": 251.9,
-    "period_base_ma": 298.9,
+    "abbrev": "Da",
+    "top_ma": 458.2,
+    "base_ma": 469.4,
+    "period": "Ordovician",
+    "period_top_ma": 443.1,
+    "period_base_ma": 486.85,
     "era": "Paleozoic"
   },
-  "Artinskian": {
+  "Drumian": {
     "rank": "Stage",
-    "abbrev": "Ar",
-    "top_ma": 279.5,
-    "base_ma": 290.0,
-    "period": "Permian",
-    "period_top_ma": 251.9,
-    "period_base_ma": 298.9,
+    "abbrev": "Dr",
+    "top_ma": 500.5,
+    "base_ma": 504.5,
+    "period": "Cambrian",
+    "period_top_ma": 486.85,
+    "period_base_ma": 538.8,
     "era": "Paleozoic"
   },
-  "Sakmarian": {
+  "Eifelian": {
     "rank": "Stage",
-    "abbrev": "Sk",
-    "top_ma": 290.0,
-    "base_ma": 295.0,
-    "period": "Permian",
-    "period_top_ma": 251.9,
-    "period_base_ma": 298.9,
+    "abbrev": "Ef",
+    "top_ma": 387.95,
+    "base_ma": 393.47,
+    "period": "Devonian",
+    "period_top_ma": 358.86,
+    "period_base_ma": 419.62,
     "era": "Paleozoic"
   },
-  "Asselian": {
+  "Emsian": {
     "rank": "Stage",
-    "abbrev": "As",
-    "top_ma": 295.5,
-    "base_ma": 298.9,
-    "period": "Permian",
-    "period_top_ma": 251.9,
-    "period_base_ma": 298.9,
+    "abbrev": "Em",
+    "top_ma": 393.47,
+    "base_ma": 410.62,
+    "period": "Devonian",
+    "period_top_ma": 358.86,
+    "period_base_ma": 419.62,
+    "era": "Paleozoic"
+  },
+  "Famennian": {
+    "rank": "Stage",
+    "abbrev": "Fa",
+    "top_ma": 358.86,
+    "base_ma": 372.15,
+    "period": "Devonian",
+    "period_top_ma": 358.86,
+    "period_base_ma": 419.62,
+    "era": "Paleozoic"
+  },
+  "Floian": {
+    "rank": "Stage",
+    "abbrev": "Fl",
+    "top_ma": 471.3,
+    "base_ma": 477.1,
+    "period": "Ordovician",
+    "period_top_ma": 443.1,
+    "period_base_ma": 486.85,
+    "era": "Paleozoic"
+  },
+  "Fortunian": {
+    "rank": "Stage",
+    "abbrev": "Fo",
+    "top_ma": 529.0,
+    "base_ma": 538.8,
+    "period": "Cambrian",
+    "period_top_ma": 486.85,
+    "period_base_ma": 538.8,
+    "era": "Paleozoic"
+  },
+  "Frasnian": {
+    "rank": "Stage",
+    "abbrev": "Fr",
+    "top_ma": 372.15,
+    "base_ma": 382.31,
+    "period": "Devonian",
+    "period_top_ma": 358.86,
+    "period_base_ma": 419.62,
+    "era": "Paleozoic"
+  },
+  "Gelasian": {
+    "rank": "Stage",
+    "abbrev": "Ge",
+    "top_ma": 1.8,
+    "base_ma": 2.58,
+    "period": "Quaternary",
+    "period_top_ma": 0.0,
+    "period_base_ma": 2.58,
+    "era": "Cenozoic"
+  },
+  "Givetian": {
+    "rank": "Stage",
+    "abbrev": "Gv",
+    "top_ma": 382.31,
+    "base_ma": 387.95,
+    "period": "Devonian",
+    "period_top_ma": 358.86,
+    "period_base_ma": 419.62,
+    "era": "Paleozoic"
+  },
+  "Guzhangian": {
+    "rank": "Stage",
+    "abbrev": "Gu",
+    "top_ma": 497.0,
+    "base_ma": 500.5,
+    "period": "Cambrian",
+    "period_top_ma": 486.85,
+    "period_base_ma": 538.8,
     "era": "Paleozoic"
   },
   "Gzhelian": {
@@ -586,7 +376,67 @@
     "base_ma": 303.7,
     "period": "Carboniferous",
     "period_top_ma": 298.9,
-    "period_base_ma": 358.9,
+    "period_base_ma": 358.86,
+    "era": "Paleozoic"
+  },
+  "Hauterivian": {
+    "rank": "Stage",
+    "abbrev": "Hv",
+    "top_ma": 125.77,
+    "base_ma": 132.6,
+    "period": "Cretaceous",
+    "period_top_ma": 66.0,
+    "period_base_ma": 143.1,
+    "era": "Mesozoic"
+  },
+  "Hettangian": {
+    "rank": "Stage",
+    "abbrev": "He",
+    "top_ma": 199.5,
+    "base_ma": 201.4,
+    "period": "Jurassic",
+    "period_top_ma": 143.1,
+    "period_base_ma": 201.4,
+    "era": "Mesozoic"
+  },
+  "Hirnantian": {
+    "rank": "Stage",
+    "abbrev": "Hi",
+    "top_ma": 443.1,
+    "base_ma": 445.2,
+    "period": "Ordovician",
+    "period_top_ma": 443.1,
+    "period_base_ma": 486.85,
+    "era": "Paleozoic"
+  },
+  "Holocene": {
+    "rank": "Series",
+    "abbrev": "Ho",
+    "top_ma": 0.0,
+    "base_ma": 0.0117,
+    "period": "Quaternary",
+    "period_top_ma": 0.0,
+    "period_base_ma": 2.58,
+    "era": "Cenozoic"
+  },
+  "Induan": {
+    "rank": "Stage",
+    "abbrev": "In",
+    "top_ma": 249.9,
+    "base_ma": 251.902,
+    "period": "Triassic",
+    "period_top_ma": 201.4,
+    "period_base_ma": 251.902,
+    "era": "Mesozoic"
+  },
+  "Jiangshanian": {
+    "rank": "Stage",
+    "abbrev": "Js",
+    "top_ma": 491.0,
+    "base_ma": 494.2,
+    "period": "Cambrian",
+    "period_top_ma": 486.85,
+    "period_base_ma": 538.8,
     "era": "Paleozoic"
   },
   "Kasimovian": {
@@ -596,8 +446,118 @@
     "base_ma": 307.0,
     "period": "Carboniferous",
     "period_top_ma": 298.9,
-    "period_base_ma": 358.9,
+    "period_base_ma": 358.86,
     "era": "Paleozoic"
+  },
+  "Katian": {
+    "rank": "Stage",
+    "abbrev": "Ka",
+    "top_ma": 445.2,
+    "base_ma": 452.8,
+    "period": "Ordovician",
+    "period_top_ma": 443.1,
+    "period_base_ma": 486.85,
+    "era": "Paleozoic"
+  },
+  "Kimmeridgian": {
+    "rank": "Stage",
+    "abbrev": "Km",
+    "top_ma": 149.2,
+    "base_ma": 154.8,
+    "period": "Jurassic",
+    "period_top_ma": 143.1,
+    "period_base_ma": 201.4,
+    "era": "Mesozoic"
+  },
+  "Kungurian": {
+    "rank": "Stage",
+    "abbrev": "Ku",
+    "top_ma": 274.4,
+    "base_ma": 283.3,
+    "period": "Permian",
+    "period_top_ma": 251.902,
+    "period_base_ma": 298.9,
+    "era": "Paleozoic"
+  },
+  "Ladinian": {
+    "rank": "Stage",
+    "abbrev": "Ld",
+    "top_ma": 237.0,
+    "base_ma": 241.464,
+    "period": "Triassic",
+    "period_top_ma": 201.4,
+    "period_base_ma": 251.902,
+    "era": "Mesozoic"
+  },
+  "Langhian": {
+    "rank": "Stage",
+    "abbrev": "La",
+    "top_ma": 13.82,
+    "base_ma": 15.98,
+    "period": "Neogene",
+    "period_top_ma": 2.58,
+    "period_base_ma": 23.04,
+    "era": "Cenozoic"
+  },
+  "Llandovery": {
+    "rank": "Series",
+    "abbrev": "Ll",
+    "top_ma": 432.9,
+    "base_ma": 443.1,
+    "period": "Silurian",
+    "period_top_ma": 419.62,
+    "period_base_ma": 443.1,
+    "era": "Paleozoic"
+  },
+  "Lochkovian": {
+    "rank": "Stage",
+    "abbrev": "Lk",
+    "top_ma": 413.02,
+    "base_ma": 419.62,
+    "period": "Devonian",
+    "period_top_ma": 358.86,
+    "period_base_ma": 419.62,
+    "era": "Paleozoic"
+  },
+  "Ludlow": {
+    "rank": "Series",
+    "abbrev": "Ld",
+    "top_ma": 422.7,
+    "base_ma": 426.7,
+    "period": "Silurian",
+    "period_top_ma": 419.62,
+    "period_base_ma": 443.1,
+    "era": "Paleozoic"
+  },
+  "Lutetian": {
+    "rank": "Stage",
+    "abbrev": "Lu",
+    "top_ma": 41.03,
+    "base_ma": 48.07,
+    "period": "Paleogene",
+    "period_top_ma": 23.04,
+    "period_base_ma": 66.0,
+    "era": "Cenozoic"
+  },
+  "Maastrichtian": {
+    "rank": "Stage",
+    "abbrev": "Mt",
+    "top_ma": 66.0,
+    "base_ma": 72.2,
+    "period": "Cretaceous",
+    "period_top_ma": 66.0,
+    "period_base_ma": 143.1,
+    "era": "Mesozoic"
+  },
+  "Messinian": {
+    "rank": "Stage",
+    "abbrev": "Ms",
+    "top_ma": 5.333,
+    "base_ma": 7.246,
+    "period": "Neogene",
+    "period_top_ma": 2.58,
+    "period_base_ma": 23.04,
+    "era": "Cenozoic"
   },
   "Moscovian": {
     "rank": "Stage",
@@ -606,277 +566,387 @@
     "base_ma": 315.2,
     "period": "Carboniferous",
     "period_top_ma": 298.9,
-    "period_base_ma": 358.9,
+    "period_base_ma": 358.86,
     "era": "Paleozoic"
   },
-  "Bashkirian": {
+  "Norian": {
     "rank": "Stage",
-    "abbrev": "Bk",
-    "top_ma": 315.2,
-    "base_ma": 323.2,
-    "period": "Carboniferous",
-    "period_top_ma": 298.9,
-    "period_base_ma": 358.9,
+    "abbrev": "No",
+    "top_ma": 205.7,
+    "base_ma": 227.3,
+    "period": "Triassic",
+    "period_top_ma": 201.4,
+    "period_base_ma": 251.902,
+    "era": "Mesozoic"
+  },
+  "Olenekian": {
+    "rank": "Stage",
+    "abbrev": "Ol",
+    "top_ma": 246.7,
+    "base_ma": 249.9,
+    "period": "Triassic",
+    "period_top_ma": 201.4,
+    "period_base_ma": 251.902,
+    "era": "Mesozoic"
+  },
+  "Oxfordian": {
+    "rank": "Stage",
+    "abbrev": "Ox",
+    "top_ma": 154.8,
+    "base_ma": 161.5,
+    "period": "Jurassic",
+    "period_top_ma": 143.1,
+    "period_base_ma": 201.4,
+    "era": "Mesozoic"
+  },
+  "Paibian": {
+    "rank": "Stage",
+    "abbrev": "Pa",
+    "top_ma": 494.2,
+    "base_ma": 497.0,
+    "period": "Cambrian",
+    "period_top_ma": 486.85,
+    "period_base_ma": 538.8,
     "era": "Paleozoic"
   },
-  "Serpukhovian": {
+  "Piacenzian": {
     "rank": "Stage",
-    "abbrev": "Se",
-    "top_ma": 323.2,
-    "base_ma": 330.9,
-    "period": "Carboniferous",
-    "period_top_ma": 298.9,
-    "period_base_ma": 358.9,
-    "era": "Paleozoic"
+    "abbrev": "Pi",
+    "top_ma": 2.58,
+    "base_ma": 3.6,
+    "period": "Neogene",
+    "period_top_ma": 2.58,
+    "period_base_ma": 23.04,
+    "era": "Cenozoic"
   },
-  "Visean": {
+  "Pliensbachian": {
     "rank": "Stage",
-    "abbrev": "Vi",
-    "top_ma": 330.9,
-    "base_ma": 346.7,
-    "period": "Carboniferous",
-    "period_top_ma": 298.9,
-    "period_base_ma": 358.9,
-    "era": "Paleozoic"
-  },
-  "Tournaisian": {
-    "rank": "Stage",
-    "abbrev": "To",
-    "top_ma": 346.7,
-    "base_ma": 358.9,
-    "period": "Carboniferous",
-    "period_top_ma": 298.9,
-    "period_base_ma": 358.9,
-    "era": "Paleozoic"
-  },
-  "Famennian": {
-    "rank": "Stage",
-    "abbrev": "Fa",
-    "top_ma": 358.9,
-    "base_ma": 372.15,
-    "period": "Devonian",
-    "period_top_ma": 358.9,
-    "period_base_ma": 419.62,
-    "era": "Paleozoic"
-  },
-  "Frasnian": {
-    "rank": "Stage",
-    "abbrev": "Fr",
-    "top_ma": 367.1,
-    "base_ma": 382.7,
-    "period": "Devonian",
-    "period_top_ma": 358.9,
-    "period_base_ma": 419.2,
-    "era": "Paleozoic"
-  },
-  "Givetian": {
-    "rank": "Stage",
-    "abbrev": "Gv",
-    "top_ma": 382.7,
-    "base_ma": 388.1,
-    "period": "Devonian",
-    "period_top_ma": 358.9,
-    "period_base_ma": 419.2,
-    "era": "Paleozoic"
-  },
-  "Eifelian": {
-    "rank": "Stage",
-    "abbrev": "Ef",
-    "top_ma": 388.1,
-    "base_ma": 393.3,
-    "period": "Devonian",
-    "period_top_ma": 358.9,
-    "period_base_ma": 419.2,
-    "era": "Paleozoic"
-  },
-  "Emsian": {
-    "rank": "Stage",
-    "abbrev": "Em",
-    "top_ma": 393.3,
-    "base_ma": 410.62,
-    "period": "Devonian",
-    "period_top_ma": 358.9,
-    "period_base_ma": 419.62,
-    "era": "Paleozoic"
+    "abbrev": "Pl",
+    "top_ma": 184.2,
+    "base_ma": 192.9,
+    "period": "Jurassic",
+    "period_top_ma": 143.1,
+    "period_base_ma": 201.4,
+    "era": "Mesozoic"
   },
   "Pragian": {
     "rank": "Stage",
     "abbrev": "Pr",
-    "top_ma": 401.8,
+    "top_ma": 410.62,
     "base_ma": 413.02,
     "period": "Devonian",
-    "period_top_ma": 358.9,
+    "period_top_ma": 358.86,
     "period_base_ma": 419.62,
     "era": "Paleozoic"
   },
-  "Lochkovian": {
+  "Priabonian": {
     "rank": "Stage",
-    "abbrev": "Lk",
-    "top_ma": 410.8,
-    "base_ma": 419.62,
-    "period": "Devonian",
-    "period_top_ma": 358.9,
-    "period_base_ma": 419.62,
-    "era": "Paleozoic"
+    "abbrev": "Pr",
+    "top_ma": 33.9,
+    "base_ma": 37.71,
+    "period": "Paleogene",
+    "period_top_ma": 23.04,
+    "period_base_ma": 66.0,
+    "era": "Cenozoic"
   },
   "Pridoli": {
-    "rank": "Stage",
+    "rank": "Series",
     "abbrev": "Pd",
-    "top_ma": 419.2,
-    "base_ma": 422.9,
+    "top_ma": 419.62,
+    "base_ma": 422.7,
     "period": "Silurian",
-    "period_top_ma": 419.2,
-    "period_base_ma": 443.8,
+    "period_top_ma": 419.62,
+    "period_base_ma": 443.1,
     "era": "Paleozoic"
   },
-  "Ludlow": {
+  "Rhaetian": {
     "rank": "Stage",
-    "abbrev": "Ld",
-    "top_ma": 422.9,
-    "base_ma": 427.4,
-    "period": "Silurian",
-    "period_top_ma": 419.2,
-    "period_base_ma": 443.8,
+    "abbrev": "Rh",
+    "top_ma": 201.4,
+    "base_ma": 205.7,
+    "period": "Triassic",
+    "period_top_ma": 201.4,
+    "period_base_ma": 251.902,
+    "era": "Mesozoic"
+  },
+  "Roadian": {
+    "rank": "Stage",
+    "abbrev": "Rd",
+    "top_ma": 266.9,
+    "base_ma": 274.4,
+    "period": "Permian",
+    "period_top_ma": 251.902,
+    "period_base_ma": 298.9,
     "era": "Paleozoic"
   },
-  "Wenlock": {
+  "Rupelian": {
     "rank": "Stage",
-    "abbrev": "Wn",
-    "top_ma": 427.4,
-    "base_ma": 433.4,
-    "period": "Silurian",
-    "period_top_ma": 419.2,
-    "period_base_ma": 443.8,
-    "era": "Paleozoic"
+    "abbrev": "Rp",
+    "top_ma": 27.3,
+    "base_ma": 33.9,
+    "period": "Paleogene",
+    "period_top_ma": 23.04,
+    "period_base_ma": 66.0,
+    "era": "Cenozoic"
   },
-  "Llandovery": {
+  "Sakmarian": {
     "rank": "Stage",
-    "abbrev": "Ll",
-    "top_ma": 433.4,
-    "base_ma": 443.8,
-    "period": "Silurian",
-    "period_top_ma": 419.2,
-    "period_base_ma": 443.8,
-    "era": "Paleozoic"
-  },
-  "Hirnantian": {
-    "rank": "Stage",
-    "abbrev": "Hi",
-    "top_ma": 443.8,
-    "base_ma": 445.2,
-    "period": "Ordovician",
-    "period_top_ma": 443.8,
-    "period_base_ma": 485.4,
-    "era": "Paleozoic"
-  },
-  "Katian": {
-    "rank": "Stage",
-    "abbrev": "Ka",
-    "top_ma": 445.2,
-    "base_ma": 453.0,
-    "period": "Ordovician",
-    "period_top_ma": 443.8,
-    "period_base_ma": 485.4,
+    "abbrev": "Sk",
+    "top_ma": 290.1,
+    "base_ma": 293.52,
+    "period": "Permian",
+    "period_top_ma": 251.902,
+    "period_base_ma": 298.9,
     "era": "Paleozoic"
   },
   "Sandbian": {
     "rank": "Stage",
     "abbrev": "Sb",
-    "top_ma": 453.0,
-    "base_ma": 458.4,
+    "top_ma": 452.8,
+    "base_ma": 458.2,
     "period": "Ordovician",
-    "period_top_ma": 443.8,
-    "period_base_ma": 485.4,
+    "period_top_ma": 443.1,
+    "period_base_ma": 486.85,
     "era": "Paleozoic"
   },
-  "Darriwilian": {
+  "Santonian": {
     "rank": "Stage",
-    "abbrev": "Da",
-    "top_ma": 458.4,
-    "base_ma": 467.3,
-    "period": "Ordovician",
-    "period_top_ma": 443.8,
-    "period_base_ma": 485.4,
+    "abbrev": "Sa",
+    "top_ma": 83.6,
+    "base_ma": 85.7,
+    "period": "Cretaceous",
+    "period_top_ma": 66.0,
+    "period_base_ma": 143.1,
+    "era": "Mesozoic"
+  },
+  "Selandian": {
+    "rank": "Stage",
+    "abbrev": "Sl",
+    "top_ma": 59.24,
+    "base_ma": 61.66,
+    "period": "Paleogene",
+    "period_top_ma": 23.04,
+    "period_base_ma": 66.0,
+    "era": "Cenozoic"
+  },
+  "Series 2": {
+    "rank": "Series",
+    "abbrev": "S2",
+    "top_ma": 506.5,
+    "base_ma": 521.0,
+    "period": "Cambrian",
+    "period_top_ma": 486.85,
+    "period_base_ma": 538.8,
     "era": "Paleozoic"
   },
-  "Dapingian": {
+  "Serpukhovian": {
     "rank": "Stage",
-    "abbrev": "Dp",
-    "top_ma": 467.3,
-    "base_ma": 470.0,
-    "period": "Ordovician",
-    "period_top_ma": 443.8,
-    "period_base_ma": 485.4,
+    "abbrev": "Se",
+    "top_ma": 323.4,
+    "base_ma": 330.3,
+    "period": "Carboniferous",
+    "period_top_ma": 298.9,
+    "period_base_ma": 358.86,
     "era": "Paleozoic"
   },
-  "Floian": {
+  "Serravallian": {
     "rank": "Stage",
-    "abbrev": "Fl",
-    "top_ma": 470.0,
-    "base_ma": 477.7,
-    "period": "Ordovician",
-    "period_top_ma": 443.8,
-    "period_base_ma": 485.4,
-    "era": "Paleozoic"
+    "abbrev": "Sr",
+    "top_ma": 11.63,
+    "base_ma": 13.82,
+    "period": "Neogene",
+    "period_top_ma": 2.58,
+    "period_base_ma": 23.04,
+    "era": "Cenozoic"
   },
-  "Tremadocian": {
+  "Sinemurian": {
     "rank": "Stage",
-    "abbrev": "Tr",
-    "top_ma": 477.7,
-    "base_ma": 485.4,
-    "period": "Ordovician",
-    "period_top_ma": 443.8,
-    "period_base_ma": 485.4,
-    "era": "Paleozoic"
+    "abbrev": "Si",
+    "top_ma": 192.9,
+    "base_ma": 199.5,
+    "period": "Jurassic",
+    "period_top_ma": 143.1,
+    "period_base_ma": 201.4,
+    "era": "Mesozoic"
   },
   "Stage 10": {
     "rank": "Stage",
     "abbrev": "10",
-    "top_ma": 485.4,
-    "base_ma": 489.0,
+    "top_ma": 486.85,
+    "base_ma": 491.0,
     "period": "Cambrian",
-    "period_top_ma": 485.4,
+    "period_top_ma": 486.85,
+    "period_base_ma": 538.8,
+    "era": "Paleozoic"
+  },
+  "Stage 2": {
+    "rank": "Stage",
+    "abbrev": "2",
+    "top_ma": 521.0,
+    "base_ma": 529.0,
+    "period": "Cambrian",
+    "period_top_ma": 486.85,
+    "period_base_ma": 538.8,
+    "era": "Paleozoic"
+  },
+  "Stage 3": {
+    "rank": "Stage",
+    "abbrev": "3",
+    "top_ma": 514.5,
+    "base_ma": 521.0,
+    "period": "Cambrian",
+    "period_top_ma": 486.85,
+    "period_base_ma": 538.8,
+    "era": "Paleozoic"
+  },
+  "Stage 4": {
+    "rank": "Stage",
+    "abbrev": "4",
+    "top_ma": 506.5,
+    "base_ma": 514.5,
+    "period": "Cambrian",
+    "period_top_ma": 486.85,
+    "period_base_ma": 538.8,
+    "era": "Paleozoic"
+  },
+  "Stage 5": {
+    "rank": "Stage",
+    "abbrev": "5",
+    "top_ma": 504.5,
+    "base_ma": 506.5,
+    "period": "Cambrian",
+    "period_top_ma": 486.85,
     "period_base_ma": 538.8,
     "era": "Paleozoic"
   },
   "Stage 9": {
     "rank": "Stage",
     "abbrev": "9",
-    "top_ma": 489.0,
-    "base_ma": 494.0,
+    "top_ma": 491.0,
+    "base_ma": 494.2,
     "period": "Cambrian",
-    "period_top_ma": 485.4,
+    "period_top_ma": 486.85,
     "period_base_ma": 538.8,
     "era": "Paleozoic"
   },
-  "Paibian": {
+  "Thanetian": {
     "rank": "Stage",
-    "abbrev": "Pa",
-    "top_ma": 494.0,
-    "base_ma": 497.0,
-    "period": "Cambrian",
-    "period_top_ma": 485.4,
-    "period_base_ma": 538.8,
+    "abbrev": "Th",
+    "top_ma": 56.0,
+    "base_ma": 59.24,
+    "period": "Paleogene",
+    "period_top_ma": 23.04,
+    "period_base_ma": 66.0,
+    "era": "Cenozoic"
+  },
+  "Tithonian": {
+    "rank": "Stage",
+    "abbrev": "Ti",
+    "top_ma": 143.1,
+    "base_ma": 149.2,
+    "period": "Jurassic",
+    "period_top_ma": 143.1,
+    "period_base_ma": 201.4,
+    "era": "Mesozoic"
+  },
+  "Toarcian": {
+    "rank": "Stage",
+    "abbrev": "To",
+    "top_ma": 174.7,
+    "base_ma": 184.2,
+    "period": "Jurassic",
+    "period_top_ma": 143.1,
+    "period_base_ma": 201.4,
+    "era": "Mesozoic"
+  },
+  "Tortonian": {
+    "rank": "Stage",
+    "abbrev": "To",
+    "top_ma": 7.246,
+    "base_ma": 11.63,
+    "period": "Neogene",
+    "period_top_ma": 2.58,
+    "period_base_ma": 23.04,
+    "era": "Cenozoic"
+  },
+  "Tournaisian": {
+    "rank": "Stage",
+    "abbrev": "To",
+    "top_ma": 346.7,
+    "base_ma": 358.86,
+    "period": "Carboniferous",
+    "period_top_ma": 298.9,
+    "period_base_ma": 358.86,
     "era": "Paleozoic"
   },
-  "Guzhangian": {
+  "Tremadocian": {
     "rank": "Stage",
-    "abbrev": "Gu",
-    "top_ma": 497.0,
-    "base_ma": 500.5,
-    "period": "Cambrian",
-    "period_top_ma": 485.4,
-    "period_base_ma": 538.8,
+    "abbrev": "Tr",
+    "top_ma": 477.1,
+    "base_ma": 486.85,
+    "period": "Ordovician",
+    "period_top_ma": 443.1,
+    "period_base_ma": 486.85,
     "era": "Paleozoic"
   },
-  "Drumian": {
+  "Turonian": {
     "rank": "Stage",
-    "abbrev": "Dr",
-    "top_ma": 500.5,
-    "base_ma": 504.5,
-    "period": "Cambrian",
-    "period_top_ma": 485.4,
-    "period_base_ma": 538.8,
+    "abbrev": "Tu",
+    "top_ma": 89.8,
+    "base_ma": 93.9,
+    "period": "Cretaceous",
+    "period_top_ma": 66.0,
+    "period_base_ma": 143.1,
+    "era": "Mesozoic"
+  },
+  "Valanginian": {
+    "rank": "Stage",
+    "abbrev": "Va",
+    "top_ma": 132.6,
+    "base_ma": 137.05,
+    "period": "Cretaceous",
+    "period_top_ma": 66.0,
+    "period_base_ma": 143.1,
+    "era": "Mesozoic"
+  },
+  "Visean": {
+    "rank": "Stage",
+    "abbrev": "Vi",
+    "top_ma": 330.3,
+    "base_ma": 346.7,
+    "period": "Carboniferous",
+    "period_top_ma": 298.9,
+    "period_base_ma": 358.86,
+    "era": "Paleozoic"
+  },
+  "Wenlock": {
+    "rank": "Series",
+    "abbrev": "Wn",
+    "top_ma": 426.7,
+    "base_ma": 432.9,
+    "period": "Silurian",
+    "period_top_ma": 419.62,
+    "period_base_ma": 443.1,
+    "era": "Paleozoic"
+  },
+  "Wordian": {
+    "rank": "Stage",
+    "abbrev": "Wo",
+    "top_ma": 264.28,
+    "base_ma": 266.9,
+    "period": "Permian",
+    "period_top_ma": 251.902,
+    "period_base_ma": 298.9,
+    "era": "Paleozoic"
+  },
+  "Wuchiapingian": {
+    "rank": "Stage",
+    "abbrev": "Wu",
+    "top_ma": 254.14,
+    "base_ma": 259.51,
+    "period": "Permian",
+    "period_top_ma": 251.902,
+    "period_base_ma": 298.9,
     "era": "Paleozoic"
   },
   "Wuliuan": {
@@ -885,58 +955,28 @@
     "top_ma": 504.5,
     "base_ma": 506.5,
     "period": "Cambrian",
-    "period_top_ma": 485.4,
+    "period_top_ma": 486.85,
     "period_base_ma": 538.8,
     "era": "Paleozoic"
   },
-  "Stage 5": {
+  "Ypresian": {
     "rank": "Stage",
-    "abbrev": "5",
-    "top_ma": 504.2,
-    "base_ma": 509.0,
-    "period": "Cambrian",
-    "period_top_ma": 485.4,
-    "period_base_ma": 538.8,
-    "era": "Paleozoic"
-  },
-  "Series 2": {
-    "rank": "Stage",
-    "abbrev": "S2",
-    "top_ma": 509.0,
-    "base_ma": 521.0,
-    "period": "Cambrian",
-    "period_top_ma": 485.4,
-    "period_base_ma": 538.8,
-    "era": "Paleozoic"
-  },
-  "Fortunian": {
-    "rank": "Stage",
-    "abbrev": "Fo",
-    "top_ma": 521.0,
-    "base_ma": 538.8,
-    "period": "Cambrian",
-    "period_top_ma": 485.4,
-    "period_base_ma": 538.8,
-    "era": "Paleozoic"
-  },
-  "Thanetian": {
-    "rank": "Stage",
-    "abbrev": "Th",
-    "top_ma": 56.0,
-    "base_ma": 59.2,
+    "abbrev": "Yp",
+    "top_ma": 48.07,
+    "base_ma": 56.0,
     "period": "Paleogene",
-    "period_top_ma": 23.03,
+    "period_top_ma": 23.04,
     "period_base_ma": 66.0,
     "era": "Cenozoic"
   },
-  "Holocene": {
+  "Zanclean": {
     "rank": "Stage",
-    "abbrev": "Ho",
-    "top_ma": 0.0,
-    "base_ma": 0.0117,
-    "period": "Quaternary",
-    "period_top_ma": 0.0,
-    "period_base_ma": 2.588,
+    "abbrev": "Za",
+    "top_ma": 3.6,
+    "base_ma": 5.333,
+    "period": "Neogene",
+    "period_top_ma": 2.58,
+    "period_base_ma": 23.04,
     "era": "Cenozoic"
   }
 }

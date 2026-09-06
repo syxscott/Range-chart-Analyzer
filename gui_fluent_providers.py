@@ -1017,25 +1017,43 @@ class ProvidersPage(ScrollArea):
         if res is None:
             self.lbl_test.setText("✗")
             return
+        # Sprint B (REVIEW-2026-09-04): the SSRF-guard failure path in
+        # _test() emits a plain dict, not an ExtractResult-shaped object —
+        # normalise it so the attribute reads below cannot raise
+        # AttributeError inside a Qt slot.
+        if isinstance(res, dict):
+            from types import SimpleNamespace as _NS
+            res = _NS(ok=bool(res.get("ok")), latency_ms=0,
+                      models_sample=[], status=None,
+                      error_key=res.get("error") or "err.http")
         # Read the persisted streak from the provider record (re-fetched
         # by id so a concurrent rename/edit doesn't race the write below),
         # not from card._health_failures — _test() resets that to 0 at
         # the start of the in-progress test for the visual badge, which
         # would otherwise make every failure look like the first.
         store = self._load_store()
-        live = store.by_id(card.provider.id) if (store and card.provider is not None) else None
-        old_streak = int(getattr(live, "consecutive_failures", None)
-                         if live is not None
+        # Sprint B (REVIEW-2026-09-04): don't clobber the resolved live
+        # card here (the old code reused the `live` local for the store
+        # record, which made the health writes below ambiguous).
+        persist_rec = store.by_id(card.provider.id) if (store and card.provider is not None) else None
+        old_streak = int(getattr(persist_rec, "consecutive_failures", None)
+                         if persist_rec is not None
                          else getattr(card.provider, "consecutive_failures", 0) or 0)
+        # Sprint B (REVIEW-2026-09-04): write the health badge to the LIVE
+        # card (resolved above via _live_card_for), not the start-time
+        # `card` — set_testing was already fixed to use the live card but
+        # set_health still wrote the orphan, so after a card rebuild the
+        # visible badge kept its stale ⚠/✗ state.
+        badge_card = live if live is not None else card
         if res.ok:
             new_streak = 0
-            card.set_health(0)
+            badge_card.set_health(0)
             txt = "✓  " + str(res.latency_ms) + " ms"
             if res.models_sample:
                 txt += "  ·  " + ", ".join(res.models_sample[:3])
         else:
             new_streak = min(old_streak + 1, 3)
-            card.set_health(new_streak)
+            badge_card.set_health(new_streak)
             txt = "✗  " + self._t(getattr(res, 'error_key', None) or "err.http")
             if getattr(res, 'status', None):
                 txt += f"  (HTTP {res.status})"

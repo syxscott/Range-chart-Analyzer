@@ -270,20 +270,30 @@ async function retryWithBackoff(func, {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
             const result = await func();
-            // Check if result is acceptable (retryable=null means all results are acceptable)
-            if (retryable === null || retryable(result)) {
+            // Sprint B (REVIEW-2026-09-04): implement the documented
+            // predicate semantics (mirrors the parallel fix to Python
+            // rca_core/error_utils.retry_with_backoff). Previously BOTH
+            // branches returned the result immediately, so the `retryable`
+            // predicate was dead code:
+            //   - retryable === null            -> accept the result;
+            //   - retryable(result) === false   -> result is acceptable,
+            //     return it immediately, no further retries;
+            //   - retryable(result) === true    -> result warrants retry;
+            //     keep retrying until retries are exhausted, then fall
+            //     through and return the LAST result (no throw).
+            if (retryable === null || !retryable(result)) {
                 return result;
             }
-            // Result is not retryable - this is NOT an error, return it directly
-            return result;
+            lastResult = result;
+            if (attempt >= maxRetries) {
+                break;
+            }
         } catch (error) {
             lastError = error;
             if (attempt >= maxRetries) {
                 break;
             }
         }
-        // Store last result for fallback return
-        // (only reached if retryable returned false without throwing)
 
         const delay = getRetryDelay({
             status: lastError?.status || null,
@@ -308,9 +318,11 @@ async function retryWithBackoff(func, {
     if (lastError !== null) {
         throw lastError;
     }
-    // No exception occurred but retryable never passed.
-    // Return null to indicate failure without throwing.
-    return null;
+    // The retryable predicate kept refusing every result. Return the last
+    // result observed (null when func never produced one), matching the
+    // Python docstring: "Returns None if all retries failed without an
+    // exception".
+    return lastResult;
 }
 
 // ---------------------------------------------------------------------------

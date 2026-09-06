@@ -47,7 +47,15 @@ EXPORT_INVARIANTS = {
         "required": ["species", "section", "range_base", "range_top"],
         # Numeric coherence: FAD <= LAD. Strings that fail to parse
         # are ignored (exporter may legitimately leave them as labels).
-        "constraints": ["range_base_le_range_top", "has_biozone_or_age"],
+        #
+        # Sprint B (REVIEW-2026-09-04): removed "has_biozone_or_age" — the
+        # constraint referenced an ``age`` key that species rows NEVER carry
+        # (extractor.normalize_result only emits optional ``biozone``), so
+        # every biozone-less result — perfectly legal per the extraction
+        # schema — failed validate_export_invariants and to_xlsx raised,
+        # breaking XLSX export wholesale. A missing biozone is a quality
+        # concern (see rca_core/quality.py), not an export-blocking one.
+        "constraints": ["range_base_le_range_top"],
     },
     "biozones": {
         "required": ["name"],
@@ -64,9 +72,14 @@ def validate_export_invariants(data: dict[str, Any]) -> tuple[bool, list[dict[st
 
     P2-5: this is an ENTRY validator — calling it before to_csv/to_tsv/
     to_xlsx surfaces data-integrity violations before they reach the
-    user's downloaded file. The exporter still runs to completion so
-    the user can see what's wrong, but the GUI can badge the result
-    with a 'had invariants failures' flag.
+    user's downloaded file.
+
+    Sprint B (REVIEW-2026-09-04): clarified the contract — THIS function
+    never raises and never blocks an export; it only reports. The only
+    hard consumer is ``to_xlsx``, which raises ValueError when ``ok`` is
+    False (so a broken workbook is never written). ``to_csv`` / ``to_tsv``
+    still run to completion so the user can see what's wrong, and the GUI
+    can badge the result with a 'had invariants failures' flag.
     """
     issues: list[dict[str, Any]] = []
     for table_id, spec in EXPORT_INVARIANTS.items():
@@ -148,12 +161,9 @@ def validate_export_invariants(data: dict[str, Any]) -> tuple[bool, list[dict[st
                                 })
                     except (TypeError, ValueError):
                         pass
-                elif constraint == "has_biozone_or_age":
-                    if not (row.get("biozone") or row.get("age")):
-                        issues.append({
-                            "table": table_id, "row_index": ridx,
-                            "constraint": constraint,
-                        })
+                # Sprint B (REVIEW-2026-09-04): the "has_biozone_or_age"
+                # branch was removed — it tested an ``age`` key that species
+                # rows never carry (see EXPORT_INVARIANTS note above).
     return len(issues) == 0, issues
 
 
@@ -206,6 +216,29 @@ def _looks_phylogenetic_tree(data: dict[str, Any] | None) -> bool:
         return False
     first = nodes[0]
     return isinstance(first, dict) and "id" in first and "parent" in first
+
+
+def _looks_zonation_chart(data: dict[str, Any] | None) -> bool:
+    """Heuristic: a zonation / correlation chart result carries a
+    non-empty ``correlations`` list, or a non-empty ``zones`` list of
+    zone-rank rows (``rank`` / ``zonation`` markers) that no other mode
+    emits. UI-REVIEW-2026-09-05 (radiolarian biochronology charts)."""
+    if not data:
+        return False
+    corr = data.get("correlations")
+    if isinstance(corr, list) and len(corr) > 0:
+        return True
+    zones = data.get("zones")
+    if isinstance(zones, list) and len(zones) > 0:
+        first = zones[0]
+        if isinstance(first, dict) and ("rank" in first or "zonation" in first):
+            return True
+    # A payload whose zonation column descriptors are populated is a
+    # zonation chart even when every zone row was unreadable.
+    zns = data.get("zonations")
+    if isinstance(zns, list) and len(zns) > 0:
+        return True
+    return False
 
 
 def _range_chart_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -319,6 +352,8 @@ def _columnar_section_tables(data: dict[str, Any] | None) -> list[dict[str, Any]
 
 def get_configs_for_result(data: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Return the table config list appropriate for ``data``."""
+    if _looks_zonation_chart(data):
+        return _zonation_chart_tables(data)
     if _looks_abundance(data):
         return _abundance_diagram_tables(data)
     # I7 fix: also detect columnar shape even when sections is empty
@@ -411,13 +446,75 @@ def _phylogenetic_tree_tables(data: dict[str, Any] | None) -> list[dict[str, Any
     ]
 
 
+def _zonation_chart_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Zonation / correlation chart table configs
+    (UI-REVIEW-2026-09-05, radiolarian biochronology). Three tables:
+    zonation columns, zone rows (primary), correlation edges. Multi-run
+    results gain an agreement column on the zones table — mirrors
+    js/table.js."""
+    multi = bool(data) and int(data.get("runs", 1) or 1) > 1
+    zone_cols = ["col.name", "col.zonation", "col.rank", "col.ageSpan",
+                 "col.baseAge", "col.topAge", "col.stage", "col.definedBy", "col.note"]
+    zone_data = ["name", "zonation", "rank", "age_span", "base_age", "top_age",
+                 "stage", "defined_by", "note"]
+    zone_row_base = lambda r: [
+        r.get("name", ""),
+        r.get("zonation", ""),
+        r.get("rank", ""),
+        r.get("age_span", ""),
+        r.get("base_age", ""),
+        r.get("top_age", ""),
+        r.get("stage", ""),
+        r.get("defined_by", ""),
+        r.get("note", ""),
+    ]
+
+    return [
+        {
+            "id": "zonations",
+            "title_key": "sec.zonations",
+            "cols": ["col.name", "col.region", "col.framework", "col.reference"],
+            "data_keys": ["name", "region", "framework", "reference"],
+            "row": lambda z: [
+                z.get("name", ""),
+                z.get("region", ""),
+                z.get("framework", ""),
+                z.get("reference", ""),
+            ],
+        },
+        {
+            "id": "zones",
+            "title_key": "sec.zonesTable",
+            "cols": zone_cols + (["col.agreement"] if multi else []),
+            "data_keys": zone_data + (["agreement"] if multi else []),
+            "row": (lambda r: zone_row_base(r) + [r.get("agreement", "")]) if multi else zone_row_base,
+        },
+        {
+            "id": "correlations",
+            "title_key": "sec.correlations",
+            "cols": ["col.fromZone", "col.fromZonation", "col.toZone",
+                     "col.toZonation", "col.basis", "col.note"],
+            "data_keys": ["from_zone", "from_zonation", "to_zone",
+                          "to_zonation", "basis", "note"],
+            "row": lambda c: [
+                c.get("from_zone", ""),
+                c.get("from_zonation", ""),
+                c.get("to_zone", ""),
+                c.get("to_zonation", ""),
+                c.get("basis", ""),
+                c.get("note", ""),
+            ],
+        },
+    ]
+
+
 def get_config(table_id: str) -> dict[str, Any] | None:
     # Search through all presets — used by the fallback path in
     # build_table_export / apply_table_edits when the table isn't in the
     # data-shape-matched configs (e.g. editing a cross_beds row while the
     # result has no sections to detect columnar shape).
     for fn in (_range_chart_tables, _columnar_section_tables, _abundance_diagram_tables,
-               _phylogenetic_tree_tables):
+               _phylogenetic_tree_tables, _zonation_chart_tables):
         for c in fn(None):
             if c["id"] == table_id:
                 return c

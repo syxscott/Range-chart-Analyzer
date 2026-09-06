@@ -119,20 +119,41 @@ def _pick_free_port(preferred=(8000, 8765)) -> int:
     helper returns. On Windows we use ``msvcrt.locking``; on POSIX we
     use ``fcntl.flock``; both work through a single sentinel file in
     the user's home directory.
+
+    Sprint B (REVIEW-2026-09-04) #4: ``main()`` no longer goes through
+    this helper — it keeps the lock held across the REAL server bind as
+    well (probe + bind atomically under one lock). This probe-only
+    helper is retained for tests and external callers.
     """
     return _with_port_lock(lambda: _probe_and_bind(preferred))
 
 
 def _probe_and_bind(preferred):
+    """Probe ports with a REAL bind (no SO_REUSEADDR lies).
+
+    Sprint B (REVIEW-2026-09-04) #4: the probe socket previously set
+    SO_REUSEADDR. On Windows that option lets a bind SUCCEED even when
+    another socket is already listening on the port (double-bind), so a
+    busy port was reported as free and the real server bind later
+    double-bound or failed confusingly. The probe now uses a plain bind;
+    on Windows we additionally set SO_EXCLUSIVEADDRUSE (guarded with
+    hasattr for portability) so a bind against an in-use listening port
+    fails outright.
+    """
+    def _harden(s):
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+
     for p in preferred:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            _harden(s)
             try:
                 s.bind(("127.0.0.1", p))
                 return p
             except OSError:
                 continue
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        _harden(s)
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
@@ -219,8 +240,14 @@ def _wait_until_ready(host: str, port: int, timeout: float = 5.0) -> bool:
 
 
 def _start_server(host: str, port: int):
-    """Launch server.py's ThreadingHTTPServer on a daemon thread."""
-    from http.server import ThreadingHTTPServer
+    """Launch server.py's bounded HTTP server on a daemon thread.
+
+    Sprint B (REVIEW-2026-09-04) #8: previously this path built a bare
+    ``ThreadingHTTPServer``, bypassing server._BoundedThreadingHTTPServer's
+    concurrent-thread cap and bounded submit queue. It now uses the same
+    bounded server class (with its default max_workers=32 /
+    request_queue_size=64, mirroring server.main()).
+    """
     import server  # the existing stdlib backend
 
     # P2-1 / REVIEW-2026-07-31: this app is local-only and same-origin, but
@@ -232,13 +259,10 @@ def _start_server(host: str, port: int):
     # populated and the server-side check stays fail-closed.
     server.populate_expected_hosts(host, port)
 
-    try:
-        httpd = ThreadingHTTPServer((host, port), server.Handler)
-    except OSError:
-        # Surface the bind failure so main() can return a non-zero exit code
-        # instead of crashing with an unhandled traceback.
-        raise
-    httpd.daemon_threads = True
+    # Raises OSError when the port is busy — main() turns that into a
+    # friendly message + non-zero exit code.
+    httpd = server._BoundedThreadingHTTPServer((host, port), server.Handler)
+    # daemon_threads is a class attribute on _BoundedThreadingHTTPServer.
     t = threading.Thread(target=httpd.serve_forever, name="rca-http", daemon=True)
     t.start()
     return t, httpd
@@ -278,10 +302,9 @@ def _clear_lock() -> None:
 
 def main():
     host = "127.0.0.1"
-    port = _pick_free_port()
-    _log(f"starting local backend on http://{host}:{port}/")
 
-    # T11: refuse to start if another live instance holds the lock.
+    # T11: refuse to start if another live instance holds the lock —
+    # checked BEFORE we probe or bind anything.
     existing = _read_lock()
     if existing:
         host_e, port_e, pid_e = existing
@@ -289,7 +312,28 @@ def main():
             _log(f"another GUI instance is running on http://{host_e}:{port_e}/ (pid {pid_e}). Aborting.")
             return 0
 
-    t, httpd = _start_server(host, port)
+    # Sprint B (REVIEW-2026-09-04) #4: probe the port AND bind the real
+    # server socket inside the same cross-process lock. Previously the
+    # lock was released as soon as the probe returned, leaving a TOCTOU
+    # window until _start_server's actual bind. Residual risk (accepted):
+    # processes that ignore the advisory lock file can still race us —
+    # the lock is cooperative only.
+    def _claim_and_start():
+        port = _probe_and_bind((8000, 8765))
+        _t, _httpd = _start_server(host, port)
+        return port, _t, _httpd
+
+    try:
+        port, t, httpd = _with_port_lock(_claim_and_start)
+    except OSError as exc:
+        # Sprint B (REVIEW-2026-09-04) #9: surface the bind failure as a
+        # friendly message + non-zero exit code instead of an unhandled
+        # traceback (the old comment promised this but main() had no try).
+        _log(f"failed to bind the local backend on {host}: {exc}")
+        _log("close the program using that port (or reboot) and try again.")
+        return 1
+
+    _log(f"starting local backend on http://{host}:{port}/")
     _write_lock(host, port)
     # HIGH-5: register atexit cleanup immediately after starting the server
     # (BEFORE the readiness probe) so a probe-failure path also releases
