@@ -1181,6 +1181,25 @@ table.data-table tbody tr:hover th[scope="row"] { background: var(--primary-soft
     .preview-img { max-width: 100%; }
 }
 
+/* UI-REVIEW-2026-09-08: auto-detected chart-type chip in the results
+   toolbar (evidence-chain UI) - compact, secondary, tooltip carries the
+   hint text. */
+.auto-mode-chip {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-lighter);
+    color: var(--text-muted);
+    cursor: help;
+}
+:root[data-theme="dark"] .auto-mode-chip {
+    border-color: rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.75);
+}
+
 /* Low-agreement multi-run rows: flag for manual review */
 table.data-table tbody tr.row-low-agreement td {
     background: var(--warning-soft);

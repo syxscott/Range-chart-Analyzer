@@ -1111,9 +1111,10 @@ class Handler(BaseHTTPRequestHandler):
                     cache_hit["quality"] = _safe_score_range_chart(cache_hit)
                 if mode_source:
                     cache_hit["_auto_mode"] = {"mode": mode, "source": mode_source}
-                cache_hit["report"] = build_extraction_report(
-                    data=cache_hit, mode=mode, mode_used=mode,
-                    mode_source=mode_source)
+                if isinstance(cache_hit, dict):
+                    cache_hit["report"] = build_extraction_report(
+                        data=cache_hit, mode=mode, mode_used=mode,
+                        mode_source=mode_source)
                 self._send_json(200, {"ok": True, "data": cache_hit,
                                       "cached": True})
                 return

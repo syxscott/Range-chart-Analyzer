@@ -474,6 +474,33 @@ function rcaRenderResults(data, rawText) {
     parts.push('<span class="qb-grade">' + rcaEsc(q.grade || '-') + '</span>');
     parts.push('</span>');
   }
+  // UI-REVIEW-2026-09-08 (evidence chain UI): show what the auto resolver
+  // decided - which chart type and whether vision classification was used.
+  // The label reuses the settings.chartType.* keys; unknown modes fall
+  // back to the raw mode string.
+  const rep = (data && typeof data.report === 'object') ? data.report : null;
+  const repMode = rep && rep.mode ? rep.mode : null;
+  const autoInfo = (data && data._auto_mode && typeof data._auto_mode === 'object')
+    ? data._auto_mode : (repMode ? { mode: repMode.used, source: repMode.source } : null);
+  if (autoInfo && autoInfo.mode && autoInfo.mode !== 'range_chart') {
+    const CHART_MODE_LABEL_KEYS = {
+      columnar_section: 'upload.chartMode.columnarSection',
+      abundance_diagram: 'upload.chartMode.abundanceDiagram',
+      phylogenetic_tree: 'upload.chartMode.phylogeneticTree',
+      zonation_chart: 'upload.chartMode.zonationChart',
+      chemical_stratigraphy: 'upload.chartMode.chemicalStratigraphy',
+      paleomap: 'upload.chartMode.paleomap',
+      scatter_plot: 'upload.chartMode.scatterPlot',
+    };
+    const modeKey = CHART_MODE_LABEL_KEYS[autoInfo.mode];
+    const modeLabel = modeKey && t(modeKey).indexOf('[?') !== 0 ? t(modeKey) : String(autoInfo.mode);
+    const via = autoInfo.source === 'vision'
+      ? ' (' + rcaEsc(t('results.viaVision')) + ')' : '';
+    parts.push('<span class="auto-mode-chip" '
+      + 'title="' + rcaEsc(t('results.autoChipHint')) + '">'
+      + rcaEsc(t('results.autoDetected')) + rcaEsc(modeLabel) + rcaEsc(via)
+      + '</span>');
+  }
   parts.push('</div>');
   parts.push('<div class="rt-actions">');
   parts.push('<button type="button" class="btn btn-secondary btn-small" id="btn-export-all">' + rcaEsc(t('results.exportAll')) + '</button>');
@@ -499,7 +526,14 @@ function rcaRenderResults(data, rawText) {
     parts.push('</div>');
 
     if (rows.length === 0) {
-      parts.push('<div class="cell-empty" style="padding:8px 2px;">' + rcaEsc(t('results.noRows')) + '</div>');
+      // UI-REVIEW-2026-09-08: surface WHY a table is empty when the
+      // evidence report says so (model note), as a hover tooltip.
+      let emptyTitle = '';
+      if (rep && Array.isArray(rep.empty_tables)) {
+        const hit = rep.empty_tables.find((e) => e && e.key === cfg.id && e.reason);
+        if (hit) emptyTitle = ' title="' + rcaEscAttr(hit.reason) + '"';
+      }
+      parts.push('<div class="cell-empty"' + emptyTitle + ' style="padding:8px 2px;">' + rcaEsc(t('results.noRows')) + '</div>');
       parts.push('</div>');
       continue;
     }
