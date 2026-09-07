@@ -229,7 +229,7 @@ python server.py --port 8000
 
 直接打开 `index.html`（或任意静态服务器托管 `index.html + css/ + js/`）。
 浏览器直连模型端点可能受 CORS 限制；需要时可自建代理
-（见 [`proxy/README.md`](proxy/README.md)，含 Cloudflare / Deno 方案）。
+（见 [`proxy/README.md`](proxy/README.md)：Cloudflare Workers 与 Deno Deploy 部署方案 + Vercel Edge 适配指引）。
 
 ### 4. 原生窗口（可选）
 
