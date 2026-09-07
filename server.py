@@ -150,6 +150,7 @@ from rca_core.extractor import (  # noqa: E402
     clamp_max_tokens,
     resolve_auto_mode,
 )
+from rca_core.report import build_extraction_report  # noqa: E402
 from rca_core.aggregate import (  # noqa: E402
     COLUMNAR_SECTION_SCHEMA,
     RANGE_CHART_SCHEMA,
@@ -1110,6 +1111,9 @@ class Handler(BaseHTTPRequestHandler):
                     cache_hit["quality"] = _safe_score_range_chart(cache_hit)
                 if mode_source:
                     cache_hit["_auto_mode"] = {"mode": mode, "source": mode_source}
+                cache_hit["report"] = build_extraction_report(
+                    data=cache_hit, mode=mode, mode_used=mode,
+                    mode_source=mode_source)
                 self._send_json(200, {"ok": True, "data": cache_hit,
                                       "cached": True})
                 return
@@ -1120,6 +1124,15 @@ class Handler(BaseHTTPRequestHandler):
                 if mode_source:
                     result.data["_auto_mode"] = {"mode": mode, "source": mode_source}
                 result.data["quality"] = _safe_score_range_chart(result.data)
+                # UI-REVIEW-2026-09-07 (evidence chain): attach the audit
+                # report (mode decision, truncation, row counts, empty-table
+                # reasons, ICS version) - borrowed from thu-digitizer.
+                result.data["report"] = build_extraction_report(
+                    data=result.data, mode=mode, mode_used=mode,
+                    mode_source=mode_source, truncated=result.truncated,
+                    warning=result.warning,
+                    image_sha256=result.image_sha256,
+                    request_meta=result.request_meta, runs=1)
                 # Write the scored result back to the cache.
                 if not force_rerun:
                     cache.put(ckey, result.data)
@@ -1365,6 +1378,9 @@ class Handler(BaseHTTPRequestHandler):
         merged["quality"] = quality
         if mode_source:
             merged["_auto_mode"] = {"mode": mode, "source": mode_source}
+        merged["report"] = build_extraction_report(
+            data=merged, mode=mode, mode_used=mode,
+            mode_source=mode_source, runs=runs)
         # REVIEW-2026-07-31: build the aggregated usage BEFORE the audit
         # write. The previous code referenced ``merged_usage`` inside the
         # try below but only assigned it AFTER the except block, so every

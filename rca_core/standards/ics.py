@@ -21,6 +21,11 @@ import warnings
 from pathlib import Path
 from typing import Any, Optional
 
+# UI-REVIEW-2026-09-07 (evidence-chain report): stage-alignment outputs
+# should say WHICH timescale anchored them. Kept in one place so a future
+# version bump (e.g. ics_2026.json) updates every report stamp at once.
+ICS_VERSION = "ICS v2024/12"
+
 
 # M7(b) (REVIEW-2026-07-25): degrade gracefully when the bundled ICS 2024
 # table is missing or corrupt. Previously a failing json.loads here crashed

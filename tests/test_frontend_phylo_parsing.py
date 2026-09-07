@@ -56,10 +56,13 @@ class TestPhyloParsingI18n:
         # Japanese section is "RCA_I18N.ja = {...};"
         ja_start = content.find("RCA_I18N.ja = {")
         ja_section = content[ja_start:]
-        assert "'status.phyloParsing'" in ja_section[:5000], (
+        # UI-REVIEW-2026-09-07: search the WHOLE section - the old
+        # [:5000] window broke once new keys were inserted ahead of the
+        # phyloParsing entry (position-dependent assertion).
+        assert "'status.phyloParsing'" in ja_section, (
             "Japanese (ja) section missing 'status.phyloParsing'"
         )
-        assert "系統樹" in ja_section[:5000], (
+        assert "系統樹" in ja_section, (
             "Japanese translation should contain '系統樹'"
         )
 

@@ -23,6 +23,23 @@
 - **历史记录**：所有提取自动保存到 SQLite，支持加载、编辑备注、重新导出、删除。
 - **Token 用量统计**：每次调用的输入/输出 Tokens、缓存命中率、延迟、成功率，按天/提供商/模型聚合可视化。
 - **多种图表模式**：除种属延限图外，还支持柱状对比图（columnar section）、丰度/孢粉图（abundance diagram）、系统发育树（phylogenetic tree）与**生物带对比图**（zonation chart，放射虫生物地层学经典图式：多地区生物带划分方案的带/亚带层级、定义事件与跨方案对比）。
+
+- **视觉自动识别图表类型**：图注/文件名启发式先行；无法判断时自动用视觉模型分类图表类型（8 类）后再提取，结果附带 `mode_used`（识别为哪种图）与证据链报告。
+- **学名验证**（可选）：提取的拉丁学名可经 GBIF species-match 模糊校验，拼错的属种名给出规范名候选提示（不改写数据，符合 ICZN 惯例）。
+- **证据链报告**：每次提取附带结构化 `report`——模式决策（请求/实际/来源）、截断状态、各表行数、空表原因、以及**年代标尺版本戳**（ICS v2024/12）。
+
+**模式成熟度**（能力注册表，借鉴 thu-digitizer 的 extractor_registry）：
+
+| 模式 | 成熟度 | 说明 |
+|---|---|---|
+| range_chart | 稳定 | 核心模式；真实文献 E2E 覆盖 |
+| columnar_section | 稳定 | 岩性柱+组/段+图例 |
+| abundance_diagram | 候选 | 深海曲线/剖面表现好；饼图/热图按设计降级为空产出 |
+| phylogenetic_tree | 候选 | Newick 结构化输出 |
+| zonation_chart | 候选 | 生物带对比图；E2E 已恢复 32 带三框架 |
+| chemical_stratigraphy | 辅助 | 地球化学曲线/年龄分布，产出部分行 |
+| paleomap | 辅助 | 古地理图；现今地质图会被模型诚实拒绝 |
+| scatter_plot | 辅助 | 散点/双坐标图 |
 - **三语 UI**（中/英/日），三种启动方式（GUI / Web+后端 / 纯前端 Web）。
 
 ---
@@ -226,6 +243,16 @@ node tests_frontend.js                       # 前端 JS parity + 行为测试�
 
 
 ---
+
+## 借鉴与致谢 / Borrowed ideas & credits
+
+本项目在调研同类开源项目时借鉴了以下设计（2026-09-07）：
+
+- **[thu-digitizer](https://github.com/Rimagination/thu-digitizer)**（MIT）——"证据优先"提取范式：证据链报告（输入哈希/校准/拒绝原因）、行级置信状态、模式能力注册表（稳定/候选/辅助）与重绘校验的思想均来源于此。
+- **[FigDataX](https://github.com/Shaowen-Ye/FigDataX)**——"确定性引擎测几何 + LLM 读语义"的分工与校准 RMSE 门槛，是丰度/化学模式几何引擎演进的方向。
+- **[gnames/gnfinder](https://github.com/gnames/gnfinder)**——科学名查找与验证；本项目学名验证的 GBIF 后端与其思路同源（gnfinder 主机不可达时 GBIF 兜底）。
+- **[equinor/scampi-benchmark](https://github.com/equinor/scampi-benchmark)**、**plannapus/RadiolarianClassifier**——微体化石图像自监督分类的开放权重与方法，是图版自动鉴定的远期路线。
+- **[automeris-io/WebPlotDigitizer](https://github.com/automeris-io/WebPlotDigitizer)**——图表数字化的黄金标准与事实交换格式。
 
 ## 许可 / License
 
