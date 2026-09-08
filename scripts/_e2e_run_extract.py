@@ -28,7 +28,9 @@ with open(ENV_PATH, encoding="utf-8") as f:
 from rca_core.extractor import extract, load_image_b64
 from rca_core.llm import ApiFormat, LlmProvider
 
-FIGDIR = os.path.join("outputs", "e2e_radiolaria")
+# UI-REVIEW-2026-09-08: figure dir is parameterizable (arg 1 after the
+# mode filter) so the harness can serve multiple literature corpora.
+FIGDIR = sys.argv[1] if len(sys.argv) > 1 and os.path.isdir(sys.argv[1])     else os.path.join("outputs", "e2e_radiolaria")
 RES = os.path.join(FIGDIR, "results")
 os.makedirs(RES, exist_ok=True)
 
@@ -85,7 +87,10 @@ def run_one(item):
 
 if __name__ == "__main__":
     from concurrent.futures import ThreadPoolExecutor
-    only = sys.argv[1] if len(sys.argv) > 1 else None
+    # argv layout: [script] [figdir] [only-substring]
+    # figdir is consumed above (FIGDIR); "only" is the LAST argument so it
+    # can never collide with the directory parameter.
+    only = sys.argv[-1] if len(sys.argv) > 2 else None
     with open(os.path.join(FIGDIR, "manifest.json"), encoding="utf-8") as f:
         manifest = json.load(f)
     items = [it for it in manifest if not only or only in it["image"]]

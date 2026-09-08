@@ -29,6 +29,7 @@ _huge.bin
 # E2E literature-figure test data (UI-REVIEW-2026-09-07): copyrighted
 # paper figures + per-run API test results stay local, never on GitHub.
 outputs/e2e_radiolaria/
+outputs/e2e_oa/
 # Local API credentials for the e2e harness (defense in depth — the file
 # itself lives outside the repo in %TEMP%).
 rca_e2e_api.env
