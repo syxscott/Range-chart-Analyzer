@@ -213,6 +213,9 @@ function makeEl(id, tagName) {
     attributes: {},
     children: [],
     parentNode: null,
+    // UI-REVIEW-2026-09-08: firstChild is required by the evidence-chain
+    // UI's explicit child-clearing loop (while (host.firstChild) ...).
+    get firstChild() { return this.children[0] || null; },
     value: '',
     textContent: '',
     innerHTML: '',
@@ -2496,6 +2499,47 @@ function test_truncation_repair() {
     && syn.abundances[1].taxon === 'B');
 }
 test_truncation_repair();
+
+// ---- UI-REVIEW-2026-09-08: GBIF name-verification UI rendering ----
+function test_names_verify_ui() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  ctx.t('zh');
+  check('nv-render-exported', typeof ctx.rcaRenderNameIssues === 'function');
+
+  // DOM-level render into a real host element
+  const host = ctx.document.getElementById('names-verify-slot');
+  ctx.rcaRenderNameIssues([
+    { msg_key: 'names.fuzzy', name: 'Psendotirolites asiaticus',
+      suggestion: 'Pseudotirolites asiaticus', confidence: 85 },
+    { msg_key: 'names.unmatched', name: 'Endemicus wonderus' },
+  ]);
+  // The stub's textContent does not aggregate children, so assert through
+  // the child labels (children[1] = the text span in each row).
+  const box = host.children[0];
+  const rows = box.children.filter((c) => c.className === 'names-issue');
+  check('nv-two-issues-rendered', rows.length === 2);
+  const fuzzyLabel = rows[0].children[1].textContent;
+  const unmatchedLabel = rows[1].children[1].textContent;
+  check('nv-fuzzy-text', fuzzyLabel.indexOf('Pseudotirolites asiaticus') !== -1
+    && fuzzyLabel.indexOf('names.fuzzy') === -1, fuzzyLabel);
+  check('nv-unmatched-text', unmatchedLabel.indexOf('Endemicus wonderus') !== -1);
+
+  // re-render with fewer issues replaces the block (stub innerHTML is a
+  // plain property, so assert on the freshly built box instead)
+  ctx.rcaRenderNameIssues([
+    { msg_key: 'names.fuzzy', name: 'A', suggestion: 'B', confidence: 80 },
+  ]);
+  const box2 = host.children[0];
+  check('nv-rerender-replaces', box2.children.length === 1);
+
+  // app.js wiring present (async GBIF verify after render)
+  const appSrc = require('fs').readFileSync(
+    path.join(__dirname, 'js', 'app.js'), 'utf8');
+  check('nv-app-gbif-wired', appSrc.indexOf('api.gbif.org/v1/species/match') !== -1);
+  check('nv-app-render-hook', appSrc.indexOf('rcaRenderNameIssues') !== -1);
+}
+test_names_verify_ui();
 
 // Wait for async races to settle before printing summary.
 setTimeout(() => {

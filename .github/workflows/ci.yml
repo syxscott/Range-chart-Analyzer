@@ -33,7 +33,7 @@ jobs:
       - name: Set up Node (frontend parity tests)
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Run full pytest suite
         run: python -m pytest tests/ tests_core.py -q --tb=short

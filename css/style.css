@@ -1181,6 +1181,22 @@ table.data-table tbody tr:hover th[scope="row"] { background: var(--primary-soft
     .preview-img { max-width: 100%; }
 }
 
+/* UI-REVIEW-2026-09-08: GBIF name-verification info block */
+.names-verify {
+    margin: 8px 0 4px;
+    padding: 8px 12px;
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+}
+.names-verify .names-issue {
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    padding: 2px 0;
+}
+
 /* UI-REVIEW-2026-09-08: auto-detected chart-type chip in the results
    toolbar (evidence-chain UI) - compact, secondary, tooltip carries the
    hint text. */

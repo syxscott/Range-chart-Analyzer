@@ -8,6 +8,10 @@ boundaries, 4 internal overlaps/gaps); tests/test_ics_invariants.py now
 guards the table's internal consistency. Known newer chart revisions
 (v2026-06, not yet adopted): Olenekian base 249.9 -> 250.8, Anisian base
 246.7 -> 247.0, Wuchiapingian base 259.51 -> 259.857.
+Re-verified 2026-09-08 against Macrostrat timescale #1: the aggregator
+still serves 249.9 / 246.7 / 259.51 (i.e. the values bundled here), so
+the adoption remains correctly deferred pending an authoritative chart
+update (tests/test_ics_series_labels.py pins these boundaries).
 
 Provides functions to map stage names to/from Ma ages, compare stage
 order, and parse age range strings.

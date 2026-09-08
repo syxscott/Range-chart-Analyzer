@@ -506,6 +506,9 @@ function rcaRenderResults(data, rawText) {
   parts.push('<button type="button" class="btn btn-secondary btn-small" id="btn-export-all">' + rcaEsc(t('results.exportAll')) + '</button>');
   parts.push('</div>');
   parts.push('</div>');
+  // UI-REVIEW-2026-09-08: GBIF name-verification hints render here
+  // (async, populated by app.js after extraction).
+  parts.push('<div id="names-verify-slot"></div>');
 
   for (const cfg of configs) {
     // Sprint B (REVIEW-2026-09-04): read rows through rcaRowsForTable so
@@ -667,3 +670,38 @@ function rcaRenderViz(data) {
   host.textContent = "";
 }
 if (typeof globalThis !== "undefined") globalThis.rcaRenderViz = rcaRenderViz;
+
+// UI-REVIEW-2026-09-08 (gnfinder/GBIF borrow, UI wiring): render the
+// scientific-name check results as an info block under the results
+// toolbar. Called by app.js after GBIF verification completes; absent
+// payload renders nothing. Never throws.
+function rcaRenderNameIssues(issues) {
+  const host = document.getElementById('names-verify-slot');
+  if (!host) return;
+  // Clear previous hints. innerHTML='' is unreliable across DOM stubs,
+  // so remove children explicitly (works in browsers and the test DOM).
+  while (host.firstChild) host.removeChild(host.firstChild);
+  if (!Array.isArray(issues) || issues.length === 0) return;
+  const box = document.createElement('div');
+  box.className = 'names-verify';
+  for (const iss of issues) {
+    const row = document.createElement('div');
+    row.className = 'names-issue';
+    const icon = document.createElement('span');
+    icon.textContent = iss.msg_key === 'names.fuzzy' ? '\u{1F50D}' : '\u2139\uFE0F';
+    const label = document.createElement('span');
+    if (iss.msg_key === 'names.fuzzy') {
+      label.textContent = t('names.fuzzy')
+        .split('{name}').join(iss.name || '')
+        .split('{suggestion}').join(iss.suggestion || '');
+    } else {
+      label.textContent = t('names.unmatched')
+        .split('{name}').join(iss.name || '');
+    }
+    row.appendChild(icon);
+    row.appendChild(label);
+    box.appendChild(row);
+  }
+  host.appendChild(box);
+}
+if (typeof globalThis !== 'undefined') globalThis.rcaRenderNameIssues = rcaRenderNameIssues;

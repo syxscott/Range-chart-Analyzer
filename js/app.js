@@ -586,6 +586,73 @@
     updateActionButtons();
   }
 
+  // UI-REVIEW-2026-09-08 (borrowed: gnfinder/GBIF): background scientific-
+  // name verification of extracted species rows against the GBIF
+  // species-match API (CORS-enabled, key-free). Caps at 20 unique names,
+  // marks FUZZY matches >= 50 confidence and NONE matches as review
+  // hints, and renders them via rcaRenderNameIssues. Fail-silent: any
+  // network trouble just skips the block.
+  const GBIF_MATCH_URL = 'https://api.gbif.org/v1/species/match?verbose=true&name=';
+  const NAME_VERIFY_MAX = 20;
+
+  function rcaCleanNameForLookup(species) {
+    let s = String(species || '').trim();
+    if (!s) return '';
+    s = s.replace(/\([^)]*\)/g, ' ');                       // author/year
+    s = s.replace(/(cf|aff|cf\.|aff\.)\s+/gi, '');            // qualifiers
+    s = s.replace(/(ex\s+gr\.?|gr\.?|s\.\s?l\.?|sensu|near)/gi, ' ');
+    s = s.replace(/\?/g, '');
+    s = s.replace(/(^|\s)[A-Z]\.\s*(?=[a-z])/g, '$1');         // abbrev. genus
+    s = s.replace(/\s+/g, ' ').trim().replace(/[.,-]+$/, '');
+    return s.length > 0 && s.length <= 100 ? s : '';
+  }
+
+  function rcaNameIssuesFromGbif(payload) {
+    const mt = String((payload && payload.matchType) || 'NONE');
+    const conf = parseFloat(payload && payload.confidence) || 0;
+    const canonical = String((payload && payload.canonicalName) || '');
+    if (mt === 'FUZZY' && conf >= 50 && canonical) {
+      return [{ msg_key: 'names.fuzzy', name: payload.query || canonical,
+                suggestion: canonical, confidence: conf }];
+    }
+    if (mt === 'NONE') {
+      return [{ msg_key: 'names.unmatched',
+                name: (payload && payload.query) || canonical || '' }];
+    }
+    return [];
+  }
+
+  async function rcaVerifySpeciesNamesAsync(result) {
+    if (!result || !Array.isArray(result.species_ranges)) return;
+    const host = document.getElementById('names-verify-slot');
+    if (!host) return;
+    host.innerHTML = '';
+    const seen = new Map();  // cleaned -> original
+    for (const row of result.species_ranges.slice(0, 40)) {
+      const cleaned = rcaCleanNameForLookup(row && row.species);
+      if (cleaned && !seen.has(cleaned) && seen.size < NAME_VERIFY_MAX) {
+        seen.set(cleaned, row.species);
+      }
+    }
+    if (seen.size === 0) return;
+    const issues = [];
+    for (const [cleaned, original] of seen) {
+      try {
+        const resp = await fetch(GBIF_MATCH_URL + encodeURIComponent(cleaned));
+        if (!resp.ok) continue;
+        const payload = await resp.json();
+        for (const iss of rcaNameIssuesFromGbif(
+            Object.assign({ query: original }, payload))) {
+          issues.push(iss);
+        }
+      } catch (_e) { /* fail-silent: skip this name */ }
+    }
+    if (typeof rcaRenderNameIssues === 'function' && issues.length > 0) {
+      state._nameIssues = issues;
+      rcaRenderNameIssues(issues);
+    }
+  }
+
   async function runExtraction() {
     if (state.busy) return;
     const apiKey = $('api-key').value.trim();
@@ -855,6 +922,10 @@
     }
 
     renderCurrentResult();
+    // UI-REVIEW-2026-09-08 (borrowed: gnfinder/GBIF): verify extracted
+    // species names in the background; fuzzy suggestions surface as an
+    // info block. Fire-and-forget, capped, fail-silent.
+    rcaVerifySpeciesNamesAsync(state.result);
     // H1 fix: refresh action-button visibility now that state.result is
     // stored (setBusy(false) ran before the assignment).
     updateActionButtons();
@@ -923,6 +994,11 @@
     }
     $('results-empty').classList.add('hidden');
     bindResultActions();
+    // UI-REVIEW-2026-09-08: restore name-verification hints (re-rendered
+    // on language switch so the wording follows the active language).
+    if (state._nameIssues && typeof rcaRenderNameIssues === 'function') {
+      rcaRenderNameIssues(state._nameIssues);
+    }
     // Animate the confidence ring's numeric label from 0 → data-target over
     // 600ms via requestAnimationFrame. Skip the tween under reduced-motion
     // (snap straight to the final value).

@@ -45,3 +45,17 @@ def test_series_still_wins_over_period_fallback():
     # "Upper Permian" must not degrade to the Permian period base (298.9).
     older, _ = ics_age_range_bounds("Upper Permian")
     assert older < 298.9
+
+
+def test_v2026_06_pending_boundaries_still_hold():
+    """The three v2026-06 boundary shifts noted in ics.py are NOT yet
+    adopted (re-verified against Macrostrat 2026-09-08: the aggregator
+    still serves these values). If a future chart update changes them,
+    this test fails and forces a reviewed data migration."""
+    import json
+    from pathlib import Path
+    p = Path(__file__).resolve().parent.parent / "rca_core" / "resources" / "ics_2024.json"
+    table = json.loads(p.read_text(encoding="utf-8"))
+    assert table["Olenekian"]["base_ma"] == 249.9
+    assert table["Anisian"]["base_ma"] == 246.7
+    assert table["Wuchiapingian"]["base_ma"] == 259.51
