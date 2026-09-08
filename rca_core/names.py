@@ -64,6 +64,10 @@ def clean_name_for_lookup(species: str) -> str:
     # drop the abbreviation instead of querying a broken binomen.
     s = re.sub(r"(^|\s)[A-Z]\.\s*(?=[a-z])", r"\1", s)
     s = re.sub(r"\s+", " ", s).strip(" .,-")
+    # A "name" longer than this is prose, not a taxon - querying it wastes
+    # a request and can never match.
+    if len(s) > 100:
+        return ""
     return s
 
 

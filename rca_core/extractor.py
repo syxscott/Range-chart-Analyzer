@@ -2932,6 +2932,33 @@ def classify_chart_image(
         + lang_hint
         + "Classify the chart type as the strict JSON contract."
     )
+    # UI-REVIEW-2026-09-08 (E2E perf): classification of the SAME image is
+    # deterministic in intent, so cache it like an extraction. Fail-open:
+    # any cache trouble just falls through to the network call.
+    ckey = None
+    try:
+        from .cache import get_cache
+        from .prompt import prompt_version_for_mode as _pvm
+        _cache = get_cache()
+        ckey = _cache.make_key(
+            endpoint=p.endpoint if p else "",
+            model=p.model if p else "",
+            api_format=p.api_format.value if p else "",
+            prompt_version=_pvm("chart_classify"),
+            mode="chart_classify",
+            image_b64=image_b64,
+        )
+        cached = _cache.get(ckey)
+        if isinstance(cached, dict) and "chart_type" in cached:
+            return ExtractResult(
+                ok=True, data=cached, raw="(cached classification)",
+                image_sha256=image_sha256,
+                request_meta={"cached": True,
+                              "mode": "chart_classify"},
+            )
+    except Exception:
+        ckey = None
+
     t0 = time.perf_counter()
     try:
         raw_text, truncated, status, err_body, usage = call_llm_api(
@@ -2963,9 +2990,16 @@ def classify_chart_image(
             truncated=truncated, latency_ms=latency_ms, usage=usage or {},
             image_sha256=image_sha256,
         )
+    data = normalize_chart_classification(parsed)
+    if ckey is not None:
+        try:
+            from .cache import get_cache
+            get_cache().put(ckey, data)
+        except Exception:
+            pass
     return ExtractResult(
         ok=True,
-        data=normalize_chart_classification(parsed),
+        data=data,
         raw=raw_text, truncated=truncated, usage=usage or {},
         latency_ms=latency_ms, image_sha256=image_sha256,
         request_meta=_build_request_meta(
@@ -3022,6 +3056,33 @@ def resolve_auto_mode(
                 and conf >= _CLASSIFY_MIN_CONFIDENCE):
             return chart_type, cls
     return "range_chart", cls
+
+
+def _is_silent_miss(data: dict[str, Any]) -> bool:
+    """True when a successful extraction returned an all-empty payload
+    with ~zero confidence AND no explanatory note - i.e. a sampling flake
+    worth one retry (E2E fig: oa_004 recovered 36 rows on re-run).
+
+    Honest degradations attach a note explaining WHY the figure is not
+    readable ("not a paleogeographic map"); those are final answers, not
+    flakes, and must not be retried."""
+    if not isinstance(data, dict):
+        return False
+    try:
+        conf = float(data.get("confidence") or 0)
+    except (TypeError, ValueError):
+        conf = 0.0
+    if conf > 0.1:
+        return False
+    extras = data.get("_extras")
+    note = data.get("note")
+    if isinstance(extras, dict):
+        note = note or extras.get("note")
+    if isinstance(note, str) and note.strip():
+        return False  # the model explained itself - honour the verdict
+    return not any(
+        isinstance(v, list) and len(v) > 0 for v in data.values()
+    )
 
 
 def extract(
@@ -3092,6 +3153,33 @@ def extract(
         provider=provider,
         progress_callback=progress_callback,
     )
+    # UI-REVIEW-2026-09-08 (E2E oa_004): silent misses recover on re-run.
+    # When the model returns a payload whose every content array is empty
+    # at ~zero confidence WITHOUT an explanatory note, that is a sampling
+    # flake, not an honest degradation - retry once with the same prompt.
+    # Honest degradations carry a note ("not a paleogeographic map") and
+    # are NOT retried: a second call with the same prompt would return the
+    # same answer and double the cost for nothing.
+    if result.ok and _is_silent_miss(result.data):
+        try:
+            retry = fn(
+                api_key=api_key,
+                image_b64=image_b64,
+                media_type=media_type,
+                caption=caption,
+                chart_lang=chart_lang,
+                base_url=base_url,
+                model=model,
+                max_tokens=max_tokens,
+                timeout_sec=timeout_sec,
+                provider=provider,
+                progress_callback=progress_callback,
+            )
+        except Exception:
+            retry = None
+        if retry is not None and retry.ok and not _is_silent_miss(retry.data):
+            retry.warning = ((retry.warning + "; ") if retry.warning else "")                 + "empty first attempt retried once"
+            result = retry
     # UI-REVIEW-2026-09-07: surface which chart type the auto resolver
     # picked so UIs / history records can show "detected: zonation_chart".
     if mode_source:

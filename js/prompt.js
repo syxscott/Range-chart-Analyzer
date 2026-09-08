@@ -22,7 +22,7 @@ const PROMPT_VERSION = {
   phylogenetic_tree: 'v1',
   // NEW chart types
   chemical_stratigraphy: 'v1',
-  paleomap: 'v1',
+  paleomap: 'v2',
   scatter_plot: 'v1',
   // UI-REVIEW-2026-09-05: radiolarian biozonation / correlation charts.
   zonation_chart: 'v1',
@@ -466,6 +466,7 @@ const PALEOMAP_SYSTEM_PROMPT = [
 '- Include all marked fossil localities with their associated information.',
 '- Paleocoordinates are in present-day reference frame unless the map specifies otherwise.',
 '- Only extract what you can READ from the map. Do not invent features or coordinates.',
+'- THEMATIC DISTRIBUTION MAPS COUNT. If the figure is a map with sample / station dots coloured or sized by a value (radiolarian abundance, percentage, species richness), extract every labelled dot into `fossil_sites` (name = station / core label, location = printed coordinates if any) and put its value into the note field of that site - these are data, not decoration.',
 '- If the figure is NOT a paleogeographic map, return all arrays empty and confidence 0.0.',
 '- Return JSON only, no markdown fences, no commentary.',
 _degradationClause()
