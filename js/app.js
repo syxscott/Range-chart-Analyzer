@@ -595,15 +595,25 @@
   const GBIF_MATCH_URL = 'https://api.gbif.org/v1/species/match?verbose=true&name=';
   const NAME_VERIFY_MAX = 20;
 
+  // Mirror of rca_core/names.py:clean_name_for_lookup - the same input
+  // must produce the same GBIF query string on both transports. Two defects
+  // fixed in the 2026-09-10 review:
+  //   1. the qualifier / ex-gr patterns carried literal 0x08 (backspace)
+  //      bytes where a word-boundary token was intended, so neither
+  //      substitution ever matched ordinary chart text - "Genus cf. species"
+  //      reached GBIF un-cleaned;
+  //   2. the trailing "sp." strip and the leading-punctuation trim were
+  //      missing, so "Genus sp." and ",Genus yini" diverged from Python.
   function rcaCleanNameForLookup(species) {
     let s = String(species || '').trim();
     if (!s) return '';
-    s = s.replace(/\([^)]*\)/g, ' ');                       // author/year
-    s = s.replace(/(cf|aff|cf\.|aff\.)\s+/gi, '');            // qualifiers
-    s = s.replace(/(ex\s+gr\.?|gr\.?|s\.\s?l\.?|sensu|near)/gi, ' ');
+    s = s.replace(/\([^)]*\)/g, ' ');                    // author/year
+    s = s.replace(/\b(cf|aff|cf\.|aff\.)\s+/gi, '');      // qualifiers
+    s = s.replace(/\b(ex\s+gr\.?|gr\.?|s\.\s?l\.?|s\.\s?s\.?|sensu|near)(?![a-z])/gi, ' ');
+    s = s.replace(/\bsp\.?$/i, '');                       // trailing sp.
     s = s.replace(/\?/g, '');
-    s = s.replace(/(^|\s)[A-Z]\.\s*(?=[a-z])/g, '$1');         // abbrev. genus
-    s = s.replace(/\s+/g, ' ').trim().replace(/[.,-]+$/, '');
+    s = s.replace(/(^|\s)[A-Z]\.\s*(?=[a-z])/g, '$1');  // abbrev. genus
+    s = s.replace(/\s+/g, ' ').replace(/^[ .,-]+|[ .,-]+$/g, '');
     return s.length > 0 && s.length <= 100 ? s : '';
   }
 

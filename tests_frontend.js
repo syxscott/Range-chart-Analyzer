@@ -271,6 +271,24 @@ function makeEl(id, tagName) {
 let pass = 0, fail = 0;
 function check(name, ok) { if (ok) { pass++; console.log('PASS', name); } else { fail++; console.log('FAIL', name); } }
 
+// Async tests run fire-and-forget: their assertions land whenever their
+// promise resolves. The summary used to be printed from a fixed 100 ms
+// timer, so a test that took longer had its assertions run AFTER
+// process.exit() — the run reported green while those checks were silently
+// dropped. Register every async test here, count rejections as failures,
+// and drain the list before printing the summary.
+const pendingTests = [];
+function trackAsync(name, p) {
+  if (!p || typeof p.then !== 'function') return p;
+  pendingTests.push(
+    Promise.resolve(p).catch((e) => {
+      fail += 1;
+      console.log('FAIL', name, '(rejected:' + ((e && e.message) || e) + ')');
+    })
+  );
+  return p;
+}
+
 function loadAllScripts(ctx) {
   vm.createContext(ctx);
   for (const f of [
@@ -316,6 +334,7 @@ function loadAllScripts(ctx) {
           'globalThis.updateActionButtons = updateActionButtons;\n' +
           'globalThis.$ = $;\n' +
           'globalThis.showAlert = showAlert;\n' +
+          'globalThis.rcaCleanNameForLookup = rcaCleanNameForLookup;\n' +
           'globalThis.Event = Event;\n' +
           'globalThis.KeyboardEvent = KeyboardEvent;\n' +
           'globalThis.document = document;\n' +
@@ -326,14 +345,7 @@ function loadAllScripts(ctx) {
     // edit is in flight) to fail without taking down the whole test
     // suite. Surface the failure in stderr so it's not silently lost.
     try {
-      // Allow individual scripts (e.g. js/prompt.js while another agent's
-    // edit is in flight) to fail without taking down the whole test
-    // suite. Surface the failure in stderr so it's not silently lost.
-    try {
       vm.runInContext(src, ctx, { filename: f });
-    } catch (loadErr) {
-      console.error('WARN: skipping', f, 'due to load error:', loadErr.message);
-    }
     } catch (loadErr) {
       console.error('WARN: skipping', f, 'due to load error:', loadErr.message);
     }
@@ -1004,14 +1016,21 @@ function test_quality_fad_lad_ma_branch() {
     species_ranges: [{ species: 'X', section: 'A', range_base: '300 Ma', range_top: '250 Ma', biozone: '' }],
     confidence: 0.9,
   });
-  check('quality Ma range valid (no fad_lt_lad)', !ageOk.issues.some(i => i.msg_key === 'quality.fad_lt_lad'));
+  // The inverted-range warning is keyed `quality.range_top_lt_base` on the
+  // accuracy path, both for bed indices and for resolved ages — this mirrors
+  // rca_core/quality.py and tests/test_review_2026_07_31_domain.py
+  // ::test_inverted_numeric_ma_range_flagged. (`quality.fad_lt_lad` is the
+  // consistency check's bed-inversion key, a different signal.)
+  check('quality Ma range valid (no range_top_lt_base)',
+    !ageOk.issues.some(i => i.msg_key === 'quality.range_top_lt_base'));
   // Inverted age range IS flagged.
   const ageInv = ctx.scoreRangeChart({
     sections: [{ name: 'A', age_range: 'Permian' }],
     species_ranges: [{ species: 'X', section: 'A', range_base: '250 Ma', range_top: '300 Ma', biozone: '' }],
     confidence: 0.9,
   });
-  check('quality inverted Ma range flagged', ageInv.issues.some(i => i.msg_key === 'quality.fad_lt_lad'));
+  check('quality inverted Ma range flagged',
+    ageInv.issues.some(i => i.msg_key === 'quality.range_top_lt_base'));
   // Bed labels containing "ma" (Madison) must NOT be read as ages.
   const bedOk = ctx.scoreRangeChart({
     sections: [{ name: 'A', age_range: 'Permian' }],
@@ -1150,7 +1169,7 @@ function test_m14_alert_removed_on_animationend() {
     check('m14-old-alert-removed-on-animationend', remaining.length === 1);
   });
 }
-const _m14 = test_m14_alert_removed_on_animationend();
+const _m14 = trackAsync('m14-alert-animationend', test_m14_alert_removed_on_animationend());
 
 // ---- PR3 M15: resetUpload preserves #viz-host ----
 function test_m15_reset_upload_preserves_viz_host() {
@@ -1312,7 +1331,7 @@ function test_m3_fetch_manual_redirect() {
     check('m3-fetch-redirect-manual', captured && captured.redirect === 'manual');
   });
 }
-const _m3 = test_m3_fetch_manual_redirect();
+const _m3 = trackAsync('m3-fetch-manual-redirect', test_m3_fetch_manual_redirect());
 
 // ---- PR3 LOW batch ----
 //
@@ -1941,7 +1960,7 @@ function test_m11_retry_succeeds_on_eventual_ok() {
     check('m11-retry-attempts-3', calls === 3);
   });
 }
-const _m11a = test_m11_retry_succeeds_on_eventual_ok();
+const _m11a = trackAsync('m11-retry-eventual-ok', test_m11_retry_succeeds_on_eventual_ok());
 
 function test_m11_retry_returns_null_on_unrecoverable() {
   const ctx = buildContext();
@@ -1958,7 +1977,7 @@ function test_m11_retry_returns_null_on_unrecoverable() {
     check('m11-retry-throws-last-error', !!e);
   });
 }
-const _m11b = test_m11_retry_returns_null_on_unrecoverable();
+const _m11b = trackAsync('m11-retry-unrecoverable', test_m11_retry_returns_null_on_unrecoverable());
 
 function test_m11_retry_aborts_on_signal() {
   const ctx = buildContext();
@@ -1980,7 +1999,7 @@ function test_m11_retry_aborts_on_signal() {
     check('m11-retry-abort-stops-loop', calls < 6);
   });
 }
-const _m11c = test_m11_retry_aborts_on_signal();
+const _m11c = trackAsync('m11-retry-abort-signal', test_m11_retry_aborts_on_signal());
 
 // M11 e2e: extractRangeChart must retry on transient 5xx (and stop retrying
 // on auth/4xx). First 2 attempts return 503, 3rd returns ok. Stub
@@ -2021,7 +2040,7 @@ function test_m11_extract_retries_on_5xx() {
     check('m11-extract-retry-attempts-3', calls === 3);
   });
 }
-const _m11d = test_m11_extract_retries_on_5xx();
+const _m11d = trackAsync('m11-extract-retries-5xx', test_m11_extract_retries_on_5xx());
 
 // M11 e2e: 4xx auth errors should NOT retry — first failure surfaces.
 function test_m11_extract_no_retry_on_4xx() {
@@ -2042,7 +2061,7 @@ function test_m11_extract_no_retry_on_4xx() {
     check('m11-extract-4xx-error-key', res.ok === false && res.errorKey === 'err.401');
   });
 }
-const _m11e = test_m11_extract_no_retry_on_4xx();
+const _m11e = trackAsync('m11-extract-no-retry-4xx', test_m11_extract_no_retry_on_4xx());
 
 // M12: leading LF must also trigger the formula guard (PR3 anchored here
 // so the export-side regression is captured with PR1's H2 export change).
@@ -2062,7 +2081,6 @@ function test_export_newline_injection_guard() {
     // is `'`, NOT `=`.
     secondLine[1] === "'");
 }
-test_export_newline_injection_guard();
 test_export_newline_injection_guard();
 
 // H5 end-to-end: extractRangeChart must flip ok=false when the parsed
@@ -2096,10 +2114,7 @@ function test_h5_extract_range_chart_flip_to_error() {
     check('h5-range-extract-fetch-called', calls.length >= 1);
   });
 }
-const _h5E = test_h5_extract_range_chart_flip_to_error();
-if (_h5E && typeof _h5E.then === 'function') {
-  _h5E.catch((e) => { console.log('FAIL h5-range-extract-error', e && e.message); fail++; });
-}
+const _h5E = trackAsync('h5-range-extract-error', test_h5_extract_range_chart_flip_to_error());
 
 function test_h5_columnar_keeps_ok_true() {
   const ctx = buildContext();
@@ -2122,10 +2137,7 @@ function test_h5_columnar_keeps_ok_true() {
       res.data._warnings.indexOf('truncated_or_unrecognized_payload') !== -1);
   });
 }
-const _h5C = test_h5_columnar_keeps_ok_true();
-if (_h5C && typeof _h5C.then === 'function') {
-  _h5C.catch((e) => { console.log('FAIL h5-columnar-extract-error', e && e.message); fail++; });
-}
+const _h5C = trackAsync('h5-columnar-extract', test_h5_columnar_keeps_ok_true());
 
 // ---------------------------------------------------------------------------
 // Sprint B (REVIEW-2026-09-04) regression tests
@@ -2279,10 +2291,7 @@ function test_sprintb_retryable_predicate_semantics() {
     check('sprintb-retryable-mixed-accepted-midway', callsC === 2 && rc.n === 2);
   });
 }
-const _sprintbRetry = test_sprintb_retryable_predicate_semantics();
-if (_sprintbRetry && typeof _sprintbRetry.then === 'function') {
-  _sprintbRetry.catch((e) => { console.log('FAIL sprintb-retryable-semantics', e && e.message); fail++; });
-}
+const _sprintbRetry = trackAsync('sprintb-retryable-semantics', test_sprintb_retryable_predicate_semantics());
 
 // Item 15: ICS Sprint B data sync — 15 English rock-unit series labels in
 // RCA_ICS_SERIES + the Chinese 统 aliases in RCA_ICS_CN_SERIES, mirroring
@@ -2350,10 +2359,7 @@ function test_sprintb_csrf_early_return_cleans_up() {
     check('sprintb-csrf-early-removes-abort-listener', removed.length === 1);
   });
 }
-const _sprintbCsrf = test_sprintb_csrf_early_return_cleans_up();
-if (_sprintbCsrf && typeof _sprintbCsrf.then === 'function') {
-  _sprintbCsrf.catch((e) => { console.log('FAIL sprintb-csrf-cleanup', e && e.message); fail++; });
-}
+const _sprintbCsrf = trackAsync('sprintb-csrf-cleanup', test_sprintb_csrf_early_return_cleans_up());
 
 // ---- UI-REVIEW-2026-09-05: low-agreement flag must parse the "n/m"
 // agreement string when agreement_count is absent, so a "3/3" row is not
@@ -2541,8 +2547,311 @@ function test_names_verify_ui() {
 }
 test_names_verify_ui();
 
-// Wait for async races to settle before printing summary.
-setTimeout(() => {
+// ---- CODE_REVIEW_2026-09-10 (backend parity) regression tests ----
+
+// (R7) A model that restates the JSON contract in a fence before emitting the
+// payload writes the REAL root keys into that example (plus <placeholders>),
+// so the example qualified as a payload and evicted the data. Python and JS
+// must pick the same block: the payload.
+function test_json_fence_placeholder_ranking() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const ex = '{"sections": [{"name": "<section name>"}], '
+    + '"species_ranges": [{"species": "<binomial>"}], "confidence": 0.9}';
+  const pay = '{"sections": [{"name": "Real"}], '
+    + '"species_ranges": [{"species": "Neoalbaillella optima"}], "confidence": 0.8}';
+  const cases = [
+    'Here is the contract:\n```json\n' + ex + '\n```\nNow the result:\n```json\n' + pay + '\n```',
+    '```json\n' + ex + '\n```\n```json\n' + pay + '\n```',
+  ];
+  for (const text of cases) {
+    const got = ctx.safeJsonLoads(text);
+    check('json-fence-picks-payload',
+      (got.species_ranges || [{}])[0].species === 'Neoalbaillella optima');
+  }
+  // Zonation payloads are recognised as payload roots (they were not).
+  const zon = 'Schema:\n```json\n{"$schema": "x", "type": "object"}\n```\n'
+    + 'Data:\n```json\n{"zonations": [{"name": "Z"}], "correlations": [], "zones": [], "confidence": 0.7}\n```';
+  const zped = ctx.safeJsonLoads(zon);
+  check('json-fence-zonation-payload',
+    Array.isArray(zped.zonations) && zped.zonations.length === 1);
+}
+
+// (R8) A literal newline inside a JSON string is invalid JSON; the browser
+// must escape it and keep the whole reply (Level 4 used to salvage one inner
+// row instead, silently emptying the extraction).
+function test_json_literal_newline_in_string() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const text = '{"sections": [{"name": "A"}], "note": "row 1\nrow 2", "confidence": 0.9}';
+  let got = null;
+  try { got = ctx.safeJsonLoads(text); } catch (_e) { got = null; }
+  check('json-literal-newline-parsed', !!got && Array.isArray(got.sections)
+    && got.sections.length === 1);
+  check('json-literal-newline-note', !!got && got.note === 'row 1\nrow 2');
+}
+
+// (R9) Structured-item dedup: `String(obj)` produced the constant
+// "[object Object]", so two runs whose blocks differed only by an _extras
+// value collapsed into ONE block and the second was discarded.
+function test_aggregate_extras_aware_dedup() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const run = (note) => ({
+    sections: [{ id: 'S1', lithology_blocks: [
+      { pattern: 'chert', range_base_idx: 1, range_top_idx: 4, _extras: { note } }] }],
+    fossil_legend: [], lithology_legend: [], cross_beds: [], confidence: 0.6,
+  });
+  const merged = ctx.rcaMergeResults([run('A'), run('B')], 2, ctx.RCA_COLUMNAR_KEYMAP);
+  const blocks = (merged.sections || [{}])[0].lithology_blocks || [];
+  check('aggregate-extras-dedup-keeps-both', blocks.length === 2);
+  // Same content still merges.
+  const same = ctx.rcaMergeResults([run('A'), run('A')], 2, ctx.RCA_COLUMNAR_KEYMAP);
+  check('aggregate-extras-dedup-merges-equal',
+    ((same.sections || [{}])[0].lithology_blocks || []).length === 1);
+}
+
+// (R10) The qualifier-restore compared a NORMALISED value against the RAW
+// mode, so it never fired — the merged taxon name differed from the server's
+// for case/whitespace jitter.
+function test_aggregate_qualifier_restore_normalised() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const run = (species) => ({
+    species_ranges: [{ species, section: 'S1', range_base: '1',
+                       range_top: '2', biozone: '' }],
+    sections: [], biozones: [], other_fossils: [], confidence: 0.5,
+  });
+  // Both runs carry one occurrence, so the tie-break picks the first-seen
+  // original — the point is that the restore now FIRES at all and the
+  // qualifier survives verbatim (it used to no-op, leaving the raw mode
+  // string, which differed from the server's answer).
+  for (const [a, b] of [['Genus sp.', 'genus sp.'], ['genus sp.', 'Genus sp.']]) {
+    const merged = ctx.rcaMergeResults([run(a), run(b)], 2);
+    const sp = (merged.species_ranges || [{}])[0].species;
+    check('aggregate-qualifier-restored:' + a, /sp\./.test(sp), sp);
+    check('aggregate-qualifier-verbatim:' + a, sp === a || sp === b, sp);
+  }
+}
+
+// (R11) Root-level _extras / _warnings carry figure-level data; the N-run
+// path used to drop them while the single-run passthrough kept them.
+function test_aggregate_root_extras_survive_multi_run() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const runs = [
+    { species_ranges: [{ species: 'A', section: 'S1', range_base: '1', range_top: '2' }],
+      sections: [], biozones: [], other_fossils: [], confidence: 0.5,
+      _extras: { caption: 'Fig 3' }, _warnings: ['string_row_coerced'] },
+    { species_ranges: [{ species: 'A', section: 'S1', range_base: '1', range_top: '2' }],
+      sections: [], biozones: [], other_fossils: [], confidence: 0.5 },
+  ];
+  const merged = ctx.rcaMergeResults(runs, 2);
+  check('aggregate-root-extras-kept',
+    JSON.stringify(merged._extras) === JSON.stringify({ caption: 'Fig 3' }));
+  check('aggregate-root-warnings-kept',
+    JSON.stringify(merged._warnings) === JSON.stringify(['string_row_coerced']));
+}
+
+// (R12) `_warning` is a bare string for one flag and an array when several
+// fire; the strict === missed the swap in exactly that combination.
+function test_quality_warning_flag_shapes() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  check('quality-warning-flags-string',
+    ctx.rcaWarningFlags('index_order_swap').indexOf('index_order_swap') !== -1);
+  check('quality-warning-flags-array',
+    ctx.rcaWarningFlags(['range_top_idx_truncated', 'index_order_swap'])
+      .indexOf('index_order_swap') !== -1);
+  check('quality-warning-flags-none', ctx.rcaWarningFlags(null).length === 0);
+  const res = ctx.scoreRangeChart({
+    sections: [{ name: 'A', age_range: 'Permian', lithology_blocks: [
+      { pattern: 'chert', range_base_idx: 1, range_top_idx: 4,
+        _warning: ['range_top_idx_truncated', 'index_order_swap'] }] }],
+    species_ranges: [], biozones: [], other_fossils: [], confidence: 0.6,
+  });
+  check('quality-warning-swap-reported',
+    res.issues.some((i) => i.msg_key === 'quality.bed_index_order_swapped'));
+}
+
+// (R13) `_payloadScore` used float division where Python floors, so an exact
+// tie picked a different candidate in each engine.
+function test_payload_score_integer_division() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const nested = { sections: [{ name: 'A' }],
+                   x: { y: { z: { species_ranges: [], format: 'q' } } } };
+  const score = ctx._payloadScore(nested);
+  check('payload-score-is-integral', Number.isInteger(score), String(score));
+}
+
+test_json_fence_placeholder_ranking();
+test_json_literal_newline_in_string();
+test_aggregate_extras_aware_dedup();
+test_aggregate_qualifier_restore_normalised();
+test_aggregate_root_extras_survive_multi_run();
+test_quality_warning_flag_shapes();
+test_payload_score_integer_division();
+
+// ---- CODE_REVIEW_2026-09-10 regression tests ----
+
+// (R1) rcaCleanNameForLookup is a mirror of rca_core/names.py and feeds the
+// GBIF query string. Its qualifier / ex-gr patterns carried literal 0x08
+// bytes where a word boundary was intended, so "cf." / "aff." stripping never
+// fired and the browser queried GBIF with the raw open-nomenclature string.
+// These cases are the golden set from tests/test_survey_borrowed.py — the two
+// implementations must agree input-for-input.
+function test_name_clean_lookup_parity() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const golden = [
+    ['Clarkina yini', 'Clarkina yini'],
+    ['Pseudotirolites cf. P. asiaticus (Zheng, 1979)', 'Pseudotirolites asiaticus'],
+    ['Genus sp.', 'Genus'],
+    ['Nankinella? aff. discoides', 'Nankinella discoides'],
+    ['Albaillella ex gr. A. levis', 'Albaillella levis'],
+    ['', ''],
+  ];
+  for (const [raw, expected] of golden) {
+    const got = ctx.rcaCleanNameForLookup(raw);
+    check('name-clean-parity:' + JSON.stringify(raw.slice(0, 28)), got === expected);
+  }
+  // The regexes must not contain a literal backspace (0x08) control char.
+  const src = require('fs').readFileSync(
+    path.join(__dirname, 'js', 'app.js'), 'utf8');
+  check('name-clean-no-backspace-bytes', !/[\u0008]/.test(src));
+}
+
+// (R2) A malformed row (null / primitive) inside a result array used to
+// throw out of rcaRenderResults, blanking the entire results panel. Rows
+// that cannot be dereferenced are now skipped, and other_fossils keeps
+// accepting plain strings (exporter.py allows a string row there).
+function test_render_tolerates_malformed_rows() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const data = {
+    species_ranges: [null, 'not-an-object',
+                     { species: 'X', section: 'A', range_base: '1', range_top: '2' }],
+    sections: [{ name: 'A' }],
+    other_fossils: ['plain string', { label: 'Ammonite' }, null],
+  };
+  let html = null;
+  try { html = ctx.rcaRenderResults(data, ''); }
+  catch (e) { check('render-null-row-no-throw', false); return; }
+  check('render-null-row-no-throw', true);
+  check('render-keeps-valid-row', html.indexOf('>X<') !== -1);
+  check('render-other-fossils-string-row', html.indexOf('plain string') !== -1);
+  check('render-other-fossils-object-row', html.indexOf('Ammonite') !== -1);
+  const exp = ctx.rcaBuildTableExport(data, 'species_ranges');
+  check('render-export-skips-null-row', exp.rows.length === 1
+    && exp.rows[0].indexOf('X') !== -1);
+}
+
+// (R3) The SSRF guard must normalize IPv6 forms — a bracketed IPv4-mapped
+// address ([::ffff:a9fe:a9fe] == 169.254.169.254) previously slipped past
+// the IPv4 patterns.
+function test_ssrf_guard_ipv6() {
+  const src = require('fs').readFileSync(
+    path.join(__dirname, 'js', 'minimax.js'), 'utf8');
+  // The guard is inline in the request path; assert its shape rather than
+  // re-implementing it: IPv4-mapped unwrapping must be present.
+  check('ssrf-guard-unwraps-ipv4-mapped', src.indexOf('::ffff:') !== -1);
+  check('ssrf-guard-blocks-ula', /f\[cd\]\[0-9a-f\]/.test(src) || src.indexOf('fe[89ab]') !== -1);
+  check('ssrf-guard-blocks-internal-tld', src.indexOf("'.internal'") !== -1);
+}
+
+// (R4) i18n: every language must carry the same placeholders as the Python
+// dictionary. The zh abundance message had dropped {sample}, so Chinese
+// users alone lost the level identifier in the warning.
+function test_i18n_placeholder_parity() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const key = 'quality.abundance_sum_violation';
+  for (const lang of ['zh', 'en', 'ja']) {
+    const val = (ctx.RCA_I18N[lang] || {})[key] || '';
+    check('i18n-abundance-sample:' + lang, val.indexOf('{sample}') !== -1);
+    check('i18n-abundance-sum:' + lang, val.indexOf('{sum}') !== -1);
+  }
+  // The quality scorer must actually pass those params, or the placeholder
+  // would render literally.
+  const qsrc = require('fs').readFileSync(
+    path.join(__dirname, 'js', 'quality.js'), 'utf8');
+  check('i18n-abundance-params-passed',
+    /abundance_sum_violation[\s\S]{0,200}sample:/.test(qsrc));
+}
+
+// (R5) The accuracy path reports inverted ranges as range_top_lt_base
+// (mirrors rca_core/quality.py); the consistency path uses fad_lt_lad.
+function test_quality_msg_key_parity() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const res = ctx.scoreRangeChart({
+    sections: [{ name: 'A', age_range: 'Permian' }],
+    species_ranges: [{ species: 'X', section: 'A',
+                       range_base: '250 Ma', range_top: '300 Ma', biozone: '' }],
+    confidence: 0.9,
+  });
+  check('quality-accuracy-uses-range_top_lt_base',
+    res.issues.some(i => i.msg_key === 'quality.range_top_lt_base'));
+  check('quality-accuracy-not-fad_lt_lad',
+    !res.issues.some(i => i.msg_key === 'quality.fad_lt_lad'));
+}
+
+// (R6) zones / correlations / zonations count as primary content
+// (rca_core/quality.py:_CONTENT_KEYS carries them). Before the JS list was
+// aligned, a zonation extraction that returned zone rows but no sections /
+// species was graded F "pure extraction miss" — the zone data was discarded
+// as if nothing had been read. Both directions are asserted here.
+function test_quality_zonation_content_keys() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const zonesOnly = ctx.scoreRangeChart({
+    sections: [], species_ranges: [], abundances: [], biozones: [],
+    other_fossils: [], cross_beds: [], lithology_legend: [],
+    fossil_legend: [], age_units: [],
+    zones: [{ name: 'Clarkina postbitteri Zone' }],
+    confidence: 0.8,
+  });
+  check('quality-zonation-rows-are-content',
+    !zonesOnly.issues.some(i => i.msg_key === 'quality.empty_result'));
+  check('quality-zonation-rows-not-graded-f', zonesOnly.grade !== 'F');
+  const allEmpty = ctx.scoreRangeChart({
+    sections: [], species_ranges: [], abundances: [], biozones: [],
+    other_fossils: [], cross_beds: [], lithology_legend: [],
+    fossil_legend: [], age_units: [],
+    zones: [], correlations: [], zonations: [],
+    confidence: 0.2,
+  });
+  check('quality-all-empty-is-pure-miss',
+    allEmpty.issues.some(i => i.msg_key === 'quality.empty_result'));
+}
+
+test_name_clean_lookup_parity();
+test_render_tolerates_malformed_rows();
+test_ssrf_guard_ipv6();
+test_i18n_placeholder_parity();
+test_quality_msg_key_parity();
+test_quality_zonation_content_keys();
+
+// Drain every registered async test before printing the summary. A fixed
+// timeout is not enough: assertions that resolve later would run after
+// process.exit() and be silently dropped, reporting a green run over checks
+// that never executed. The hard timer is a last-resort guard so a test that
+// never settles fails the run loudly instead of hanging it.
+const HARD_TIMEOUT_MS = 60000;
+const hardTimer = setTimeout(() => {
+  console.error(`\nTIMEOUT: async tests still pending after ${HARD_TIMEOUT_MS} ms` +
+    ` (${pendingTests.length} registered)`);
+  process.exit(1);
+}, HARD_TIMEOUT_MS);
+if (hardTimer.unref) hardTimer.unref();
+
+Promise.all(pendingTests).then(() => {
+  clearTimeout(hardTimer);
   console.log(`\n--- ${pass} passed, ${fail} failed ---`);
   process.exit(fail ? 1 : 0);
-}, 100);
+}).catch((e) => {
+  clearTimeout(hardTimer);
+  console.error('FAIL summary:', (e && e.message) || e);
+  process.exit(1);
+});

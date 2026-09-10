@@ -75,10 +75,14 @@ function _payloadScore(parsed) {
   // Schema keys carry negative weight
   const schemaHits = keys.filter(k => ['format', 'schema_version', '$schema', 'required', 'properties', 'example'].includes(k)).length;
   score -= schemaHits * 50;
-  // Nesting: scan dict/list values
+  // Nesting: scan dict/list values.
+  // REVIEW-2026-09-10: integer division, matching Python's `// 4`. The
+  // float version scored 112.5 where Python scored 112, and a fractional
+  // difference decides the candidate in an otherwise exact tie - the two
+  // engines then picked DIFFERENT objects out of the same reply.
   for (const v of Object.values(parsed)) {
     if (v && typeof v === 'object') {
-      score += Math.max(0, _payloadScore(v)) / 4;
+      score += Math.floor(Math.max(0, _payloadScore(v)) / 4);
     }
   }
   return score;
@@ -235,6 +239,10 @@ const RCA_KNOWN_ROOT_KEYS = new Set([
   'fossil_legend', 'lithology_legend', 'cross_beds', 'overall_confidence',
   // abundance_diagram (_KNOWN_ABUNDANCE_ROOT_KEYS)
   'sites', 'abundances', 'zones',
+  // zonation_chart (rca_core/extractor._KNOWN_ZONATION_ROOT_KEYS).
+  // REVIEW-2026-09-10: mirror of the Python fix - without these a fence
+  // carrying only zonations/correlations is not recognised as a payload.
+  'zonations', 'correlations',
   // chemical_stratigraphy (_KNOWN_CHEMICAL_STRAT_ROOT_KEYS)
   'data_points', 'events', 'intervals',
   // paleomap (_KNOWN_PALEOMAP_ROOT_KEYS)
@@ -275,19 +283,52 @@ function selectPayloadFenceBlock(text) {
   const s = String(text == null ? '' : text);
   const blocks = _collectFenceBlocks(s);
   if (blocks.length === 0) return null;
-  for (const b of blocks) {
+  // REVIEW-2026-09-10: collect EVERY qualifying block and rank them, instead
+  // of returning the first one. A model that restates the JSON contract in a
+  // fence before emitting the payload writes the REAL root keys in that
+  // example (the contract lists them) plus angle-bracket placeholders like
+  // "<binomial>", so the example qualified and evicted the payload — and
+  // because the browser runs this selection BEFORE stripMarkdownFence while
+  // Python ran strip_markdown_fence first, the two engines returned different
+  // blocks for the same reply (the browser rendered placeholder rows as the
+  // extraction). Ranking on placeholder density, then on position, mirrors
+  // rca_core/json_utils.strip_markdown_fence exactly.
+  const qualifying = [];
+  for (let i = 0; i < blocks.length; i += 1) {
     try {
-      const parsed = JSON.parse(b);
+      const parsed = JSON.parse(blocks[i]);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         for (const k of Object.keys(parsed)) {
-          if (RCA_KNOWN_ROOT_KEYS.has(k)) return b;
+          if (RCA_KNOWN_ROOT_KEYS.has(k)) {
+            qualifying.push([i, blocks[i]]);
+            break;
+          }
         }
       }
     } catch (_e) {
       // Not strict JSON — try the next block.
     }
   }
+  if (qualifying.length > 0) {
+    qualifying.sort((a, b) => {
+      const pa = rcaFencePlaceholderCount(a[1]);
+      const pb = rcaFencePlaceholderCount(b[1]);
+      if (pa !== pb) return pa - pb;
+      return a[0] - b[0];
+    });
+    return qualifying[0][1];
+  }
   return blocks[0];
+}
+
+// Angle-bracket placeholders mark "fill this in" in the prompt contract and in
+// a model's restatement of it ("<binomial>", "<section name>"). A fenced block
+// dense with them is an example, not the extraction.
+const RCA_PLACEHOLDER_RE = /<[^<>\n]{0,60}>/g;
+
+function rcaFencePlaceholderCount(text) {
+  const m = String(text).match(RCA_PLACEHOLDER_RE);
+  return m ? m.length : 0;
 }
 
 // Lenient JSON object parse with a 6-level fallback chain.
@@ -344,6 +385,38 @@ function repairTruncatedJson(text) {
   return null;
 }
 
+// Escape raw control characters that sit INSIDE a JSON string literal.
+// Structural whitespace outside strings is untouched, so a pretty-printed
+// body keeps its line breaks. Mirrors _escape_control_chars_in_strings in
+// rca_core/json_utils.py.
+function rcaEscapeControlCharsInStrings(text) {
+  const s = String(text);
+  const out = [];
+  let inString = false;
+  let escape = false;
+  let changed = false;
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (escape) { escape = false; out.push(ch); continue; }
+    if (inString) {
+      if (ch === '\\') { escape = true; out.push(ch); continue; }
+      if (ch === '"') { inString = false; out.push(ch); continue; }
+      const code = ch.charCodeAt(0);
+      if (code < 0x20) {
+        const named = { 8: '\\b', 9: '\\t', 10: '\\n', 12: '\\f', 13: '\\r' }[code];
+        out.push(named || '\\u' + code.toString(16).padStart(4, '0'));
+        changed = true;
+        continue;
+      }
+      out.push(ch);
+      continue;
+    }
+    if (ch === '"') inString = true;
+    out.push(ch);
+  }
+  return changed ? out.join('') : s;
+}
+
 function safeJsonLoads(text) {
   if (!text) throw new Error('empty text');
   // Sprint B (REVIEW-2026-09-04): multi-fence selection runs BEFORE the
@@ -359,8 +432,10 @@ function safeJsonLoads(text) {
   // Level 3: strict parse.
   try {
     const parsed = JSON.parse(s);
-    // Fix J-1: typeof null === 'object' in JS, but null is not a valid object
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed !== null) {
+    // Fix J-1: typeof null === 'object' in JS, but null is not a valid object.
+    // The truthiness check already excludes null, so no separate `!== null`
+    // test is needed here.
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       return promoteWrapper(parsed);
     }
     // Top-level array: wrap it so downstream code can use object semantics,
@@ -371,6 +446,23 @@ function safeJsonLoads(text) {
     }
   } catch (_e) {
     /* fall through to balanced-object extraction */
+  }
+  // Level 3.2 (REVIEW-2026-09-10): literal control characters INSIDE a string
+  // literal. Level 2 deliberately keeps \t \r \n, which is exactly what makes
+  // JSON.parse reject a string value containing a raw newline (a caption or
+  // note copied from a multi-line figure label). The reply then failed
+  // Levels 3-6 and Level 4 salvaged one inner row, silently emptying the
+  // extraction. Mirrors rca_core/json_utils Level 3.2.
+  const escapedCtl = rcaEscapeControlCharsInStrings(s);
+  if (escapedCtl !== s) {
+    let parsedCtl = null;
+    try { parsedCtl = JSON.parse(escapedCtl); } catch (_e) { parsedCtl = null; }
+    if (parsedCtl && typeof parsedCtl === 'object' && !Array.isArray(parsedCtl)) {
+      return promoteWrapper(parsedCtl);
+    }
+    if (Array.isArray(parsedCtl)) {
+      return { _array_root: parsedCtl, _note: 'model returned a top-level array; wrapping for diagnostics' };
+    }
   }
   // Level 3.5 (UI-REVIEW-2026-09-07): truncated-payload repair. Mirrors
   // rca_core/json_utils safe_json_loads Level 3.5 — close the brackets at
@@ -444,7 +536,7 @@ function safeJsonLoads(text) {
   if (prose !== null) {
     try {
       const parsed = JSON.parse(prose);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed !== null) return promoteWrapper(parsed);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return promoteWrapper(parsed);
       if (Array.isArray(parsed)) return { _array_root: parsed, _note: 'model returned a top-level array; wrapping for diagnostics' };
     } catch (_e) { /* fall through */ }
   }

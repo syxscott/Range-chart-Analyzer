@@ -53,7 +53,9 @@ def clamp_max_tokens(value):
     """Coerce a user-supplied max_tokens into [MIN, MAX]."""
     try:
         v = int(value)
-    except (TypeError, ValueError):
+    # REVIEW-2026-09-10: OverflowError is not a TypeError/ValueError
+    # subclass, and JSON 1e400 parses to float('inf') -> int() raises.
+    except (TypeError, ValueError, OverflowError):
         return DEFAULT_MAX_TOKENS
     return max(MIN_MAX_TOKENS, min(v, MAX_MAX_TOKENS))
 
@@ -70,7 +72,7 @@ def clamp_timeout_sec(value):
     """Coerce a user-supplied timeout_sec into [MIN_TIMEOUT_SEC, MAX_TIMEOUT_SEC]."""
     try:
         v = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # see clamp_max_tokens
         return DEFAULT_TIMEOUT_SEC
     return max(MIN_TIMEOUT_SEC, min(v, MAX_TIMEOUT_SEC))
 
@@ -88,7 +90,7 @@ def clamp_max_edge(value):
     """
     try:
         v = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # see clamp_max_tokens
         return DEFAULT_MAX_EDGE
     return max(MIN_MAX_EDGE, min(v, MAX_MAX_EDGE))
 
@@ -143,6 +145,18 @@ def _build_request_meta(provider, mode, max_tokens, image_sha256, prompt_version
             meta["temperature"] = eb["temperature"]
         if "seed" in eb:
             meta["seed"] = eb["seed"]
+        # REVIEW-2026-09-10: extra_body is applied to the request body AFTER
+        # the clamped max_tokens / model are set (llm.py `body.update(...)`),
+        # so a provider with extra_body={"max_tokens": ..., "model": ...} sends
+        # different values on the wire than this record claims - and this
+        # record is the 5-year audit artifact. Record the actual wire values
+        # so the two cannot disagree.
+        if "max_tokens" in eb:
+            meta["max_tokens"] = eb["max_tokens"]
+            meta["max_tokens_source"] = "provider.extra_body"
+        if "model" in eb:
+            meta["model"] = eb["model"]
+            meta["model_source"] = "provider.extra_body"
     return meta
 
 
@@ -418,6 +432,199 @@ def _carry_extras(item: dict[str, Any], known: tuple[str, ...], out: dict[str, A
         out["_extras"] = extras
 
 
+def _coerce_bool_flag(value: Any, default: bool = True) -> bool:
+    """Coerce a model-emitted flag to a real bool.
+
+    REVIEW-2026-09-10: ``bool(value)`` inverts the meaning of the string
+    ``"false"`` (non-empty string -> True) and turns ``None`` into False.
+    Strings are parsed explicitly; anything unrecognisable falls back to
+    ``default`` rather than to a silently-wrong value. Mirrors the JS
+    mirror's ``metaRaw.rooted !== false`` intent (absent/null -> default).
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("false", "0", "no", "n", "off", "none", "null"):
+        return False
+    if text in ("true", "1", "yes", "y", "on", ""):
+        return True
+    return default
+
+
+def _row_from_string(item: str, kind: str) -> dict[str, Any] | None:
+    """Coerce a bare-string list entry into the mode's row shape.
+
+    REVIEW-2026-09-10: ``{"sections": ["Pingdingshan"]}`` / ``{"biozones":
+    ["Clarkina postbitteri Zone"]}`` / ``{"species_ranges": ["Clarkina
+    yini"]}`` previously dropped every entry silently (both engines). The
+    natural reading is one row whose primary identifier is the string, so
+    the record is preserved (and flagged by the caller) instead of lost.
+    Returns None when the string is blank.
+    """
+    text = str(item).strip()
+    if not text:
+        return None
+    if kind in ("sections", "biozones", "sites", "zones", "zonations"):
+        return {"name": text}
+    if kind == "species_ranges":
+        return {"species": text}
+    # Deliberately NOT abundances: a taxon row needs a level/abundance to mean
+    # anything, so a bare string there is far more likely to be junk than a
+    # record — tests_core pins that it is dropped, and coercing it would
+    # invent a taxon with no associated measurement.
+    return None
+
+
+def _iter_rows(raw: Any, kind: str, warnings: list[str] | None = None):
+    """Yield dict rows from a list- or dict-shaped named array.
+
+    Generalises the range-chart ``_coerce_list_or_dict`` recovery for the
+    other chart modes:
+      * list  -> dict items pass through; bare strings are coerced to a row
+        whose primary identifier is the string (REVIEW-2026-09-10: they used
+        to be skipped with no warning at all).
+      * dict  -> each ``{wrapper_key: {...}}`` value is yielded, with the
+        wrapper key injected as the primary identifier when that identifier
+        is *absent* (a present-but-empty value is the model honestly saying
+        "unreadable" and must NOT be overwritten - review finding).
+    """
+    def _flag(tag: str) -> None:
+        if warnings is not None and tag not in warnings:
+            warnings.append(tag)
+
+    if isinstance(raw, dict):
+        for wrapper_key, inner in raw.items():
+            if not isinstance(inner, dict):
+                continue
+            row = dict(inner)
+            id_key = _PRIMARY_ID_KEYS.get(kind)
+            if id_key and id_key not in row:
+                row[id_key] = str(wrapper_key)
+                _flag("dict_shaped_array")
+            yield row
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                yield item
+            elif isinstance(item, str):
+                row = _row_from_string(item, kind)
+                if row is not None:
+                    yield row
+                    _flag("string_row_coerced")
+
+
+def _dict_rows(raw: Any):
+    """Yield dict rows from a list- OR dict-shaped named array.
+
+    REVIEW-2026-09-10: every non-range-chart normalizer did
+    ``for x in (parsed.get(k) or [])`` and skipped non-dicts, so a
+    dict-shaped emission (``{"sections": {"Ki-1": {...}}}``) produced [] and
+    silently discarded every record. Iterating a dict's values recovers them.
+    Bare strings are NOT coerced here (the caller decides whether the key has
+    a natural single-field row shape); they are skipped exactly as before.
+    """
+    if isinstance(raw, dict):
+        for value in raw.values():
+            if isinstance(value, dict):
+                yield value
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                yield item
+
+
+_PRIMARY_ID_KEYS = {
+    "sections": "name",
+    "biozones": "name",
+    "species_ranges": "species",
+    "sites": "name",
+    "zones": "name",
+    "zonations": "name",
+    "correlations": "from_zone",
+    "nodes": "id",
+    "data_points": "sample_id",
+}
+
+
+def _other_fossils_from(raw: Any) -> list[str]:
+    """Normalise ``other_fossils`` to a list of display strings.
+
+    REVIEW-2026-09-10: dict-shaped entries were dropped by the Python
+    normalizer while the browser (js/minimax.js M1 fix) already lifted
+    ``label``/``species``/``taxon``/``name`` - so a fossil record with a
+    label was visible in the browser and absent from the server/CSV/XLSX.
+    Both shapes are now accepted on both sides.
+    """
+    def _lift(item: Any) -> str:
+        if item is None:
+            return ""
+        if isinstance(item, str):
+            return item.strip()
+        if isinstance(item, dict):
+            for key in ("label", "species", "taxon", "name", "fossil", "text"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            # No recognisable label: keep the raw dict textually rather than
+            # dropping the record.
+            extras = {k: v for k, v in item.items() if k not in ("label", "species", "taxon", "name")}
+            return _stringify_scalar(item) if not extras else ""
+        return _stringify_scalar(item)
+
+    if isinstance(raw, str):
+        return [raw.strip()] if raw.strip() else []
+    if isinstance(raw, dict):
+        # {"ammonoid": {...}} / {"1": "string"} - iterate the values.
+        out: list[str] = []
+        for value in raw.values():
+            text = _lift(value)
+            if text:
+                out.append(text)
+        return out
+    if isinstance(raw, list):
+        out = []
+        for item in raw:
+            text = _lift(item)
+            if text:
+                out.append(text)
+        return out
+    return []
+
+
+def _stringify_scalar(value: Any) -> str:
+    """Stringify only scalars; containers return "" instead of a Python repr.
+
+    REVIEW-2026-09-10: ``str({"name": "x"})`` produced
+    ``"{'name': 'x'}"`` inside scientific identifier fields (species,
+    fossil_marker), i.e. a fabricated-looking value. Containers are handled
+    by the callers (lifted or carried into ``_extras``); here they collapse
+    to an empty string rather than leaking a repr.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple, set)):
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _pop_array_root_extras(extras: dict[str, Any]) -> dict[str, Any]:
+    """Drop ``_array_root`` / ``_note`` from a top-level ``_extras`` payload.
+
+    REVIEW-2026-09-10: only the range-chart normalizer stripped these, so
+    every other mode duplicated the whole raw payload into the result JSON
+    (and inflated quality.py's ``_extras``-ratio check).
+    """
+    extras.pop("_array_root", None)
+    extras.pop("_note", None)
+    return extras
+
+
 def _normalize_section_into(sec: dict[str, Any],
                              target: list[dict[str, Any]]) -> None:
     """Build a section row from a raw dict and append it to ``target``.
@@ -514,6 +721,19 @@ def _normalize_species_into(sp: dict[str, Any],
     def s(v):
         return "" if v is None else str(v)
 
+    # REVIEW-2026-09-10: species rows carried their bed indices through
+    # _normalize_optional_int with no order check, unlike the columnar path
+    # (norm_blocks) which swaps an inverted pair and flags it. An inverted
+    # (range_top_idx < range_base_idx) pair was therefore exported as a valid
+    # range and nothing downstream caught it - quality.py's FAD/LAD check
+    # reads the *string* fields, not the index fields.
+    _base_idx = _normalize_optional_int(sp.get("range_base_idx"))
+    _top_idx = _normalize_optional_int(sp.get("range_top_idx"))
+    _idx_warnings: list[str] = []
+    if _top_idx is not None and _base_idx is not None and _top_idx < _base_idx:
+        _top_idx, _base_idx = _base_idx, _top_idx
+        _idx_warnings.append("index_order_swap")
+
     row = {
         "species": s(sp.get("species")),
         "section": s(sp.get("section")),
@@ -533,8 +753,8 @@ def _normalize_species_into(sp: dict[str, Any],
         # does not double-write them.
         "range_top_bed": s(sp.get("range_top_bed", "")),
         "range_base_bed": s(sp.get("range_base_bed", "")),
-        "range_top_idx": _normalize_optional_int(sp.get("range_top_idx")),
-        "range_base_idx": _normalize_optional_int(sp.get("range_base_idx")),
+        "range_top_idx": _top_idx,
+        "range_base_idx": _base_idx,
         "endpoint_kind": _normalize_endpoint_kind(sp.get("endpoint_kind")),
         # Missing modern classifications remain unknown. Explicit legacy
         # reworked booleans retain their historical compatibility mapping.
@@ -549,6 +769,10 @@ def _normalize_species_into(sp: dict[str, Any],
     sp_name = row["species"]
     if sp_name and _IRON_RULE_ZONE_RE.search(sp_name):
         row["note"] = (row["note"] + " [zone-mislabel-warning]").strip()
+    if _idx_warnings:
+        # Same single-string / list convention the block rows use, so
+        # rcaWarningFlags / _warning_flags consumers read it uniformly.
+        row["_warning"] = _idx_warnings[0] if len(_idx_warnings) == 1 else _idx_warnings
     target.append(row)
 
 
@@ -676,15 +900,22 @@ def normalize_result(parsed):
                 if not isinstance(inner, dict):
                     continue
                 inner2 = dict(inner)
-                # Fall back: when the inner record has no primary identifier
-                # for its kind (no ``name`` for sections/biozones, no
+                # Fall back: when the inner record has NO primary identifier
+                # key at all (no ``name`` for sections/biozones, no
                 # ``species`` for species_ranges), use the wrapper key as the
                 # primary identifier. This recovers the most common
                 # dict-shaped payload (``{'Pingdingshan': {...}}``) without
                 # losing the record.
-                if kind in ("sections", "biozones") and not inner2.get("name"):
+                #
+                # REVIEW-2026-09-10: the test must be "key absent", not
+                # "value falsy". A record that carries ``species: ""`` is the
+                # model following the prompt's instruction to leave an
+                # unreadable name empty - overwriting it with the wrapper key
+                # fabricated a taxon name (e.g. ``{"unclear": {"species": ""}}``
+                # became species "unclear", ``{"0": {...}}`` became "0").
+                if kind in ("sections", "biozones") and "name" not in inner2:
                     inner2["name"] = wrapper_key
-                elif kind == "species_ranges" and not inner2.get("species"):
+                elif kind == "species_ranges" and "species" not in inner2:
                     inner2["species"] = wrapper_key
                 # Drop any pre-existing _extras before re-running the
                 # normalizer so we don't end up with a nested ``_extras``
@@ -711,6 +942,21 @@ def normalize_result(parsed):
         elif isinstance(raw, list):
             for item in raw:
                 if not isinstance(item, dict):
+                    # REVIEW-2026-09-10: a bare string entry
+                    # (``{"biozones": ["Clarkina postbitteri Zone"]}``) used
+                    # to be skipped in silence (both engines). Coerce it to a
+                    # one-field row so the record survives, and flag it.
+                    if isinstance(item, str):
+                        row = _row_from_string(item, kind)
+                        if row is not None:
+                            if kind == "sections":
+                                _normalize_section_into(row, out["sections"])
+                            elif kind == "species_ranges":
+                                _normalize_species_into(row, out["species_ranges"])
+                            elif kind == "biozones":
+                                _normalize_biozone_into(row, out["biozones"])
+                            if "string_row_coerced" not in root_warnings:
+                                root_warnings.append("string_row_coerced")
                     continue
                 if kind == "sections":
                     _normalize_section_into(item, out["sections"])
@@ -736,12 +982,12 @@ def normalize_result(parsed):
 
     of = parsed.get("other_fossils") or []
     # Fix B-3: handle case where model returns a string instead of a list.
-    if isinstance(of, list):
-        out["other_fossils"] = [s(x) for x in of if isinstance(x, str) and s(x).strip()]
-    elif isinstance(of, str) and of.strip():
-        out["other_fossils"] = [of.strip()]
-    else:
-        out["other_fossils"] = []
+    # REVIEW-2026-09-10: dict-shaped entries used to be dropped here while
+    # the browser (js/minimax.js M1 fix) already lifted their label/species/
+    # taxon/name - so a labelled fossil record appeared in the browser and
+    # vanished from the server, CSV and XLSX. Both sides now accept both
+    # shapes (see _other_fossils_from).
+    out["other_fossils"] = _other_fossils_from(of)
     try:
         conf = float(parsed.get("confidence", 0.0))
     except (TypeError, ValueError):
@@ -926,6 +1172,13 @@ def _error_from_status(status: int | None, err_body: str = "", latency_ms: int =
         key = "err.403"
     elif status == 429:
         key = "err.429"
+    elif status == 200:
+        # REVIEW-2026-09-10: a 200 that produced no usable text is an EMPTY
+        # response, not an HTTP error - reporting "HTTP error (HTTP 200)"
+        # told the user nothing. The JS engine already uses err.empty here,
+        # and the key is translated in all three languages; the reason rides
+        # in error_body (see _summarise_empty_payload).
+        key = "err.empty"
     return ExtractResult(
         ok=False, error_key=key, status=status, error_body=err_body,
         latency_ms=latency_ms, image_sha256=image_sha256,
@@ -1034,9 +1287,7 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
 
     def norm_blocks(items):
         out = []
-        for b in items or []:
-            if not isinstance(b, dict):
-                continue
+        for b in _dict_rows(items):
             raw_top = b.get("range_top_idx")
             raw_base = b.get("range_base_idx")
             top_idx, top_lossy = fi(raw_top)
@@ -1079,9 +1330,7 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
 
     def norm_units(items):
         out = []
-        for u in items or []:
-            if not isinstance(u, dict):
-                continue
+        for u in _dict_rows(items):
             top_idx, top_lossy = fi(u.get("range_top_idx"))
             base_idx, base_lossy = fi(u.get("range_base_idx"))
             # B-3 fix: same swap-logic for age_units.
@@ -1111,9 +1360,7 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
 
     def norm_samples(items):
         out = []
-        for s_item in items or []:
-            if not isinstance(s_item, dict):
-                continue
+        for s_item in _dict_rows(items):
             bed_idx, bed_lossy = fi(s_item.get("bed_idx"))
             row = {
                 "bed_idx": bed_idx,
@@ -1157,9 +1404,7 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
 
     def norm_cross(items):
         out = []
-        for x in items or []:
-            if not isinstance(x, dict):
-                continue
+        for x in _dict_rows(items):
             from_bed_idx, from_lossy = fi(x.get("from_bed_idx"))
             to_bed_idx, to_lossy = fi(x.get("to_bed_idx"))
             row = {
@@ -1180,9 +1425,7 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
         return out
 
     sections = []
-    for sec in parsed.get("sections") or []:
-        if not isinstance(sec, dict):
-            continue
+    for sec in _dict_rows(parsed.get("sections")):
         try:
             conf_v = float(sec.get("confidence_by_section", 0.0))
         except (TypeError, ValueError):
@@ -1204,7 +1447,17 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
         # Models sometimes emit `confidence` at the root instead of the
         # documented `overall_confidence`; fall back so the value isn't
         # silently zeroed (which would also distort aggregate's mean).
-        overall = float(parsed.get("overall_confidence", parsed.get("confidence", 0.0)))
+        #
+        # REVIEW-2026-09-10: `dict.get(key, default)` only falls back when the
+        # key is ABSENT, so an explicit ``overall_confidence: null`` (a common
+        # model emission) still produced 0.0 and discarded a perfectly good
+        # sibling ``confidence``. The browser's mirror uses `!= null`
+        # (js/minimax.js) and returned 0.8 for the same payload - the server
+        # and the browser disagreed on the same extraction.
+        _overall_raw = parsed.get("overall_confidence")
+        if _overall_raw is None:
+            _overall_raw = parsed.get("confidence", 0.0)
+        overall = float(_overall_raw)
     except (TypeError, ValueError):
         overall = 0.0
     overall = max(0.0, min(1.0, overall))
@@ -1373,17 +1626,21 @@ def normalize_abundance_result(parsed: dict[str, Any]) -> dict[str, Any]:
                 parsed.setdefault("_unclassified", []).append(item)
 
     def s(v: Any) -> str:
-        return "" if v is None else str(v)
+        # REVIEW-2026-09-10: _stringify_scalar, not str(), so a container in a
+        # scalar field degrades to "" instead of a Python repr.
+        return _stringify_scalar(v)
 
+    warnings: list[str] = []
     out: dict[str, Any] = {
         "sites": [],
         "abundances": [],
         "zones": [],
         "confidence": 0.0,
     }
-    for site in (parsed.get("sites") if isinstance(parsed.get("sites"), list) else []):
-        if not isinstance(site, dict):
-            continue
+    # REVIEW-2026-09-10: _iter_rows tolerates a dict-shaped field
+    # ({"sites": {"Suigetsu": {...}}}), which previously produced [] and
+    # silently discarded every record for this mode.
+    for site in _iter_rows(parsed.get("sites"), "sites", warnings):
         row = {
             "name": s(site.get("name")),
             "location": s(site.get("location")),
@@ -1392,9 +1649,7 @@ def normalize_abundance_result(parsed: dict[str, Any]) -> dict[str, Any]:
         }
         _carry_extras(site, _KNOWN_SITE_KEYS, row)
         out["sites"].append(row)
-    for ab in (parsed.get("abundances") if isinstance(parsed.get("abundances"), list) else []):
-        if not isinstance(ab, dict):
-            continue
+    for ab in _iter_rows(parsed.get("abundances"), "abundances", warnings):
         row = {
             "taxon": s(ab.get("taxon")),
             "site": s(ab.get("site")),
@@ -1405,9 +1660,7 @@ def normalize_abundance_result(parsed: dict[str, Any]) -> dict[str, Any]:
         }
         _carry_extras(ab, _KNOWN_ABUNDANCE_KEYS, row)
         out["abundances"].append(row)
-    for z in (parsed.get("zones") if isinstance(parsed.get("zones"), list) else []):
-        if not isinstance(z, dict):
-            continue
+    for z in _iter_rows(parsed.get("zones"), "zones", warnings):
         row = {
             "name": s(z.get("name")),
             "age": s(z.get("age")),
@@ -1420,9 +1673,12 @@ def normalize_abundance_result(parsed: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         conf = 0.0
     out["confidence"] = max(0.0, min(1.0, conf))
-    top_extras = {k: v for k, v in parsed.items() if k not in _KNOWN_ABUNDANCE_ROOT_KEYS}
+    top_extras = _pop_array_root_extras(
+        {k: v for k, v in parsed.items() if k not in _KNOWN_ABUNDANCE_ROOT_KEYS})
     if top_extras:
         out["_extras"] = top_extras
+    if warnings:
+        out["_warnings"] = warnings
     return out
 
 
@@ -1559,16 +1815,33 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
     """
     # H3-fix pattern: unwrap _array_root wrapper (top-level array from
     # safe_json_loads wrapped as {_array_root:[...]}).
+    #
+    # REVIEW-2026-09-10: the old form REPLACED `raw` with the inner item, so
+    # every outer field the model emitted alongside the array was discarded -
+    # e.g. {"_array_root":[{nodes...}], "confidence": 0.9} normalized to
+    # confidence 0.0. The wrapper's own keys now fill only the gaps the inner
+    # object does not define (setdefault), matching the in-place style the
+    # abundance/columnar unwraps already use.
     if "_array_root" in raw and isinstance(raw["_array_root"], list):
         for item in raw["_array_root"]:
             if not isinstance(item, dict):
                 continue
             if isinstance(item.get("nodes"), list):
-                raw = item
+                merged = dict(item)
+                for key, value in raw.items():
+                    if key in ("_array_root", "_note"):
+                        continue
+                    merged.setdefault(key, value)
+                raw = merged
                 break
 
+    # REVIEW-2026-09-10: collected repairs to surface on the result.
+    phylo_warnings: list[str] = []
+
     def s(v):
-        return "" if v is None else str(v)
+        # Container-safe: a dict/list in a scalar field collapses to "" rather
+        # than leaking a Python repr into a scientific field.
+        return _stringify_scalar(v)
 
     def fv(v):
         """Coerce to float or None."""
@@ -1579,9 +1852,29 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             return None
 
-    nodes_in = raw.get("nodes") or []
-    if not isinstance(nodes_in, list):
-        nodes_in = []
+    # REVIEW-2026-09-10: `_dict_rows` accepts a list OR a dict-shaped
+    # ``{"nodes": {"n0": {...}}}`` emission, which previously produced [].
+    nodes_in = list(_dict_rows(raw.get("nodes")))
+
+    # REVIEW-2026-09-10: a node with a missing/empty id used to be skipped
+    # silently ("continue"), which collapsed the topology - a 2-node tree
+    # became a single-node tree and to_newick returned "(Root);". Assign a
+    # stable synthetic id instead and flag the repair, so the clade is kept
+    # and the operator can see that the id was not in the figure.
+    _existing_ids = {str(n.get("id") or "").strip()
+                     for n in nodes_in if isinstance(n, dict)}
+    _anon = 0
+    for n in nodes_in:
+        if str(n.get("id") or "").strip():
+            continue
+        while True:
+            _anon += 1
+            candidate = f"_anon{_anon}"
+            if candidate not in _existing_ids:
+                break
+        _existing_ids.add(candidate)
+        n["id"] = candidate
+        phylo_warnings.append("node_missing_id_synthesised")
 
     # Build id→node lookup and compute children counts (reverse check for is_leaf).
     id_to_node: dict[str, dict[str, Any]] = {}
@@ -1687,7 +1980,12 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
         "extraction_timestamp": s(metadata_raw.get("extraction_timestamp", "")),
         "tree_type": s(metadata_raw.get("tree_type", "")),
         "scale": s(metadata_raw.get("scale", "")),
-        "rooted": bool(metadata_raw.get("rooted", True)),
+        # REVIEW-2026-09-10: `bool(...)` inverted the meaning of the string
+        # "false" (non-empty string -> True) and turned an explicit null into
+        # False, diverging from the browser mirror (js/minimax.js treats
+        # anything that is not exactly false as rooted). _coerce_bool_flag
+        # parses the textual forms and keeps the mirror's absent/null default.
+        "rooted": _coerce_bool_flag(metadata_raw.get("rooted"), True),
         "source": s(metadata_raw.get("source", metadata_raw.get("image_source", ""))),
     }
     for k, v in metadata_raw.items():
@@ -1703,9 +2001,9 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
         conf = 0.0
     conf = max(0.0, min(1.0, conf))
 
-    root_extras = {k: v for k, v in raw.items()
-                   if k not in ("metadata", "nodes", "root_ids", "legend",
-                                "confidence", "_array_root")}
+    root_extras = _pop_array_root_extras(
+        {k: v for k, v in raw.items()
+         if k not in ("metadata", "nodes", "root_ids", "legend", "confidence")})
     out: dict[str, Any] = {
         "metadata": metadata,
         # root_ids is already str-normalised up front (Sprint B REVIEW-2026-09-04).
@@ -1716,6 +2014,8 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
     }
     if root_extras:
         out["_extras"] = root_extras
+    if phylo_warnings:
+        out["_warnings"] = phylo_warnings
     return out
 
 
@@ -1972,8 +2272,11 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
         }
 
     def s(v):
-        return "" if v is None else str(v)
+        # REVIEW-2026-09-10: container-safe (see _stringify_scalar).
+        return _stringify_scalar(v)
 
+    # REVIEW-2026-09-10: repairs to surface on the result.
+    _chem_warnings: list[str] = []
     out = {
         "metadata": {},
         "data_points": [],
@@ -1995,14 +2298,27 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
         }
 
     # Normalize data_points
-    for pt in parsed.get("data_points") or []:
-        if not isinstance(pt, dict):
-            continue
+    for pt in _dict_rows(parsed.get("data_points")):
         values_raw = pt.get("values") or {}
         values = {}
         if isinstance(values_raw, dict):
             for k, v in values_raw.items():
                 values[str(k)] = s(v)
+        elif isinstance(values_raw, list):
+            # REVIEW-2026-09-10: a non-dict `values` (e.g. the model emitting
+            # [{"name": "d13C", "value": "-1.24"}]) used to leave values == {}
+            # with the raw list unrecoverable - `values` is a known key, so
+            # _carry_extras would not preserve it either. That produced a
+            # sample row that looks valid but carries no geochemistry.
+            # Accept the common list-of-{name,value} shape, and keep anything
+            # unrecognised under a companion key rather than losing it.
+            for entry in values_raw:
+                if not isinstance(entry, dict):
+                    continue
+                label = entry.get("name", entry.get("element", entry.get("isotope")))
+                if label is None:
+                    continue
+                values[str(label)] = s(entry.get("value", entry.get("val", "")))
         row = {
             "sample_id": s(pt.get("sample_id")),
             "depth_m": s(pt.get("depth_m")),
@@ -2014,6 +2330,16 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
             "note": s(pt.get("note")),
         }
         _carry_extras(pt, _KNOWN_CHEMICAL_STRAT_DATA_POINT_KEYS, row)
+        if values_raw and not values:
+            # Nothing could be lifted out of a non-dict `values`. Keep the raw
+            # payload on the row so the measurements are not silently lost.
+            extras = row.get("_extras")
+            if not isinstance(extras, dict):
+                extras = {}
+                row["_extras"] = extras
+            extras["values_raw"] = values_raw
+            if "values_unparseable" not in _chem_warnings:
+                _chem_warnings.append("values_unparseable")
         out["data_points"].append(row)
 
     # Normalize events
@@ -2056,6 +2382,8 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
     extras_src = {k: v for k, v in parsed.items() if k not in _KNOWN_CHEMICAL_STRAT_ROOT_KEYS}
     if extras_src:
         out["_extras"] = extras_src
+    if _chem_warnings:
+        out["_warnings"] = _chem_warnings
     return out
 
 
@@ -2192,8 +2520,11 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         }
 
     def s(v):
-        return "" if v is None else str(v)
+        # REVIEW-2026-09-10: container-safe (see _stringify_scalar).
+        return _stringify_scalar(v)
 
+    # REVIEW-2026-09-10: repairs to surface on the result.
+    _paleomap_warnings: list[str] = []
     out = {
         "metadata": {},
         "continents": [],
@@ -2231,9 +2562,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         return []
 
     # Normalize continents
-    for cont in parsed.get("continents") or []:
-        if not isinstance(cont, dict):
-            continue
+    for cont in _dict_rows(parsed.get("continents")):
         row = {
             "name": s(cont.get("name")),
             "type": s(cont.get("type")),
@@ -2246,9 +2575,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["continents"].append(row)
 
     # Normalize oceans/seas
-    for sea in parsed.get("oceans_seas") or []:
-        if not isinstance(sea, dict):
-            continue
+    for sea in _dict_rows(parsed.get("oceans_seas")):
         row = {
             "name": s(sea.get("name")),
             "type": s(sea.get("type")),
@@ -2259,9 +2586,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["oceans_seas"].append(row)
 
     # Normalize tectonic features
-    for feat in parsed.get("tectonic_features") or []:
-        if not isinstance(feat, dict):
-            continue
+    for feat in _dict_rows(parsed.get("tectonic_features")):
         row = {
             "name": s(feat.get("name")),
             "type": s(feat.get("type")),
@@ -2273,9 +2598,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["tectonic_features"].append(row)
 
     # Normalize biogeographic realms
-    for realm in parsed.get("biogeographic_realms") or []:
-        if not isinstance(realm, dict):
-            continue
+    for realm in _dict_rows(parsed.get("biogeographic_realms")):
         row = {
             "name": s(realm.get("name")),
             "type": s(realm.get("type")),
@@ -2286,9 +2609,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["biogeographic_realms"].append(row)
 
     # Normalize fossil sites
-    for site in parsed.get("fossil_sites") or []:
-        if not isinstance(site, dict):
-            continue
+    for site in _dict_rows(parsed.get("fossil_sites")):
         row = {
             "name": s(site.get("name")),
             "lat_lon": s(site.get("lat_lon")),
@@ -2300,9 +2621,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["fossil_sites"].append(row)
 
     # Normalize paleolatitude indicators
-    for ind in parsed.get("paleolatitude_indicators") or []:
-        if not isinstance(ind, dict):
-            continue
+    for ind in _dict_rows(parsed.get("paleolatitude_indicators")):
         row = {
             "type": s(ind.get("type")),
             "coordinates": norm_coords(ind.get("coordinates")),
@@ -2316,9 +2635,12 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         conf = 0.0
     out["confidence"] = max(0.0, min(1.0, conf))
 
-    extras_src = {k: v for k, v in parsed.items() if k not in _KNOWN_PALEOMAP_ROOT_KEYS}
+    extras_src = _pop_array_root_extras(
+        {k: v for k, v in parsed.items() if k not in _KNOWN_PALEOMAP_ROOT_KEYS})
     if extras_src:
         out["_extras"] = extras_src
+    if _paleomap_warnings:
+        out["_warnings"] = _paleomap_warnings
     return out
 
 
@@ -2460,6 +2782,9 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
     }
 
     # Normalize metadata
+    # REVIEW-2026-09-10: repairs to surface on the result.
+    scatter_warnings: list[str] = []
+
     meta = parsed.get("metadata") or {}
     if isinstance(meta, dict):
         out["metadata"] = {
@@ -2474,9 +2799,7 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
         }
 
     # Normalize groups
-    for grp in parsed.get("groups") or []:
-        if not isinstance(grp, dict):
-            continue
+    for grp in _dict_rows(parsed.get("groups")):
         row = {
             "name": s(grp.get("name")),
             "color": s(grp.get("color")),
@@ -2489,9 +2812,14 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["groups"].append(row)
 
     # Normalize points (limit to first 500 for very large outputs)
-    for pt in (parsed.get("points") or [])[:500]:
-        if not isinstance(pt, dict):
-            continue
+    # REVIEW-2026-09-10: the cap used to be applied in silence, so the
+    # result contradicted its own metadata.n_points (which keeps the model's
+    # full count) and the JSON/table/CSV silently reported 500 of N
+    # observations. The cap now surfaces as a warning.
+    _points_all = list(_dict_rows(parsed.get("points")))
+    if len(_points_all) > 500:
+        scatter_warnings.append("points_truncated_to_500")
+    for pt in _points_all[:500]:
         row = {
             "x": s(pt.get("x")),
             "y": s(pt.get("y")),
@@ -2504,9 +2832,7 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["points"].append(row)
 
     # Normalize outliers
-    for ot in parsed.get("outliers") or []:
-        if not isinstance(ot, dict):
-            continue
+    for ot in _dict_rows(parsed.get("outliers")):
         row = {
             "x": s(ot.get("x")),
             "y": s(ot.get("y")),
@@ -2532,9 +2858,12 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
         conf = 0.0
     out["confidence"] = max(0.0, min(1.0, conf))
 
-    extras_src = {k: v for k, v in parsed.items() if k not in _KNOWN_SCATTER_PLOT_ROOT_KEYS}
+    extras_src = _pop_array_root_extras(
+        {k: v for k, v in parsed.items() if k not in _KNOWN_SCATTER_PLOT_ROOT_KEYS})
     if extras_src:
         out["_extras"] = extras_src
+    if scatter_warnings:
+        out["_warnings"] = scatter_warnings
     return out
 
 
@@ -2690,8 +3019,10 @@ def normalize_zonation_chart_result(parsed: dict[str, Any]) -> dict[str, Any]:
                 parsed.setdefault("_unclassified", []).append(item)
 
     def s(v: Any) -> str:
-        return "" if v is None else str(v)
+        # REVIEW-2026-09-10: container-safe (see _stringify_scalar).
+        return _stringify_scalar(v)
 
+    warnings: list[str] = []
     out: dict[str, Any] = {
         "zonations": [],
         "zones": [],
@@ -2700,9 +3031,9 @@ def normalize_zonation_chart_result(parsed: dict[str, Any]) -> dict[str, Any]:
     }
     if not isinstance(parsed, dict):
         return out
-    for z in (parsed.get("zonations") if isinstance(parsed.get("zonations"), list) else []):
-        if not isinstance(z, dict):
-            continue
+    # REVIEW-2026-09-10: _iter_rows also recovers dict-shaped fields
+    # ({"zones": {"Z1": {...}}}) that previously collapsed to [].
+    for z in _iter_rows(parsed.get("zonations"), "zonations", warnings):
         row = {
             "name": s(z.get("name")),
             "region": s(z.get("region")),
@@ -2711,9 +3042,7 @@ def normalize_zonation_chart_result(parsed: dict[str, Any]) -> dict[str, Any]:
         }
         _carry_extras(z, _KNOWN_ZONATIONS_KEYS, row)
         out["zonations"].append(row)
-    for z in (parsed.get("zones") if isinstance(parsed.get("zones"), list) else []):
-        if not isinstance(z, dict):
-            continue
+    for z in _iter_rows(parsed.get("zones"), "zones", warnings):
         row = {
             "name": s(z.get("name")),
             "zonation": s(z.get("zonation")),
@@ -2727,9 +3056,7 @@ def normalize_zonation_chart_result(parsed: dict[str, Any]) -> dict[str, Any]:
         }
         _carry_extras(z, _KNOWN_ZONATION_ZONE_KEYS, row)
         out["zones"].append(row)
-    for c in (parsed.get("correlations") if isinstance(parsed.get("correlations"), list) else []):
-        if not isinstance(c, dict):
-            continue
+    for c in _iter_rows(parsed.get("correlations"), "correlations", warnings):
         row = {
             "from_zone": s(c.get("from_zone")),
             "to_zone": s(c.get("to_zone")),
@@ -2744,9 +3071,12 @@ def normalize_zonation_chart_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["confidence"] = max(0.0, min(1.0, float(parsed.get("confidence", 0.0) or 0.0)))
     except (TypeError, ValueError):
         out["confidence"] = 0.0
-    extras_src = {k: v for k, v in parsed.items() if k not in _KNOWN_ZONATION_ROOT_KEYS}
+    extras_src = _pop_array_root_extras(
+        {k: v for k, v in parsed.items() if k not in _KNOWN_ZONATION_ROOT_KEYS})
     if extras_src:
         out["_extras"] = extras_src
+    if warnings:
+        out["_warnings"] = warnings
     return out
 
 
@@ -2947,6 +3277,16 @@ def classify_chart_image(
             prompt_version=_pvm("chart_classify"),
             mode="chart_classify",
             image_b64=image_b64,
+            # REVIEW-2026-09-10: the caption and chart-language hint are
+            # interpolated into the classification prompt above, so they MUST
+            # be part of the key - otherwise the same image resubmitted with a
+            # different caption was served the earlier verdict (three distinct
+            # captions produced one LLM call), and because mode="auto" derives
+            # the extraction mode from this result, a stale verdict silently
+            # selected the wrong prompt/normalizer/merge schema. The sibling
+            # extraction keys already include both fields.
+            caption=caption,
+            chart_lang=chart_lang,
         )
         cached = _cache.get(ckey)
         if isinstance(cached, dict) and "chart_type" in cached:
@@ -3018,6 +3358,7 @@ def resolve_auto_mode(
     base_url: str = DEFAULT_ENDPOINT,
     model: str = DEFAULT_MODEL,
     provider: LlmProvider | None = None,
+    timeout_sec: int | None = None,
     progress_callback=None,
 ) -> tuple[str, ExtractResult | None]:
     """Resolve ``"auto"`` to a concrete chart type.
@@ -3039,9 +3380,16 @@ def resolve_auto_mode(
     # derive mode_source from `classify_result is not None`, so returning
     # None here would misreport a vision-default as a text match.
     try:
+        # REVIEW-2026-09-10: the caller's timeout setting was never forwarded,
+        # so a user who set 10 s to bound latency still waited up to the
+        # classifier's own 120 s default before extraction even started.
+        # classify_chart_image clamps its own value, so passing None keeps the
+        # previous behaviour for callers that do not have a deadline.
+        _cls_timeout = clamp_timeout_sec(timeout_sec) if timeout_sec is not None else None
         cls = classify_chart_image(
             api_key=api_key, image_b64=image_b64, media_type=media_type,
             caption=caption, provider=provider,
+            **({"timeout_sec": _cls_timeout} if _cls_timeout is not None else {}),
             progress_callback=progress_callback,
         )
     except Exception as exc:

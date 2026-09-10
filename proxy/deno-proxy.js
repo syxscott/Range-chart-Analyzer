@@ -186,17 +186,35 @@ Deno.serve(async (request) => {
   // so any rate-limited request threw ReferenceError before this 429
   // could be returned with proper CORS headers).
   const cors = corsFor(origin);
-  const authorized = cors !== null || secretOk(request);
+  // REVIEW-2026-09-10: mirror of cloudflare-worker.js — an allowlisted Origin
+  // alone no longer authorizes a request when a secret is configured. The
+  // documented modes: both configured -> both required; allowlist empty +
+  // secret -> key alone; no secret -> Origin alone (documented as weak);
+  // neither -> closed. A configured secret must also CHANGE the outcome when
+  // the key is missing or wrong (the first draft treated "no key sent" the
+  // same as "no secret configured" and let a forged Origin through).
+  const secretConfigured = Boolean(PROXY_SHARED_SECRET);
+  const allowlistEmpty = ALLOWED_ORIGINS.length === 0;
+  let authorized;
+  if (secretConfigured) {
+    authorized = secretOk(request) && (allowlistEmpty || cors !== null);
+  } else {
+    authorized = cors !== null;
+  }
 
-  // RATE LIMIT: key on CF-Connecting-IP when available (set by CF, not
-  // client-spoofable) and otherwise the RIGHTMOST X-Forwarded-For (the
-  // edge-appended value when behind a trusted proxy). The leftmost is
-  // client-controlled and trivially rotatable — never trust it.
+  // RATE LIMIT: key on the RIGHTMOST X-Forwarded-For (edge-appended when
+  // behind a trusted proxy). The leftmost is client-controlled and trivially
+  // rotatable — never trust it.
+  //
+  // REVIEW-2026-09-10: this used to prefer `cf-connecting-ip`. Only Cloudflare
+  // sets that header (and overwrites a client-supplied one); Deno Deploy does
+  // not, so a client could send a fresh cf-connecting-ip per request, reset
+  // its rate-limit bucket every time, and also churn the LRU map to evict
+  // other clients' entries. This deployment is not Cloudflare, so that header
+  // carries no authority here (cloudflare-worker.js keeps using it).
   const fwd = request.headers.get("x-forwarded-for");
   const rightmostFwd = fwd ? fwd.split(",").slice(-1)[0].trim() : "";
-  const clientIp = request.headers.get("cf-connecting-ip") ||
-                   rightmostFwd ||
-                   "unknown";
+  const clientIp = rightmostFwd || "unknown";
   // Sprint B (REVIEW-2026-09-04) #11: reject unauthorized requests BEFORE
   // consuming a rate-limit slot, matching cloudflare-worker.js. Previously
   // the deno variant checked the rate limit first, so a flood of bogus

@@ -32,10 +32,20 @@ _RATE_WINDOW_SEC = 60
 _RATE_MAX_REQUESTS = 30
 _rate_history: dict[str, collections.deque] = {}
 _rate_lock = threading.Lock()
+# REVIEW-2026-09-10: sweep fully-expired entries once the map is this large,
+# so one-shot / rotating source IPs cannot grow it without bound.
+_RATE_HISTORY_SWEEP_AT = 256
 
 # CSRF store cap — protects against unbounded memory growth from
 # clients minting tokens faster than they use them.
 _CSRF_STORE_MAX = 4096
+# REVIEW-2026-09-10: the cap above bounds the entry COUNT but not the entry
+# SIZE. A GET may supply its own X-Session-Token, which is used verbatim as
+# the store key (and echoed back), so a single request with a ~64 KB header
+# value added ~64 KB that persisted for the TTL — 4096 of those is ~100 MB.
+# Only accept a token shaped like the ones this server mints.
+_CSRF_SESSION_TOKEN_MAX_LEN = 128
+_SESSION_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-]{8,128}")
 
 # Sprint B (REVIEW-2026-09-04) #2: GET /api/history/<id>/provenance serves
 # audit data with no authentication, so it now requires this custom header.
@@ -63,8 +73,18 @@ _MULTI_RUN_TIMEOUT_SLACK_SEC = 10
 # S8 fix: redact API-key-like patterns from error_body before echoing to the UI.
 # Upstream servers may echo back request headers (including Authorization)
 # or query params. We redact common key formats to prevent accidental leakage.
+#
+# REVIEW-2026-09-10: the value character class excluded ".", "+", "/" and "="
+# — exactly the characters a JWT or base64 key is made of — so
+# "x-api-key=sk-abc.defghijklmnop" was left untouched and only the FIRST
+# segment of a Bearer JWT was redacted (payload + signature survived). The
+# prefix alternation also missed this repo's own third-party presets
+# ("ccs-...", "pk-...") and the Google/AWS fixed formats. Expanded both.
 _API_KEY_RE = re.compile(
-    r'(sk-|Bearer |x-api-key[:=]\s*)[a-zA-Z0-9_\-]{8,}',
+    r"(?:sk-|ccs-|pk-|Bearer\s+|x-api-key\s*[:=]\s*|api[_-]?key\s*[:=]\s*)"
+    r"[A-Za-z0-9._+\-/=]{8,}"
+    r"|AIza[0-9A-Za-z_\-]{20,}"
+    r"|AKIA[0-9A-Z]{16}",
     re.IGNORECASE,
 )
 
@@ -73,7 +93,11 @@ def _redact_error_body(body):
     """Remove API-key-like tokens from a string before sending to the client."""
     if not isinstance(body, str):
         return ""
-    return _API_KEY_RE.sub(r'\1[REDACTED]', body)
+    # REVIEW-2026-09-10: the pattern no longer has a capture group (the
+    # alternation covers whole tokens), so replace the whole match. Keeping
+    # the old `\1` reference would raise "invalid group reference" on every
+    # call.
+    return _API_KEY_RE.sub('[REDACTED]', body)
 
 
 # Issue-2 fix: validate base64 format and size for image_b64.
@@ -97,6 +121,74 @@ def _validate_image_b64(data):
     return True, ""
 
 
+# REVIEW-2026-09-10: pixel/edge caps for the enhancement path. The client
+# downscales to maxImageEdge (js/config.js, default 4000) before upload, so a
+# larger image is either an unusual client or a decompression bomb; either way
+# the enhancement must not pay for it.
+_MAX_ENHANCE_EDGE = 4000
+_MAX_ENHANCE_PIXELS = 16_000_000
+
+
+def _raw_text(entry) -> str:
+    """Raw text from a per-run raw entry.
+
+    REVIEW-2026-09-10: the multi-run pipeline records
+    ``{"run_idx": <slot>, "text": <raw>}`` so the audit table can label each
+    reply with its sampling slot; single-run callers still pass a bare string.
+    """
+    if isinstance(entry, dict):
+        return entry.get("text", "") or ""
+    return entry or ""
+
+
+def _validate_provider_fields(provider_raw: dict) -> str:
+    """Type-check the provider sub-fields the request path dereferences.
+
+    REVIEW-2026-09-10: ``provider: {"endpoint": 5}`` raised AttributeError
+    inside rca_core/ssrf.py (whose try only catches ValueError), and
+    ``"extra_headers": "oops"`` raised AttributeError at the
+    ``.items()`` call in _stable_extra_headers. Both escaped do_POST, so the
+    socket closed with no response at all. Returns an error message, or ""
+    when the fields are usable.
+    """
+    endpoint = provider_raw.get("endpoint")
+    if endpoint is not None and not isinstance(endpoint, str):
+        return "field 'provider.endpoint' must be a string"
+    api_key = provider_raw.get("api_key")
+    if api_key is not None and not isinstance(api_key, str):
+        return "field 'provider.api_key' must be a string"
+    model = provider_raw.get("model")
+    if model is not None and not isinstance(model, str):
+        return "field 'provider.model' must be a string"
+    for field in ("extra_headers", "extra_body"):
+        value = provider_raw.get(field)
+        if value is not None and not isinstance(value, dict):
+            return f"field 'provider.{field}' must be an object or null"
+    return ""
+
+
+def _constrain_resolved_mode(mode: str, mode_source: str) -> tuple[str, str]:
+    """Keep an auto-resolved mode inside the wired set.
+
+    REVIEW-2026-09-10: the request whitelist only inspects the REQUESTED
+    mode, so ``mode: "auto"`` was a way around it - the vision classifier can
+    return chemical_stratigraphy / paleomap / scatter_plot
+    (rca_core/extractor.KNOWN_CHART_TYPES), which have no MergeSchema and no
+    exporter tables. ``merge_results`` then fell back to RANGE_CHART_SCHEMA
+    and dropped every mode-specific row (continents, fossil_sites,
+    data_points) while still returning ``ok=True`` - precisely the "WRONG
+    merge schema with ok=True" failure the whitelist documents itself as
+    preventing. The resolved mode now gets the same rule applied, falling
+    back to range_chart (the documented default) and marking the source so
+    the report and UI show that the fallback happened.
+
+    Returns ``(mode, mode_source)``.
+    """
+    if mode not in WIRED_MODES:
+        return "range_chart", "auto-fallback"
+    return mode, mode_source
+
+
 # Sprint B (REVIEW-2026-09-04) #12: the web UI sends ``enhance: true`` in
 # the POST body when the user opts into image pre-processing, but the
 # server silently dropped the field. This is the server-side equivalent of
@@ -104,8 +196,16 @@ def _validate_image_b64(data):
 # ``_enhance_image_pil`` — unsharp mask + gentle contrast boost; server.py
 # must not import gui.py). Best-effort: any failure falls back to the
 # original bytes so enhancement can never break an extraction.
-def _enhance_image_b64(image_b64: str) -> str:
-    """Return an enhanced copy of a base64 image, or the input unchanged.
+def _enhance_image_b64_with_mime(image_b64: str) -> tuple[str, str]:
+    """Return ``(image_b64, media_type)`` for the enhanced image.
+
+    REVIEW-2026-09-10: the enhancement always re-encodes as PNG, but the
+    caller kept forwarding the client's declared media_type - so a JPEG at or
+    under the client's resize threshold was uploaded as "image/jpeg" while the
+    bytes were PNG. Providers that validate the declared type against the
+    payload reject that (the GUI path and the JS resize path both return the
+    new mime alongside the bytes). ``media_type`` is "" when the input was
+    returned unchanged, so the caller keeps its own value.
 
     Applies a light unsharp mask + contrast boost with Pillow's
     ImageEnhance/ImageFilter (same recipe as the GUI path). Pillow missing,
@@ -116,10 +216,22 @@ def _enhance_image_b64(image_b64: str) -> str:
         import io
         from PIL import Image, ImageEnhance, ImageFilter  # type: ignore
     except Exception:
-        return image_b64
+        return image_b64, ""
     try:
         raw = base64.b64decode(image_b64, validate=True)
         img = Image.open(io.BytesIO(raw))
+        # REVIEW-2026-09-10 (decompression bomb): _validate_image_b64 caps the
+        # DECODED BYTE COUNT (10 MB) but not the pixel count, and Pillow only
+        # emits a warning below 2x its MAX_IMAGE_PIXELS. A 151 KB PNG
+        # expanding to 10000x10000 (100 Mpx) was decoded, unsharp-masked and
+        # re-encoded here in ~1.3 s; the worst case is hundreds of MB of
+        # intermediate buffers per request, multiplied by the handler pool.
+        # Refuse anything larger than the GUI's own edge cap (DEFAULT_MAX_EDGE,
+        # 4000 px) so a small upload cannot burn memory before the resize
+        # stage the client is supposed to have applied.
+        width, height = img.size
+        if width * height > _MAX_ENHANCE_PIXELS or max(width, height) > _MAX_ENHANCE_EDGE:
+            return image_b64, ""
         # Unsharp mask sharpens thin lines and small species names.
         img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
         # Gentle contrast boost helps faint pencil lines stand out.
@@ -131,10 +243,15 @@ def _enhance_image_b64(image_b64: str) -> str:
         # enforces (~4/3 of the 10 MB decoded cap); otherwise prefer the
         # original image over a ballooned PNG re-encode.
         if len(enhanced) > 14_000_000:
-            return image_b64
-        return enhanced
+            return image_b64, ""
+        return enhanced, "image/png"
     except Exception:
-        return image_b64
+        return image_b64, ""
+
+
+def _enhance_image_b64(image_b64: str) -> str:
+    """Bytes-only wrapper around :func:`_enhance_image_b64_with_mime`."""
+    return _enhance_image_b64_with_mime(image_b64)[0]
 
 
 # Allow running as `python server.py` from the project root.
@@ -155,6 +272,7 @@ from rca_core.aggregate import (  # noqa: E402
     COLUMNAR_SECTION_SCHEMA,
     RANGE_CHART_SCHEMA,
     SCHEMA_BY_MODE,
+    WIRED_MODES,
     merge_results,
 )
 from rca_core.llm import ApiFormat, LlmProvider  # noqa: E402
@@ -272,14 +390,19 @@ def _write_history_record(result, mode, runs, provider, max_tokens,
         # Build per-run raw_responses entries.
         raw_responses = []
         if raws:
-            for i, txt in enumerate(raws):
+            for i, entry in enumerate(raws):
+                # REVIEW-2026-09-10: entries may carry the sampling SLOT index
+                # ({'run_idx': n, 'text': ...}); a bare string is the legacy
+                # single-run call shape.
+                slot_idx = entry.get("run_idx", i) if isinstance(entry, dict) else i
+                txt = entry.get("text", "") if isinstance(entry, dict) else entry
                 if not txt:
                     continue
                 raw_responses.append({
-                    "run_idx": i,
+                    "run_idx": slot_idx,
                     "raw_text": txt,
                     "prompt_text": "",
-                    "request_meta": {**meta, "run_idx": i},
+                    "request_meta": {**meta, "run_idx": slot_idx},
                     "timestamp": int(time.time()),
                 })
 
@@ -439,6 +562,17 @@ def _check_rate_limit(ip: str) -> tuple[bool, int]:
     """Return (allowed, seconds_until_reset). Sliding window 30 req / 60 s."""
     now = time.time()
     with _rate_lock:
+        # REVIEW-2026-09-10: an entry used to be deleted only when THAT SAME
+        # ip returned after its window had slid fully empty, so a one-shot
+        # source (or a rotating IPv6 /64) left a permanent entry and the map
+        # grew without bound - the opposite of what the comment below claims.
+        # Sweep fully-expired entries once the map is large enough to matter.
+        if len(_rate_history) > _RATE_HISTORY_SWEEP_AT:
+            cutoff_sweep = now - _RATE_WINDOW_SEC
+            stale = [k for k, w in _rate_history.items()
+                     if not w or w[-1] < cutoff_sweep]
+            for k in stale:
+                _rate_history.pop(k, None)
         window = _rate_history.get(ip)
         if window is None:
             _rate_history[ip] = collections.deque([now], maxlen=_RATE_MAX_REQUESTS)
@@ -523,6 +657,60 @@ class Handler(BaseHTTPRequestHandler):
     # of pinning a worker thread indefinitely. 60s is generous for a normal
     # request line + headers + JSON body upload.
     timeout = 60
+
+    # REVIEW-2026-09-10: `timeout` is a per-recv INACTIVITY timeout (it maps
+    # to socket.settimeout), not a request deadline. A client that sends one
+    # byte just inside each interval keeps the buffered rfile.read() alive
+    # indefinitely - 30 such connections (one rate-limit window, so no 429)
+    # would pin 30 of the pool's 32 worker threads at a cost of ~30 bytes per
+    # minute and starve every legitimate request. The body read therefore
+    # enforces its own wall-clock deadline.
+    _BODY_DEADLINE_SEC = 60
+
+    def _read_body_with_deadline(self, length: int):
+        """Read exactly ``length`` body bytes, or None past the deadline.
+
+        Returns the bytes, or None when the upload did not complete within
+        ``_BODY_DEADLINE_SEC`` of wall-clock time (the caller answers 408).
+
+        Two details make this a real deadline rather than another inactivity
+        timer:
+          * ``rfile.read(n)`` blocks until it has all n bytes, so a trickle
+            would sit inside a single call past every check - use ``read1``,
+            which returns as soon as one chunk is available.
+          * the socket timeout is narrowed to the remaining budget before each
+            read, so a client that sends nothing at all is cut off at the
+            deadline instead of at the (much longer) per-recv ``timeout``.
+        """
+        deadline = time.monotonic() + self._BODY_DEADLINE_SEC
+        reader = getattr(self.rfile, "read1", None) or self.rfile.read
+        chunks = []
+        remaining = length
+        try:
+            while remaining > 0:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return None
+                try:
+                    self.connection.settimeout(max(0.05, min(left, 5.0)))
+                except OSError:
+                    pass
+                try:
+                    chunk = reader(min(remaining, 64 * 1024))
+                except (socket.timeout, TimeoutError):
+                    continue  # deadline check at the top decides
+                except (OSError, ValueError):
+                    return None
+                if not chunk:
+                    return None
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        finally:
+            try:
+                self.connection.settimeout(self.timeout)
+            except OSError:
+                pass
+        return b"".join(chunks)
 
     # --- helpers ---
     def _send_json(self, status: int, payload: dict) -> None:
@@ -657,8 +845,15 @@ class Handler(BaseHTTPRequestHandler):
                 })
                 return
             session_token = self.headers.get("X-Session-Token", "")
-            if not session_token:
-                # Generate a new session token if none provided.
+            # REVIEW-2026-09-10: a client-supplied token becomes the store key
+            # verbatim and is echoed back, so an over-long or oddly-shaped
+            # value (a header can be ~64 KB) would be retained for the whole
+            # TTL and multiplied by the store cap. Only reuse a value shaped
+            # like the ones this server mints; otherwise issue a fresh one.
+            if (not session_token
+                    or len(session_token) > _CSRF_SESSION_TOKEN_MAX_LEN
+                    or not _SESSION_TOKEN_RE.fullmatch(session_token)):
+                # Generate a new session token if none (or an unusable one).
                 session_token = secrets.token_urlsafe(32)
             csrf_token = _generate_csrf_token()
             _set_csrf_for_session(session_token, csrf_token)
@@ -826,7 +1021,20 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             length = 0
-        if length <= 0 or length > MAX_BODY_BYTES:
+        # REVIEW-2026-09-10: a missing or zero Content-Length (an empty body,
+        # or a chunked-encoding client that sends none) reported
+        # "Content-Length 0 exceeds limit of 20971520", which is both false
+        # and impossible to act on. Distinguish the two cases.
+        if length <= 0:
+            self._send_json(411, {
+                "ok": False,
+                "error_key": "err.badRequest",
+                "error_body": ("Content-Length header is required and must be "
+                               "greater than zero (chunked transfer encoding "
+                               "is not supported)."),
+            })
+            return
+        if length > MAX_BODY_BYTES:
             self._send_json(413, {
                 "ok": False,
                 "error_key": "err.bodyTooLarge",
@@ -834,7 +1042,16 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
         try:
-            raw = self.rfile.read(length)
+            raw = self._read_body_with_deadline(length)
+            if raw is None:
+                # REVIEW-2026-09-10: a trickled body is dropped, not parked.
+                # See _read_body_with_deadline.
+                self._send_json(408, {
+                    "ok": False,
+                    "error_key": "err.timeout",
+                    "error_body": "request body not received within the upload deadline",
+                })
+                return
             req = json.loads(raw.decode("utf-8"))
         except Exception as exc:
             self._send_json(400, {
@@ -924,6 +1141,20 @@ class Handler(BaseHTTPRequestHandler):
         # otherwise fall back to legacy flat fields (api_key / endpoint / model).
         provider_raw = req.get("provider")
         if isinstance(provider_raw, dict):
+            # REVIEW-2026-09-10: only the TOP-LEVEL fields were type-checked
+            # (below); a nested `endpoint`, `extra_headers` or `extra_body` of
+            # the wrong type reached urlparse / dict.update and raised
+            # AttributeError or ValueError out of do_POST, so the connection
+            # closed with no response at all. Validate the nested fields the
+            # provider is actually built from and reject with a clear 400.
+            _nested_error = _validate_provider_fields(provider_raw)
+            if _nested_error:
+                self._send_json(400, {
+                    "ok": False,
+                    "error_key": "err.parse",
+                    "error_body": _nested_error,
+                })
+                return
             try:
                 provider = LlmProvider.from_dict(provider_raw)
             except Exception:
@@ -993,18 +1224,24 @@ class Handler(BaseHTTPRequestHandler):
         try:
             # M5: clamp to [MIN, MAX] so a client can't demand 99M tokens.
             max_tokens = clamp_max_tokens(req.get("max_tokens"))
-        except (TypeError, ValueError):
+        # REVIEW-2026-09-10: OverflowError is NOT a TypeError/ValueError
+        # subclass, and json.loads maps an oversized JSON number (1e400) to
+        # float('inf'), so `int(...)` on such a field raised straight out of
+        # do_POST: the socket closed with NO response at all and the client
+        # saw a generic network error, breaking the documented "always JSON
+        # with ok/error_key" contract.
+        except (TypeError, ValueError, OverflowError):
             max_tokens = DEFAULT_MAX_TOKENS
 
         try:
             runs = int(req.get("runs") or 1)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             runs = 1
         runs = max(1, min(runs, 5))
 
         try:
             timeout_sec = int(req.get("timeout_sec") or DEFAULT_TIMEOUT_SEC)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             timeout_sec = DEFAULT_TIMEOUT_SEC
         timeout_sec = max(_MIN_EXTRACT_TIMEOUT_SEC,
                           min(timeout_sec, _MAX_EXTRACT_TIMEOUT_SEC))
@@ -1024,8 +1261,12 @@ class Handler(BaseHTTPRequestHandler):
                 image_b64=image_b64,
                 media_type=req.get("media_type") or "image/png",
                 provider=provider,
+                # Honor the caller's timeout for the classification round-trip
+                # too (REVIEW-2026-09-10).
+                timeout_sec=timeout_sec,
             )
             mode_source = "vision" if classify_result is not None else "text"
+            mode, mode_source = _constrain_resolved_mode(mode, mode_source)
 
         # Sprint B (REVIEW-2026-09-04) #12: honour the optional ``enhance``
         # flag from the web UI (it was previously dropped silently). The
@@ -1034,7 +1275,13 @@ class Handler(BaseHTTPRequestHandler):
         # entry. Pillow missing or any enhancement failure falls back to
         # the original image silently.
         if req.get("enhance"):
-            image_b64 = _enhance_image_b64(image_b64)
+            # The re-encode is PNG, so the declared media type must follow the
+            # bytes (see _enhance_image_b64_with_mime).
+            _enhanced_b64, _enhanced_mime = _enhance_image_b64_with_mime(image_b64)
+            image_b64 = _enhanced_b64
+            if _enhanced_mime:
+                req = dict(req)
+                req["media_type"] = _enhanced_mime
 
         common = dict(
             image_b64=image_b64,
@@ -1102,21 +1349,45 @@ class Handler(BaseHTTPRequestHandler):
                     caption=common["caption"],
                     media_type=common["media_type"],
                 )
-                cache_hit = cache.get(ckey)
+                # REVIEW-2026-09-10: the cache is an optimisation, so a
+                # corrupt or unopenable cache file must degrade to a miss.
+                # Previously a single bad cache left every request raising
+                # here (get_cache() only publishes the singleton after a
+                # successful construction, so each call re-raised) and the
+                # endpoint could never answer again, with no self-heal.
+                try:
+                    cache_hit = cache.get(ckey)
+                except Exception:
+                    cache_hit = None
             if cache_hit is not None:
                 # FIX (quality): ensure the quality badge is present even on
                 # a cache hit. The cached payload may predate the quality
                 # scorer if an older client wrote it.
                 if isinstance(cache_hit, dict) and "quality" not in cache_hit:
                     cache_hit["quality"] = _safe_score_range_chart(cache_hit)
+                # REVIEW-2026-09-10: the truncation signal lives on
+                # ExtractResult, never inside result.data, so a cache hit used
+                # to drop it entirely - the user saw "result may be truncated"
+                # on the first Extract and nothing on a re-click (or for the
+                # next user of the same figure), while the attached report
+                # asserted truncated: False. The flags ride along with the
+                # cached payload under reserved keys and are stripped here.
+                cached_truncated = None
+                cached_warning = ""
+                if isinstance(cache_hit, dict):
+                    cached_truncated = cache_hit.pop("_cache_truncated", None)
+                    cached_warning = cache_hit.pop("_cache_warning", "") or ""
                 if mode_source:
                     cache_hit["_auto_mode"] = {"mode": mode, "source": mode_source}
                 if isinstance(cache_hit, dict):
                     cache_hit["report"] = build_extraction_report(
                         data=cache_hit, mode=mode, mode_used=mode,
-                        mode_source=mode_source)
+                        mode_source=mode_source,
+                        truncated=cached_truncated, warning=cached_warning)
                 self._send_json(200, {"ok": True, "data": cache_hit,
-                                      "cached": True})
+                                      "cached": True,
+                                      "truncated": cached_truncated,
+                                      "warning": cached_warning})
                 return
             result = extract(mode=mode, **common)
             # FIX (quality): score single-run results too for a consistent
@@ -1135,8 +1406,22 @@ class Handler(BaseHTTPRequestHandler):
                     image_sha256=result.image_sha256,
                     request_meta=result.request_meta, runs=1)
                 # Write the scored result back to the cache.
+                # REVIEW-2026-09-10: carry the truncation flags with the
+                # payload (reserved keys, stripped on read) so a later cache
+                # hit can still warn the user that the output was cut off.
                 if not force_rerun:
-                    cache.put(ckey, result.data)
+                    to_cache = dict(result.data)
+                    to_cache["_cache_truncated"] = bool(result.truncated)
+                    to_cache["_cache_warning"] = result.warning or ""
+                    try:
+                        cache.put(ckey, to_cache)
+                    except Exception:
+                        # The cache is an optimisation: a corrupt/unwritable
+                        # cache file must not turn a SUCCESSFUL extraction
+                        # into a 500. (The pre-existing failure mode was
+                        # fatal - every later request re-raised and the
+                        # endpoint could never answer again.)
+                        pass
             # P1-3 (REVIEW-2026-07-27): persist this single-run extract
             # as a HistoryRecord so the audit trail captures it. Skip
             # on cache hits (they're already a previous audit record).
@@ -1228,9 +1513,19 @@ class Handler(BaseHTTPRequestHandler):
             slot_keys.append(slot_ckey)
 
         if not force_rerun:
-            cache = get_cache()
+            # REVIEW-2026-09-10: a broken cache degrades to a miss instead of
+            # failing the whole request (see the single-run probe above).
+            try:
+                cache = get_cache()
+            except Exception:
+                cache = None
             for run_idx, ckey in enumerate(slot_keys):
-                cached = cache.get(ckey)
+                cached = None
+                if cache is not None:
+                    try:
+                        cached = cache.get(ckey)
+                    except Exception:
+                        cached = None
                 if cached is not None:
                     if isinstance(cached, dict) and "quality" not in cached:
                         cached["quality"] = _safe_score_range_chart(cached)
@@ -1244,6 +1539,15 @@ class Handler(BaseHTTPRequestHandler):
         ok_datas = [slot_results[i] for i in range(runs) if i in slot_results]
 
         misses = runs - len(slot_results)
+        # REVIEW-2026-09-10: whether this request performed ANY live call.
+        # When every slot was a cache hit the audit row already exists (the
+        # run that filled the cache wrote it), so writing another one would
+        # duplicate it - and because no live run exists to supply a
+        # fingerprint, the duplicate carried the empty-bytes sentinel SHA
+        # (e3b0c442...), which HistoryStore.get_by_sha256 then groups with
+        # every other such record as "the same image". The single-run path
+        # already skips on cache hits for exactly this reason.
+        all_slots_from_cache = (misses <= 0 and not force_rerun)
         if misses <= 0:
             # All runs were cache hits — merge directly.
             pass  # falls through to merge
@@ -1321,7 +1625,13 @@ class Handler(BaseHTTPRequestHandler):
                         max_run_latency = max(max_run_latency, int(r.latency_ms))
                     if r.ok and r.data is not None:
                         if not force_rerun:
-                            get_cache().put(slot_keys[run_idx], r.data)
+                            # Cache writes are best-effort (see the
+                            # single-run path): a broken cache must not turn
+                            # a completed run into a failed request.
+                            try:
+                                get_cache().put(slot_keys[run_idx], r.data)
+                            except Exception:
+                                pass
                         # P0-4 (REVIEW-2026-07-25): store under slot index.
                         # ok_datas is rebuilt in slot order before merge.
                         slot_results[run_idx] = r.data
@@ -1336,7 +1646,13 @@ class Handler(BaseHTTPRequestHandler):
                         ok_datas = [slot_results[i] for i in range(runs) if i in slot_results]
                         any_truncated = any_truncated or bool(r.truncated)
                         if r.raw:
-                            raws.append(r.raw)
+                            # REVIEW-2026-09-10: keep the SLOT index with the
+                            # text. Appending positionally made
+                            # raw_responses.run_idx the position among the
+                            # SURVIVING runs, so a failed or cache-hit slot
+                            # shifted every later label and the audit trail
+                            # attributed one slot's reply to another.
+                            raws.append({'run_idx': run_idx, 'text': r.raw})
                         u = r.usage or {}
                         total_in += int(u.get("input_tokens") or 0)
                         total_out += int(u.get("output_tokens") or 0)
@@ -1379,9 +1695,18 @@ class Handler(BaseHTTPRequestHandler):
         merged["quality"] = quality
         if mode_source:
             merged["_auto_mode"] = {"mode": mode, "source": mode_source}
+        # REVIEW-2026-09-10: pass the full evidence set, exactly as the
+        # single-run path does (server.py's single-run call passes all four).
+        # Without them the report - which rides into history.result_json as
+        # the documented audit artifact - asserted `truncation.truncated:
+        # False` and carried an empty `input.image_sha256` / `provenance` for
+        # every runs>=2 extraction, contradicting the same response's
+        # top-level fields.
         merged["report"] = build_extraction_report(
             data=merged, mode=mode, mode_used=mode,
-            mode_source=mode_source, runs=runs)
+            mode_source=mode_source, runs=runs,
+            truncated=any_truncated, warning=merged_warning or "",
+            image_sha256=first_ok_sha, request_meta=first_ok_meta or {})
         # REVIEW-2026-07-31: build the aggregated usage BEFORE the audit
         # write. The previous code referenced ``merged_usage`` inside the
         # try below but only assigned it AFTER the except block, so every
@@ -1410,7 +1735,7 @@ class Handler(BaseHTTPRequestHandler):
                 data=merged,
                 error_key=None,
                 status=200,
-                raw=("\n---RUN---\n".join(raws))[:8000] if raws else "",
+                raw=("\n---RUN---\n".join(_raw_text(t) for t in raws))[:8000] if raws else "",
                 truncated=any_truncated,
                 partial_failures=partial_fails,
                 usage=merged_usage,
@@ -1444,14 +1769,19 @@ class Handler(BaseHTTPRequestHandler):
             for _k, _v in (first_ok_meta or {}).items():
                 multi_meta.setdefault(_k, _v)
             multi_result.request_meta = multi_meta
-            _write_history_record(
-                multi_result, mode=mode, runs=runs,
-                provider=provider, max_tokens=common["max_tokens"],
-                chart_lang=common["chart_lang"],
-                partial_failures=partial_fails,
-                duration_ms=int((time.perf_counter() - batch_t0) * 1000),
-                raws=raws if raws else None,
-            )
+            if not all_slots_from_cache:
+                # Every slot served from the cache means the originating live
+                # runs already wrote their audit rows; writing another would
+                # duplicate them (and stamp it with the empty-bytes sentinel
+                # SHA, since no live run exists to supply a fingerprint).
+                _write_history_record(
+                    multi_result, mode=mode, runs=runs,
+                    provider=provider, max_tokens=common["max_tokens"],
+                    chart_lang=common["chart_lang"],
+                    partial_failures=partial_fails,
+                    duration_ms=int((time.perf_counter() - batch_t0) * 1000),
+                    raws=raws if raws else None,
+                )
         except Exception:
             pass
         # M2: partial_failures is surfaced separately from truncated so the
@@ -1466,7 +1796,7 @@ class Handler(BaseHTTPRequestHandler):
             "runs": runs,
             "error_key": None,
             "status": None,
-            "raw": ("\n---RUN---\n".join(raws))[:8000],
+            "raw": ("\n---RUN---\n".join(_raw_text(t) for t in raws))[:8000],
             "truncated": any_truncated,
             "partial_failures": partial_fails,
             "warning": merged_warning,

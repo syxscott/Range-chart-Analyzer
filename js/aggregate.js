@@ -52,15 +52,35 @@ function rcaNormIcbnAuthor(s) {
 // quoted strings, bare numbers. JSON.stringify produces different strings
 // for the same logical content, causing duplicate detection to fail.
 function rcaStructDedupKey(item) {
-  const entries = Object.keys(item).sort().map((k) => {
-    const v = item[k];
-    if (v === null || v === undefined) return k + ':null';
-    if (typeof v === 'boolean') return k + ':' + (v ? 'True' : 'False');
-    if (typeof v === 'string') return k + ':' + JSON.stringify(v);
-    if (typeof v === 'number') return k + ':' + String(v);
-    return k + ':' + String(v);
-  });
-  return entries.join(',');
+  // Keys sorted, every value coerced through the same str()-style encoder so
+  // {"a": 8} and {"a": "8"} collapse exactly as they do in Python.
+  //
+  // REVIEW-2026-09-10: the value encoder used to be `String(v)` for objects,
+  // which yields the constant "[object Object]" - nested content was
+  // invisible to the key, so two runs whose lithology_blocks differed only by
+  // an _extras value (e.g. a different note) collapsed into ONE block and the
+  // second was silently discarded.
+  const entries = Object.keys(item).sort().map(
+    (k) => rcaStructDedupScalar(k) + ': ' + rcaStructDedupScalar(item[k]));
+  return entries.join(', ');
+}
+
+// Python's _struct_dedup_key builds
+//     repr(sorted(((k, str(val)) for k, val in item.items())))
+// i.e. the item's own keys are SORTED, every value is coerced with str()
+// (so {"a": 8} and {"a": "8"} collapse - the P1-11 fix), and a NESTED dict or
+// list renders as its Python repr with insertion order preserved. This helper
+// reproduces that value coercion for JS; the caller sorts the top-level keys.
+function rcaStructDedupScalar(v) {
+  if (Array.isArray(v)) return '[' + v.map(rcaStructDedupScalar).join(', ') + ']';
+  if (v && typeof v === 'object') {
+    return '{' + Object.keys(v).map(
+      (k) => rcaStructDedupScalar(k) + ': ' + rcaStructDedupScalar(v[k])).join(', ') + '}';
+  }
+  if (typeof v === 'string') return v;          // str("x") == "x"
+  if (typeof v === 'boolean') return v ? 'True' : 'False';
+  if (v === null || v === undefined) return 'None';
+  return String(v);
 }
 
 // P0-6: mirror of Python _QUALIFIER_PATTERNS (aggregate.py).
@@ -127,10 +147,11 @@ function mergeScalarField(values) {
     for (const [v, c] of counts) {
       if (c > topC) { topVal = v; topC = c; }
     }
-    // Tie-break: stable ordering. Python's Counter.most_common returns
-    // the first-inserted value on ties; we want deterministic behavior
-    // instead, so pick `false` (False < True) on a tie — matches the
-    // sort-based fallback in rcaAggMode.
+    // Tie-break: deterministic, `false` (False < True) wins.
+    // REVIEW-2026-09-10: Python's bool path used to break ties by insertion
+    // order (Counter.most_common), so the two engines disagreed for
+    // [True, False]. Python now sorts the tied values the same way this does
+    // — see rca_core/aggregate.py:_merge_scalar_field.
     const tied = Array.from(counts.entries()).filter(([, c]) => c === topC);
     if (tied.length > 1) {
       // Sort entries by value (false < true). Use the first.
@@ -139,10 +160,17 @@ function mergeScalarField(values) {
     }
     return topVal;
   }
+  // Mixed input (some non-boolean scalar present): the booleans are IGNORED
+  // and the mode is taken over the string/number values only.
+  //
+  // REVIEW-2026-09-10: this loop used to stringify booleans into the vote, so
+  // [true, true, "maybe"] merged to "true" while Python's _merge_scalar_field
+  // (which keeps bools out of the string pool - see its docstring) returned
+  // "maybe". Same runs, different merged value on the two endpoints.
   const coerced = [];
   for (const v of values) {
     if (v == null) continue;
-    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+    if (typeof v === 'string' || typeof v === 'number') {
       const s = String(v).trim();
       if (s) coerced.push(s);
     }
@@ -156,7 +184,16 @@ function mergeTypedInteger(values) {
   if (valid.length === 0) return NO_MERGE;
   const counts = new Map();
   for (const value of valid) counts.set(value, (counts.get(value) || 0) + 1);
-  const top = Math.max(...counts.values());
+  // Iterate rather than Math.max(...counts.values()): spreading a large
+  // values() iterable passes one argument per distinct integer, which
+  // overflows the engine's argument limit ("Maximum call stack size
+  // exceeded") once a chart yields tens of thousands of distinct bed
+  // indices. Python's max() has no such limit, so the loop also keeps the
+  // two implementations behaving identically at any input size.
+  let top = 0;
+  for (const count of counts.values()) {
+    if (count > top) top = count;
+  }
   return Array.from(counts.entries())
     .filter(([, count]) => count === top)
     .map(([value]) => value)
@@ -474,10 +511,21 @@ function mergePrimaryList(runs, km, n) {
     const primaryMode = aggr[primaryIdField] || '';
     if (primaryMode) {
       const counter = {};
+      // REVIEW-2026-09-10: both sides of this comparison must be NORMALISED.
+      // The check used `rcaAggNorm(raw) === primaryMode`, i.e. a normalised
+      // value against the RAW mode, so whenever the mode string was not
+      // already canonical (which is exactly the case this block exists for)
+      // nothing matched, `counter` stayed empty and the qualifier restore
+      // silently no-op'd. Python was fixed for this in Sprint B
+      // (aggregate.py: species_mode_norm = _norm(species_mode)); the JS
+      // mirror kept the defect, so case/whitespace jitter in the species
+      // string produced a different merged taxon name in the browser than on
+      // the server - and the species name feeds name verification + exports.
+      const primaryModeNorm = rcaAggNorm(primaryMode);
       for (const g of group) {
         const raw = (g && g[primaryIdField] || '').trim();
         if (!raw) continue;
-        if (rcaAggNorm(raw) === primaryMode) {
+        if (rcaAggNorm(raw) === primaryModeNorm) {
           counter[raw] = (counter[raw] || 0) + 1;
         }
       }
@@ -547,7 +595,13 @@ function mergePrimaryList(runs, km, n) {
         } else {
           const as = (av != null ? String(av) : '').toLowerCase();
           const bs = (bv != null ? String(bv) : '').toLowerCase();
-          cmp = as.localeCompare(bs);
+          // REVIEW-2026-09-10: code-point comparison, not localeCompare.
+          // ICU collation is locale/environment dependent and folds
+          // accents (Kure < Küre), so the browser ordered rows
+          // differently from Python's `str(v).lower()` comparison - and
+          // a row order that changes with the host locale is not
+          // reproducible. Use < / > so both engines agree.
+          cmp = as < bs ? -1 : (as > bs ? 1 : 0);
         }
         if (cmp !== 0) return direction === 'desc' ? -cmp : cmp;
       }
@@ -556,7 +610,8 @@ function mergePrimaryList(runs, km, n) {
     // Fall back to alphabetical on id/species.
     const aKey = (a.id != null ? String(a.id) : (a.species || '')).toLowerCase();
     const bKey = (b.id != null ? String(b.id) : (b.species || '')).toLowerCase();
-    return aKey.localeCompare(bKey);
+    // REVIEW-2026-09-10: code-point comparison (see above).
+    return aKey < bKey ? -1 : (aKey > bKey ? 1 : 0);
   });
   return merged;
 }
@@ -702,6 +757,20 @@ function rcaMergeResults(results, totalRuns, keymap) {
   const out = { runs: n };
   out[km.primary] = mergePrimaryList(runs, km, n);
   Object.assign(out, mergeNamedLists(runs, km));
+
+  // REVIEW-2026-09-10: root-level _extras / _warnings carry figure-level data
+  // the extractor deliberately preserves (captions, notes, degradation
+  // warnings). The single-run passthrough keeps them, but this N-run path
+  // built `out` only from the primary list + listKeys + confidence, so
+  // raising the run count silently dropped them. Mirrors rca_core/aggregate.py.
+  for (const key of ['_extras', '_warnings']) {
+    for (const run of runs) {
+      if (run && typeof run === 'object' && run[key]) {
+        out[key] = deepClone(run[key]);
+        break;
+      }
+    }
+  }
 
   // REVIEW-2026-08-17 (P2 follow-up): phylogenetic-tree ``metadata`` and
   // ``legend`` are single dicts (not lists). They are identical across

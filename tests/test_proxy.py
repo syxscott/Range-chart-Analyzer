@@ -185,7 +185,11 @@ async function dispatchOne(spec) {
     if (payload.moduleOriginal === "deno-proxy.js") {
       resp = await globalThis.__denoHandler(req);
     } else {
-      resp = await globalThis.__cfWorker.fetch(req);
+      // REVIEW-2026-09-10: pass the documented `env` bindings through. The
+      // field existed in the spec (see the header comment) but was never
+      // forwarded, so the worker's env-based secret lookup — the path
+      // `wrangler secret put` configures — had no test coverage at all.
+      resp = await globalThis.__cfWorker.fetch(req, payload.env || {});
     }
   } catch (e) {
     threw = { name: e?.name, message: e?.message, stack: e?.stack };

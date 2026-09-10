@@ -47,10 +47,14 @@ const _GRADES = [
 
 // Top-level arrays that count as primary "content" for the extraction result.
 // Presence-but-empty across all of these = "pure extraction miss" -> F.
+// UI-REVIEW-2026-09-07: zonation / correlation chart content keys included so
+// _isPureExtractionMiss also covers that mode. Mirrors the Python tuple
+// rca_core/quality.py:_CONTENT_KEYS exactly.
 const _CONTENT_KEYS = [
   'species_ranges', 'abundances', 'sections', 'biozones',
   'other_fossils', 'cross_beds', 'lithology_legend',
   'fossil_legend', 'age_units',
+  'zones', 'correlations', 'zonations',
 ];
 
 // Columnar-mode marker keys — unique to columnar-section extraction.
@@ -61,6 +65,17 @@ const _COLUMNAR_MARKERS = [
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// Normalise a row's `_warning` field to an array of flag names.
+// REVIEW-2026-09-10: the normalizers write a bare string for a single flag
+// and an array when several fire together, so consumers must accept both.
+// Mirrors _warning_flags in rca_core/quality.py.
+function rcaWarningFlags(value) {
+  if (value === null || value === undefined) return [];
+  if (typeof value === 'string') return value ? [value] : [];
+  if (Array.isArray(value)) return value.filter(Boolean).map(String);
+  return [String(value)];
+}
 
 function gradeFor(score) {
   for (const [threshold, letter] of _GRADES) {
@@ -403,7 +418,11 @@ function scoreAccuracy(data) {
       fadLadTotal += 1;
       if (top < base) {
         fadLadViolations += 1;
-        issues.push({severity: 'warning', msg_key: 'quality.fad_lt_lad'});
+        // Parity: the bed-index branch reports range_top_lt_base — mirrors
+        // rca_core/quality.py (both the bed branch and the ICS-age branch
+        // below use "quality.range_top_lt_base", while the consistency
+        // check's bed inversion uses "quality.fad_lt_lad").
+        issues.push({severity: 'warning', msg_key: 'quality.range_top_lt_base'});
       }
     } else {
       const topR = _resolveAgeBound(topRaw, 'younger');
@@ -412,7 +431,7 @@ function scoreAccuracy(data) {
         fadLadTotal += 1;
         if (baseR.ma < topR.ma) {
           fadLadViolations += 1;
-          issues.push({severity: 'warning', msg_key: 'quality.fad_lt_lad'});
+          issues.push({severity: 'warning', msg_key: 'quality.range_top_lt_base'});
         }
       }
     }
@@ -445,7 +464,11 @@ function scoreAccuracy(data) {
         bedViolations += 1;
         issues.push({severity: 'warning', msg_key: 'quality.bed_index_order_invalid'});
       }
-      if (block._warning === 'index_order_swap') {
+      // REVIEW-2026-09-10: `_warning` is a bare string for one flag and a
+      // LIST when several fire together (e.g. ["range_top_idx_truncated",
+      // "index_order_swap"]); the strict === missed the swap in exactly that
+      // combination. Mirrors _warning_flags in rca_core/quality.py.
+      if (rcaWarningFlags(block._warning).indexOf('index_order_swap') !== -1) {
         issues.push({severity: 'info', msg_key: 'quality.bed_index_order_swapped'});
       }
     }

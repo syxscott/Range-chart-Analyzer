@@ -83,8 +83,9 @@ def to_darwin_core_occurrences(result: dict) -> list[dict]:
     Returns list of dicts with DwC terms as keys:
     - occurrenceID, scientificName, scientificNameAuthorship
     - locality, decimalLatitude, decimalLongitude
-    - chronostratigraphicAge, earliestAgeOrLowestStage, latestAgeOrHighestStage
-    - biostratigraphicZone
+    - earliestAgeOrLowestStage, latestAgeOrHighestStage
+    - lowestBiostratigraphicZone (REVIEW-2026-09-10: renamed from the
+      non-existent dwc:biostratigraphicZone)
     - lithostratigraphicTerms
     - occurrenceRemarks, occurrenceStatus
     - basisOfRecord ('MachineExtractedFromImage' for our use case)
@@ -159,6 +160,15 @@ def to_darwin_core_occurrences(result: dict) -> list[dict]:
             "locality": section,
             "decimalLatitude": str(lat) if lat is not None else "",
             "decimalLongitude": str(lon) if lon is not None else "",
+            # REVIEW-2026-09-10: these two keys used to be
+            # "chronostratigraphicAge" and "biostratigraphicZone" — neither
+            # term exists in the TDWG Darwin Core vocabulary (checked against
+            # dwc.tdwg.org/terms), so meta.xml advertised IRIs that strict
+            # consumers (GBIF, iDigBio) reject. The biozone pair
+            # lowest/highestBiostratigraphicZone IS a real term and matches
+            # this file's own FAD/LAD split; the free-text age label has no
+            # dwc: equivalent, so it moves to this archive's project
+            # namespace (the same one fadMa/ladMa already use).
             "chronostratigraphicAge": age_range or biozone or "",
             # M-1 fix: DO NOT collapse earliest and latest. Use the
             # species' range_base (FAD, older) and range_top (LAD,
@@ -166,7 +176,7 @@ def to_darwin_core_occurrences(result: dict) -> list[dict]:
             # true ranges.
             "earliestAgeOrLowestStage": earliest,
             "latestAgeOrHighestStage": latest,
-            "biostratigraphicZone": biozone or "",
+            "lowestBiostratigraphicZone": biozone or "",
             "lithostratigraphicTerms": litho,
             "occurrenceRemarks": remarks,
             "occurrenceStatus": "present",
@@ -272,7 +282,7 @@ def to_darwin_core_archive(result: dict, output_path: str) -> str:
         "occurrenceID", "scientificName", "scientificNameAuthorship",
         "locality", "decimalLatitude", "decimalLongitude",
         "chronostratigraphicAge", "earliestAgeOrLowestStage",
-        "latestAgeOrHighestStage", "biostratigraphicZone",
+        "latestAgeOrHighestStage", "lowestBiostratigraphicZone",
         "lithostratigraphicTerms", "occurrenceRemarks",
         "occurrenceStatus", "basisOfRecord",
         # H4: dynamic property columns so endpoint_kind / occurrence_mode
@@ -290,10 +300,10 @@ def to_darwin_core_archive(result: dict, output_path: str) -> str:
         "http://rs.tdwg.org/dwc/terms/locality",
         "http://rs.tdwg.org/dwc/terms/decimalLatitude",
         "http://rs.tdwg.org/dwc/terms/decimalLongitude",
-        "http://rs.tdwg.org/dwc/terms/chronostratigraphicAge",
+        "https://range-chart-analyzer.local/terms/chronostratigraphicAge",
         "http://rs.tdwg.org/dwc/terms/earliestAgeOrLowestStage",
         "http://rs.tdwg.org/dwc/terms/latestAgeOrHighestStage",
-        "http://rs.tdwg.org/dwc/terms/biostratigraphicZone",
+        "http://rs.tdwg.org/dwc/terms/lowestBiostratigraphicZone",
         "http://rs.tdwg.org/dwc/terms/lithostratigraphicTerms",
         "http://rs.tdwg.org/dwc/terms/occurrenceRemarks",
         "http://rs.tdwg.org/dwc/terms/occurrenceStatus",

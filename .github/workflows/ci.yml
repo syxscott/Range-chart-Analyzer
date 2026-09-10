@@ -44,6 +44,34 @@ jobs:
       - name: Run frontend JS tests
         run: node tests_frontend.js
 
+      # REVIEW-2026-09-10: these suites existed but were never executed by CI,
+      # so they could rot unnoticed. They all pass today.
+      - name: Run remaining JS suites
+        run: |
+          node tests_contrast.js
+          node tests_aggregate.js
+
+      # REVIEW-2026-09-10: 14 root-level Python test files were outside
+      # `testpaths = tests`, so nothing ran them. Each must exit non-zero on
+      # failure (several print "N passed, M failed" and sys.exit accordingly).
+      # tests_onboarding.py touches $HOME, so it runs with a scratch HOME to
+      # keep it from depending on (or polluting) the runner's home directory.
+      - name: Run root-level Python test files
+        run: |
+          set -e
+          for f in tests_bugfixes.py tests_db.py tests_editable.py \
+                   tests_exporter_xlsx.py tests_gui_fluent.py tests_history.py \
+                   tests_llm.py tests_logo.py tests_modern_ui.py tests_drag.py \
+                   tests_server.py tests_server_hardening.py tests_usage.py \
+                   tests_worker.py; do
+            echo "=== $f ==="
+            python "$f"
+          done
+          echo "=== tests_onboarding.py (scratch HOME) ==="
+          _scratch_home="$(mktemp -d)"
+          HOME="$_scratch_home" python tests_onboarding.py
+          rm -rf "$_scratch_home"
+
       - name: Verify gold canned responses are committed
         run: |
           python tests/fixtures/gold/_gen_canned.py >/dev/null

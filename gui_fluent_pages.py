@@ -124,6 +124,11 @@ class HistoryPage(ScrollArea):
             # only be reached via "all" — the filter silently hid them.
             ("history.filter.abundance", "abundance_diagram"),
             ("history.filter.phylo", "phylogenetic_tree"),
+            # REVIEW-2026-09-10: zonation records are persisted by
+            # gui_fluent.py but had no filter entry, so they were unreachable
+            # through any filter — the same partial-fix pattern the
+            # 2026-09-05 comment describes for abundance/phylo.
+            ("history.filter.zonation", "zonation_chart"),
         ]:
             self.filter_combo.addItem(routeKey=key, text=self._t(label))
         self.filter_combo.setCurrentItem("all")
@@ -207,6 +212,11 @@ class HistoryPage(ScrollArea):
             # only be reached via "all" — the filter silently hid them.
             ("history.filter.abundance", "abundance_diagram"),
             ("history.filter.phylo", "phylogenetic_tree"),
+            # REVIEW-2026-09-10: zonation records are persisted by
+            # gui_fluent.py but had no filter entry, so they were unreachable
+            # through any filter — the same partial-fix pattern the
+            # 2026-09-05 comment describes for abundance/phylo.
+            ("history.filter.zonation", "zonation_chart"),
         ]:
             self.filter_combo.setItemText(key, self._t(label))
         if cur:

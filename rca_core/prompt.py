@@ -237,7 +237,7 @@ PHYLOGENETIC_TREE_SYSTEM_PROMPT = "\n".join([
     "      \"depth_confidence\": 0.88 (float, 0.0–1.0, your confidence in the color→depth mapping),",
     "      \"sequence_count\": 15 (int, the number of sequences / terminals this clade represents as printed, or empty),",
     "      \"is_leaf\": false (bool, true only for terminal taxa; false for internal ancestor nodes),",
-    "      \"parent\": \"n1\" (string, the id of the immediate parent node; null only for the root)"
+    "      \"parent\": \"n1\" (string, the id of the immediate parent node; null only for the root)\n"
     "    }",
     "  ],",
     "  \"root_ids\": [\"n0\"] (array of strings, the ids of root nodes; usually one entry, multiple only when the figure is a forest),",

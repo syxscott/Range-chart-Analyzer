@@ -76,7 +76,14 @@ def build_extraction_report(
             rows[key] = len(value)
             if not value:
                 reason = "not readable in this figure"
-                note = (data.get("_extras") or {}).get("note")
+                # REVIEW-2026-09-10: `_extras` is whatever the model emitted,
+                # so it is not guaranteed to be a dict (a list/str leaked
+                # through before) - `(x or {}).get()` then raised
+                # AttributeError out of a function documented "Pure and total:
+                # never raises", and the server attaches this report to its
+                # response, so a malformed payload took the request down.
+                extras = data.get("_extras")
+                note = extras.get("note") if isinstance(extras, dict) else None
                 if isinstance(note, str) and note.strip():
                     reason = note.strip()
                 empty_tables.append({"key": key, "reason": reason})
@@ -107,7 +114,13 @@ def build_extraction_report(
             "runs": runs,
         },
         "truncation": {
-            "truncated": bool(truncated),
+            # REVIEW-2026-09-10: `truncated=None` means UNKNOWN (server.py
+            # uses it when serving a result from the cache, whose originating
+            # call's flags may be absent for legacy entries). Collapsing that
+            # to False made the audit record assert completeness it could not
+            # know about; null says so honestly. Callers that only test
+            # truthiness (`!!payload.truncated`) are unaffected.
+            "truncated": None if truncated is None else bool(truncated),
             "warning": warning or "",
         },
         "rows": rows,

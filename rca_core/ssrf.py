@@ -367,10 +367,29 @@ def make_pinning_opener():
                 host[1:host.index("]")] if host.startswith("[")
                 else host.split(":")[0]
             )
+            # REVIEW-2026-09-10: preserve an explicit port. `req.host` is
+            # "host[:port]"; overwriting it with the bare IP silently reset
+            # the port to 443, so an https endpoint on a non-default port was
+            # unreachable — and the request (key, prompt, image) was delivered
+            # to whatever happens to listen on 443 of that host, i.e. a
+            # service the user never addressed.
+            orig_port = None
+            if host.startswith("["):
+                after_bracket = host.split("]", 1)[1]
+                if after_bracket.startswith(":"):
+                    orig_port = int(after_bracket[1:])
+            elif ":" in host:
+                orig_port = int(host.rsplit(":", 1)[1])
+            pinned = f"[{ip}]" if ":" in ip else ip
+            if orig_port is not None and orig_port != 443:
+                req.host = f"{pinned}:{orig_port}"
+                host_header = f"{orig_host}:{orig_port}"
+            else:
+                req.host = pinned
+                host_header = orig_host
             # Rewrite the connection target to the pinned IP while keeping
             # the original hostname visible to the server (Host / SNI).
-            req.add_unredirected_header("Host", orig_host)
-            req.host = f"[{ip}]" if ":" in ip else ip
+            req.add_unredirected_header("Host", host_header)
             sni = orig_host
 
             def _conn_factory(host_arg, timeout=req.timeout, **kw):

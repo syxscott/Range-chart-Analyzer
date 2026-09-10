@@ -288,6 +288,16 @@ _SERIES_STAGE_LISTS: dict[str, tuple[str, list[str]]] = {
     "upper carboniferous": ("Pennsylvanian", ["Bashkirian", "Moscovian", "Kasimovian", "Gzhelian"]),
     "lower carboniferous": ("Mississippian", ["Tournaisian", "Visean", "Serpukhovian"]),
     "upper cambrian": ("Furongian", ["Paibian", "Jiangshanian", "Stage 10"]),
+    # REVIEW-2026-09-10: the FORMAL series/epoch names must resolve too — the
+    # entries above emit them as the canonical interval name ("late permian"
+    # -> "Lopingian"), so a value that round-trips through an export, or a
+    # chart labelled with the formal name, used to come back (None, None).
+    # Each alias shares the informal key's stage list.
+    "lopingian": ("Lopingian", ["Wuchiapingian", "Changhsingian"]),
+    "guadalupian": ("Guadalupian", ["Roadian", "Wordian", "Capitanian"]),
+    "cisuralian": ("Cisuralian", ["Asselian", "Sakmarian", "Artinskian", "Kungurian"]),
+    "miaolingian": ("Miaolingian", ["Wuliuan", "Drumian", "Guzhangian"]),
+    "terreneuvian": ("Terreneuvian", ["Fortunian", "Stage 2"]),
 }
 
 # REVIEW-2026-07-31: series/epoch labels whose bounds cannot be derived
@@ -439,21 +449,15 @@ def ics_resolve_age_bound(
                 top = info.get("top_ma", 0) or 0
                 return stage, (base + top) / 2
 
-    # 3. Series/epoch labels (English then Chinese).
-    norm = text.lower()
-    for label, (name, stages) in _SERIES_STAGE_LISTS.items():
-        if re.search(r"\b" + re.escape(label) + r"\b", norm):
-            older, younger = _series_bounds_for(label, stages)
-            if older is not None:
-                return name, older if prefer == "older" else younger
-    for alias, label in _CN_SERIES_ALIASES.items():
-        if alias in text:
-            name, stages = _SERIES_STAGE_LISTS[label]
-            older, younger = _series_bounds_for(label, stages)
-            if older is not None:
-                return name, older if prefer == "older" else younger
-
-    # 4. ICS stage name(s) -> order-independent range bounds.
+    # 3. ICS stage name(s) -> order-independent range bounds.
+    # REVIEW-2026-09-10: stages now resolve BEFORE series, so both this
+    # function and ics_age_range_bounds agree on which unit a compound
+    # label names. The old order (series first) resolved
+    # "Late Permian (Wuchiapingian)" to the Lopingian SERIES bound here
+    # while ics_age_range_bounds (stage first) gave the Wuchiapingian
+    # range - the precise stage named in the label was silently
+    # discarded, and one section exported different ages to the DwC and
+    # PBDB consumers.
     # P0-2 fix (REVIEW-2026-08-17): a stage RANGE ("Wuchiapingian -
     # Changhsingian") must honor ``prefer`` and use the max-of-bases /
     # min-of-tops convention from ``ics_age_range_bounds``, NOT the
@@ -491,6 +495,20 @@ def ics_resolve_age_bound(
                 else:
                     name, ma = min(tops, key=lambda x: x[1])
                 return name, ma
+
+    # 4. Series/epoch labels (English then Chinese).
+    norm = text.lower()
+    for label, (name, stages) in _SERIES_STAGE_LISTS.items():
+        if re.search(r"\b" + re.escape(label) + r"\b", norm):
+            older, younger = _series_bounds_for(label, stages)
+            if older is not None:
+                return name, older if prefer == "older" else younger
+    for alias, label in _CN_SERIES_ALIASES.items():
+        if alias in text:
+            name, stages = _SERIES_STAGE_LISTS[label]
+            older, younger = _series_bounds_for(label, stages)
+            if older is not None:
+                return name, older if prefer == "older" else younger
 
     # 5. Period-level fallback (English then Chinese).
     for label, period in _EN_PERIOD_ALIASES.items():

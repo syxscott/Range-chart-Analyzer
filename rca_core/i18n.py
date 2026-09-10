@@ -9,6 +9,24 @@ TRANSLATIONS = {
 }
 
 TRANSLATIONS["zh"] = {
+    "history.filter.zonation": "生物带",
+    "err.exportFailed": "无法写入文件，请检查目标路径是否可写：",
+    # REVIEW-2026-09-10: err.* keys produced by gui.py and rca_core had no entry in any language, so failures rendered the raw key.
+    "err.imageDecode": "无法解码该图片，请换一张 PNG / JPG / WEBP。",
+    "err.extract": "提取失败，请检查网络与 API Key 后重试。",
+    "err.classify": "图表类型识别失败，已按种属延限图处理。",
+    "edit.historyMissing": "该历史记录已不存在，编辑未保存。",
+    # REVIEW-2026-09-10: columnar sub-tables (lithology_blocks / age_units / samples) that the browser export already carries.
+    "sec.lithologyBlocks": "岩性块 (Lithology Blocks)",
+    "sec.ageUnits": "年代单元 (Age Units)",
+    "sec.samples": "样品 (Samples)",
+    "col.secId": "剖面 ID",
+    "col.pattern": "岩性图案",
+    "col.topIdx": "上层索引",
+    "col.baseIdx": "下层索引",
+    "col.label": "标签",
+    "col.bedIdx": "层位",
+    "col.ref": "引用",
     "_label": "中文",
     "app.title": "Range Chart Analyzer",
     "app.subtitle": "地层沿线图数据提取工具",
@@ -377,6 +395,24 @@ TRANSLATIONS["zh"] = {
 }
 
 TRANSLATIONS["en"] = {
+    "history.filter.zonation": "Zonation",
+    "err.exportFailed": "Could not write the file — check that the target path is writable:",
+    # REVIEW-2026-09-10: err.* keys produced by gui.py and rca_core had no entry in any language, so failures rendered the raw key.
+    "err.imageDecode": "Could not decode that image — try a PNG / JPG / WEBP file.",
+    "err.extract": "Extraction failed. Check your network and API key, then retry.",
+    "err.classify": "Chart-type detection failed; proceeding as a range chart.",
+    "edit.historyMissing": "That history record no longer exists — the edit was not saved.",
+    # REVIEW-2026-09-10: columnar sub-tables (lithology_blocks / age_units / samples) that the browser export already carries.
+    "sec.lithologyBlocks": "Lithology Blocks",
+    "sec.ageUnits": "Age Units",
+    "sec.samples": "Samples",
+    "col.secId": "Section ID",
+    "col.pattern": "Pattern",
+    "col.topIdx": "Top idx",
+    "col.baseIdx": "Base idx",
+    "col.label": "Label",
+    "col.bedIdx": "Bed idx",
+    "col.ref": "Reference",
     "_label": "English",
     "app.title": "Range Chart Analyzer",
     "app.subtitle": "Stratigraphic range chart data extraction tool",
@@ -739,6 +775,24 @@ TRANSLATIONS["en"] = {
 }
 
 TRANSLATIONS["ja"] = {
+    "history.filter.zonation": "帯区分",
+    "err.exportFailed": "ファイルに書き込めません。保存先に書き込み権限があるか確認してください：",
+    # REVIEW-2026-09-10: err.* keys produced by gui.py and rca_core had no entry in any language, so failures rendered the raw key.
+    "err.imageDecode": "画像を読み込めませんでした。PNG / JPG / WEBP をお試しください。",
+    "err.extract": "抽出に失敗しました。ネットワークと API キーを確認して再試行してください。",
+    "err.classify": "図表タイプの判定に失敗しました。種属延長図として処理します。",
+    "edit.historyMissing": "この履歴レコードは存在しません。編集は保存されませんでした。",
+    # REVIEW-2026-09-10: columnar sub-tables (lithology_blocks / age_units / samples) that the browser export already carries.
+    "sec.lithologyBlocks": "岩相ブロック",
+    "sec.ageUnits": "年代ユニット",
+    "sec.samples": "試料",
+    "col.secId": "断面 ID",
+    "col.pattern": "岩相パターン",
+    "col.topIdx": "上位層",
+    "col.baseIdx": "下位層",
+    "col.label": "ラベル",
+    "col.bedIdx": "層準",
+    "col.ref": "引用",
     "_label": "日本語",
     "app.title": "Range Chart Analyzer",
     "app.subtitle": "層序レンジチャートのデータ抽出ツール",
