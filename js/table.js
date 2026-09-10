@@ -12,12 +12,14 @@ function rcaEsc(value) {
     .replace(/'/g, '&#39;');
 }
 
-// M12: HTML-escape for attribute contexts (single-quoted with `&apos;`
-// flipping so we wrap data-* attributes consistently). Currently `cfg.id`
-// is one of a small hardcoded set of strings, but a future contributor
-// should not be able to inject attribute-breaking values.
+// M12: HTML-escape for attribute contexts. rcaEsc already encodes both
+// quote styles (&#34; / &#39;), so the text stored here is safe inside the
+// double-quoted attributes the renderer emits. Kept as a named wrapper so
+// attribute call sites read distinctly from text call sites, and so a
+// future contributor cannot silently reintroduce an attribute-breaking
+// value.
 function rcaEscAttr(value) {
-  return rcaEsc(value).replace(/'/g, '&#39;');
+  return rcaEsc(value);
 }
 
 // Table definitions: key on the result object, i18n title, columns, and a
@@ -272,7 +274,12 @@ function rcaTableConfigs(data) {
   const speciesOptLabels = ['col.authorYear', 'col.rangeTopBed', 'col.rangeTopIdx',
                             'col.endpointKind', 'col.occurrenceMode',
                             'col.colConfidence', 'col.note'];
-  const speciesRowsForPred = Array.isArray(data.species_ranges) ? data.species_ranges : [];
+  // Same non-null-object filter rcaRowsForTable applies: the predicates
+  // below dereference each row, so a malformed (null / primitive) entry
+  // would throw here — before rendering even starts.
+  const speciesRowsForPred = (Array.isArray(data.species_ranges)
+    ? data.species_ranges
+    : []).filter((r) => r !== null && typeof r === 'object');
   const speciesOptPreds = [
     (r) => r.author_year,
     (r) => r.range_top_bed,
@@ -402,12 +409,22 @@ function rcaColumnarSubTableRows(data) {
 // Resolve the row array for a table id. The three columnar sub-tables read
 // from the flattened per-section arrays; every other table reads
 // `data[tableId]` directly.
+//
+// Malformed rows are dropped here rather than at each call site: a model
+// payload can contain a null / primitive entry inside an array
+// (rca_core/exporter.py reports those as a not_a_dict invariant issue), and
+// every row extractor dereferences its row — a single null would throw out
+// of rcaRenderResults and blank the whole results panel. other_fossils is
+// exempt because its extractor explicitly accepts plain strings (see the
+// M1 note above); everything else must be a non-null object.
 function rcaRowsForTable(data, tableId) {
   if (tableId === 'lithology_blocks' || tableId === 'age_units'
       || tableId === 'samples') {
     return rcaColumnarSubTableRows(data)[tableId];
   }
-  return Array.isArray(data && data[tableId]) ? data[tableId] : [];
+  const rows = Array.isArray(data && data[tableId]) ? data[tableId] : [];
+  if (tableId === 'other_fossils') return rows;
+  return rows.filter((r) => r !== null && typeof r === 'object');
 }
 
 // Render the whole result. `data` is the normalized result object.

@@ -113,7 +113,7 @@ const RANGE_CHART_SYSTEM_PROMPT = [
 '- Preserve bed/level numbers exactly as printed (e.g. \'Bed 23c\', \'Bed 27a\').',
 '- If the chart is NOT a stratigraphic range/distribution chart, return all arrays empty and confidence 0.0.',
 '- Return JSON only, no markdown fences, no commentary.',
-'- DEGRADE GRACEFULLY. If a species name, range boundary, bed number, or other value is ambiguous or partially unreadable, still emit your best guess but lower the per-row `confidence` field (e.g. 0.3–0.5) AND set the per-row `note` field to a short string such as "unclear" or "partially obscured". NEVER invent a plausible-looking value with high confidence — a low-confidence guess is far more useful than a confident fabrication. NEVER embed the note inside the species name or other structured fields; notes live in the dedicated `note` field only. If a value is completely unreadable, leave the field empty string, lower the row `confidence`, and put "unclear" in the row `note`.',
+_degradationClause()
 ].join('\n');
 
 // Optional per-chart-language hint appended to the user message.
@@ -298,8 +298,11 @@ const PHYLOGENETIC_TREE_SYSTEM_PROMPT = [
 '- BE COMPLETE. Extract EVERY visible node, including unsampled / placeholder taxa and short side branches. Do not skip a leaf just because its label is faint — degrade gracefully instead.',
 '- Only extract what you can READ from the figure. Do not invent topology, support values, or taxa that are not present.',
 '- If the figure is NOT a phylogenetic tree / cladogram / phylogram, return all arrays empty and confidence 0.0.',
-'- DEGRADE GRACEFULLY. If a species name, range boundary, bed number, or other value is ambiguous or partially unreadable, still emit your best guess but lower the per-row `confidence` field (e.g. 0.3-0.5) AND set the per-row `note` field to a short string such as "unclear" or "partially obscured". NEVER invent a plausible-looking value with high confidence - a low-confidence guess is far more useful than a confident fabrication. NEVER embed the note inside the species name or other structured fields; notes live in the dedicated `note` field only. If a value is completely unreadable, leave the field empty string, lower the row `confidence`, and put "unclear" in the row `note`.',
 '- Return JSON only, no markdown fences, no commentary.',
+// This slot previously held a hardcoded copy of the clause written with
+// ASCII hyphens ("0.3-0.5"), which had drifted from the shared helper and
+// from rca_core/prompt.py (which calls _degradation_clause here).
+_degradationClause()
 ].join('\n');
 
 // NEW: Chemical Stratigraphy Chart (isotopic curves, elemental data)

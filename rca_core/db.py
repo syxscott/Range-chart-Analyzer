@@ -130,7 +130,14 @@ class Database:
 
     def __init__(self, path: str | None = None) -> None:
         self.path = path or default_db_path()
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        # REVIEW-2026-09-10: dirname(":memory:") and dirname("rel.db") are "",
+        # and makedirs("") raises FileNotFoundError — so the SQLite-idiomatic
+        # ":memory:" path was unusable, as was any relative path. `path` is a
+        # documented public parameter (and Database is re-exported from
+        # rca_core), so this affected callers outside the app too.
+        _parent = os.path.dirname(self.path)
+        if _parent:
+            os.makedirs(_parent, exist_ok=True)
         self._lock = threading.RLock()
         # check_same_thread=False so any thread may borrow the connection.
         # Combined with WAL, multiple readers don't block each other and

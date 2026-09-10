@@ -38,6 +38,11 @@ from rca_core.ssrf import (  # noqa: E402
     _ALLOW_PRIVATE,           # re-exported for legacy tests
     is_private_host as _is_private_host,
     validate_endpoint as _validate_endpoint,
+    # REVIEW-2026-09-10: the extract pre-flight uses the SAME policy as the
+    # core's live extract paths and the connection test — loopback + plain
+    # http (local Ollama) are legitimate, and the old strict guard here
+    # refused endpoints the core happily extracts with.
+    validate_endpoint_local_ok as _validate_extract_endpoint,
 )
 
 # UI-Mod-2: optional Windows 11 Fluent theme (sv_ttk). If unavailable,
@@ -247,7 +252,14 @@ def save_config(cfg: dict) -> None:
                 to_write = dict(cfg)
                 to_write["api_key"] = encrypt(key)
         except Exception:
-            pass
+            # REVIEW-2026-09-10: fail CLOSED. Swallowing the failure here used
+            # to write the raw PLAINTEXT key to disk (the exact thing the H3
+            # fix exists to prevent) whenever encryption blew up. Drop the key
+            # from the file instead - the provider store keeps its own copy,
+            # and the in-session value is untouched.
+            to_write = dict(cfg)
+            to_write["api_key"] = ""
+            to_write["api_key_store_failed"] = True
     try:
         tmp = CONFIG_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -1737,8 +1749,20 @@ class RangeChartApp:
             messagebox.showwarning("Range Chart Analyzer", self._t("err.noKey"))
             return
         # S-1 fix: validate endpoint URL to prevent SSRF attacks.
+        # REVIEW-2026-09-10: validate the endpoint the extraction will
+        # ACTUALLY use (the selected provider's endpoint when one is active —
+        # extract() ignores base_url/api_key/model whenever provider is set),
+        # and use validate_endpoint_local_ok, the SAME policy as the core's
+        # live extract paths and the connection test. The strict guard here
+        # rejected a local Ollama endpoint that test_llm_connection accepts,
+        # and said nothing about the provider endpoint it was about to POST
+        # the key to.
         endpoint_url = self.var_endpoint.get().strip() or DEFAULT_ENDPOINT
-        ok, why = _validate_endpoint(endpoint_url)
+        if provider is not None:
+            # extract() uses the provider's endpoint when a provider is
+            # active, so that is the URL worth validating.
+            endpoint_url = provider.endpoint
+        ok, why = _validate_extract_endpoint(endpoint_url)
         if not ok:
             messagebox.showwarning("Range Chart Analyzer", f"Invalid endpoint: {why}")
             self._set_busy(False)
@@ -1783,12 +1807,20 @@ class RangeChartApp:
             mode, matched = auto_detect_chart_mode_ex(
                 (params.get("caption") or "") + " " + (auto_filename or ""))
             if not matched:
+                # REVIEW-2026-09-10: forward the real credentials (see the
+                # gui_fluent.py note) — provider=None on the legacy path made
+                # the classifier run with an empty key against the default
+                # endpoint and silently degrade mode="auto" to range_chart.
                 mode, _cls = resolve_auto_mode(
                     caption=params.get("caption") or "",
                     filename=auto_filename or "",
                     image_b64=params.get("image_b64") or "",
                     media_type=params.get("media_type") or "image/png",
+                    api_key=params.get("api_key") or "",
+                    base_url=params.get("base_url") or "",
+                    model=params.get("model") or "",
                     provider=params.get("provider"),
+                    timeout_sec=params.get("timeout_sec"),
                 )
         if runs <= 1:
             r = extract(mode=mode, **params)
@@ -2080,9 +2112,23 @@ class RangeChartApp:
         if not path:
             return
         headers, rows = build_table_export(self.result, table_id, self._t)
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            f.write(to_csv(headers, rows))
-        self.var_status.set(self._t("status.saved"))
+        # REVIEW-2026-09-10: report write failures instead of silently doing
+        # nothing, and write via a temp file + replace so a mid-write failure
+        # cannot truncate an existing export the user still wants.
+        try:
+            tmp_path = path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8", newline="") as f:
+                f.write(to_csv(headers, rows))
+            os.replace(tmp_path, path)
+            self.var_status.set(self._t("status.saved"))
+        except OSError as exc:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
+            messagebox.showerror("Range Chart Analyzer", str(exc))
+            self.var_status.set(self._t("err.exportFailed"))
 
     def _export_json(self):
         if not self.result:
@@ -2098,9 +2144,21 @@ class RangeChartApp:
             "source_file": os.path.basename(self.image_path) if self.image_path else None,
             "result": self.result,
         }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        self.var_status.set(self._t("status.saved"))
+        # REVIEW-2026-09-10: same treatment as _export_csv above.
+        try:
+            tmp_path = path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+            self.var_status.set(self._t("status.saved"))
+        except OSError as exc:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
+            messagebox.showerror("Range Chart Analyzer", str(exc))
+            self.var_status.set(self._t("err.exportFailed"))
 
     def on_close(self):
         # Persist settings (respecting the remember flag) on exit.

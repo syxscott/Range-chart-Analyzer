@@ -65,7 +65,14 @@ function rcaDownload(filename, text, mime) {
   const lowerMime = (mime || '').toLowerCase();
   const needsBom = lowerMime.indexOf('csv') !== -1 || lowerMime.indexOf('tsv') !== -1;
   const parts = needsBom ? ['﻿', text] : [text];
-  const blob = new Blob(parts, { type: (mime || 'text/plain') + ';charset=utf-8' });
+  // Only append the charset when the caller did not already supply one —
+  // otherwise a caller passing "text/csv;charset=utf-8" produced the
+  // malformed "text/csv;charset=utf-8;charset=utf-8".
+  let finalMime = mime || 'text/plain';
+  if (finalMime.toLowerCase().indexOf('charset') === -1) {
+    finalMime += ';charset=utf-8';
+  }
+  const blob = new Blob(parts, { type: finalMime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

@@ -98,6 +98,32 @@ def _machine_fingerprint() -> bytes:
     return b"|".join(sources)
 
 
+import threading
+
+# REVIEW-2026-09-10: memoise the PBKDF2 derivations. Every provider's
+# encrypt/decrypt re-derived the key from scratch - 600 000 iterations each
+# time - so saving or loading a 20-provider file cost seconds of GUI-thread
+# freeze (measured: save 1.67 s, load 3.27 s), and the GUI saves after every
+# connection test and twice per wizard edit. The cache is keyed on the
+# derivation inputs, so a changed salt or passphrase still produces a fresh
+# key rather than a stale one.
+_KDF_CACHE: dict[tuple, bytes] = {}
+_KDF_LOCK = threading.RLock()
+
+
+def _pbkdf2_cached(material: bytes, salt: bytes, iterations: int) -> bytes:
+    """PBKDF2-HMAC-SHA256 with an in-process memo (see _KDF_CACHE)."""
+    key = (iterations, salt, hashlib.sha256(material).digest())
+    with _KDF_LOCK:
+        hit = _KDF_CACHE.get(key)
+    if hit is not None:
+        return hit
+    derived = hashlib.pbkdf2_hmac("sha256", material, salt, iterations, dklen=_KEY_LEN)
+    with _KDF_LOCK:
+        _KDF_CACHE[key] = derived
+    return derived
+
+
 def _get_or_create_salt() -> bytes:
     path = _salt_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -109,10 +135,33 @@ def _get_or_create_salt() -> bytes:
                     return salt
         except OSError:
             pass
+        # REVIEW-2026-09-10: the file EXISTS but is unusable (truncated by a
+        # crash/disk-full, or zero bytes). The old code treated it as absent
+        # and OVERWROTE it with a fresh random salt — which silently made
+        # every stored key undecryptable, with no warning and no backup.
+        # Refuse instead: a loud error the operator can act on (restore the
+        # salt / re-enter keys) beats a quiet total loss.
+        raise RuntimeError(
+            f"secrets_store: the salt file at {path} exists but is corrupt "
+            f"({os.path.getsize(path)} bytes; expected >= 16). Refusing to "
+            "overwrite it - overwriting would permanently lose every stored "
+            "API key. Restore the file from backup, or delete it AND re-enter "
+            "your keys."
+        )
     salt = secrets.token_bytes(32)
+    # REVIEW-2026-09-10: write atomically (tmp + os.replace) with fsync, the
+    # same way providers.json is written, so a crash mid-write cannot leave
+    # the truncated file that triggers the error above.
+    tmp_path = path + ".tmp"
     try:
-        with open(path, "wb") as f:
+        with open(tmp_path, "wb") as f:
             f.write(salt)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp_path, path)
         try:
             os.chmod(path, 0o600)
         except (OSError, AttributeError):
@@ -126,11 +175,8 @@ def _get_or_create_salt() -> bytes:
 
 def _derive_key() -> bytes:
     """Legacy key derivation (100k iterations) — only for decrypting old obf:v1: envelopes."""
-    fp = _machine_fingerprint()
-    salt = _get_or_create_salt()
-    return hashlib.pbkdf2_hmac(
-        "sha256", fp, salt, _PBKDF2_ITERS_LEGACY, dklen=_KEY_LEN
-    )
+    return _pbkdf2_cached(_machine_fingerprint(), _get_or_create_salt(),
+                          _PBKDF2_ITERS_LEGACY)
 
 
 def _derive_fernet_key() -> bytes:
@@ -142,10 +188,8 @@ def _derive_fernet_key() -> bytes:
     machine fingerprint + salt — it is obfuscation, not real protection.
     Prefer :func:`_active_fernet_key` (keyring) for new encryptions.
     """
-    raw = hashlib.pbkdf2_hmac(
-        "sha256", _machine_fingerprint(), _get_or_create_salt(),
-        _PBKDF2_ITERS_FERNET, dklen=_KEY_LEN
-    )
+    raw = _pbkdf2_cached(_machine_fingerprint(), _get_or_create_salt(),
+                         _PBKDF2_ITERS_FERNET)
     return base64.urlsafe_b64encode(raw)
 
 

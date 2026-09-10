@@ -82,6 +82,13 @@ def validate_export_invariants(data: dict[str, Any]) -> tuple[bool, list[dict[st
     can badge the result with a 'had invariants failures' flag.
     """
     issues: list[dict[str, Any]] = []
+    # REVIEW-2026-09-10: the `sections` table id is shared by two schemas.
+    # Range-chart sections carry `name`; columnar-section sections carry `id`
+    # (plus group/thickness_m/coordinates_text) and NEVER a `name`, so the
+    # fixed `required: ["name"]` failed every columnar result and to_xlsx
+    # raised ValueError - XLSX export was dead for the whole columnar mode
+    # while the same data exported to CSV/JSON fine.
+    columnar = _looks_columnar(data)
     for table_id, spec in EXPORT_INVARIANTS.items():
         rows = data.get(table_id) or []
         if not isinstance(rows, list):
@@ -97,7 +104,10 @@ def validate_export_invariants(data: dict[str, Any]) -> tuple[bool, list[dict[st
                             "constraint": "not_a_dict",
                         })
                 continue
-            for key in spec.get("required", []):
+            required = spec.get("required", [])
+            if table_id == "sections" and columnar:
+                required = ["id"]
+            for key in required:
                 v = row.get(key)
                 if v is None or (isinstance(v, str) and not v.strip()):
                     issues.append({
@@ -256,6 +266,44 @@ def _range_chart_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
         r.get("biozone", ""),
     ]
 
+    # REVIEW-2026-09-10: the optional per-species columns the browser has
+    # always added (js/table.js H3) — emitted only when at least one row
+    # populates the field, so a CSV carries `author_year` / `note` /
+    # `confidence` when the model emitted them instead of dropping those
+    # values on the GUI/server export path. The js/table.js comment claimed
+    # this mirrored rca_core/exporter.py; it did not.
+    rows_for_pred = data.get("species_ranges") if isinstance(data, dict) else None
+    rows_for_pred = rows_for_pred if isinstance(rows_for_pred, list) else []
+    species_opt = [
+        ("col.authorYear", "author_year", lambda r: r.get("author_year") or ""),
+        ("col.rangeTopBed", "range_top_bed", lambda r: r.get("range_top_bed") or ""),
+        ("col.rangeTopIdx", "range_top_idx", lambda r: ""
+         if r.get("range_top_idx") is None else str(r.get("range_top_idx"))),
+        ("col.endpointKind", "endpoint_kind",
+         lambda r: "" if r.get("endpoint_kind") in (None, "unknown") else str(r.get("endpoint_kind"))),
+        ("col.occurrenceMode", "occurrence_mode",
+         lambda r: "" if r.get("occurrence_mode") in (None, "unknown") else str(r.get("occurrence_mode"))),
+        ("col.colConfidence", "confidence", lambda r: ""
+         if r.get("confidence") is None else str(r.get("confidence"))),
+        ("col.note", "note", lambda r: r.get("note") or ""),
+    ]
+    species_extra_cols: list[str] = []
+    species_extra_data: list[str] = []
+    species_extra_getters: list = []
+    for label, data_key, getter in species_opt:
+        if any(getter(r) for r in rows_for_pred if isinstance(r, dict)):
+            species_extra_cols.append(label)
+            species_extra_data.append(data_key)
+            species_extra_getters.append(getter)
+    species_cols = species_cols + species_extra_cols
+    species_data = species_data + species_extra_data
+    if species_extra_getters:
+        # Capture the ORIGINAL base row builder before rebinding, or the
+        # lambda would call itself (late binding).
+        _base = species_row_base
+        _getters = list(species_extra_getters)
+        species_row_base = lambda r: _base(r) + [g(r) for g in _getters]
+
     return [
         {
             "id": "sections",
@@ -313,6 +361,39 @@ def _columnar_section_tables(data: dict[str, Any] | None) -> list[dict[str, Any]
     ]
     row = (lambda s: row_base(s) + [s.get("agreement", "")]) if multi else row_base
 
+    # REVIEW-2026-09-10: flatten the per-section sub-tables so the exporter
+    # can treat them like any top-level table (see the `rows` handling in
+    # build_table_export). Same field order as js/table.js
+    # rcaColumnarSubTableRows: section_id first, then the row's own fields.
+    blocks_rows: list[dict[str, Any]] = []
+    units_rows: list[dict[str, Any]] = []
+    samples_rows: list[dict[str, Any]] = []
+    for s in (data or {}).get("sections") or []:
+        if not isinstance(s, dict):
+            continue
+        sid = s.get("id", "")
+        for b in s.get("lithology_blocks") or []:
+            if isinstance(b, dict):
+                blocks_rows.append({
+                    "section_id": sid, "pattern": b.get("pattern", ""),
+                    "top_idx": b.get("range_top_idx"),
+                    "base_idx": b.get("range_base_idx"),
+                })
+        for u in s.get("age_units") or []:
+            if isinstance(u, dict):
+                units_rows.append({
+                    "section_id": sid, "label": u.get("label", ""),
+                    "top_idx": u.get("range_top_idx"),
+                    "base_idx": u.get("range_base_idx"),
+                })
+        for smp in s.get("samples") or []:
+            if isinstance(smp, dict):
+                samples_rows.append({
+                    "section_id": sid, "bed_idx": smp.get("bed_idx"),
+                    "fossil_marker": smp.get("fossil_marker", ""),
+                    "ref": smp.get("ref", ""),
+                })
+
     return [
         {
             "id": "sections",
@@ -345,6 +426,51 @@ def _columnar_section_tables(data: dict[str, Any] | None) -> list[dict[str, Any]
                 "" if it.get("from_bed_idx") is None else str(it.get("from_bed_idx")),
                 it.get("to_section", ""),
                 "" if it.get("to_bed_idx") is None else str(it.get("to_bed_idx")),
+            ],
+        },
+        # REVIEW-2026-09-10: the three per-section sub-tables the browser
+        # export has always carried (js/table.js rcaColumnarSubTableRows).
+        # They live nested inside sections[i], so they are flattened here —
+        # section_id first, exactly like the JS rows — otherwise the GUI /
+        # server CSV + XLSX lost every lithology block, age unit and sample
+        # that the browser kept.
+        {
+            "id": "lithology_blocks",
+            "title_key": "sec.lithologyBlocks",
+            "cols": ["col.secId", "col.pattern", "col.topIdx", "col.baseIdx"],
+            "data_keys": ["section_id", "pattern", "top_idx", "base_idx"],
+            "rows": blocks_rows,
+            "row": lambda it: [
+                it.get("section_id", ""),
+                it.get("pattern", ""),
+                "" if it.get("top_idx") is None else str(it.get("top_idx")),
+                "" if it.get("base_idx") is None else str(it.get("base_idx")),
+            ],
+        },
+        {
+            "id": "age_units",
+            "title_key": "sec.ageUnits",
+            "cols": ["col.secId", "col.label", "col.topIdx", "col.baseIdx"],
+            "data_keys": ["section_id", "label", "top_idx", "base_idx"],
+            "rows": units_rows,
+            "row": lambda it: [
+                it.get("section_id", ""),
+                it.get("label", ""),
+                "" if it.get("top_idx") is None else str(it.get("top_idx")),
+                "" if it.get("base_idx") is None else str(it.get("base_idx")),
+            ],
+        },
+        {
+            "id": "samples",
+            "title_key": "sec.samples",
+            "cols": ["col.secId", "col.bedIdx", "col.fossilMarker", "col.ref"],
+            "data_keys": ["section_id", "bed_idx", "fossil_marker", "ref"],
+            "rows": samples_rows,
+            "row": lambda it: [
+                it.get("section_id", ""),
+                "" if it.get("bed_idx") is None else str(it.get("bed_idx")),
+                it.get("fossil_marker", ""),
+                it.get("ref", ""),
             ],
         },
     ]
@@ -538,6 +664,30 @@ def _find_cfg(table_id: str, data: dict[str, Any] | None) -> dict[str, Any] | No
 TABLE_CONFIGS = _range_chart_tables(None)
 
 
+_NONFINITE_TEXT = {"nan", "inf", "-inf", "+inf", "-nan", "infinity", "-infinity"}
+
+
+def _export_cell_text(value: Any) -> str:
+    """Cell text for an export row, with non-finite numbers blanked.
+
+    REVIEW-2026-09-10: _sanitize_number_cell only sees float/Decimal
+    instances, but by the time a value reaches this table builder it has
+    usually already been str()-ed by a normalizer or a row extractor — so the
+    literal text "nan" / "inf" reached the CSV and the XLSX as a value that
+    looks like data. Blank those spellings here as defence in depth
+    (mirrors the M5 intent and json_utils._strip_nonfinite).
+    """
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return ""
+    text = str(value)
+    if text.strip().lower() in _NONFINITE_TEXT:
+        return ""
+    return text
+
+
 def build_table_export(data: dict[str, Any], table_id: str, translate: Callable[[str], str]):
     """Return (headers, rows) for a table, using translated column labels."""
     cfg = _find_cfg(table_id, data)
@@ -545,7 +695,12 @@ def build_table_export(data: dict[str, Any], table_id: str, translate: Callable[
         return [], []
     headers = [translate("col.index")] + [translate(c) for c in cfg["cols"]]
     n_cols = len(cfg["cols"])
-    items = data.get(table_id) or []
+    # REVIEW-2026-09-10: a config may carry its own pre-flattened rows (the
+    # columnar sub-tables live nested inside sections[i] and are flattened at
+    # config-build time); fall back to the top-level key otherwise.
+    items = cfg.get("rows")
+    if items is None:
+        items = data.get(table_id) or []
     rows = []
     for idx, item in enumerate(items):
         cells = cfg["row"](item)
@@ -553,7 +708,13 @@ def build_table_export(data: dict[str, Any], table_id: str, translate: Callable[
         # a custom row extractor can't silently misalign columns between
         # headers and rows on a CSV / Excel paste.
         cells = (cells + [""] * n_cols)[:n_cols]
-        rows.append([str(idx + 1)] + ["" if v is None else str(v) for v in cells])
+        # REVIEW-2026-09-10: this is where values become strings, so it is the
+        # LAST point at which a non-finite float can be caught — the
+        # _sanitize_number_cell guard runs on float INSTANCES only, and by the
+        # time a producer has already str()-ed its value the literal text
+        # "nan"/"inf" sailed past it into the CSV / workbook. Normalise the
+        # spellings here as defence in depth.
+        rows.append([str(idx + 1)] + [_export_cell_text(v) for v in cells])
     return headers, rows
 
 
@@ -595,6 +756,17 @@ COL_TYPES: dict[str, dict[str, str]] = {
         "branch_length": "float",
         "node_age_ma": "float",
         "support": "float",
+        # REVIEW-2026-09-10: the nodes table renders is_leaf as the display
+        # strings "Y"/"N" and parent None as "", but without a COL_TYPES entry
+        # _coerce_cell's default ("str") wrote those DISPLAY strings back into
+        # the model. One no-op Apply-edits pass therefore turned
+        # is_leaf into the string "N" for every node — which is TRUTHY, so the
+        # re-export reported "Y" (leaf) for all of them and eval_metrics'
+        # Random-Forest metric changed on an unchanged tree — and it blanked
+        # the root marker `parent: None` that the "root must have parent None"
+        # invariant relies on.
+        "is_leaf": "bool_yn",
+        "parent": "nullable_str",
     },
 }
 
@@ -626,6 +798,16 @@ def _coerce_cell(value: str, data_key: str, table_id: str) -> Any:
             return float(s)
         except (TypeError, ValueError):
             return None
+    if t == "bool_yn":
+        # Inverse of the renderer's "Y" / "N". Accept the obvious human
+        # spellings; an empty cell reads as False (an internal node).
+        s = (value or "").strip().lower()
+        return s in ("y", "yes", "true", "1", "t")
+    if t == "nullable_str":
+        # Inverse of the renderer's None -> "" mapping, so the root marker
+        # `parent: None` survives an edit round-trip.
+        s = (value or "").strip()
+        return s or None
     return value or ""
 
 

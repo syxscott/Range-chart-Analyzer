@@ -256,6 +256,15 @@ _KNOWN_ROOT_KEYS: frozenset[str] = frozenset({
     "fossil_legend", "lithology_legend", "cross_beds", "overall_confidence",
     # abundance_diagram (_KNOWN_ABUNDANCE_ROOT_KEYS)
     "sites", "abundances", "zones",
+    # zonation_chart (rca_core/extractor._KNOWN_ZONATION_ROOT_KEYS).
+    # REVIEW-2026-09-10: these were missing even though this set's docstring
+    # claims it is the union of every per-mode ROOTS constant, so a fence
+    # whose payload carried only zonations/correlations did not qualify as a
+    # payload - the leading schema/example fence (or blocks[0]) won and the
+    # real data was dropped. The same gap made the Level-3.5 truncation
+    # repair discard a repaired zonation payload, because the repair is
+    # accepted only when _looks_like_payload_root() says yes.
+    "zonations", "correlations",
     # chemical_stratigraphy (_KNOWN_CHEMICAL_STRAT_ROOT_KEYS)
     "data_points", "events", "intervals",
     # paleomap (_KNOWN_PALEOMAP_ROOT_KEYS)
@@ -271,6 +280,63 @@ _KNOWN_ROOT_KEYS: frozenset[str] = frozenset({
 def _looks_like_payload_root(parsed: Any) -> bool:
     """True when *parsed* is a dict containing at least one known root key."""
     return isinstance(parsed, dict) and bool(_KNOWN_ROOT_KEYS & parsed.keys())
+
+
+# Angle-bracket placeholders are how the prompt contract and a model's
+# restatement of it mark "fill this in": "<binomial>", "<section name>",
+# "<one of the list above>". A fenced block dense with them is an example,
+# not the extraction.
+_PLACEHOLDER_RE = re.compile(r"<[^<>\n]{0,60}>")
+
+
+_CONTROL_ESCAPES = {
+    "\n": "\\n", "\r": "\\r", "\t": "\\t", "\b": "\\b", "\f": "\\f",
+}
+
+
+def _escape_control_chars_in_strings(text: str) -> str:
+    """Escape raw control characters that sit INSIDE a JSON string literal.
+
+    REVIEW-2026-09-10: JSON forbids unescaped control characters in strings,
+    so a caption/note containing a literal newline made the whole reply
+    unparseable - Levels 3-6 failed and Level 4 salvaged a single inner row
+    instead of the payload. Structure outside strings is left untouched (the
+    scanner tracks string state and escapes), so a pretty-printed body keeps
+    its line breaks.
+    """
+    out: list[str] = []
+    in_string = False
+    escape = False
+    changed = False
+    for ch in text:
+        if escape:
+            escape = False
+            out.append(ch)
+            continue
+        if in_string:
+            if ch == "\\":
+                escape = True
+                out.append(ch)
+                continue
+            if ch == '"':
+                in_string = False
+                out.append(ch)
+                continue
+            if ch < " ":
+                out.append(_CONTROL_ESCAPES.get(ch, "\\u%04x" % ord(ch)))
+                changed = True
+                continue
+            out.append(ch)
+            continue
+        if ch == '"':
+            in_string = True
+        out.append(ch)
+    return "".join(out) if changed else text
+
+
+def _fence_placeholder_count(block: str) -> int:
+    """Number of schema-placeholder tokens inside a fenced block."""
+    return len(_PLACEHOLDER_RE.findall(block))
 
 
 def strip_markdown_fence(text: str) -> str:
@@ -298,24 +364,39 @@ def strip_markdown_fence(text: str) -> str:
     if not text:
         return text
     s = str(text).strip()
-    # If the whole text is one fenced block, extract its inner content.
-    fence_block = re.match(
-        r"^```(?:json)?\s*\n?(.*?)\n?```\s*$", s, re.DOTALL | re.IGNORECASE
-    )
-    if fence_block:
-        return fence_block.group(1).strip()
     # Sprint B (REVIEW-2026-09-04): collect every fenced block in the text
-    # and prefer the first one that actually looks like the real payload.
+    # and prefer the one that actually looks like the real payload.
+    #
+    # REVIEW-2026-09-10: the whole-text single-fence shortcut used to run
+    # FIRST with a DOTALL regex, so a two-fence reply matched as one blob and
+    # the selection below never saw the individual blocks - the choice then
+    # fell through to Level 4's scorer (a different rule than the JS mirror
+    # applies at this point). Selecting over the block list for every shape
+    # keeps the two engines on one rule.
     blocks = [
         b.strip()
         for b in re.findall(
             r"```(?:json)?\s*\n?(.*?)\n?```", s, re.DOTALL | re.IGNORECASE
         )
     ]
+    if len(blocks) == 1:
+        return blocks[0]
     if blocks:
-        for block in blocks:
-            if _looks_like_payload_root(_try_parse_object(block)):
-                return block
+        qualifying = [
+            (i, b) for i, b in enumerate(blocks)
+            if _looks_like_payload_root(_try_parse_object(b))
+        ]
+        if qualifying:
+            # Prefer the block with the FEWEST schema-placeholder tokens, then
+            # the earliest. A model that restates the contract first (a very
+            # common pattern) writes "<binomial>" / "<section name>" in the
+            # example - and because the contract itself lists the real root
+            # keys, that example QUALIFIES by the rule above and used to evict
+            # the payload that followed it. Rank on placeholder density so the
+            # real rows win, while an ordinary earlier payload still wins on
+            # the index tie-break.
+            return min(qualifying,
+                       key=lambda ib: (_fence_placeholder_count(ib[1]), ib[0]))[1]
         # No block carries a known root key — keep the historical
         # first-block behaviour (safe_json_loads' later fallback chain
         # still gets a chance to rescue the right object).
@@ -490,6 +571,25 @@ def safe_json_loads(text: str) -> dict[str, Any]:
                     "_note": "model returned a top-level array; wrapping for diagnostics"}
     except Exception:
         pass
+
+    # Level 3.2 (REVIEW-2026-09-10): literal control characters INSIDE a
+    # string literal. Level 2 deliberately keeps \t \r \n, which is exactly
+    # what makes json reject a string value that contains a raw newline - a
+    # caption or note copied verbatim from a multi-line figure label. The
+    # whole reply then failed Levels 3-6 and Level 4 returned a single inner
+    # row ({"name": "A"}), so the extraction silently emptied while the reply
+    # carried the data. Escape those characters in place and retry.
+    escaped = _escape_control_chars_in_strings(s)
+    if escaped != s:
+        try:
+            parsed = _strict_json_loads(escaped)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            return _promote_wrapper(parsed)
+        if isinstance(parsed, list):
+            return {"_array_root": parsed,
+                    "_note": "model returned a top-level array; wrapping for diagnostics"}
 
     # Level 3.5 (UI-REVIEW-2026-09-07): truncated-payload repair. When the
     # model hit max_tokens mid-array, Level 3 fails and Level 4 would only

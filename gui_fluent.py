@@ -62,6 +62,10 @@ from rca_core.extractor import (
 )
 from rca_core.llm import test_llm_connection
 from rca_core.ssrf import validate_endpoint as _validate_endpoint
+# REVIEW-2026-09-10: the extract pre-flight uses the SAME policy as the
+# core's live extract paths and the connection test — a local Ollama
+# endpoint passed the connection test but was refused here.
+from rca_core.ssrf import validate_endpoint_local_ok as _validate_extract_endpoint
 
 # New-style provider page (cc-switch alignment + drag-to-reorder).
 from gui_fluent_providers import ProvidersPage  # noqa: E402
@@ -184,7 +188,13 @@ def save_config(cfg: dict) -> None:
                 to_write = dict(cfg)
                 to_write["api_key"] = encrypt(key)
         except Exception:
-            pass
+            # REVIEW-2026-09-10: fail CLOSED — an encrypt failure used to fall
+            # through and persist the raw plaintext key. Drop it from the file
+            # instead (the provider store keeps its own copy; the in-session
+            # value is untouched) and leave a marker the settings page can show.
+            to_write = dict(cfg)
+            to_write["api_key"] = ""
+            to_write["api_key_store_failed"] = True
     tmp = CONFIG_PATH + ".tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
@@ -331,13 +341,26 @@ class ExtractWorker(QThread):
             mode, matched = auto_detect_chart_mode_ex(
                 (params.get("caption") or "") + " " + (self._auto_filename or ""))
             if not matched:
+                # REVIEW-2026-09-10: pass the SAME credentials the extraction
+                # will use. Only `provider` was forwarded, so on the legacy-key
+                # path (provider is None) the classifier ran against
+                # DEFAULT_ENDPOINT with an EMPTY key — a guaranteed 401 — and
+                # resolve_auto_mode then silently fell back to range_chart.
+                # An abundance/zonation figure was extracted with the
+                # range-chart prompt and presented as a successful result.
                 mode, _cls = resolve_auto_mode(
                     caption=params.get("caption") or "",
                     filename=self._auto_filename or "",
                     image_b64=params.get("image_b64") or "",
                     media_type=params.get("media_type") or "image/png",
+                    api_key=params.get("api_key") or "",
+                    base_url=params.get("base_url") or "",
+                    model=params.get("model") or "",
                     provider=params.get("provider"),
+                    timeout_sec=params.get("timeout_sec"),
                 )
+                if _cls is not None and not getattr(_cls, "ok", False):
+                    self.progress.emit("classify-failed")
 
         def prog(stage):
             self.progress.emit(stage)
@@ -1164,7 +1187,7 @@ class ExtractPage(ScrollArea):
         # with image + API key. Mirrors the guards in gui.py:_on_extract and
         # server.py:_handle_extract.
         active_endpoint = self.win.endpoint()
-        ok, why = _validate_endpoint(active_endpoint)
+        ok, why = _validate_extract_endpoint(active_endpoint)
         if not ok:
             msg = f"Invalid endpoint: {why}"
             log.warning("Rejecting extract: %s", why)
@@ -1461,6 +1484,19 @@ class ExtractPage(ScrollArea):
             if is_tree_mode:
                 self._show_phylotree()
                 return
+            # REVIEW-2026-09-10: restore the table UI here too — mirroring the
+            # table branch below (`if self.phylotree is not None`, since the
+            # widget is absent in slim Qt builds). This branch returned early
+            # without undoing what _show_phylotree() hid, so loading a
+            # zero-row record after viewing a tree left the PREVIOUS chart's
+            # tree on screen while the status line showed the newly loaded
+            # record — the operator was looking at the wrong figure.
+            if self.phylotree is not None:
+                self.phylotree.setVisible(False)
+            self.pivot.setVisible(True)
+            self.edit_row_widget.setVisible(True)
+            self.stack.setVisible(True)
+            self.pivot.clear()
             self.pivot.addItem(
                 routeKey="empty",
                 text=self._t("results.empty"),
@@ -1809,16 +1845,24 @@ class ExtractPage(ScrollArea):
             # the latest version. The newest record for this image (if
             # any) is updated in-place.
             try:
-                self._persist_edits_to_history()
+                persisted = self._persist_edits_to_history()
             except Exception as exc:
                 log.warning("persist edits failed: %s", exc)
-            InfoBar.success(
-                "", self._t("edit.saved"), parent=self.win,
-                position=InfoBarPosition.TOP, duration=2000,
-            )
+                persisted = False
+            # REVIEW-2026-09-10: only claim success when the write actually
+            # landed (see the return contract in _persist_edits_to_history).
+            if persisted:
+                InfoBar.success(
+                    "", self._t("edit.saved"), parent=self.win,
+                    position=InfoBarPosition.TOP, duration=2000,
+                )
 
-    def _persist_edits_to_history(self) -> None:
+    def _persist_edits_to_history(self) -> bool:
         """Update the most recent history record with the current result.
+
+        Returns True when the edit was persisted, False when it was not
+        (missing row / write error) — the caller must not report success
+        on False.
 
         Best-effort: prefers the record we were loaded from (when the user
         reopened a historical entry via the History page) so the same row
@@ -1836,32 +1880,51 @@ class ExtractPage(ScrollArea):
         loaded_id = getattr(self, "_loaded_history_id", None)
         if loaded_id is not None:
             try:
-                hs.update_result(loaded_id, self.result)
+                # REVIEW-2026-09-10: update_result returns False (it does not
+                # raise) when the row is gone — e.g. the user deleted the
+                # record on the History page after loading it. The return value
+                # was ignored, so the caller showed the green "edit.saved"
+                # toast while nothing had been written at all. Report it so the
+                # caller can tell the user the edit was NOT persisted.
+                if not hs.update_result(loaded_id, self.result):
+                    InfoBar.warning(
+                        "", self._t("edit.historyMissing"), parent=self.win,
+                        position=InfoBarPosition.TOP, duration=5000,
+                    )
+                    return False
             except Exception as exc:
                 InfoBar.error(
                     "", f"保存历史记录失败: {exc}",
                     parent=self.win,
                     position=InfoBarPosition.TOP, duration=5000,
                 )
-            return
+                return False
+            return True
         if not self.image_path:
             # Sprint B: no loaded record and no source image to match
             # against — persist the edited result as a NEW record instead
             # of dropping the edits on the floor.
             self._save_new_history_record()
-            return
+            return True
         records = hs.list(limit=20, search=os.path.basename(self.image_path))
         if not records:
             self._save_new_history_record()
-            return
+            return True
         try:
-            hs.update_result(records[0].id, self.result)
+            if not hs.update_result(records[0].id, self.result):
+                InfoBar.warning(
+                    "", self._t("edit.historyMissing"), parent=self.win,
+                    position=InfoBarPosition.TOP, duration=5000,
+                )
+                return False
         except Exception as exc:
             InfoBar.error(
                 "", f"保存历史记录失败: {exc}",
                 parent=self.win,
                 position=InfoBarPosition.TOP, duration=5000,
             )
+            return False
+        return True
 
     def _save_new_history_record(self) -> None:
         """Sprint B (REVIEW-2026-09-04): create a fresh history record for
@@ -2023,10 +2086,32 @@ class ExtractPage(ScrollArea):
             "source_file": os.path.basename(self.image_path) if self.image_path else None,
             "result": self.result,
         }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        InfoBar.success("", self._t("status.saved"), parent=self.win,
-                        position=InfoBarPosition.TOP)
+        # REVIEW-2026-09-10: this branch had no error handling at all (unlike
+        # the tree branch above and _export_xlsx) — a windowed app has no
+        # console, so a locked/read-only target meant "nothing happens". It
+        # also wrote in place, so a failure mid-dump truncated the file the
+        # user already had. Write to a temp file in the same directory and
+        # replace, and report both outcomes.
+        try:
+            tmp_path = path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            os.replace(tmp_path, path)
+            InfoBar.success("", self._t("status.saved"), parent=self.win,
+                            position=InfoBarPosition.TOP)
+        except Exception as exc:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
+            InfoBar.error("", str(exc), parent=self.win,
+                          position=InfoBarPosition.TOP, duration=5000)
 
     def retranslate(self):
         self.lbl_title.setText("Extract" if self._t("upload.title") == "upload.title" else self._t("upload.title"))
@@ -2852,6 +2937,21 @@ class RangeChartFluentWindow(FluentWindow):
                 legacy = (self.cfg.get("api_key") or "").strip()
                 if legacy:
                     current.api_key = legacy
+                    # REVIEW-2026-09-10: migrate the legacy ENDPOINT and MODEL
+                    # too. Only the key was carried over, so a Tkinter user
+                    # configured against a proxy (cfg endpoint/model) had the
+                    # key copied into the seeded MiniMax provider — from then
+                    # on every extraction went to
+                    # api.minimaxi.com/anthropic with model MiniMax-M3 using
+                    # the proxy key, silently breaking a working setup (and
+                    # the Fluent UI has no field that even shows cfg's
+                    # endpoint/model to explain it).
+                    legacy_endpoint = (self.cfg.get("endpoint") or "").strip()
+                    legacy_model = (self.cfg.get("model") or "").strip()
+                    if legacy_endpoint:
+                        current.endpoint = legacy_endpoint
+                    if legacy_model:
+                        current.model = legacy_model
                     try:
                         self._provider_store.update(current)
                     except Exception:

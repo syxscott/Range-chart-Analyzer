@@ -1278,11 +1278,22 @@ async function extractRangeChart(opts) {
     ? proxyUrl.trim().replace(/\/+$/, '')
     : String(baseUrl).replace(/\/+$/, '');
   // F-8: Enforce HTTPS for proxy URLs to prevent API key leakage via HTTP MITM
-  if (target.startsWith('http://')) {
+  // REVIEW-2026-09-10: the scheme check was case-sensitive, so "HTTP://…" (or
+  // "Http://…") reached the direct path and was then validated by a guard
+  // whose https requirement used a different comparison — an insecure
+  // plaintext proxy could slip through. Schemes are case-insensitive per
+  // RFC 3986 §3.1.
+  if (/^http:\/\//i.test(target)) {
     console.error('Insecure proxy URL: HTTP is not allowed, falling back to direct connection');
     return rcaCallBackend(opts, base64);
   }
-  // SSRF protection: block private/internal hostnames and cloud metadata endpoints
+  // SSRF protection: block private/internal hostnames and cloud metadata
+  // endpoints. `new URL()` already normalizes the odd IPv4 spellings
+  // (decimal "2130706433", hex "0x7f.1", short "127.1") to a canonical
+  // dotted quad, so the IPv4 rules below see a normalized string. IPv6
+  // needs its own pass: the hostname keeps its surrounding brackets and
+  // hex form, so an IPv4-mapped address such as https://[::ffff:a9fe:a9fe]
+  // would otherwise slip past the IPv4 patterns entirely.
   let targetHostname;
   try {
     targetHostname = new URL(target).hostname.toLowerCase();
@@ -1294,12 +1305,37 @@ async function extractRangeChart(opts) {
     '169.254.169.254',   // AWS / Azure metadata
     'metadata.google.internal', // GCP metadata
   ];
-  const isPrivate = /^10\./.test(targetHostname) ||
-    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(targetHostname) ||
-    /^192\.168\./.test(targetHostname) ||
-    /^127\./.test(targetHostname) ||
-    /^169\.254\./.test(targetHostname) ||
+  const _isPrivateV4 = (h) => /^10\./.test(h) ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(h) ||
+    /^192\.168\./.test(h) ||
+    /^127\./.test(h) ||
+    /^169\.254\./.test(h);
+  let isPrivate = _isPrivateV4(targetHostname) ||
     ssrfBlocked.includes(targetHostname);
+  if (!isPrivate && targetHostname.charAt(0) === '[' && targetHostname.slice(-1) === ']') {
+    const v6 = targetHostname.slice(1, -1);
+    // Loopback (::1), unique-local (fc00::/7) and link-local (fe80::/10).
+    if (v6 === '::1' || /^f[cd][0-9a-f]{2}:/.test(v6) || /^fe[89ab][0-9a-f]:/.test(v6)) {
+      isPrivate = true;
+    } else {
+      // IPv4-mapped (::ffff:a.b.c.d, possibly re-serialized as hex pairs).
+      let mapped = null;
+      let m = v6.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+      if (m) {
+        mapped = m[1];
+      } else if ((m = v6.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/))) {
+        const hi = parseInt(m[1], 16);
+        const lo = parseInt(m[2], 16);
+        mapped = [hi >> 8, hi & 255, lo >> 8, lo & 255].join('.');
+      }
+      if (mapped && _isPrivateV4(mapped)) isPrivate = true;
+    }
+  }
+  // Cloud metadata services also answer on internal-only DNS names.
+  if (!isPrivate && targetHostname &&
+      (targetHostname === 'metadata' || targetHostname.slice(-9) === '.internal')) {
+    isPrivate = true;
+  }
   if (isPrivate && targetHostname) {
     console.error('Insecure endpoint: private/internal URLs are not allowed in direct mode, falling back to backend');
     return rcaCallBackend(opts, base64);

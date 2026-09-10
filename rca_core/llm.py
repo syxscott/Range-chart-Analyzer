@@ -949,6 +949,47 @@ class ProviderStore:
 _PROVIDER_STORE_SAVE_LOCK = threading.Lock()
 
 
+def _coerce_text(value: Any) -> str:
+    """Coerce a provider text field to str.
+
+    REVIEW-2026-09-10: a single null/numeric text part used to raise
+    ``TypeError: can only concatenate str (not "NoneType") to str`` out of
+    the never-raises ``call_llm_api``, poisoning an otherwise good reply.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _summarise_empty_payload(payload: Any) -> str:
+    """Describe a 2xx response that carried no usable text.
+
+    REVIEW-2026-09-10: relay/gateway presets commonly answer HTTP 200 with an
+    error object in the body (``{"error": {"message": "insufficient balance"}}``)
+    and some providers return a refusal with an empty content list. Both used
+    to reach the caller as "successful but empty", so the user saw a generic
+    parse error instead of the real reason. Surface a short excerpt.
+    """
+    try:
+        if isinstance(payload, dict):
+            err = payload.get("error")
+            if isinstance(err, dict):
+                msg = err.get("message") or err.get("type") or ""
+                if msg:
+                    return "upstream error in a 200 response: " + str(msg)[:500]
+            if err:
+                return "upstream error in a 200 response: " + str(err)[:500]
+            stop = payload.get("stop_reason") or payload.get("finish_reason") or ""
+            if stop:
+                return ("response contained no text blocks "
+                        f"(stop_reason={stop})")
+        return "response contained no text blocks"
+    except Exception:
+        return "response contained no text blocks"
+
+
 def _decode_err_body(err_body: bytes) -> str:
     """Best-effort decode of the upstream error bytes for surfacing in the UI.
 
@@ -1092,6 +1133,29 @@ def _api_base(endpoint: str) -> str:
     return _V1_TAIL.sub("", (endpoint or "").rstrip("/"))
 
 
+# A base URL that already ends in a version segment. REVIEW-2026-09-10: eight
+# shipped presets publish such a base (Zhipu /api/paas/v4, Baidu Qianfan /v2,
+# Volcengine Ark /api/v3, Novita /v3, BytePlus/Huoshan/DouBaoSeed /api/v3) and
+# the OpenAI/Anthropic SDK convention is to append ONLY the resource path
+# ("/chat/completions", "/messages"). Appending the full "/v1/..." produced
+# /api/paas/v4/v1/chat/completions, which those hosts do not serve - a valid
+# key then failed the provider Test and every extraction.
+_BASE_VERSION_TAIL = re.compile(r"/v\d+(?:\.\d+)?$", re.IGNORECASE)
+
+
+def _endpoint_path(base: str, resource: str) -> str:
+    """Join a canonical versioned ``resource`` path onto a provider base URL.
+
+    ``resource`` is the path this client would use against a bare host
+    ("/v1/messages", "/v1/chat/completions", "/v1/models"). When the base
+    already carries a version segment, only the resource suffix is appended so
+    the version is not duplicated.
+    """
+    if _BASE_VERSION_TAIL.search(base):
+        return base + resource[len("/v1"):]
+    return base + resource
+
+
 def _call_anthropic(
     *,
     provider: LlmProvider,
@@ -1118,7 +1182,7 @@ def _call_anthropic(
         return None, False, None, f"endpoint rejected by SSRF guard: {why_ep}", None
     if not image_b64:
         return None, False, None, "", None
-    target = _api_base(provider.endpoint) + "/v1/messages"
+    target = _endpoint_path(_api_base(provider.endpoint), "/v1/messages")
     body: dict[str, Any] = {
         "model": provider.model,
         "max_tokens": max_tokens or 4000,
@@ -1177,7 +1241,7 @@ def _call_openai(
         return None, False, None, f"endpoint rejected by SSRF guard: {why_ep}", None
     if not image_b64:
         return None, False, None, "", None
-    target = _api_base(provider.endpoint) + "/v1/chat/completions"
+    target = _endpoint_path(_api_base(provider.endpoint), "/v1/chat/completions")
     # OpenAI reasoning models (o1/o3/o4-mini) reject `max_tokens` and require
     # `max_completion_tokens`; sending the legacy name 400s the request.
     # They ALSO reject `role:system` (must be `developer` or merged into the
@@ -1396,7 +1460,11 @@ def _read_response(
     try:
         payload = json.loads(payload_bytes.decode("utf-8"))
     except Exception:
-        return None, False, status, err_str, None
+        # REVIEW-2026-09-10: a 2xx whose body is not JSON (a WAF/login HTML
+        # page, an SSE stream) discarded the bytes entirely, so the caller
+        # reported err.http with an EMPTY error_body - nothing to diagnose.
+        # Hand the decoded text back as the error body (already capped).
+        return None, False, status, _decode_err_body(payload_bytes), None
     raw_text = ""
     for c in payload.get("content", []) or []:
         if isinstance(c, dict) and c.get("type") == "text":
@@ -1404,8 +1472,21 @@ def _read_response(
             # can legitimately split a long response across multiple
             # content blocks (e.g. ``{"text":"{..."} + {"text":"...}"}``),
             # and the previous ``break`` discarded the tail.
-            raw_text += c.get("text", "")
+            # REVIEW-2026-09-10: the value may be null/numeric (a malformed
+            # block), and `"" + None` raised TypeError out of a function
+            # documented as never raising - one bad block poisoned an
+            # otherwise good reply.
+            raw_text += _coerce_text(c.get("text"))
     truncated = payload.get("stop_reason") == "max_tokens"
+    if not raw_text.strip():
+        # REVIEW-2026-09-10: a 200 with no usable text (a refusal, an empty
+        # content list, or an error object delivered inside the body - which
+        # many relay/gateway presets do) used to return "" and be treated as
+        # a SUCCESSFUL empty result: the caller then reported err.parse with
+        # raw="" and the upstream reason was lost. Return None (the caller's
+        # "no text" signal) and carry the payload excerpt as the error body so
+        # the user sees the real cause.
+        return None, truncated, status, _summarise_empty_payload(payload), payload
     return raw_text, truncated, status, err_str, payload
 
 
@@ -1482,8 +1563,13 @@ def call_llm_api(
         timeout_sec=timeout_sec,
         progress_callback=progress_callback,
     )
-    if capture_error_body and not err_body:
-        err_body = ""
+    if not capture_error_body:
+        # REVIEW-2026-09-10: this was a no-op (`if capture_error_body and not
+        # err_body: err_body = ""` - the branch only ran when the body was
+        # already empty), so the documented privacy switch did nothing and the
+        # decoded upstream body was returned on every path regardless. Blank
+        # it, keeping a marker so the caller still knows WHY there is no body.
+        err_body = "[upstream error body not captured]" if err_body else ""
     # When the API didn't return a usage block but we got text back, fall
     # back to local estimation. Flag the row so the UI can label it.
     # Include an image token estimate so vision calls aren't under-counted
@@ -1584,15 +1670,15 @@ def call_llm_api_with_retry(
             # retry summary so the surfaced message reads "1 attempt, gave up"
             # instead of "single connection failure with no indication of
             # retry behaviour".
-            error_utils = _get_error_utils()
-            backoff_final = error_utils.get_retry_delay(
-                status=status,
-                headers=None,
-                attempt=attempt,
-                initial_delay=initial_backoff_sec,
-                backoff_factor=backoff_factor,
-            )
-            net_suffix = f"[retry {attempt + 1}/{retries} after {backoff_final:.1f}s — network error, giving up]"
+            # REVIEW-2026-09-10: this branch RETURNS immediately (it does not
+            # sleep), so the suffix used to advertise a delay that was never
+            # waited and an attempt that never happens ("retry 2/3 after 1.6s"
+            # with retries=3 on a give-up path). Report the attempts actually
+            # made.
+            attempts_made = attempt + 1
+            net_suffix = (f"[{attempts_made} attempt"
+                          f"{'' if attempts_made == 1 else 's'}"
+                          f" — network error, giving up]")
             if err_body:
                 last = (text, truncated, status, err_body + "\n" + net_suffix, usage)
             else:
@@ -1675,7 +1761,7 @@ def _probe_openai_models(provider: LlmProvider, timeout_sec: int) -> ConnectionR
     # test then falsely reports a working endpoint as broken. Use GET; on a
     # 405 / 404 / non-2xx response, fall back to a 1-token generation probe
     # so we still verify the key works end-to-end.
-    target = _api_base(provider.endpoint) + "/v1/models"
+    target = _endpoint_path(_api_base(provider.endpoint), "/v1/models")
     headers = {
         "Authorization": f"Bearer {provider.api_key}",
     }
@@ -1787,7 +1873,7 @@ def _probe_minimal_generate(
         """Returns (payload, status, err_body, latency_ms)."""
         t0 = _now_ms()
         if fmt == ApiFormat.OPENAI:
-            target = _api_base(provider.endpoint) + "/v1/chat/completions"
+            target = _endpoint_path(_api_base(provider.endpoint), "/v1/chat/completions")
             body = {"model": model, "max_tokens": PROBE_MAX_TOKENS,
                     "messages": [{"role": "user", "content": "hi"}]}
             headers = {"Authorization": f"Bearer {provider.api_key}",
@@ -1801,7 +1887,7 @@ def _probe_minimal_generate(
                        "x-goog-api-key": provider.api_key,
                        "x-api-key": provider.api_key}
         else:  # ANTHROPIC
-            target = _api_base(provider.endpoint) + "/v1/messages"
+            target = _endpoint_path(_api_base(provider.endpoint), "/v1/messages")
             body = {"model": model, "max_tokens": PROBE_MAX_TOKENS,
                     "messages": [{"role": "user", "content": "hi"}]}
             headers = {"x-api-key": provider.api_key,

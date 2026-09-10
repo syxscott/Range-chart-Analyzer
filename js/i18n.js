@@ -4,6 +4,14 @@
 const RCA_I18N = {
   zh: {
     _label: '中文',
+    'a11y.skipToContent': '跳到主要内容',
+    'history.filter.zonation': '生物带',
+    'err.exportFailed': '无法写入文件，请检查目标路径是否可写：',
+    // REVIEW-2026-09-10: err.* keys had no entry in any locale.
+    'err.imageDecode': '无法解码该图片，请换一张 PNG / JPG / WEBP。',
+    'err.extract': '提取失败，请检查网络与 API Key 后重试。',
+    'err.classify': '图表类型识别失败，已按种属延限图处理。',
+    'edit.historyMissing': '该历史记录已不存在，编辑未保存。',
     'app.title': 'Range Chart Analyzer',
     'app.subtitle': '地层沿线图数据提取工具',
     'nav.settings': 'API 设置',
@@ -189,6 +197,7 @@ const RCA_I18N = {
     'col.pattern': '岩性图案',
     'col.topIdx': '上层索引',
     'col.baseIdx': '下层索引',
+    'col.label': '标签',
     'col.bedIdx': '层位',
     'col.ref': '引用',
     'col.crossFrom': '来自剖面',
@@ -275,7 +284,7 @@ const RCA_I18N = {
     // (the general bed_index_order_* wording matching rca_core/i18n.py).
     // The first definitions were silently shadowed — removed as dead code.
     // P1-8: abundance sum-to-100
-    'quality.abundance_sum_violation': '丰度百分比之和不等于 100%（实测：{sum}%）',
+    'quality.abundance_sum_violation': '「{sample}」的丰度百分比之和不等于 100%（实测：{sum}%）',
     'quality.abundance_sum_violation_count': '共 {count} 个层位的丰度之和不等于 100%',
     'quality.range_top_lt_base': '部分物种的 LAD（末现）早于 FAD（首现）',
     'quality.ages_inconsistent': '{count} 个剖面的年龄跨纪，属界线剖面的可能',
@@ -289,6 +298,14 @@ const RCA_I18N = {
 
 RCA_I18N.en = {
   _label: 'English',
+  'a11y.skipToContent': 'Skip to main content',
+  'history.filter.zonation': 'Zonation',
+  'err.exportFailed': 'Could not write the file — check that the target path is writable:',
+  // REVIEW-2026-09-10: err.* keys had no entry in any locale.
+  'err.imageDecode': 'Could not decode that image — try a PNG / JPG / WEBP file.',
+  'err.extract': 'Extraction failed. Check your network and API key, then retry.',
+  'err.classify': 'Chart-type detection failed; proceeding as a range chart.',
+  'edit.historyMissing': 'That history record no longer exists — the edit was not saved.',
   'app.title': 'Range Chart Analyzer',
   'app.subtitle': 'Stratigraphic range chart data extraction tool',
   'nav.settings': 'API Settings',
@@ -474,6 +491,7 @@ RCA_I18N.en = {
     'col.pattern': 'Pattern',
     'col.topIdx': 'Top idx',
     'col.baseIdx': 'Base idx',
+    'col.label': 'Label',
     'col.bedIdx': 'Bed idx',
     'col.ref': 'Reference',
     'col.crossFrom': 'From section',
@@ -569,6 +587,14 @@ RCA_I18N.en = {
 
 RCA_I18N.ja = {
   _label: '日本語',
+  'a11y.skipToContent': 'メインコンテンツへスキップ',
+  'history.filter.zonation': '帯区分',
+  'err.exportFailed': 'ファイルに書き込めません。保存先に書き込み権限があるか確認してください：',
+  // REVIEW-2026-09-10: err.* keys had no entry in any locale.
+  'err.imageDecode': '画像を読み込めませんでした。PNG / JPG / WEBP をお試しください。',
+  'err.extract': '抽出に失敗しました。ネットワークと API キーを確認して再試行してください。',
+  'err.classify': '図表タイプの判定に失敗しました。種属延長図として処理します。',
+  'edit.historyMissing': 'この履歴レコードは存在しません。編集は保存されませんでした。',
   'app.title': 'Range Chart Analyzer',
   'app.subtitle': '層序レンジチャートのデータ抽出ツール',
   'nav.settings': 'API 設定',
@@ -753,6 +779,7 @@ RCA_I18N.ja = {
     'col.pattern': '岩相パターン',
     'col.topIdx': '上位層',
     'col.baseIdx': '下位層',
+    'col.label': 'ラベル',
     'col.bedIdx': '層準',
     'col.ref': '引用',
     'col.lithologyMeaning': '名称',

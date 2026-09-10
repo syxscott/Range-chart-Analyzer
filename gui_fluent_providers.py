@@ -625,6 +625,14 @@ class ProviderWizard(QDialog):
             # silently deactivate the user's currently-active provider and
             # reroute LLM calls/credentials to a different endpoint.
             is_current=(bool(self._existing.is_current) if self._existing else False),
+            # REVIEW-2026-09-10: carry over sort_index and the health
+            # counter as well. Both defaulted to 0 on the rebuilt object,
+            # so store.update()'s sort by (sort_index, created_at) made an
+            # edited provider jump back to the top of the drag order, and
+            # consecutive_failures was reset — a provider showing a failure
+            # state flipped back to healthy without ever succeeding.
+            sort_index=(self._existing.sort_index if self._existing else 0),
+            consecutive_failures=(self._existing.consecutive_failures if self._existing else 0),
         )
         self.accept()
 

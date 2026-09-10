@@ -53,9 +53,14 @@ const ALLOWED_ORIGINS = [
 // Optional shared secret. Set via `wrangler secret put PROXY_SHARED_SECRET`
 // (https://developers.cloudflare.com/workers/configuration/secrets/). When
 // set, requests must include `X-Proxy-Key: <secret>`. Empty string = off.
-// If you set this, origin allowlisting is still applied when the allowlist
-// is non-empty, but a valid key alone is enough to pass when the allowlist
-// is empty.
+// If you set this, an allowlisted Origin is ALSO required (the two are ANDed
+// in fetch() below) unless the allowlist is empty (secret-only mode).
+//
+// REVIEW-2026-09-10: this constant is only a source-level default. The value
+// actually used is `env.PROXY_SHARED_SECRET` from the Worker's bindings, so
+// `wrangler secret put` works without editing this file. The old code never
+// looked at `env` at all, which made the secret branches dead code on
+// Cloudflare and left `wrangler secret put` silently ineffective.
 const PROXY_SHARED_SECRET = '';
 
 // Path allowlist: exact-match only — only these paths are forwarded to upstream.
@@ -164,10 +169,13 @@ function corsFor(origin) {
 // false when no secret is configured (an empty secret is treated as "off").
 // Comparison is constant-time to prevent timing-side-channel discovery of
 // the secret length / prefix by an attacker who can probe the Worker.
-function secretOk(request) {
-  if (!PROXY_SHARED_SECRET) return false;
+function secretOk(request, env) {
+  // The Worker binding wins (that is what `wrangler secret put` sets); the
+  // source-level constant is only a fallback default.
+  const secret = (env && env.PROXY_SHARED_SECRET) || PROXY_SHARED_SECRET;
+  if (!secret) return false;
   const provided = request.headers.get('X-Proxy-Key') || '';
-  return timingSafeEqual(provided, PROXY_SHARED_SECRET);
+  return timingSafeEqual(provided, secret);
 }
 
 // Constant-time string compare (length-mismatch is not constant but
@@ -241,14 +249,38 @@ async function readBoundedBody(request, maxBytes) {
 }
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
     // Compute cors + authorization FIRST so the rate-limit 429 branch can
     // safely reference them (TDZ fix: previously `cors` was declared later,
     // so any rate-limited request threw ReferenceError before this 429
     // could be returned with proper CORS headers).
     const cors = corsFor(origin);
-    const authorized = cors !== null || secretOk(request);
+    // REVIEW-2026-09-10: this used to be an OR (`cors !== null ||
+    // secretOk(request)`), so ANY allowlisted Origin authorized the request by
+    // itself and a configured shared secret was never consulted — the opposite
+    // of proxy/README.md's "推荐组合" (origin + key both required; a forged
+    // Origin without the key is rejected).
+    //
+    // The documented deployment modes are (README + the mode comments below):
+    //   allowlist set + secret set   -> BOTH required (recommended)
+    //   allowlist empty + secret set -> key alone is enough (secret-only mode)
+    //   allowlist set + no secret    -> Origin alone passes (documented as
+    //                                   weak for production; unchanged)
+    //   neither                      -> closed (403 for everything)
+    //
+    // A configured secret must also CHANGE the outcome when the key is
+    // missing or wrong: the first draft treated "no key sent" the same as "no
+    // secret configured" and let a forged Origin straight through.
+    const secretConfigured = Boolean((env && env.PROXY_SHARED_SECRET)
+                                     || PROXY_SHARED_SECRET);
+    const allowlistEmpty = ALLOWED_ORIGINS.length === 0;
+    let authorized;
+    if (secretConfigured) {
+      authorized = secretOk(request, env) && (allowlistEmpty || cors !== null);
+    } else {
+      authorized = cors !== null;
+    }
 
     // Rate-limit key: CF-Connecting-IP when available (set by CF and not
     // client-spoofable) and falls back to the rightmost X-Forwarded-For when

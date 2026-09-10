@@ -146,6 +146,22 @@ def _is_pure_extraction_miss(data: dict[str, Any]) -> bool:
 _BED_RE = re.compile(r"-?\d+")
 
 
+def _warning_flags(value: Any) -> set:
+    """Normalise a row's ``_warning`` field to a set of flag names.
+
+    REVIEW-2026-09-10: the extractor writes a bare string when a single
+    warning fires and a list when several do (extractor.py row builders), so
+    consumers must accept both. Mirrors ``rcaWarningFlags`` in js/quality.js.
+    """
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        return {value} if value else set()
+    if isinstance(value, (list, tuple, set)):
+        return {str(v) for v in value if v}
+    return {str(value)}
+
+
 def _parse_bed_n(value: Any) -> int | None:
     """Parse a bed indicator like ``"Bed 9"``, ``"bed-7"``, ``"5"``, or ``5``
     into an integer.  Returns ``None`` for empty / unparsable values."""
@@ -431,7 +447,13 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
                 bed_violations += 1
                 issues.append({"severity": "warning",
                                "msg_key": "quality.bed_index_order_invalid"})
-            if block.get("_warning") == "index_order_swap":
+            # REVIEW-2026-09-10: the extractor emits `_warning` as a bare
+            # string for one flag but as a LIST when two fire together (e.g.
+            # ["range_top_idx_truncated", "index_order_swap"] - the normal
+            # order when a float index was also floored). The old `== "..."`
+            # test missed the swap in exactly that combination, so the
+            # "indices were swapped" info never reached the operator.
+            if "index_order_swap" in _warning_flags(block.get("_warning")):
                 bed_swapped += 1
                 issues.append({"severity": "info",
                                "msg_key": "quality.bed_index_order_swapped"})
@@ -457,7 +479,12 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
         re.IGNORECASE,
     )
     _CENOZOIC_RE = re.compile(
-        r"\b(paleogene|neogene|quaternary|pleistocene|holocene|eocene|oligocene|miocene|pliocene)\b",
+        # "paleocene" is listed explicitly alongside "paleogene": a chart may
+        # label an age at epoch level ("Paleocene") without naming the period,
+        # and the JS mirror (js/quality.js cross-era detector) already matches
+        # it — keeping both sides on the same term set prevents the frontend
+        # and the server from disagreeing on the same chart.
+        r"\b(paleocene|paleogene|neogene|quaternary|pleistocene|holocene|eocene|oligocene|miocene|pliocene)\b",
         re.IGNORECASE,
     )
     section_ages: dict[str, set[str]] = {}

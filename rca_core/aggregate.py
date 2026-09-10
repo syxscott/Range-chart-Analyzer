@@ -113,8 +113,38 @@ def _norm_iczn_author(s):
     return f"{author}|{year}" if year else author
 
 
+def _str_for_merge(v: Any) -> str:
+    """Stringify a scalar for the merge string pool.
+
+    REVIEW-2026-09-10: JSON has no int/float distinction, so JavaScript's
+    ``String(1.0)`` is "1" while Python's ``str(1.0)`` is "1.0" - the two
+    engines merged the SAME numeric value to different strings, and the
+    merged value lands in CSV/XLSX/JSON as text. Integral floats are
+    therefore rendered without the trailing ".0" so both sides agree.
+    Common values (0/1 confidence, 0-length branches, full support) are
+    affected, which is why this is worth normalising.
+    """
+    if isinstance(v, bool):  # bool is an int subclass - keep "True"/"False"
+        return "True" if v else "False"
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
+
+
 def _mode(values):
-    non_empty = [v for v in values if v and str(v).strip()]
+    # REVIEW-2026-09-10: skip structurally non-scalar values (dict / list /
+    # set / tuple). They are unhashable, so Counter raised
+    # `TypeError: unhashable type` and aborted the ENTIRE merge for any
+    # caller whose payload put a container in a field the schema declares as a
+    # string-mode field. The JS mirror keys a Map by reference and never
+    # throws, and a single unrepresentable field must not take the whole
+    # merged result down.
+    non_empty = []
+    for v in values:
+        if isinstance(v, (dict, list, set, tuple)):
+            continue
+        if v and str(v).strip():
+            non_empty.append(v)
     if not non_empty:
         return ""
     counts = Counter(non_empty)
@@ -150,20 +180,28 @@ def _merge_scalar_field(values):
         if isinstance(v, bool):
             bools.append(v)
         elif isinstance(v, (str, int, float)):
-            s = str(v).strip()
+            s = _str_for_merge(v).strip()
             if s:
                 strs.append(s)
     # Prefer the mode of strings; fall back to bool mode if no strings.
     if strs:
         return _mode(strs)
     if bools:
-        # Mode of bools, converted back to the original bool type.
-        # Counter on bools gives the most-common bool; converting that
-        # bool to str gives 'True' or 'False', but callers expect the
-        # original type. We return the bool directly.
-        from collections import Counter
-        mode_bool = Counter(bools).most_common(1)[0][0]
-        return mode_bool
+        # Mode of bools, converted back to the original bool type: the mode of
+        # [F,F,F] must be the bool False, not the string 'False'.
+        #
+        # REVIEW-2026-09-10: this used Counter.most_common(1)[0][0], which
+        # breaks ties by INSERTION ORDER - so [True, False] merged to True and
+        # [False, True] to False, i.e. the same set of runs produced a
+        # different merged flag depending on which run came first. That is the
+        # exact non-determinism the H4 fix removed from the string path
+        # ("Break deterministically by sorted order so input order never
+        # silently decides the merged string across sessions"). Sort the tied
+        # values instead (False < True), which is also what the JS mirror
+        # does and what its test asserts.
+        counts = Counter(bools)
+        top = max(counts.values())
+        return sorted(v for v in counts if counts[v] == top)[0]
     return _NO_MERGE
 
 
@@ -393,6 +431,18 @@ SCHEMA_BY_MODE = {
     "zonation_chart": ZONATION_CHART_SCHEMA,
 }
 
+# REVIEW-2026-09-10: modes that are wired through the FULL stack (prompt +
+# normalizer + merge schema + quality + exporter tables + entry points). The
+# extractor implements three more (chemical_stratigraphy / paleomap /
+# scatter_plot) but they have no MergeSchema and no exporter tables, so they
+# MUST NOT reach merge_results - SCHEMA_BY_MODE.get(mode, RANGE_CHART_SCHEMA)
+# would silently substitute the range-chart schema and drop every
+# mode-specific row (continents, fossil_sites, data_points) while still
+# returning ok=True. server.py already rejects them when explicitly
+# requested; this constant exists so the "auto" path can apply the same rule
+# after vision classification resolves a mode the caller never named.
+WIRED_MODES = frozenset(SCHEMA_BY_MODE)
+
 
 def _looks_abundance(data: Optional[dict]) -> bool:
     """Mirror of rca_core.exporter._looks_abundance. An abundance-diagram
@@ -553,16 +603,24 @@ def _merge_primary_list(runs, schema, n):
             # in the dedup key so "Genus sp." and "Genus" stay separate.
             species_val = it.get("species", "") or ""
             id_norm = tuple(_norm(it.get(k)) for k in schema.primary_id_keys)
+            # Mirror JS: skip a row only when ALL id fields are empty
+            # (parts.some(p => p) — skip if no part is truthy).
+            #
+            # REVIEW-2026-09-10: this test must run BEFORE the author is
+            # folded into the key. It used to run after, so a row with an
+            # empty species AND empty section but a non-empty author_year
+            # ("Smith 1950") counted as identified and survived - the server/
+            # GUI/CSV emitted a species row with no species name, while the
+            # browser (which appends the author after its own guard) dropped
+            # it. Same runs, different row sets per endpoint.
+            if not any(id_norm):
+                continue
             # P1-2 (REVIEW-2026-07-25): for range-chart schema, also
             # include ICZN-normalized author_year in the dedup key so
             # "Smith, 1950", "(Smith, 1950)", "Smith 1950" merge together
             # but stay distinct from "Smith, 1960".
             if schema.primary_list_key == "species_ranges":
                 id_norm = id_norm + (_norm_iczn_author(it.get("author_year", "")),)
-            # Mirror JS: skip row only when ALL id fields are empty
-            # (parts.some(p => p) — skip if no part is truthy)
-            if not any(id_norm):
-                continue
             key = (id_norm, _extract_qualifiers(species_val))
             if key in seen_in_run:
                 continue
@@ -855,13 +913,29 @@ def merge_results(
     out[sch.primary_list_key] = _merge_primary_list(runs, sch, n)
     out.update(_merge_named_lists(runs, sch))
 
+    # REVIEW-2026-09-10: root-level _extras / _warnings carry figure-level
+    # data the extractor deliberately preserves (captions, notes, degradation
+    # warnings). The single-run path keeps them, but the N-run path built
+    # `out` only from the primary list + list_keys + confidence, so raising
+    # the run count silently dropped them. Preserve from the first run that
+    # has them, deep-copied so later mutations cannot rewrite the source run.
+    for key in ("_extras", "_warnings"):
+        for run in runs:
+            if isinstance(run, dict) and run.get(key):
+                out[key] = copy.deepcopy(run[key])
+                break
+
     # For phylogenetic tree, metadata and legend are single dicts (not
     # lists). They are identical across runs for the same image; preserve
     # from the first run to keep them in the merged output.
     if sch.primary_list_key == "nodes" and sch is not RANGE_CHART_SCHEMA:
         for key in ("metadata", "legend"):
             if runs and isinstance(runs[0], dict) and key in runs[0]:
-                out[key] = runs[0][key]
+                # REVIEW-2026-09-10: deep-copy, not alias. The JS mirror does
+                # (deepClone) and the single-run path above already does; the
+                # bare alias let a caller's in-place edit of the merged result
+                # rewrite the source run, breaking audit integrity.
+                out[key] = copy.deepcopy(runs[0][key])
 
     confs = []
     # M-1 fix (REVIEW-2026-07-25): merged confidence is a SIMPLE AVERAGE of

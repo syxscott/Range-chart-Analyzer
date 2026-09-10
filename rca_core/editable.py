@@ -32,6 +32,11 @@ _LIST_KEYS = (
     # results — every edit a user makes on an abundance chart is silently
     # dropped on "Apply edits".
     "sites", "abundances", "zones",
+    # REVIEW-2026-09-10: phylogenetic-tree and zonation tables were missing,
+    # so capture_edits() returned {} for any edit confined to them and
+    # apply_edits() silently no-op'd — the same class of bug the abundance
+    # addition above fixed. report.py already tracks all three keys.
+    "nodes", "zonations", "correlations",
 )
 
 
@@ -221,6 +226,19 @@ def new_row_template(list_key: str) -> dict[str, Any]:
         },
         "zones": {
             "name": "", "age": "", "level_range": "",
+        },
+        # REVIEW-2026-09-10: see the _LIST_KEYS note above.
+        "nodes": {
+            "id": "", "parent": "", "name": "", "is_leaf": None,
+            "branch_length": None, "node_age_ma": None, "support": None,
+        },
+        "zonations": {
+            "name": "", "region": "", "framework": "", "reference": "",
+        },
+        "correlations": {
+            "from_zone": "", "to_zone": "",
+            "from_zonation": "", "to_zonation": "",
+            "basis": "", "note": "",
         },
     }
     return copy.deepcopy(templates.get(list_key, {}))
