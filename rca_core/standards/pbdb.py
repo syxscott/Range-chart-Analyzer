@@ -49,6 +49,27 @@ def _resolve_pbdb_bounds(row):
     return e_stage, l_stage, e_ma, l_ma
 
 
+def _stage_endpoint_names(stages):
+    """Return ``(older_name, younger_name)`` for *stages* — by their ICS bounds.
+
+    REVIEW-2026-09-20: both PBDB builders took ``stages[0]`` / ``stages[-1]``,
+    i.e. the TEXT order of the age_range label. Labels do not have to be
+    written bottom-to-top ("Changhsingian - Wuchiapingian" occurs on real
+    charts, and the module's own numeric path is deliberately
+    order-independent: max_ma/min_ma use max()/min()). Pairing the first word
+    with early_interval then exported the YOUNGER name beside the OLDER max_ma
+    — a self-contradicting interval row that PBDB validators reject.
+    """
+    known = [s for s in stages if s in ICS_2024]
+    if not known:
+        return "", ""
+    # Geological convention inside the table: base_ma is the older (larger)
+    # number and top_ma the younger (smaller) one.
+    older = max(known, key=lambda s: ICS_2024[s].get("base_ma", 0) or 0)
+    younger = min(known, key=lambda s: ICS_2024[s].get("top_ma", 0) or 0)
+    return older, younger
+
+
 def _parse_coords(text):
     if not text or not isinstance(text, str):
         return None, None
@@ -169,9 +190,11 @@ def to_pbdb_occurrences(result):
                 section_info[name]["max_ma"] = str(max_ma)
             if _HAS_ICS and ics_parse_age_range:
                 _stages = ics_parse_age_range(age_range)
-                if _stages:
-                    section_info[name]["older_name"] = _stages[0]
-                    section_info[name]["younger_name"] = _stages[-1]
+                _older_name, _younger_name = (
+                    _stage_endpoint_names(_stages) if _stages else ("", ""))
+                if _older_name and _younger_name:
+                    section_info[name]["older_name"] = _older_name
+                    section_info[name]["younger_name"] = _younger_name
                 elif ics_resolve_age_bound:
                     _n_old, _ = ics_resolve_age_bound(age_range, prefer="older")
                     if _n_old:
@@ -187,7 +210,17 @@ def to_pbdb_occurrences(result):
         lat, lon = None, None
         coords = sec_data.get("coordinates", "")
         if coords: lat, lon = _parse_coords(coords)
-        author_year = row.get("author_year", row.get("authority", ""))
+        # REVIEW-2026-09-20: ``dict.get(key, default)`` only uses the default
+        # when the key is ABSENT, and the normalizer always writes
+        # ``author_year`` (empty string when nothing was read) — so the
+        # ``row.get("authority", "")`` second argument was dead code and an
+        # empty author_year never fell through to the authority alias the
+        # older payloads / hand-edited rows carry. ``or``-chaining is what was
+        # meant here (same fix in darwin_core.py).
+        author_year = (
+            row.get("author_year") or row.get("authority")
+            or row.get("author") or ""
+        )
         # C-2 / C-4 fix (REVIEW-2026-07-25): resolve the per-species FAD/LAD
         # bounds via ICS. early = older bound (range_base), late = younger
         # bound (range_top). When ICS is unavailable or a bound can't be
@@ -260,8 +293,10 @@ def to_pbdb_collections(result):
                 min_ma, max_ma = younger_ma, older_ma
         if _HAS_ICS and ics_parse_age_range:
             _stages = ics_parse_age_range(age_range)
-            if _stages:
-                early_interval, late_interval = _stages[0], _stages[-1]
+            _older_name, _younger_name = (
+                _stage_endpoint_names(_stages) if _stages else ("", ""))
+            if _older_name and _younger_name:
+                early_interval, late_interval = _older_name, _younger_name
             elif ics_resolve_age_bound:
                 _n_old, _ = ics_resolve_age_bound(age_range, prefer="older")
                 if _n_old:

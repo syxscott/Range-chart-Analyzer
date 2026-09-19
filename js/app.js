@@ -22,6 +22,16 @@
     // FIX-6: AbortController for the in-flight extraction so the user can
     // cancel a long-running (possibly multi-run) request.
     abort: null,
+    // M3 (REVIEW-2026-09-20): AbortController for the in-flight GBIF name
+    // verification round. Its own handle because the hints fire AFTER the
+    // extraction resolved — `state.abort` is already cleared by then, so
+    // cancelling a live round needed an owner of its own.
+    _nameAbort: null,
+    // H8 (REVIEW-2026-09-20): true while the CURRENT `state.dataUrl` pixels
+    // have already been through the browser's supersample + unsharp pass, so
+    // the backend must not enhance them a second time. Set in handleFile,
+    // cleared whenever the image (or its preview) is dropped.
+    _frontendEnhanced: false,
   };
 
   // ---- element helpers ----
@@ -47,25 +57,66 @@
   // caller can distinguish a POSITIVE keyword hit from the range_chart
   // default. Unmatched "auto" is forwarded to the extraction layer,
   // which classifies the image itself (vision) instead of guessing.
+  // REVIEW-2026-09-20 (#105 mirror): the tables, the STEM list, the bounded
+  // zone-correlation phrase regex AND the branch order below are a verbatim
+  // mirror of rca_core/chart_mode.py (_ZON/_AB/_COL/_PHYLO/_RANGE/_CHEM/
+  // _PALEO/_SCAT + _STEMS + _ZON_PHRASE_RES + auto_detect_chart_mode_ex).
+  // Order: zon → ab → col → phylo → (only when the caption does NOT name a
+  // range chart) paleo → scat → chem → explicit range chart → unmatched
+  // default. Pinned keyword-by-keyword by tests/test_chart_mode_parity.py,
+  // so a one-sided edit fails loudly on both engines.
+  //
+  // Shared helpers (both auto-detect variants below declare their own keyword
+  // tables, but resolve matching through these identical rules):
+  //   asciiWordBoundary — whole-word ASCII keyword (\b…\b)
+  //   asciiWordStart    — STEM keyword (leading \b only, so 'phylogen'
+  //                       matches "phylogenetic" and 'zonation' "zonations")
+  //   cjk keys          — plain substring (CJK/Cyrillic have no boundary)
+  const RCA_CHART_MODE_STEMS = ['phylogen', 'molecular phylogen', 'palyno',
+    'zonation', 'range chart', 'isotop', 'chemostrat', 'paleomap', 'palaeomap',
+    'paleogeograph', 'palaeogeograph', 'paleocontinent', 'palaeocontinent'];
+
+  // \bcorrelation of … zone(s) — the split spelling ("Correlation of Triassic
+  // radiolarian ZONES and subzones") no keyword tuple can express. The clause
+  // stops at the first full stop, so the lithostratigraphic "Correlation of
+  // the measured sections" is still refused. Mirrors _ZON_PHRASE_RES.
+  function rcaChartModeAsciiWordBoundary(haystack, needle) {
+    const re = new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+    return re.test(haystack);
+  }
+
+  function rcaChartModeAsciiWordStart(haystack, needle) {
+    const re = new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    return re.test(haystack);
+  }
+
+  // One keyword of one table (mirrors chart_mode.py:_match_kw).
+  function rcaChartModeMatchKw(haystack, needle) {
+    return RCA_CHART_MODE_STEMS.indexOf(needle) !== -1
+      ? rcaChartModeAsciiWordStart(haystack, needle)
+      : rcaChartModeAsciiWordBoundary(haystack, needle);
+  }
+
+  // Any keyword / CJK term / phrase of one table occurs in the lowercased
+  // blob (mirrors chart_mode.py:_hit).
+  function rcaChartModeHit(blob, asciiKeys, cjkKeys, phraseRes) {
+    for (const k of asciiKeys) {
+      if (rcaChartModeMatchKw(blob, k)) return true;
+    }
+    for (const k of cjkKeys) {
+      if (blob.indexOf(k) !== -1) return true;
+    }
+    return phraseRes ? phraseRes.some((re) => re.test(blob)) : false;
+  }
+
   function rcaAutoDetectChartModeDetailed() {
     const blob = (function () {
       const cap = ($('caption') && $('caption').value || '').toLowerCase();
       const fileName = (state.file && state.file.name || '').toLowerCase();
       return cap + ' ' + fileName;
     })();
-    const asciiWordBoundary = (haystack, needle) => {
-      const re = new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
-      return re.test(haystack);
-    };
-    const asciiWordStart = (haystack, needle) => {
-      const re = new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      return re.test(haystack);
-    };
-    const stemMatch = (blob2, k) =>
-      k === 'phylogen' || k === 'molecular phylogen' || k === 'palyno'
-        ? asciiWordStart(blob2, k)
-        : asciiWordBoundary(blob2, k);
-    const zonKeysAscii = ['zonation', 'biozonation', 'zone correlation', 'correlation of', 'correlation chart'];
+    const zonPhraseRes = [/\bcorrelation of\b[^.\n]{0,80}?\bzones?\b/];
+    const zonKeysAscii = ['zonation', 'biozonation', 'zone correlation', 'correlation chart', 'correlation of zones'];
     const zonKeysCjk = ['生物带', '化石带', '带状对比', '对比图'];
     const abKeysAscii = ['pollen', 'abundance', 'percentage diagram', 'palyno'];
     const abKeysCjk = ['孢粉', '花粉', '丰度', '百分比'];
@@ -73,34 +124,52 @@
     const colKeysCjk = ['柱状', '柱状図', '柱状图'];
     const phyloKeysAscii = ['phylogen', 'phylogram', 'cladogram', 'dendrogram', 'molecular phylogen'];
     const phyloKeysCjk = ['系统发育', '进化树', '系统树', '分子系统'];
-    const zonHit = zonKeysAscii.some((k) => (k === 'zonation' ? asciiWordStart(blob, k) : stemMatch(blob, k)))
-      || zonKeysCjk.some((k) => blob.indexOf(k) !== -1);
-    if (zonHit) {
-      // UI-REVIEW-2026-09-07 (E2E fig_23): a caption mixing "range chart"
-      // with zonation keywords routes to range_chart — the extractor's
-      // biozone fields still capture zonation columns.
-      if (asciiWordBoundary(blob, 'range chart') || blob.indexOf('延限') !== -1) {
-        return { mode: 'range_chart', matched: true };
+    const rangeKeysAscii = ['range chart', 'range-chart'];
+    const rangeKeysCjk = ['延限', 'карта совмещения', 'график совмещения'];
+    const chemKeysAscii = ['isotop', 'chemostrat', 'chemical stratigraphy', 'chemical stratigraphic'];
+    const chemKeysCjk = ['同位素', '化学地层', '化学地層', '地球化学', 'изотоп', 'геохим'];
+    const paleoKeysAscii = ['paleomap', 'palaeomap', 'paleogeograph', 'palaeogeograph', 'paleocontinent', 'palaeocontinent'];
+    const paleoKeysCjk = ['古地理', '古海洋', '古大陆', '板块重建', 'палеогеограф', 'палеокарт', 'палеоконтинент'];
+    const scatKeysAscii = ['scatter plot', 'scatterplot', 'scatter diagram', 'biplot', 'crossplot', 'cross plot'];
+    const scatKeysCjk = ['散点', '散布図', 'точечная диаграмма', 'рассеяни', 'рассеиван'];
+    // Does the caption name a range chart itself? UI-REVIEW-2026-09-07
+    // (E2E fig_23) + REVIEW-2026-09-20 #105 item 1: a mixed
+    // "Columnar section with radiolarian range chart. Zonation of …" caption
+    // routes to range_chart (the extractor's biozone fields still capture the
+    // zonation columns), and a self-labelled range chart is a POSITIVE hit so
+    // the vision classifier never gets to overturn it.
+    const saysRangeChart = rcaChartModeHit(blob, rangeKeysAscii, rangeKeysCjk);
+    if (rcaChartModeHit(blob, zonKeysAscii, zonKeysCjk, zonPhraseRes)) {
+      return saysRangeChart
+        ? { mode: 'range_chart', matched: true }
+        : { mode: 'zonation_chart', matched: true };
+    }
+    if (rcaChartModeHit(blob, abKeysAscii, abKeysCjk)) {
+      return { mode: 'abundance_diagram', matched: true };
+    }
+    if (rcaChartModeHit(blob, colKeysAscii, colKeysCjk)) {
+      return { mode: 'columnar_section', matched: true };
+    }
+    if (rcaChartModeHit(blob, phyloKeysAscii, phyloKeysCjk)) {
+      return { mode: 'phylogenetic_tree', matched: true };
+    }
+    // The three ASSISTANT modes: chart-type wording first (biplot / map say
+    // MORE about the figure than the data it plots), then the data-content
+    // table. Gated on `not saysRange_chart` — "…δ13C curve above the conodont
+    // range chart" must stay a range chart.
+    if (!saysRangeChart) {
+      if (rcaChartModeHit(blob, paleoKeysAscii, paleoKeysCjk)) {
+        return { mode: 'paleomap', matched: true };
       }
-      return { mode: 'zonation_chart', matched: true };
+      if (rcaChartModeHit(blob, scatKeysAscii, scatKeysCjk)) {
+        return { mode: 'scatter_plot', matched: true };
+      }
+      if (rcaChartModeHit(blob, chemKeysAscii, chemKeysCjk)) {
+        return { mode: 'chemical_stratigraphy', matched: true };
+      }
     }
-    for (const k of abKeysAscii) {
-      if (stemMatch(blob, k)) return { mode: 'abundance_diagram', matched: true };
-    }
-    for (const k of abKeysCjk) {
-      if (blob.indexOf(k) !== -1) return { mode: 'abundance_diagram', matched: true };
-    }
-    for (const k of colKeysAscii) {
-      if (asciiWordBoundary(blob, k)) return { mode: 'columnar_section', matched: true };
-    }
-    for (const k of colKeysCjk) {
-      if (blob.indexOf(k) !== -1) return { mode: 'columnar_section', matched: true };
-    }
-    for (const k of phyloKeysAscii) {
-      if (stemMatch(blob, k)) return { mode: 'phylogenetic_tree', matched: true };
-    }
-    for (const k of phyloKeysCjk) {
-      if (blob.indexOf(k) !== -1) return { mode: 'phylogenetic_tree', matched: true };
+    if (saysRangeChart) {
+      return { mode: 'range_chart', matched: true };
     }
     return { mode: 'range_chart', matched: false };
   }
@@ -115,6 +184,11 @@
     // misclassify an ordinary range chart as an abundance / columnar chart.
     // CJK tokens have no whitespace boundaries, so a substring match there
     // is the correct behavior.
+    // Legacy (mode-string-only) variant of rcaAutoDetectChartModeDetailed
+    // above: SAME tables, SAME stem rules and SAME branch order — the two
+    // must not drift (tests/test_chart_mode_parity.py counts each table's
+    // declarations and compares them against rca_core/chart_mode.py).
+    const zonPhraseRes = [/\bcorrelation of\b[^.\n]{0,80}?\bzones?\b/];
     const abKeysAscii = ['pollen', 'abundance', 'percentage diagram', 'palyno'];
     const abKeysCjk = ['孢粉', '花粉', '丰度', '百分比'];
     const colKeysAscii = ['column', 'columns', 'columnar', 'col_section', 'col_sections'];
@@ -129,52 +203,29 @@
     // UI-REVIEW-2026-09-05: biozonation / correlation charts (radiolarian
     // biochronology). Matched BEFORE abundance (mirrors chart_mode.py).
     // 'zonation' is a stem: also matches 'zonations' / 'zonal'.
-    const zonKeysAscii = ['zonation', 'biozonation', 'zone correlation', 'correlation of', 'correlation chart'];
+    const zonKeysAscii = ['zonation', 'biozonation', 'zone correlation', 'correlation chart', 'correlation of zones'];
     const zonKeysCjk = ['生物带', '化石带', '带状对比', '对比图'];
-    const asciiWordBoundary = (haystack, needle) => {
-      // Use \b word boundaries around ASCII tokens so 'col' won't match
-      // 'colour' but 'col_section' (with underscore) still does. The
-      // 'word boundary' semantics treat _ as a word character.
-      const re = new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
-      return re.test(haystack);
-    };
-    // REVIEW-2026-11-07 (low): leading-boundary matcher for STEM keywords.
-    // \bphylogen\b NEVER matched "phylogenetic" / "phylogenies" (the most
-    // common caption form — 'e'/'i' are word chars, no boundary after
-    // 'n'), so auto-detect silently fell back to range_chart. Stems match
-    // on a leading boundary only; 'palyno' matches "palynology" the same
-    // way. Mirrors rca_core/chart_mode.py (_STEMS) so all UIs agree.
-    const asciiWordStart = (haystack, needle) => {
-      const re = new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      return re.test(haystack);
-    };
-    const stemMatch = (blob, k) =>
-      k === 'phylogen' || k === 'molecular phylogen' || k === 'palyno'
-        ? asciiWordStart(blob, k)
-        : asciiWordBoundary(blob, k);
-    for (const k of zonKeysAscii) {
-      if (k === 'zonation' ? asciiWordStart(blob, k) : stemMatch(blob, k)) return 'zonation_chart';
+    // REVIEW-2026-09-20 #105: the explicit range-chart wording, and the three
+    // assistant-mode tables (chemical stratigraphy / paleomap / scatter).
+    const rangeKeysAscii = ['range chart', 'range-chart'];
+    const rangeKeysCjk = ['延限', 'карта совмещения', 'график совмещения'];
+    const chemKeysAscii = ['isotop', 'chemostrat', 'chemical stratigraphy', 'chemical stratigraphic'];
+    const chemKeysCjk = ['同位素', '化学地层', '化学地層', '地球化学', 'изотоп', 'геохим'];
+    const paleoKeysAscii = ['paleomap', 'palaeomap', 'paleogeograph', 'palaeogeograph', 'paleocontinent', 'palaeocontinent'];
+    const paleoKeysCjk = ['古地理', '古海洋', '古大陆', '板块重建', 'палеогеограф', 'палеокарт', 'палеоконтинент'];
+    const scatKeysAscii = ['scatter plot', 'scatterplot', 'scatter diagram', 'biplot', 'crossplot', 'cross plot'];
+    const scatKeysCjk = ['散点', '散布図', 'точечная диаграмма', 'рассеяни', 'рассеиван'];
+    const saysRangeChart = rcaChartModeHit(blob, rangeKeysAscii, rangeKeysCjk);
+    if (rcaChartModeHit(blob, zonKeysAscii, zonKeysCjk, zonPhraseRes)) {
+      return saysRangeChart ? 'range_chart' : 'zonation_chart';
     }
-    for (const k of zonKeysCjk) {
-      if (blob.indexOf(k) !== -1) return 'zonation_chart';
-    }
-    for (const k of abKeysAscii) {
-      if (stemMatch(blob, k)) return 'abundance_diagram';
-    }
-    for (const k of abKeysCjk) {
-      if (blob.indexOf(k) !== -1) return 'abundance_diagram';
-    }
-    for (const k of colKeysAscii) {
-      if (asciiWordBoundary(blob, k)) return 'columnar_section';
-    }
-    for (const k of colKeysCjk) {
-      if (blob.indexOf(k) !== -1) return 'columnar_section';
-    }
-    for (const k of phyloKeysAscii) {
-      if (stemMatch(blob, k)) return 'phylogenetic_tree';
-    }
-    for (const k of phyloKeysCjk) {
-      if (blob.indexOf(k) !== -1) return 'phylogenetic_tree';
+    if (rcaChartModeHit(blob, abKeysAscii, abKeysCjk)) return 'abundance_diagram';
+    if (rcaChartModeHit(blob, colKeysAscii, colKeysCjk)) return 'columnar_section';
+    if (rcaChartModeHit(blob, phyloKeysAscii, phyloKeysCjk)) return 'phylogenetic_tree';
+    if (!saysRangeChart) {
+      if (rcaChartModeHit(blob, paleoKeysAscii, paleoKeysCjk)) return 'paleomap';
+      if (rcaChartModeHit(blob, scatKeysAscii, scatKeysCjk)) return 'scatter_plot';
+      if (rcaChartModeHit(blob, chemKeysAscii, chemKeysCjk)) return 'chemical_stratigraphy';
     }
     return 'range_chart';
   }
@@ -201,22 +252,24 @@
   // Map a result object's shape to an export filename prefix. Mirrors the
   // shape detection in table.js / rca_core.exporter so exported files are
   // labeled by the chart kind they actually hold.
+  //
+  // M4/e (REVIEW-2026-09-20): this used to be its OWN inline set of ad-hoc
+  // booleans (`sections && !species_ranges` → columnar, a `zones[0]` check
+  // without the dict/rank test, abundance first, no phylo branch at all) and
+  // so it drifted from the tables that were actually rendered: a range-chart
+  // result whose species rows all came back empty was written out as
+  // `columnar_section_result.json`, and a phylogenetic tree as
+  // `range_chart_*`. It now calls the SAME predicates js/table.js dispatches
+  // on (which are the `_looks_*` mirrors of rca_core/exporter.py), in the
+  // SAME order, so the filename can never contradict the file's contents.
   function rcaResultFilePrefix(result) {
-    // Sprint B (REVIEW-2026-09-04): require a non-empty abundances list,
-    // mirroring rca_core/exporter.py:_looks_abundance (exporter.py:186-191)
-    // — an empty `abundances: []` placeholder must not mislabel a range-chart
-    // export as abundance_diagram.
-    if (result && Array.isArray(result.abundances) && result.abundances.length > 0) return 'abundance_diagram_';
-    if (result && Array.isArray(result.sections) && !Array.isArray(result.species_ranges)) {
+    if (!result) return 'range_chart_';
+    if (rcaLooksZonationChart(result)) return 'zonation_chart_';
+    if (rcaLooksAbundance(result)) return 'abundance_diagram_';
+    if (rcaLooksColumnar(result) || rcaLooksColumnarEmptySections(result)) {
       return 'columnar_section_';
     }
-    // UI-REVIEW-2026-09-07: zonation / correlation chart exports get a
-    // proper prefix (previously named range_chart_*).
-    if (result && ((Array.isArray(result.correlations) && result.correlations.length > 0)
-        || (Array.isArray(result.zones) && result.zones.length > 0
-            && result.zones[0] && ('rank' in result.zones[0] || 'zonation' in result.zones[0])))) {
-      return 'zonation_chart_';
-    }
+    if (rcaLooksPhylogeneticTree(result)) return 'phylogenetic_tree_';
     return 'range_chart_';
   }
 
@@ -238,7 +291,7 @@
   function loadSettings() {
     $('endpoint').value = rcaStoreGet(RCA_STORE.endpoint, RCA_CONFIG.defaultEndpoint);
     $('model').value = rcaStoreGet(RCA_STORE.model, RCA_CONFIG.defaultModel);
-    $('max-tokens').value = rcaStoreGet('rca.maxTokens', String(RCA_CONFIG.defaultMaxTokens));
+    $('max-tokens').value = rcaStoreGet(RCA_STORE.maxTokens, String(RCA_CONFIG.defaultMaxTokens));
     $('proxy').value = rcaStoreGet(RCA_STORE.proxy, '');
     $('conn-mode').value = rcaStoreGet(RCA_STORE.mode, 'auto');
     $('max-edge').value = rcaStoreGet(RCA_STORE.maxEdge, String(RCA_CONFIG.maxImageEdge));
@@ -303,7 +356,7 @@
     const writes = [
       [RCA_STORE.endpoint, rcaStoreSet(RCA_STORE.endpoint, $('endpoint').value.trim() || RCA_CONFIG.defaultEndpoint)],
       [RCA_STORE.model, rcaStoreSet(RCA_STORE.model, $('model').value.trim() || RCA_CONFIG.defaultModel)],
-      ['rca.maxTokens', rcaStoreSet('rca.maxTokens', $('max-tokens').value.trim() || String(RCA_CONFIG.defaultMaxTokens))],
+      [RCA_STORE.maxTokens, rcaStoreSet(RCA_STORE.maxTokens, $('max-tokens').value.trim() || String(RCA_CONFIG.defaultMaxTokens))],
       [RCA_STORE.proxy, rcaStoreSet(RCA_STORE.proxy, $('proxy').value.trim())],
       [RCA_STORE.mode, rcaStoreSet(RCA_STORE.mode, $('conn-mode').value)],
       [RCA_STORE.maxEdge, rcaStoreSet(RCA_STORE.maxEdge, $('max-edge').value.trim() || String(RCA_CONFIG.maxImageEdge))],
@@ -484,6 +537,11 @@
     // result from rendering; aborting just stops the underlying network
     // work (otherwise a 2-of-3 multi-run still pays for all 3).
     if (state.abort) state.abort.abort();
+    // M3 (REVIEW-2026-09-20): stop the previous image's GBIF round too.
+    // Its hints describe a result that is no longer what we are heading
+    // towards, and the un-cancelled serial loop used to keep issuing
+    // requests (and writing issues) long after the image changed.
+    rcaCancelNameVerify();
     // REVIEW-2026-11-07 (low): abort the PREVIOUS file's image load as
     // well — before, its FileReader/Image decode ran to completion in the
     // background after a newer selection (token check dropped the result,
@@ -519,6 +577,18 @@
       state.file = file;
       state.dataUrl = loaded.dataUrl;
       state.mediaType = loaded.mime;
+      // H8 (REVIEW-2026-09-20) — double-enhancement contract.
+      // rcaLoadAndMaybeResize (js/minimax.js:59-87) only runs its supersample
+      // + unsharp-mask INSIDE the resize branch, i.e. the browser has
+      // already pre-processed the pixels iff `enhance` was on AND a resize
+      // happened. `loaded` carries no `enhanced` flag, so `resized &&
+      // enhance` is the exact condition; recording it here (not at extract
+      // time) is what makes a later checkbox flip unable to make us lie
+      // about bytes we already produced. server.py:1671 then applies a
+      // SECOND unsharp + contrast on top — which is what this flag exists to
+      // prevent, matching the GUI path where load_image_b64(..., enhance=…)
+      // pre-processes once and extract_range_chart never re-enhances.
+      state._frontendEnhanced = !!(loaded.resized && state._enhance);
       // Sprint B (REVIEW-2026-09-04): record the decoded dimensions so a
       // language switch can still show them while a large image is still
       // decoding (img.naturalWidth reads 0 until then).
@@ -594,6 +664,16 @@
   // network trouble just skips the block.
   const GBIF_MATCH_URL = 'https://api.gbif.org/v1/species/match?verbose=true&name=';
   const NAME_VERIFY_MAX = 20;
+  // M3 (REVIEW-2026-09-20): the loop used to be an unbounded serial `fetch`
+  // chain — no signal, no timeout, no total budget — so a stalled GBIF
+  // request kept a dead round alive, and its late answers wrote into the
+  // results panel of a DIFFERENT image. The two constants below mirror
+  // rca_core/names.py (verify_name_gbif timeout=15.0,
+  // DEFAULT_BATCH_BUDGET_SECONDS=60.0, checked BEFORE every round-trip), so
+  // both transports give up on the hints at the same point and never on the
+  // extraction.
+  const NAME_VERIFY_TIMEOUT_MS = 15000;
+  const NAME_VERIFY_BUDGET_MS = 60000;
 
   // Mirror of rca_core/names.py:clean_name_for_lookup - the same input
   // must produce the same GBIF query string on both transports. Two defects
@@ -632,11 +712,46 @@
     return [];
   }
 
+  // M3 (REVIEW-2026-09-20): cancel the in-flight GBIF round. Called from
+  // handleFile / resetUpload / cancel-btn / runExtraction / a new verify
+  // round, so a dead image can never write hints into the current results
+  // panel. Safe to call when nothing is in flight.
+  function rcaCancelNameVerify() {
+    const ctl = state._nameAbort;
+    state._nameAbort = null;
+    if (ctl) {
+      try { ctl.abort(); } catch (_e) { /* already aborted */ }
+    }
+  }
+
   async function rcaVerifySpeciesNamesAsync(result) {
+    // M3: a fresh round owns the block now. Clear BOTH the rendered hints
+    // and `state._nameIssues` up front — the previous version only wiped
+    // the DOM, so the stale list survived in state and renderCurrentResult
+    // (language switch, re-render) repainted the PREVIOUS image's names.
+    rcaCancelNameVerify();
+    state._nameIssues = [];
+    if (typeof rcaRenderNameIssues === 'function') {
+      try { rcaRenderNameIssues([]); } catch (_e) { /* never abort here */ }
+    }
     if (!result || !Array.isArray(result.species_ranges)) return;
     const host = document.getElementById('names-verify-slot');
     if (!host) return;
     host.innerHTML = '';
+    // M3: capture the token this round belongs to. Any newer file
+    // selection / extraction / reset bumps state.extractToken, and this
+    // round then drops its (possibly already partially collected) issues.
+    const myToken = state.extractToken;
+    const batch = new AbortController();
+    state._nameAbort = batch;
+    const deadline = Date.now() + NAME_VERIFY_BUDGET_MS;
+    // Ownership test: still the newest round, not cancelled, and still
+    // describing the result currently on screen.
+    function stillCurrent() {
+      return !batch.signal.aborted
+        && state._nameAbort === batch
+        && myToken === state.extractToken;
+    }
     const seen = new Map();  // cleaned -> original
     for (const row of result.species_ranges.slice(0, 40)) {
       const cleaned = rcaCleanNameForLookup(row && row.species);
@@ -644,21 +759,43 @@
         seen.set(cleaned, row.species);
       }
     }
-    if (seen.size === 0) return;
+    if (seen.size === 0) {
+      if (state._nameAbort === batch) state._nameAbort = null;
+      return;
+    }
     const issues = [];
     for (const [cleaned, original] of seen) {
+      if (!stillCurrent()) return;
+      // Mirror of names.py: the batch budget is checked BEFORE every
+      // round-trip (never mid-request), so a stalled GBIF can't push the
+      // hint block past the shared 60 s ceiling. Fail-open: dropping the
+      // rest of the names must not affect the extraction itself.
+      if (Date.now() >= deadline) break;
+      // Per-request controller: linked to the batch one (so a cancel
+      // reaches the live fetch) and armed with the 15 s timeout.
+      const req = new AbortController();
+      const onBatchAbort = () => { try { req.abort(); } catch (_e) { /* noop */ } };
+      batch.signal.addEventListener('abort', onBatchAbort);
+      const timer = setTimeout(onBatchAbort, NAME_VERIFY_TIMEOUT_MS);
       try {
-        const resp = await fetch(GBIF_MATCH_URL + encodeURIComponent(cleaned));
+        const resp = await fetch(GBIF_MATCH_URL + encodeURIComponent(cleaned),
+          { signal: req.signal });
         if (!resp.ok) continue;
         const payload = await resp.json();
         for (const iss of rcaNameIssuesFromGbif(
             Object.assign({ query: original }, payload))) {
           issues.push(iss);
         }
-      } catch (_e) { /* fail-silent: skip this name */ }
+      } catch (_e) { /* fail-silent: timeout / abort / network — skip this name */
+      } finally {
+        clearTimeout(timer);
+        batch.signal.removeEventListener('abort', onBatchAbort);
+      }
     }
+    if (state._nameAbort === batch) state._nameAbort = null;
+    if (!stillCurrent()) return;
+    state._nameIssues = issues;
     if (typeof rcaRenderNameIssues === 'function' && issues.length > 0) {
-      state._nameIssues = issues;
       rcaRenderNameIssues(issues);
     }
   }
@@ -695,6 +832,10 @@
     // FIX-6: fresh AbortController for this extraction; cancel-btn aborts it.
     const abort = new AbortController();
     state.abort = abort;
+    // M3 (REVIEW-2026-09-20): a re-run supersedes any GBIF round still
+    // running for the PREVIOUS answer — kill it before it races the new
+    // result's own hints.
+    rcaCancelNameVerify();
     setBusy(true);
 
     // FR4: wrap the body in try/catch/finally so an unexpected exception
@@ -735,7 +876,13 @@
         // FIX (force-rerun): bypass server cache on explicit user request.
         force_rerun: !!state._forceRerun,
         // FIX (enhance): pre-process image to boost VLM recognition.
-        enhance: state._enhance || false,
+        // H8 (REVIEW-2026-09-20): ask the backend for the PIL enhancement
+        // ONLY when the browser did not already sharpen these exact bytes
+        // (see `state._frontendEnhanced` in handleFile). Direct transport
+        // has no server stage at all, so there the browser pass is by
+        // definition the only one — the flag still reports the user's
+        // intent, it just has nothing to double up with.
+        enhance: !!state._enhance && !state._frontendEnhanced,
       };
 
       // Phase 1: analyze (LLM call). For single-run use 'analyzing';
@@ -1094,12 +1241,20 @@
     // the stale result from rendering; aborting just stops the underlying
     // work. Safe to call when nothing is in flight (abort is null/no-op).
     if (state.abort) state.abort.abort();
+    // M3 (REVIEW-2026-09-20): the results panel (and with it the name-hint
+    // block) is about to be wiped — kill the GBIF round and its issue list
+    // so nothing re-paints into the cleared page.
+    rcaCancelNameVerify();
+    state._nameIssues = [];
     state.expectedToken += 1;
     state.loadToken = state.expectedToken;
     state.extractToken = state.expectedToken;
     state.file = null;
     state.dataUrl = null;
     state.mediaType = null;
+    // H8 (REVIEW-2026-09-20): no image on screen → no browser enhancement
+    // to remember; the next upload recomputes the flag from scratch.
+    state._frontendEnhanced = false;
     state.result = null;
     state.rawText = null;
     $('file-input').value = '';
@@ -1220,7 +1375,11 @@
       $('api-key-toggle').textContent = showing ? t('settings.show') : t('settings.hide');
     });
 
-    $('save-settings').addEventListener('click', saveSettings);
+    // M2 (REVIEW-2026-09-20): a click handler receives the MouseEvent, and
+    // `saveSettings(silent)` read that object as `silent` — truthy — so the
+    // "settings saved" toast NEVER appeared on an explicit Save click (only
+    // the persistence-failure toast did). Pass the flag explicitly.
+    $('save-settings').addEventListener('click', () => saveSettings(false));
 
     // dropzone
     const dz = $('dropzone');
@@ -1277,6 +1436,9 @@
     if (cancelBtn) {
       cancelBtn.addEventListener('click', () => {
         if (state.abort) state.abort.abort();
+        // M3 (REVIEW-2026-09-20): "Cancel" means cancel — an in-flight GBIF
+        // round from the previous answer is part of the same work.
+        rcaCancelNameVerify();
       });
     }
     // FIX (force-rerun): re-extract bypassing the server-side cache so the

@@ -160,114 +160,574 @@ function rcaSplitDataUrl(dataUrl) {
   return { mediaType: m[1], base64: m[2] };
 }
 
-// H8 parity: copy any unknown keys under `_extras` so the model can emit
-// extra context without it being silently dropped.
-function rcaCarryExtras(item, known) {
-  if (!item || typeof item !== 'object') return null;
-  const out = {};
+// ---------------------------------------------------------------------------
+// Scalar coercion helpers — mirrors of the module-level helpers in
+// rca_core/extractor.py. Every normalizer below goes through these so the
+// browser and the server agree on what "stringify this field" means.
+// ---------------------------------------------------------------------------
+
+// Mirror of _stringify_scalar: stringify scalars only; containers collapse to
+// "" instead of leaking a repr into a scientific identifier field.
+//
+// REVIEW-2026-09-20 #14 — this is the ONE stringifier in this file (the
+// normalizers used to carry five local `asStr`/`s` closures with three
+// different null/bool/container rules). Known deliberate divergences from
+// Python, all of them cosmetic and none on a well-formed payload:
+//   1. Container values: `_stringify_scalar` returns "" on both sides, but
+//      the range-chart (`normalize_result`'s local `s`) and columnar
+//      (`normalize_columnar_result`'s local `s`) normalizers still call bare
+//      `str(v)` in Python, so a dict in one of THOSE scalar fields yields
+//      "{'a': 1}" server-side where JS yields "". JS is lossless-or-empty,
+//      never a fabricated Python repr; no test pins the Python repr.
+//   2. Float repr: Python str(1.0) == "1.0" and str(1e-7) == "1e-07", JS
+//      String(1.0) == "1" and String(1e-7) == "1e-7". Only reachable when the
+//      model emits a raw number in a string field; the aggregate layer
+//      re-normalizes both spellings through rcaPyFloat before comparing.
+//   3. Booleans: Python str(True) == "True", _stringify_scalar == "true";
+//      both engines use the lowercase "true"/"false" form here (rule 1 means
+//      the two range-chart str() fields are again the exception).
+function rcaStringifyScalar(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (Array.isArray(value) || typeof value === 'object') return '';
+  return String(value);
+}
+
+// Python truthiness for JSON-shaped values — `bool(v)`. Distinct from JS
+// truthiness in exactly two ways that matter here: an empty list/dict is
+// FALSY in Python ({} / [] are the model's "nothing here" spelling) and NaN
+// never occurs in JSON.
+function rcaPyTruthy(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') return value.length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
+  return Boolean(value);
+}
+
+// Mirror of Python's `a or b` on a value that may be 0 / "" / [] / {} / false.
+// `a || b` in JS differs on the container and (importantly) the numeric 0
+// cases, e.g. `_normalize_biozone_into`'s `bz.get("zone_type") or inferred_zt`
+// must take `inferred_zt` for an explicit 0, and `s(item.get("name") or "")`
+// must take "" for an empty list.
+function rcaPyOr(value, fallback) {
+  return rcaPyTruthy(value) ? value : fallback;
+}
+
+// Mirror of Python `float()` for the confidence/numeric fields: returns null
+// where Python raises (TypeError on a container, ValueError on "1.4x"),
+// which is what makes `float("90%")` a 0.0 fallback rather than JS
+// `parseFloat("90%")` === 90. Same rule as rcaPyFloat in js/aggregate.js —
+// kept as a local copy because aggregate.js and minimax.js each have to run
+// standalone (tests_aggregate.js loads aggregate.js alone), and the two are
+// pinned against the same Python oracle by tests/test_parity.py.
+const _RCA_PY_FLOAT_RE = /^[+-]?(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d+)?$/;
+function rcaPyFloatOrNull(value) {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'boolean') return value ? 1 : 0;   // float(True) == 1.0
+  if (typeof value !== 'string') return null;             // dict / list -> TypeError
+  const s = value.trim();
+  if (!s) return null;
+  const low = s.toLowerCase();
+  if (low === 'inf' || low === '+inf' || low === 'infinity' || low === '+infinity') return Infinity;
+  if (low === '-inf' || low === '-infinity') return -Infinity;
+  if (low === 'nan' || low === '+nan' || low === '-nan') return NaN;
+  if (!_RCA_PY_FLOAT_RE.test(s)) return null;
+  return Number(s.replace(/_/g, ''));
+}
+
+// Python `max(0.0, min(1.0, float(x)))` with the try/except the normalizers
+// wrap it in. `x or 0.0` in two of the modes means an explicit 0/null/""
+// collapses to 0.0 BEFORE the float() call — same result either way.
+function rcaConfidenceClamped(value) {
+  const n = rcaPyFloatOrNull(value === undefined ? 0.0 : value);
+  if (n === null || Number.isNaN(n)) return 0.0;
+  return Math.max(0.0, Math.min(1.0, n));
+}
+
+// Mirror of _normalize_optional_int: an EXACT integer or null. Note the two
+// differences from Number()+isInteger: a numeric STRING "9" is accepted (it
+// goes through float()), and a non-integral float (8.5) is rejected — while
+// the columnar bed-index field below (rcaBedIndex, mirror of fi()) truncates
+// and flags instead.
+function rcaOptionalInt(value) {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
+  const n = rcaPyFloatOrNull(value);
+  if (n === null || Number.isNaN(n) || !Number.isFinite(n)) return null;
+  return Number.isInteger(n) ? n : null;
+}
+
+// Mirror of _normalize_confidence (the per-ROW one — null on unparseable).
+function rcaOptionalConfidence(value) {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
+  const n = rcaPyFloatOrNull(value);
+  if (n === null || Number.isNaN(n)) return null;
+  return Math.max(0.0, Math.min(1.0, n));
+}
+
+// Mirror of _coerce_bool_flag: parse the textual spellings instead of bool(),
+// which inverted "false" (non-empty string -> True) and turned null into
+// False. Anything unrecognisable falls back to `defaultValue`.
+function rcaCoerceBoolFlag(value, defaultValue) {
+  if (value === null || value === undefined) return defaultValue;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return rcaPyTruthy(value);
+  if (Array.isArray(value) || typeof value === 'object') return defaultValue;
+  const text = String(value).trim().toLowerCase();
+  if (['false', '0', 'no', 'n', 'off', 'none', 'null'].indexOf(text) !== -1) return false;
+  if (['true', '1', 'yes', 'y', 'on', ''].indexOf(text) !== -1) return true;
+  return defaultValue;
+}
+
+// Mirror of _carry_extras (H8). Two rules the JS version used to miss:
+//   * keys already written explicitly on the row are skipped (`k not in out`),
+//     so an explicit first-class field never doubles as an _extras entry;
+//   * an existing `_extras` dict is MERGED into rather than replaced, which is
+//     how the caller's structural hint (wrapper_key) and the model's own extra
+//     keys coexist.
+function rcaCarryExtras(item, known, out) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+  if (!out || typeof out !== 'object') return;
+  const extras = {};
+  let count = 0;
   for (const k of Object.keys(item)) {
-    if (!known.includes(k)) out[k] = item[k];
+    if (known.indexOf(k) !== -1) continue;
+    if (Object.prototype.hasOwnProperty.call(out, k)) continue;
+    extras[k] = item[k];
+    count += 1;
   }
-  return Object.keys(out).length ? out : null;
+  if (!count) return;
+  const existing = out._extras;
+  if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+    const merged = { ...existing };
+    for (const k of Object.keys(extras)) merged[k] = extras[k];
+    out._extras = merged;
+  } else {
+    out._extras = extras;
+  }
 }
 
-// Normalize the parsed JSON into the strict result shape.
-// H5 (REVIEW-2026-08-19): Mode-known root keys. When parsed JSON has
-// none of these and no _array_root, the model returned a structurally
-// foreign payload (e.g. truncated mid-stream, schema swap, hallucinated
-// shape) and the result must be flagged as truncated/unrecognized.
-// Mirrors rca_core/extractor.py:_MODE_KNOWN_ROOTS.
-// Sprint B (REVIEW-2026-09-04): `_extras` removed from the range_chart set
-// to mirror rca_core/extractor.py:629-630 RANGE_CHART_ROOTS
-// ({"sections","species_ranges","biozones","other_fossils","confidence"}).
-// The extra entry made the JS foreign-payload guard accept `_extras`-only
-// payloads that Python (correctly) flags as truncated_or_unrecognized.
-const KNOWN_ROOTS = {
-  range_chart:       new Set(['sections','species_ranges','biozones','other_fossils','confidence']),
-  columnar_section:  new Set(['sections','fossil_legend','lithology_legend','cross_beds','confidence','overall_confidence','_extras']),
-  abundance_diagram: new Set(['sites','abundances','zones','confidence','_extras']),
-  phylogenetic_tree: new Set(['metadata','nodes','root_ids','legend','confidence']),
-  // UI-REVIEW-2026-09-05: radiolarian biozonation / correlation charts.
-  zonation_chart:    new Set(['zonations','zones','correlations','confidence']),
-};
-
-// H5 helper: returns a fresh warnings array with the flag if no known
-// root key was found and no _array_root was set. Otherwise returns null.
-function rcaTruncatedWarningIfForeign(parsed, mode) {
-  if (!parsed || typeof parsed !== 'object') return ['truncated_or_unrecognized_payload'];
-  const keys = Object.keys(parsed);
-  const hasArrayRoot = Array.isArray(parsed._array_root);
-  const roots = KNOWN_ROOTS[mode];
-  const matched = roots && keys.some((k) => roots.has(k));
-  if (!matched && !hasArrayRoot) {
-    return ['truncated_or_unrecognized_payload'];
-  }
-  return null;
+// Mirror of _pop_array_root_extras: the wrapper keys are diagnostics, not
+// data — leaving them in duplicated the whole raw payload into every export
+// and inflated quality.py's `_extras`-ratio check.
+function rcaPopArrayRootExtras(extras) {
+  if (!extras || typeof extras !== 'object') return extras;
+  delete extras._array_root;
+  delete extras._note;
+  return extras;
 }
 
-// P0-5 (REVIEW-2026-07-25): If the model returned a top-level JSON array
-// (already wrapped by json-utils.extractBalancedJsonArray as {_array_root:[...]}),
-// distribute items into the correct tables by structural key, mirroring
-// Python rca_core/extractor.py:636-661 (the _array_root unwrap in
-// normalize_range_chart).
-// Sprint B (REVIEW-2026-09-04): classification parity with
-// _classify_array_item (extractor.py:344-389) —
-//   * bare non-empty strings go to `other_fossils` (extractor.py:640-642);
-//   * dicts that classify to no bucket are kept under a top-level
-//     `_unclassified` array (extractor.py:648) instead of being silently
-//     dropped;
-//   * key tests use KEY PRESENCE, not truthiness (Python `"species" in item`),
-//     so `{species: ""}` still classifies as a species row.
-function rcaUnwrapArrayRoot(parsed) {
-  if (!parsed || typeof parsed !== 'object') return parsed;
-  if (!Array.isArray(parsed._array_root)) return parsed;
-  const dist = {
-    sections: [], species_ranges: [], biozones: [], other_fossils: [],
-  };
-  let unclassified = null;
-  for (const item of parsed._array_root) {
-    // Non-dict items: bare strings land in other_fossils, everything else
-    // is skipped (mirrors extractor.py:639-643).
-    if (!item || typeof item !== 'object') {
-      if (typeof item === 'string' && item.trim()) {
-        dist.other_fossils.push(item.trim());
-      }
-      continue;
-    }
-    const key = rcaClassifyArrayItem(item);
-    if (key && dist[key]) dist[key].push(item);
-    else {
-      // Unclassifiable dicts survive under _unclassified so nothing the
-      // model emitted is silently dropped (extractor.py:645-648).
-      if (!unclassified) unclassified = [];
-      unclassified.push(item);
+// Top-level extras: every key the mode does not document, with the array-root
+// wrapper keys stripped (per-mode: columnar deliberately keeps them, which is
+// what `keepWrapper` encodes — mirror of the one normalizer in Python that
+// builds root_extras without _pop_array_root_extras).
+function rcaTopExtras(parsed, knownRootKeys, keepWrapper) {
+  const extras = {};
+  let count = 0;
+  for (const k of Object.keys(parsed || {})) {
+    if (knownRootKeys.indexOf(k) !== -1) continue;
+    if (!keepWrapper && (k === '_array_root' || k === '_note')) continue;
+    extras[k] = parsed[k];
+    count += 1;
+  }
+  return count ? extras : null;
+}
+
+// Mirror of _append_warning / the `if tag not in warnings` idiom every
+// normalizer uses to keep the root warning list duplicate-free.
+function rcaPushWarning(warnings, tag) {
+  if (warnings.indexOf(tag) === -1) warnings.push(tag);
+}
+
+// Row-level `_warning`: one flag stays a bare string, several become a list —
+// the same convention rca_core/aggregate.js's _add_row_warning writes, so
+// rcaWarningFlags / the UI badges read both engines uniformly.
+function rcaSetRowWarning(row, flags) {
+  const list = Array.isArray(flags) ? flags.filter(Boolean) : [flags].filter(Boolean);
+  if (!list.length) return;
+  row._warning = list.length === 1 ? list[0] : list;
+}
+
+// Python's bare `str()` — used where the oracle calls str() directly instead of
+// _stringify_scalar (phylogenetic `root_ids` / node id normalisation). The two
+// spellings differ on containers (repr vs "") and on booleans ("True" vs
+// "true"), so the call sites are kept separate on purpose.
+function rcaPyStr(value) {
+  if (value === null || value === undefined) return 'None';
+  if (typeof value === 'boolean') return value ? 'True' : 'False';
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value) || typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+// Mirror of normalize_columnar_result's local `fi()` — the bed-index coercion
+// with the LOSSY path reported, `{"value": int|null, "lossy": bool}`.
+//
+// The three-way contract matters: `(null, false)` for unparseable / empty /
+// bool input, `(v, false)` for a clean integer, `(trunc(v), true)` whenever the
+// value had to go through `float()` ("8.5" -> 8, 8.5 -> 8). `parseInt("8.5")`
+// silently returned 8 in the old JS mirror, so the row-level
+// `range_top_idx_truncated` / `bed_idx_truncated` flags the Python side emits
+// (and the UI badge reads) never appeared in the browser.
+function rcaBedIndex(value) {
+  if (value === null || value === undefined || value === '') return { value: null, lossy: false };
+  if (typeof value === 'boolean') return { value: null, lossy: false };
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return { value: null, lossy: false };
+    if (Number.isInteger(value)) return { value, lossy: false };
+    // int(float) TRUNCATES toward zero, exactly like Python's int(v).
+    return { value: Math.trunc(value), lossy: true };
+  }
+  if (typeof value !== 'string') return { value: null, lossy: false };
+  const n = rcaPyFloatOrNull(value);
+  if (n === null || Number.isNaN(n) || !Number.isFinite(n)) return { value: null, lossy: false };
+  if (Number.isInteger(n)) {
+    // Python tries `int(v)` first, which succeeds for "8" but raises for
+    // "8.0" — the latter falls through to the float path and is lossy.
+    const direct = /^[+-]?\d+$/.test(value.trim());
+    return { value: n, lossy: !direct };
+  }
+  return { value: Math.trunc(n), lossy: true };
+}
+
+// Python's `str(float)` keeps a trailing `.0` on integral values and prints
+// exponents as `1e-07`; `String(1.0)` gives "1". Only reachable through the
+// Newick serializer (support / branch_length), where the two spellings produce
+// two different tree files from the same payload.
+function rcaPyFloatStr(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return String(value);
+  if (Number.isInteger(value) && Math.abs(value) < 1e21) return value.toFixed(1);
+  return String(value);
+}
+
+// Mirror of _quote_newick_label: Newick tokens `( ) [ ] ; ,` (and a `:`, which
+// would otherwise split `name:branch_length`) force single quotes, embedded
+// single quotes are doubled per the Newick spec, and a label with surrounding
+// or embedded whitespace is quoted too. The old JS mirror substituted `_` for
+// `(`, `)` and `:`, which destroyed the taxon name ("(A)" -> "_A_").
+function rcaQuoteNewickLabel(label) {
+  const text = label === null || label === undefined ? '' : String(label);
+  if (!text) return "''";
+  const needsQuote = /[(),[\];:]/.test(text);
+  if (!needsQuote && text.trim() === text && text.indexOf(' ') === -1) return text;
+  return "'" + text.replace(/'/g, "''") + "'";
+}
+
+// Mirror of _extracted_any: did the normalizer salvage anything at all?
+function rcaExtractedAny(out) {
+  if (!out || typeof out !== 'object') return false;
+  for (const k of Object.keys(out)) {
+    const value = out[k];
+    if (Array.isArray(value) || (value && typeof value === 'object')) {
+      if (Object.keys(value).length > 0) return true;
+    } else if (value !== null && value !== undefined && value !== ''
+               && value !== 0 && value !== false) {
+      return true;
     }
   }
-  // Preserve any other top-level fields the wrapper may have carried.
-  const out = { ...dist };
-  if (unclassified) out._unclassified = unclassified;
-  for (const k of Object.keys(parsed)) {
-    if (k === '_array_root') continue;
-    if (k in out) continue;  // already populated from array items
-    out[k] = parsed[k];
+  return false;
+}
+
+// Mirror of _stringify_scalar's caller in _other_fossils_from: lift the first
+// readable label out of a dict-shaped fossil entry, else keep a scalar's text,
+// else drop the record (a dict with real content but no label is noise the
+// table cannot render).
+function rcaOtherFossilLabel(item) {
+  if (item === null || item === undefined) return '';
+  if (typeof item === 'string') return item.trim();
+  if (Array.isArray(item)) return '';
+  if (typeof item === 'object') {
+    for (const key of ['label', 'species', 'taxon', 'name', 'fossil', 'text']) {
+      const value = item[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    const extras = Object.keys(item).filter(
+      (k) => ['label', 'species', 'taxon', 'name'].indexOf(k) === -1);
+    return extras.length ? '' : rcaStringifyScalar(item);
+  }
+  return rcaStringifyScalar(item);
+}
+
+function rcaOtherFossilsFrom(raw) {
+  const out = [];
+  const push = (text) => { if (text) out.push(text); };
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    return t ? [t] : [];
+  }
+  if (raw && typeof raw === 'object') {
+    const values = Array.isArray(raw) ? raw : Object.values(raw);
+    for (const item of values) push(rcaOtherFossilLabel(item));
+    return out;
   }
   return out;
 }
 
-// Lightweight re-implementation of Python _classify_array_item
-// (rca_core/extractor.py:344-389) for the JS normalizers. Used only when
-// unwrapping _array_root payloads.
-// P0-4: explicit zone_type wins over all heuristics.
-// Sprint B (REVIEW-2026-09-04): aligned 1:1 with the Python ladder —
-// species via key presence, biozone via name+age presence + zone label,
-// sections via name + (age_range|formations|age) presence, then a
-// name-only fallback. The previous JS ladders (truthiness checks, an
-// id/thickness_m section probe, a label/species/taxon other_fossils probe)
-// dropped rows Python keeps — e.g. `{name:'S1', age_range:'Cretaceous'}`
-// fell through every JS branch and vanished.
+// Mirror of _merge_other_fossils (REVIEW-2026-09-20 #1): the `_array_root`
+// unwrap may already have salvaged bare-string labels into
+// out.other_fossils; a plain assignment dropped them as soon as the payload
+// also carried an `other_fossils` field. Merge instead — order preserved,
+// exact duplicates skipped.
+function rcaMergeOtherFossils(existing, raw) {
+  const already = Array.isArray(existing) ? existing.filter((x) => typeof x === 'string') : [];
+  const merged = [];
+  const seen = new Set();
+  for (const text of already.concat(rcaOtherFossilsFrom(raw))) {
+    const t = (text || '').trim();
+    if (t && !seen.has(t)) {
+      seen.add(t);
+      merged.push(t);
+    }
+  }
+  return merged;
+}
+
+// Mirror of _row_from_string: a bare-string list entry becomes one row whose
+// primary identifier is the string. Deliberately NOT for `abundances` (a taxon
+// row needs a level/abundance to mean anything; tests_core pins the drop).
+function rcaRowFromString(item, kind) {
+  const text = String(item).trim();
+  if (!text) return null;
+  if (['sections', 'biozones', 'sites', 'zones', 'zonations'].indexOf(kind) !== -1) {
+    return { name: text };
+  }
+  if (kind === 'species_ranges') return { species: text };
+  return null;
+}
+
+// Mirror of _PRIMARY_ID_KEYS — the identifier a dict-shaped array's wrapper key
+// fills in when the record does not carry one.
+const RCA_PRIMARY_ID_KEYS = {
+  abundances: 'taxon',
+  sections: 'name',
+  biozones: 'name',
+  species_ranges: 'species',
+  sites: 'name',
+  zones: 'name',
+  zonations: 'name',
+  correlations: 'from_zone',
+  nodes: 'id',
+  data_points: 'sample_id',
+};
+
+// Mirror of _dict_rows: dict-shaped named arrays recover their values; bare
+// strings are skipped (the caller decides whether the key has a natural
+// single-field row shape). Returns an array rather than a generator — the
+// Python generator exists only to avoid an intermediate list.
+function rcaDictRows(raw) {
+  const out = [];
+  if (raw && typeof raw === 'object') {
+    if (Array.isArray(raw)) {
+      for (const item of raw) {
+        if (item && typeof item === 'object' && !Array.isArray(item)) out.push(item);
+      }
+    } else {
+      for (const value of Object.values(raw)) {
+        if (value && typeof value === 'object' && !Array.isArray(value)) out.push(value);
+      }
+    }
+  }
+  return out;
+}
+
+// Mirror of _iter_rows: like _dict_rows but a LIST entry that is a bare string
+// is coerced to a row and the repair is flagged; a DICT-shaped array is always
+// flagged (`dict_shaped_array`, REVIEW-2026-09-20 #5: the shape change used to
+// go unreported whenever every record carried its own id), and the wrapper key
+// fills a MISSING primary identifier only (a present-but-empty value is the
+// model honestly saying "unreadable" and must not be overwritten).
+function rcaIterRows(raw, kind, warnings) {
+  const flag = (tag) => { if (warnings) rcaPushWarning(warnings, tag); };
+  const out = [];
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    flag('dict_shaped_array');
+    for (const [wrapperKey, inner] of Object.entries(raw)) {
+      if (!inner || typeof inner !== 'object' || Array.isArray(inner)) continue;
+      const row = { ...inner };
+      const idKey = RCA_PRIMARY_ID_KEYS[kind];
+      if (idKey && !(idKey in row)) row[idKey] = String(wrapperKey);
+      out.push(row);
+    }
+  } else if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (item && typeof item === 'object' && !Array.isArray(item)) { out.push(item); continue; }
+      if (typeof item === 'string') {
+        const row = rcaRowFromString(item, kind);
+        if (row !== null) { out.push(row); flag('string_row_coerced'); }
+      }
+    }
+  }
+  return out;
+}
+
+
+// ---------------------------------------------------------------------------
+// Per-mode documented root keys — verbatim mirrors of the _KNOWN_*_ROOT_KEYS
+// tuples declared next to each Python normalizer, as resolved by
+// rca_core/extractor.py:_mode_root_keys. When a parsed payload has none of
+// these and no _array_root, the model returned a structurally foreign object
+// (truncated mid-stream, schema swap, hallucinated shape) and the result has
+// to be flagged rather than served as a confident-looking empty table.
+//
+// REVIEW-2026-09-20 #13: `_extras` used to be listed for columnar_section and
+// abundance_diagram. It is an artifact the normalizers ATTACH to their output
+// and is never a root key of a raw model payload on either engine, so those two
+// entries made the browser accept `_extras`-only payloads that Python flags.
+//
+// REVIEW-2026-09-20 #7: chemical_stratigraphy / paleomap / scatter_plot added.
+// The browser has no normalizer for those three (they are backend-only), but
+// the shared unusable-payload guard resolves root keys BY MODE, and an empty
+// list means "never flag" (see rcaRootUnrelated) — so a request that arrives
+// with mode="paleomap" on the direct path fell through to the range-chart
+// normalizer and came back ok=true with an empty table. The lists below are
+// verbatim so the guard is honest for a mode the browser cannot serve.
+const RCA_MODE_ROOT_KEYS = {
+  range_chart:        ['sections', 'species_ranges', 'biozones', 'other_fossils', 'confidence'],
+  columnar_section:   ['sections', 'fossil_legend', 'lithology_legend', 'cross_beds',
+                       'overall_confidence', 'confidence'],
+  abundance_diagram:  ['sites', 'abundances', 'zones', 'confidence'],
+  phylogenetic_tree:  ['metadata', 'nodes', 'root_ids', 'legend', 'confidence'],
+  chemical_stratigraphy: ['metadata', 'data_points', 'events', 'intervals', 'confidence'],
+  paleomap:           ['metadata', 'continents', 'oceans_seas', 'tectonic_features',
+                       'biogeographic_realms', 'fossil_sites', 'paleolatitude_indicators',
+                       'confidence'],
+  scatter_plot:       ['metadata', 'groups', 'points', 'outliers', 'statistics', 'confidence'],
+  zonation_chart:     ['zonations', 'zones', 'correlations', 'confidence'],
+};
+
+// Mirror of the "truncated rescue" guard inside normalize_result (and the
+// same shape each other mode's normalizer builds): returns the flag list to
+// attach, or null. Python's rule is `parsed and not ROOTS & parsed.keys() and
+// "_array_root" not in parsed` — an EMPTY payload is not foreign, it is an
+// honest empty result, so it is not flagged here.
+function rcaTruncatedWarningIfForeign(parsed, mode) {
+  // normalize_result's non-dict guard: Python returns
+  // {"sections": [], ..., "_warnings": ["normalize_non_dict_input"]} rather
+  // than the truncation flag, so the operator sees the real cause.
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return ['normalize_non_dict_input'];
+  }
+  const roots = RCA_MODE_ROOT_KEYS[mode];
+  if (!roots || !Object.keys(parsed).length) return null;
+  const keys = Object.keys(parsed);
+  const matched = keys.some((k) => roots.indexOf(k) !== -1);
+  if (matched) return null;
+  if ('_array_root' in parsed) return null;
+  return ['truncated_or_unrecognized_payload'];
+}
+
+// Mirror of rca_core/extractor._payload_mismatch: the non-empty reason a
+// normalized payload is unusable, "" when it is not. Deliberately narrow
+// (REVIEW-2026-09-20 #7): an empty result WITH an explanatory note is an
+// honest degradation the prompt asks for ("do not invent data") and stays
+// ok=True; so is a truncated response that still produced rows.
+function rcaPayloadMismatch(data, resultTruncated) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return '';
+  if (rcaExtractedAny(data)) return '';
+  const warnings = Array.isArray(data._warnings) ? data._warnings : [];
+  if (warnings.indexOf('truncated_or_unrecognized_payload') !== -1) {
+    return 'rescued inner object: unusable';
+  }
+  if (resultTruncated || warnings.indexOf('truncated') !== -1 || data.truncated) {
+    return 'truncated output rescued no usable records';
+  }
+  return '';
+}
+
+// Mirror of the `root_unrelated` clause of _ok_result: the payload parsed, but
+// none of its root keys belong to this mode's contract and it produced nothing.
+function rcaRootUnrelated(parsed, data, mode) {
+  const known = RCA_MODE_ROOT_KEYS[mode] || [];
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  if (!Object.keys(parsed).length || !known.length) return false;
+  const keys = Object.keys(parsed);
+  if (keys.some((k) => known.indexOf(k) !== -1)) return false;
+  if (keys.indexOf('_array_root') !== -1) return false;
+  return !rcaExtractedAny(data);
+}
+
+// The prose every Python `extract_*` mode keeps in a local `warning` and then
+// puts into `ExtractResult.warning` (extractor.py:1359-1360, and `_ok_result`
+// 856-857 / 881 / 886). Two shapes use it:
+//   * success while truncated -> the prose verbatim; not truncated -> "";
+//   * the unusable-payload error -> `prose + " | " + reason`.
+// REVIEW-2026-09-20 #7: the browser used to report the bare tag
+// `truncated_or_unrecognized_payload` in `warning` instead, so the direct
+// transport and the backend transport (`rcaCallBackend`, which forwards the
+// server's `warning` verbatim) surfaced two different strings for one run.
+// The tag still travels — inside `data._warnings`, exactly like Python.
+const RCA_TRUNCATION_WARNING = 'Result may be truncated (model hit max_tokens). '
+  + 'Try raising the max_tokens setting and re-running.';
+
+// Mirror of the shared `_ok_result` contract: given the normalized data and the
+// raw parse, return the reason the run must be reported as an error, or "" for
+// a success. Every mode goes through this, not only range_chart (the guard used
+// to exist on the range-chart path alone, which is why seven modes could serve
+// an unrelated or truncated object as a confident empty table).
+function rcaUnusablePayloadReason(parsed, data, mode, truncated) {
+  let reason = rcaPayloadMismatch(data, !!truncated);
+  const unrelated = rcaRootUnrelated(parsed, data, mode);
+  if (!reason && unrelated) {
+    reason = 'payload root keys match no field of this chart type';
+  }
+  if (reason && unrelated) {
+    if (!Array.isArray(data._warnings)) data._warnings = [];
+    rcaPushWarning(data._warnings, 'truncated_or_unrecognized_payload');
+  }
+  return reason;
+}
+
+// P0-5 (REVIEW-2026-07-25): the range-chart `_array_root` unwrap. Bare
+// non-empty strings go to `other_fossils`, classifiable dicts are routed
+// through the SAME row normalizers as the named arrays (Python 1136-1148:
+// pushing the raw dict left string-where-list-was-expected fields such as
+// `formations` uncoerced), and unclassifiable dicts survive under
+// `_unclassified` instead of vanishing.
+function rcaArrayRootIntoRangeChart(parsed, out, rootWarnings) {
+  const items = parsed && parsed._array_root;
+  if (!Array.isArray(items)) return;
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      // Non-dict items (e.g. bare strings) go to other_fossils.
+      if (typeof item === 'string' && item.trim()) {
+        out.other_fossils.push(item.trim());
+      }
+      continue;
+    }
+    const key = rcaClassifyArrayItem(item);
+    if (key === 'sections') rcaNormalizeSectionInto(item, out.sections, rootWarnings);
+    else if (key === 'species_ranges') rcaNormalizeSpeciesInto(item, out.species_ranges, rootWarnings);
+    else if (key === 'biozones') rcaNormalizeBiozoneInto(item, out.biozones, rootWarnings);
+    else if (key) (out[key] = out[key] || []).push(item);
+    else (out._unclassified = out._unclassified || []).push(item);
+  }
+}
+
+// Mirror of Python _IRON_RULE_ZONE_RE (extractor.py:421) — the prompt's iron
+// rule markers: a name reading like one of these belongs in `biozones`, never
+// in `species_ranges`. One shared regex, used by _classify_array_item, the
+// species row builder and the post-normalize flagging pass.
+const _RCA_IRON_RULE_ZONE_RE = /\b(zone|zonule|assemblage|oppel|interval|lineage|range|acme)\b/i;
+
+// Python `(item.get("name") or "").strip()` — the `or` matters: a 0 / [] / {} /
+// false value reads as "" on the server, while `String(item.name || "")` in JS
+// would yield "0" / "" / "[object Object]".
+function rcaNameStr(item, key) {
+  return rcaStringifyScalar(rcaPyOr(item ? item[key] : null, '')).trim();
+}
+
+// Mirror of rca_core/extractor._classify_array_item.
+// P0-4: explicit zone_type wins over all heuristics; the remaining ladder uses
+// KEY PRESENCE (Python `"species" in item`), not truthiness, so `{species: ""}`
+// still classifies as a species row.
+// REVIEW-2026-09-20 #12: the biozone probe read `item.name || item.label`, so a
+// `{label: "X Zone", age: ...}` item became a biozone server-side and a section
+// browser-side; Python only ever looks at `name`.
 function rcaClassifyArrayItem(item) {
-  if (!item || typeof item !== 'object') return null;
-  // P0-4: explicit zone_type wins over all heuristics.
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
   const zt = item.zone_type;
   if (typeof zt === 'string') {
     const ztl = zt.trim().toLowerCase();
@@ -282,264 +742,351 @@ function rcaClassifyArrayItem(item) {
       return 'sections';
     }
   }
-  // species: "species" in item OR (range_top AND range_base present) —
-  // key-existence test, mirroring extractor.py:365-367.
   if ('species' in item || ('range_top' in item && 'range_base' in item)) {
     return 'species_ranges';
   }
-  // biozone: requires name + age present AND the name passes the zone-label
-  // pattern (extractor.py:368-378, iron-rule regex).
-  const biozoneText = String(item.name || item.label || '');
-  const isZoneLabel = /\b(zone|zonule|assemblage|oppel|interval|lineage|range|acme)\b/i.test(biozoneText);
-  if ('name' in item && 'age' in item && isZoneLabel) {
+  const nameStr = rcaNameStr(item, 'name');
+  if ('name' in item && 'age' in item && _RCA_IRON_RULE_ZONE_RE.test(nameStr)) {
     return 'biozones';
   }
-  // section: name + any age/formations signal (extractor.py:379-385).
-  if ('name' in item && ('age_range' in item || 'formations' in item
-      || 'age' in item)) {
+  if ('name' in item && ('age_range' in item || 'formations' in item || 'age' in item)) {
     return 'sections';
   }
-  // Name-only fallback: still a section (extractor.py:386-388).
-  if ('name' in item) {
-    return 'sections';
-  }
+  if ('name' in item) return 'sections';
   return null;
 }
 
+const _RCA_KNOWN_SECTION_KEYS = ['name', 'age_range', 'formations',
+                                 'formation_thickness_m', 'coordinates'];
+// Verbatim mirror of _KNOWN_SPECIES_KEYS. The bed/idx/endpoint/occurrence/
+// confidence/note fields are deliberately ABSENT: they are first-class row keys
+// written explicitly below, and rcaCarryExtras already skips any key the row
+// itself carries ("k not in out"), so listing them here would be a second
+// source of truth that drifted (it is exactly how the old 17-field JS list lost
+// the `reworked` semantics).
+const _RCA_KNOWN_SPECIES_KEYS = ['species', 'section', 'range_top', 'range_base',
+                                 'biozone', 'author', 'year', 'author_year', 'reworked'];
+const _RCA_KNOWN_BIOZONE_KEYS = ['name', 'section', 'age', 'thickness_m', 'zone_type'];
+// Verbatim mirror of _KNOWN_RANGE_CHART_KEYS — the root keys whose leftovers
+// become the result's `_extras`.
+const _RCA_KNOWN_RANGE_CHART_KEYS = ['sections', 'species_ranges', 'biozones',
+                                     'other_fossils', 'confidence'];
+const _RCA_VALID_OCCURRENCE_MODES = ['unknown', 'in_situ', 'reworked', 'transported',
+                                     'cavity_fill', 'bioturbated', 'derived', 'lag_deposit'];
+const _RCA_VALID_ENDPOINT_KINDS = ['unknown', 'observed', 'projected', 'truncated'];
+
+function rcaNormalizeOccurrenceMode(sp) {
+  const raw = sp ? sp.occurrence_mode : null;
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    if (_RCA_VALID_OCCURRENCE_MODES.indexOf(normalized) !== -1) return normalized;
+  }
+  const reworked = sp ? sp.reworked : null;
+  if (typeof reworked === 'boolean') return reworked ? 'reworked' : 'in_situ';
+  return 'unknown';
+}
+
+function rcaNormalizeEndpointKind(value) {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (_RCA_VALID_ENDPOINT_KINDS.indexOf(normalized) !== -1) return normalized;
+  }
+  return 'unknown';
+}
+
+// Mirror of _normalize_section_into: every array-root / named / dict-shaped
+// section row goes through this one builder, so string-where-list-was-expected
+// fields (`formations`) and missing keys get a uniform shape.
+function rcaNormalizeSectionInto(sec, target, warnings) {
+  let formationsOut = [];
+  const formations = sec ? sec.formations : null;
+  if (Array.isArray(formations)) {
+    formationsOut = formations
+      .filter((x) => typeof x === 'string')
+      .map((x) => x.trim())
+      .filter((x) => x.length > 0);
+  } else if (typeof formations === 'string' && formations.trim()) {
+    formationsOut = [formations.trim()];
+  }
+  const row = {
+    name: rcaStringifyScalar(sec ? sec.name : null),
+    age_range: rcaStringifyScalar(sec ? sec.age_range : null),
+    formations: formationsOut,
+    formation_thickness_m: rcaStringifyScalar(sec ? sec.formation_thickness_m : null),
+    coordinates: rcaStringifyScalar(sec ? sec.coordinates : null),
+  };
+  rcaCarryExtras(sec, _RCA_KNOWN_SECTION_KEYS, row);
+  target.push(row);
+  return row;
+}
+
+// Mirror of _normalize_species_into.
+// REVIEW-2026-09-20 #11: the bed indices now get the same order repair the
+// columnar block rows already had. An inverted (range_top_idx < range_base_idx)
+// pair used to be exported as a valid range and nothing downstream caught it —
+// quality.py's FAD/LAD check reads the STRING fields, not the index fields — so
+// the pair is swapped and the row carries `index_order_swap`.
+function rcaNormalizeSpeciesInto(sp, target, warnings) {
+  let topIdx = rcaOptionalInt(sp ? sp.range_top_idx : null);
+  let baseIdx = rcaOptionalInt(sp ? sp.range_base_idx : null);
+  const idxWarnings = [];
+  if (topIdx !== null && baseIdx !== null && topIdx < baseIdx) {
+    const t = topIdx; topIdx = baseIdx; baseIdx = t;
+    idxWarnings.push('index_order_swap');
+  }
+  const row = {
+    species: rcaStringifyScalar(sp ? sp.species : null),
+    section: rcaStringifyScalar(sp ? sp.section : null),
+    range_top: rcaStringifyScalar(sp ? sp.range_top : null),
+    range_base: rcaStringifyScalar(sp ? sp.range_base : null),
+    biozone: rcaStringifyScalar(sp ? sp.biozone : null),
+    author: rcaStringifyScalar(sp ? sp.author : ''),
+    year: rcaStringifyScalar(sp ? sp.year : ''),
+    author_year: rcaStringifyScalar(rcaPyOr(sp ? sp.author_year : null, '')),
+    range_top_bed: rcaStringifyScalar(sp ? sp.range_top_bed : ''),
+    range_base_bed: rcaStringifyScalar(sp ? sp.range_base_bed : ''),
+    range_top_idx: topIdx,
+    range_base_idx: baseIdx,
+    endpoint_kind: rcaNormalizeEndpointKind(sp ? sp.endpoint_kind : null),
+    occurrence_mode: rcaNormalizeOccurrenceMode(sp),
+    confidence: rcaOptionalConfidence(sp ? sp.confidence : null),
+    note: rcaStringifyScalar(sp ? sp.note : ''),
+  };
+  rcaCarryExtras(sp, _RCA_KNOWN_SPECIES_KEYS, row);
+  // P0-4: defensive — if the species name reads like a zone, flag & annotate.
+  const spName = row.species;
+  if (spName && _RCA_IRON_RULE_ZONE_RE.test(spName)) {
+    row.note = (row.note + ' [zone-mislabel-warning]').trim();
+  }
+  // Same single-string / list convention as the columnar block rows, so
+  // rcaWarningFlags reads every `_warning` the same way.
+  rcaSetRowWarning(row, idxWarnings);
+  target.push(row);
+  return row;
+}
+
+// Mirror of _normalize_biozone_into.
+// REVIEW-2026-09-20 #10: two divergences fixed at once.
+//   * Ladder ORDER: Python tests `interval` BEFORE the `\bzonule\b` /
+//     `\bsubzone\b` regexes and `oppel` after them. The JS order put
+//     zonule/subzone first, so "Interval zonule" inferred `zonule` in the
+//     browser and `interval_zone` on the server.
+//   * The `or` on zone_type is PYTHON's `or`: `bz.get("zone_type") or
+//     inferred_zt` falls through for 0 / false / "" / [] / {} — while
+//     `asStr(bz.zone_type) || inferredZt` stringified FIRST, so an explicit
+//     numeric 0 became the string "0" (truthy in JS) and was kept as the zone
+//     type. rcaPyOr evaluates the raw value, then the result is stringified.
+function rcaNormalizeBiozoneInto(bz, target, warnings) {
+  const name = rcaStringifyScalar(bz ? bz.name : null).trim();
+  const nl = name.toLowerCase();
+  let inferredZt = 'biozone';
+  if (nl.includes('assemblage') || nl.includes('ass.')) inferredZt = 'assemblage_zone';
+  else if (nl.includes('acme')) inferredZt = 'acme_zone';
+  else if (nl.includes('lineage')) inferredZt = 'lineage_zone';
+  else if (nl.includes('interval')) inferredZt = 'interval_zone';
+  else if (/\bzonule\b/.test(nl)) inferredZt = 'zonule';
+  else if (/\bsubzone\b/.test(nl)) inferredZt = 'subzone';
+  else if (nl.includes('oppel')) inferredZt = 'oppel_zone';
+  else if (nl.includes('range zone') || nl.includes('taxon-range')) inferredZt = 'range_zone';
+  const row = {
+    name: name,
+    // PARITY: `section` is a top-level field on the biozone row so the
+    // aggregation layer can fold it into the row label; demoting it to
+    // _extras hides it from rcaAggNorm and collapses two same-named biozones
+    // from different sections into one merged row.
+    section: rcaStringifyScalar(bz ? bz.section : ''),
+    age: rcaStringifyScalar(bz ? bz.age : ''),
+    thickness_m: rcaStringifyScalar(bz ? bz.thickness_m : ''),
+    zone_type: rcaStringifyScalar(rcaPyOr(bz ? bz.zone_type : null, inferredZt)),
+  };
+  rcaCarryExtras(bz, _RCA_KNOWN_BIOZONE_KEYS, row);
+  target.push(row);
+  return row;
+}
+
+// Mirror of normalize_result's inner _coerce_list_or_dict: named-array recovery
+// for the three range-chart tables.
+//   * dict-shaped ({"Pingdingshan": {...}}): iterate the VALUES, inject the
+//     wrapper key as the primary identifier when that identifier is ABSENT
+//     (never overwrite a present-but-empty value: that is the model saying
+//     "unreadable"), drop any pre-existing `_extras` so the normalizer rebuilds
+//     it cleanly, then stamp `wrapper_key` on the row it appended.
+//   * list-shaped: dicts pass through; a bare string coerces to a one-field row
+//     and the repair is flagged `string_row_coerced` (both engines used to
+//     discard those entries in silence).
+function rcaCoerceRangeChartList(raw, kind, out, rootWarnings) {
+  const append = (row) => {
+    if (kind === 'sections') rcaNormalizeSectionInto(row, out.sections, rootWarnings);
+    else if (kind === 'species_ranges') rcaNormalizeSpeciesInto(row, out.species_ranges, rootWarnings);
+    else if (kind === 'biozones') rcaNormalizeBiozoneInto(row, out.biozones, rootWarnings);
+  };
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [wrapperKey, inner] of Object.entries(raw)) {
+      if (!inner || typeof inner !== 'object' || Array.isArray(inner)) continue;
+      const inner2 = { ...inner };
+      if ((kind === 'sections' || kind === 'biozones') && !('name' in inner2)) {
+        inner2.name = wrapperKey;
+      } else if (kind === 'species_ranges' && !('species' in inner2)) {
+        inner2.species = wrapperKey;
+      }
+      delete inner2._extras;
+      const before = out[kind].length;
+      append(inner2);
+      if (out[kind].length > before) {
+        const row = out[kind][out[kind].length - 1];
+        if (!row._extras || typeof row._extras !== 'object' || Array.isArray(row._extras)) {
+          row._extras = {};
+        }
+        row._extras.wrapper_key = wrapperKey;
+      }
+    }
+  } else if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (item && typeof item === 'object' && !Array.isArray(item)) { append(item); continue; }
+      if (typeof item === 'string') {
+        const row = rcaRowFromString(item, kind);
+        if (row !== null) {
+          append(row);
+          rcaPushWarning(rootWarnings, 'string_row_coerced');
+        }
+      }
+    }
+  }
+}
+
+// Mirror of rca_core/extractor.normalize_result.
 function rcaNormalizeResult(parsed) {
-  // P0-5 (REVIEW-2026-07-25): unwrap top-level array wrappers.
-  parsed = rcaUnwrapArrayRoot(parsed) || parsed;
+  // MEDIUM fix: a non-dict payload must not crash the normalizer (Python
+  // returns the empty shape with `normalize_non_dict_input`).
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {
+      sections: [], species_ranges: [], biozones: [], other_fossils: [],
+      confidence: 0.0,
+      _warnings: ['normalize_non_dict_input'],
+    };
+  }
   const out = {
     sections: [],
     species_ranges: [],
     biozones: [],
     other_fossils: [],
-    confidence: 0,
+    confidence: 0.0,
   };
-  // Sprint B (REVIEW-2026-09-04): keep unclassifiable dicts top-level on
-  // the result, mirroring rca_core/extractor.py:645-648
-  // (out.setdefault("_unclassified", []).append(item)). Excluded from the
-  // root _extras carry below so it is not duplicated there.
+  const rootWarnings = [];
+
+  // MEDIUM fix (truncated rescue): a rescued partial / inner object that matches
+  // none of the documented range-chart root keys is flagged so the operator is
+  // not silently handed an empty ok=True result.
+  const foreign = rcaTruncatedWarningIfForeign(parsed, 'range_chart');
+  if (foreign) foreign.forEach((tag) => rcaPushWarning(rootWarnings, tag));
+
+  // H3-fix: unwrap _array_root and distribute items to the known keys — by
+  // APPENDING to the same buckets the named arrays feed, never by replacing
+  // them (REVIEW-2026-09-20 #12: the old pre-pass dropped a payload's real
+  // `sections` list because the wrapper keys shadowed it).
+  rcaArrayRootIntoRangeChart(parsed, out, rootWarnings);
+
+  rcaCoerceRangeChartList(parsed.sections, 'sections', out, rootWarnings);
+  rcaCoerceRangeChartList(parsed.species_ranges, 'species_ranges', out, rootWarnings);
+  rcaCoerceRangeChartList(parsed.biozones, 'biozones', out, rootWarnings);
   if (Array.isArray(parsed._unclassified)) {
-    out._unclassified = parsed._unclassified;
+    (out._unclassified = out._unclassified || []).push(...parsed._unclassified);
   }
-  // H5: flag payloads that have no range_chart root keys (and no array
-  // wrapper) as truncated/unrecognized. The Python extractor then
-  // converts this warning into err.parse in the extract_range_chart path.
-  const warn = rcaTruncatedWarningIfForeign(parsed, 'range_chart');
-  if (warn) out._warnings = warn;
-  const asStr = (v) => (v === null || v === undefined ? '' : String(v));
-  const SEC_KNOWN = ['name', 'age_range', 'formations', 'formation_thickness_m', 'coordinates'];
-  // P1-6 (REVIEW-2026-07-25): align SP_KNOWN with rca_core/extractor.py
-  // _KNOWN_SPECIES_KEYS (13 fields). The previous 5-field list silently
-  // dropped author, year, author_year, range_top_bed, range_base_bed,
-  // endpoint_kind, occurrence_mode into row._extras as a dict — which
-  // would be coerced to "[object Object]" by the JS merge multi-run
-  // fallback.
-  // M-1 fix: replaced 'reworked' (boolean) with 'occurrence_mode' (string enum)
-  // to match rca_core/extractor.py:455 and the updated Python prompt.
-  const SP_KNOWN = [
-    'species', 'section', 'range_top', 'range_base', 'biozone',
-    'author', 'year', 'author_year',
-    'range_top_bed', 'range_base_bed',
-    'range_top_idx', 'range_base_idx',
-    'endpoint_kind', 'occurrence_mode', 'reworked', 'confidence', 'note',
-  ];
-  // P1-5 parity: enum values for occurrence_mode (must match
-  // rca_core/extractor.py:92-100 VALID_OCCURRENCE_MODES).
-  const VALID_OCCURRENCE_MODES = new Set([
-    'unknown', 'in_situ', 'reworked', 'transported', 'cavity_fill',
-    'bioturbated', 'derived', 'lag_deposit',
-  ]);
-  const VALID_ENDPOINT_KINDS = new Set([
-    'unknown', 'observed', 'projected', 'truncated',
-  ]);
-  const asOptionalInt = (v) => {
-    if (v === null || v === undefined || v === '' || typeof v === 'boolean') return null;
-    const n = Number(v);
-    return Number.isInteger(n) ? n : null;
-  };
-  const asOptionalConfidence = (v) => {
-    if (v === null || v === undefined || v === '' || typeof v === 'boolean') return null;
-    const n = Number(v);
-    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
-  };
 
-  function _normalizeOccurrenceMode(sp) {
-    const raw = sp && sp.occurrence_mode;
-    if (typeof raw === 'string') {
-      const normalized = raw.trim().toLowerCase();
-      if (VALID_OCCURRENCE_MODES.has(normalized)) return normalized;
+  // MEDIUM fix (iron rule): post-normalize pass flagging any species whose name
+  // reads like a zone label. The row is NOT moved (that would be silently
+  // destructive) — the operator sees the slip-through and decides.
+  for (const sp of out.species_ranges) {
+    const name = rcaNameStr(sp, 'species');
+    if (name && _RCA_IRON_RULE_ZONE_RE.test(name)) {
+      sp._warning = 'iron_rule_zone_label';
+      rcaPushWarning(rootWarnings, 'iron_rule_zone_label');
     }
-    if (sp && typeof sp.reworked === 'boolean') {
-      return sp.reworked ? 'reworked' : 'in_situ';
-    }
-    return 'unknown';
   }
-  function _normalizeEndpointKind(value) {
-    if (typeof value === 'string') {
-      const normalized = value.trim().toLowerCase();
-      if (VALID_ENDPOINT_KINDS.has(normalized)) return normalized;
-    }
-    return 'unknown';
-  }
-  // PARITY (extractor.py:250): biozones row includes `section` so the
-  // aggregation layer can fold section into the row label and prevent two
-  // biozones with the same name in different sections from collapsing into
-  // a single merged row. Without this, browser runs lose the section axis
-  // for biozones and exported tables diverge from the Python export shape.
-  const BZ_KNOWN = ['name', 'section', 'age', 'thickness_m', 'zone_type'];
-  const ROOT_KNOWN = ['sections', 'species_ranges', 'biozones', 'other_fossils', 'confidence'];
 
-  for (const sec of Array.isArray(parsed.sections) ? parsed.sections : []) {
-    if (!sec || typeof sec !== 'object') continue;
-    const row = {
-      name: asStr(sec.name),
-      age_range: asStr(sec.age_range),
-      formations: Array.isArray(sec.formations) ? sec.formations.map(asStr) : [],
-      formation_thickness_m: asStr(sec.formation_thickness_m),
-      coordinates: asStr(sec.coordinates),
-    };
-    const extras = rcaCarryExtras(sec, SEC_KNOWN);
-    if (extras) row._extras = extras;
-    out.sections.push(row);
-  }
-  for (const sp of Array.isArray(parsed.species_ranges) ? parsed.species_ranges : []) {
-    if (!sp || typeof sp !== 'object') continue;
-    const row = {
-      species: asStr(sp.species),
-      section: asStr(sp.section),
-      range_top: asStr(sp.range_top),
-      range_base: asStr(sp.range_base),
-      biozone: asStr(sp.biozone),
-      // P1-6 (REVIEW-2026-07-25): promote the 8 long-standing prompt
-      // fields to first-class row keys so the JS↔Python parity test,
-      // merge function, and exported CSV/JSON all see them.
-      author: asStr(sp.author),
-      year: asStr(sp.year),
-      author_year: asStr(sp.author_year),
-      range_top_bed: asStr(sp.range_top_bed),
-      range_base_bed: asStr(sp.range_base_bed),
-      range_top_idx: asOptionalInt(sp.range_top_idx),
-      range_base_idx: asOptionalInt(sp.range_base_idx),
-      endpoint_kind: _normalizeEndpointKind(sp.endpoint_kind),
-      occurrence_mode: _normalizeOccurrenceMode(sp),
-      confidence: asOptionalConfidence(sp.confidence),
-      // P1-5 / H-8: capture the per-row uncertainty note.
-      note: asStr(sp.note || ''),
-    };
-    const extras = rcaCarryExtras(sp, SP_KNOWN);
-    if (extras) row._extras = extras;
-    // P0-4: defensive — if species name looks like a zone, flag & strip.
-    const spName = row.species;
-    if (spName && /\b(zone|zonule|assemblage|oppel|interval|lineage|range|acme)\b/i.test(spName)) {
-      row.note = ((row.note || '') + ' [zone-mislabel-warning]').trim();
-    }
-    out.species_ranges.push(row);
-  }
-  for (const bz of Array.isArray(parsed.biozones) ? parsed.biozones : []) {
-    if (!bz || typeof bz !== 'object') continue;
-    // P0-4: infer zone_type from name keywords when not explicitly provided.
-    const bzName = asStr(bz.name).trim();
-    let inferredZt = 'biozone';
-    const bzNameLower = bzName.toLowerCase();
-    if (bzNameLower.includes('assemblage') || bzNameLower.includes('ass.')) {
-      inferredZt = 'assemblage_zone';
-    } else if (bzNameLower.includes('acme')) {
-      inferredZt = 'acme_zone';
-    } else if (bzNameLower.includes('lineage')) {
-      inferredZt = 'lineage_zone';
-    } else if (/\bzonule\b/.test(bzNameLower)) {
-      inferredZt = 'zonule';
-    } else if (/\bsubzone\b/.test(bzNameLower)) {
-      inferredZt = 'subzone';
-    } else if (bzNameLower.includes('oppel')) {
-      inferredZt = 'oppel_zone';
-    } else if (bzNameLower.includes('interval')) {
-      inferredZt = 'interval_zone';
-    } else if (bzNameLower.includes('range zone') || bzNameLower.includes('taxon-range')) {
-      inferredZt = 'range_zone';
-    }
-    const row = {
-      name: bzName,
-      // PARITY: section is a top-level field on the biozone row, mirroring
-      // rca_core/extractor.py:371. Demoting it to _extras would hide it
-      // from rcaAggNorm and break the section-folding dedup in aggregate.js.
-      section: asStr(bz.section),
-      age: asStr(bz.age),
-      thickness_m: asStr(bz.thickness_m),
-      // P0-4: enforce zone_type field.
-      zone_type: asStr(bz.zone_type) || inferredZt,
-    };
-    const extras = rcaCarryExtras(bz, BZ_KNOWN);
-    if (extras) row._extras = extras;
-    out.biozones.push(row);
-  }
-  // M1 (REVIEW-2026-08-19): other_fossils may be a string OR a dict
-  // shape (label/species/taxon). The previous asStr map silently turned
-  // dicts into '[object Object]'. Lift the first available label so
-  // researchers see the actual fossil name in the export.
-  if (Array.isArray(parsed.other_fossils)) {
-    out.other_fossils = parsed.other_fossils.map((item) => {
-      if (item == null) return '';
-      if (typeof item === 'string') return item.trim();
-      if (typeof item === 'object') {
-        return String(item.label || item.species || item.taxon || item.name || '').trim();
-      }
-      return '';
-    }).filter(Boolean);
-  }
-  const conf = Number(parsed.confidence);
-  out.confidence = Number.isFinite(conf) ? Math.max(0, Math.min(1, conf)) : 0;
-  const rootExtras = rcaCarryExtras(parsed || {}, ROOT_KNOWN.concat(['_unclassified']));
-  if (rootExtras) out._extras = rootExtras;
+  // Fix B-3 / REVIEW-2026-09-20 #1: `other_fossils` may be a string, a dict or
+  // a list, and entries may be dicts carrying label/species/taxon — and the
+  // merge must not drop what the array unwrap already salvaged.
+  out.other_fossils = rcaMergeOtherFossils(out.other_fossils, rcaPyOr(parsed.other_fossils, []));
+  // Python: float(parsed.get("confidence", 0.0)) — an ABSENT key defaults to
+  // 0.0, an explicit null/"" raises and is caught to 0.0.
+  out.confidence = rcaConfidenceClamped('confidence' in parsed ? parsed.confidence : 0.0);
+
+  // LOW fix: `_array_root` / `_note` are diagnostics, not data.
+  const extras = rcaTopExtras(parsed, _RCA_KNOWN_RANGE_CHART_KEYS, false);
+  if (extras) out._extras = extras;
+  if (rootWarnings.length) out._warnings = rootWarnings;
   return out;
 }
 
 
+function rcaNormalizeResultOldDupA() {
+  // M1 (REVIEW-2026-08-19): other_fossils may be a string OR a dict
+  // shape (label/species/taxon). The previous asStr map silently turned
+  // dicts into '[object Object]'. Lift the first available label so
+  // researchers see the actual fossil name in the export.
+  const conf = 0;
+  return conf;
+}
+
+
+
 // Normalize the parsed columnar-section JSON into the strict result shape.
-// Mirrors rca_core.extractor.normalize_columnar_result (deep nested
-// normalization + _extras carry + confidence fallback to top-level
-// `confidence` when `overall_confidence` is absent).
+// Mirror of rca_core.extractor.normalize_columnar_result.
+//
+// REVIEW-2026-09-20 #5/#3 (parity pass): this was the one normalizer the
+// previous round never migrated off the pre-_dict_rows shape, so four Python
+// behaviours were missing in the browser:
+//   * `_array_root` bucketing used JS truthiness on a different key set
+//     (`item.id || item.group || item.samples ...`), so the same bare-array
+//     reply landed in `sections` in the browser and in `_unclassified` on the
+//     server. Python tests KEY PRESENCE for lithology_blocks/age_units/id,
+//     then meaning+(marker|pattern), then from_section|from_bed_idx.
+//   * every sub-list went through `items.filter(...)`, which THROWS on the
+//     dict-shaped emission ({"lithology_blocks": {"b1": {...}}}) that
+//     `_dict_rows` exists to repair — normalize failed, the whole run came
+//     back err.extract, and the same image worked server-side.
+//   * `fi()`'s lossy path ("8.5" -> 8, 9.7 -> 9) was a silent `parseInt`, so
+//     the row-level `range_top_idx_truncated` / `range_base_idx_unparseable` /
+//     `bed_idx_truncated` flags the Python side emits (and the UI badge reads)
+//     never appeared browser-side.
+//   * `age_units` had no order repair at all while Python swaps an inverted
+//     (top < base) pair and flags `index_order_swap`.
+// Also: `_carry_extras(item, known, row)` is the 3-argument form — the old
+// 2-argument `const ex = rcaCarryExtras(...)` call silently returned undefined
+// once rcaCarryExtras moved to the out-parameter shape, which dropped EVERY
+// columnar `_extras` (row-level and root-level).
 function rcaNormalizeColumnarResult(parsed) {
-  // P0-5 (REVIEW-2026-07-25): unwrap top-level array wrappers. For columnar
-  // we distribute only items whose structural keys look like section rows
-  // (id/group/lithology_blocks/...) into sections; other items are merged
-  // into the appropriate legend/cross_beds buckets.
-  if (parsed && Array.isArray(parsed._array_root)) {
-    const items = parsed._array_root;
-    const dist = {
-      sections: [], fossil_legend: [], lithology_legend: [], cross_beds: [],
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    // Python reaches for parsed.get() on a non-dict and raises; the caller's
+    // try/except turns that into err.extract — and so does this.
+    throw new Error('columnar payload is not an object');
+  }
+  // H3-fix: unwrap `_array_root` in place, exactly like Python's
+  // `parsed.setdefault(key, []).append(item)`. The shallow copy keeps the
+  // caller's object untouched while producing the identical payload.
+  if (Array.isArray(parsed._array_root)) {
+    parsed = Object.assign({}, parsed);
+    const push = (key, item) => {
+      const list = Array.isArray(parsed[key]) ? parsed[key].slice() : [];
+      list.push(item);
+      parsed[key] = list;
     };
-    for (const item of items) {
-      if (!item || typeof item !== 'object') continue;
-      if (item.id || item.group || item.lithology_blocks || item.age_units || item.samples) {
-        dist.sections.push(item);
-      } else if (item.fossil || item.marker) {
-        dist.fossil_legend.push(item);
-      } else if (item.pattern) {
-        dist.lithology_legend.push(item);
-      } else if (item.from_section || item.to_section) {
-        dist.cross_beds.push(item);
+    for (const item of parsed._array_root) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      if ('lithology_blocks' in item || 'age_units' in item || 'id' in item) {
+        push('sections', item);
+      } else if ('meaning' in item && ('marker' in item || 'pattern' in item)) {
+        push('marker' in item ? 'fossil_legend' : 'lithology_legend', item);
+      } else if ('from_section' in item || 'from_bed_idx' in item) {
+        push('cross_beds', item);
+      } else {
+        push('_unclassified', item);
       }
     }
-    const original = arguments[0] || {};
-    parsed = { ...dist };
-    // Walk the ORIGINAL (pre-rewrite) payload, not the freshly-built `dist`
-    // copy, so extra top-level fields that aren't columnar buckets get
-    // carried through instead of being silently dropped.
-    for (const k of Object.keys(original)) {
-      if (k === '_array_root' || k in dist) continue;
-      parsed[k] = original[k];
-    }
   }
-  const asStr = (v) => (v === null || v === undefined ? '' : String(v));
-  const asInt = (v) => {
-    if (v === null || v === undefined || v === '') return null;
-    const n = parseInt(v, 10);
-    return Number.isFinite(n) ? n : null;
-  };
-  const normList = (key) => (Array.isArray(parsed[key]) ? parsed[key] : []);
+  const asStr = rcaStringifyScalar;
+  const idx = (v) => rcaBedIndex(v);
   const BLOCK_KNOWN = ['pattern', 'range_top_idx', 'range_base_idx'];
   const UNIT_KNOWN = ['label', 'range_top_idx', 'range_base_idx'];
   const SAMPLE_KNOWN = ['bed_idx', 'fossil_marker', 'ref'];
@@ -548,475 +1095,961 @@ function rcaNormalizeColumnarResult(parsed) {
   const SECTION_KNOWN = ['id', 'group', 'lithology_blocks', 'age_units', 'samples',
                          'coordinates_text', 'thickness_m', 'confidence_by_section'];
 
-  const normBlocks = (items) => items.filter((x) => x && typeof x === 'object').map((b) => {
-    const row = {
-      pattern: asStr(b.pattern),
-      range_top_idx: asInt(b.range_top_idx),
-      range_base_idx: asInt(b.range_base_idx),
-    };
-    const ex = rcaCarryExtras(b, BLOCK_KNOWN);
-    if (ex) row._extras = ex;
-    return row;
-  });
-  const normUnits = (items) => items.filter((x) => x && typeof x === 'object').map((u) => {
-    const row = {
-      label: asStr(u.label),
-      range_top_idx: asInt(u.range_top_idx),
-      range_base_idx: asInt(u.range_base_idx),
-    };
-    const ex = rcaCarryExtras(u, UNIT_KNOWN);
-    if (ex) row._extras = ex;
-    return row;
-  });
-  const normSamples = (items) => items.filter((x) => x && typeof x === 'object').map((s) => {
-    const row = {
-      bed_idx: asInt(s.bed_idx),
-      fossil_marker: asStr(s.fossil_marker),
-      ref: asStr(s.ref),
-    };
-    const ex = rcaCarryExtras(s, SAMPLE_KNOWN);
-    if (ex) row._extras = ex;
-    return row;
-  });
-  const normLegend = (items) => items.filter((x) => x && typeof x === 'object').map((x) => {
-    const row = {
-      marker: asStr(x.marker),
-      pattern: asStr(x.pattern),
-      meaning: asStr(x.meaning),
-    };
-    const ex = rcaCarryExtras(x, LEGEND_KNOWN);
-    if (ex) row._extras = ex;
-    return row;
-  });
-  const normCross = (items) => items.filter((x) => x && typeof x === 'object').map((x) => {
-    const row = {
-      from_section: asStr(x.from_section),
-      from_bed_idx: asInt(x.from_bed_idx),
-      to_section: asStr(x.to_section),
-      to_bed_idx: asInt(x.to_bed_idx),
-    };
-    const ex = rcaCarryExtras(x, CROSS_KNOWN);
-    if (ex) row._extras = ex;
-    return row;
-  });
+  const normBlocks = (items) => {
+    const rows = [];
+    for (const b of rcaDictRows(items)) {
+      const rawTop = b.range_top_idx;
+      const rawBase = b.range_base_idx;
+      const top = idx(rawTop);
+      const base = idx(rawBase);
+      let topIdx = top.value;
+      let baseIdx = base.value;
+      // B-3 fix: the prompt numbers beds from the bottom (oldest = 1) and asks
+      // for top >= base; a reversed pair is swapped and flagged.
+      let swapped = false;
+      if (topIdx !== null && baseIdx !== null && topIdx < baseIdx) {
+        const t = topIdx; topIdx = baseIdx; baseIdx = t;
+        swapped = true;
+      }
+      const row = {
+        pattern: asStr(b.pattern),
+        range_top_idx: topIdx,
+        range_base_idx: baseIdx,
+      };
+      const warnings = [];
+      if (topIdx === null && rawTop !== null && rawTop !== undefined && rawTop !== '') {
+        warnings.push('range_top_idx_unparseable');
+      } else if (top.lossy) {
+        warnings.push('range_top_idx_truncated');
+      }
+      if (baseIdx === null && rawBase !== null && rawBase !== undefined && rawBase !== '') {
+        warnings.push('range_base_idx_unparseable');
+      } else if (base.lossy) {
+        warnings.push('range_base_idx_truncated');
+      }
+      if (swapped) warnings.push('index_order_swap');
+      rcaSetRowWarning(row, warnings);
+      rcaCarryExtras(b, BLOCK_KNOWN, row);
+      rows.push(row);
+    }
+    return rows;
+  };
+
+  const normUnits = (items) => {
+    const rows = [];
+    for (const u of rcaDictRows(items)) {
+      const top = idx(u.range_top_idx);
+      const base = idx(u.range_base_idx);
+      let topIdx = top.value;
+      let baseIdx = base.value;
+      let swapped = false;
+      if (topIdx !== null && baseIdx !== null && topIdx < baseIdx) {
+        const t = topIdx; topIdx = baseIdx; baseIdx = t;
+        swapped = true;
+      }
+      const row = {
+        label: asStr(u.label),
+        range_top_idx: topIdx,
+        range_base_idx: baseIdx,
+      };
+      // NOTE the order: units report the swap FIRST while blocks report the
+      // unparseable/truncated pair first — Python's list order is what the UI
+      // badge prints, so the two helpers are not interchangeable.
+      const warnings = [];
+      if (swapped) warnings.push('index_order_swap');
+      if (top.lossy) warnings.push('range_top_idx_truncated');
+      if (base.lossy) warnings.push('range_base_idx_truncated');
+      rcaSetRowWarning(row, warnings);
+      rcaCarryExtras(u, UNIT_KNOWN, row);
+      rows.push(row);
+    }
+    return rows;
+  };
+
+  const normSamples = (items) => {
+    const rows = [];
+    for (const s of rcaDictRows(items)) {
+      const bed = idx(s.bed_idx);
+      const row = {
+        bed_idx: bed.value,
+        fossil_marker: asStr(s.fossil_marker),
+        ref: asStr(s.ref),
+      };
+      if (bed.lossy) row._warning = 'bed_idx_truncated';
+      rcaCarryExtras(s, SAMPLE_KNOWN, row);
+      rows.push(row);
+    }
+    return rows;
+  };
+
+  // Returns {rows, warning} — Python's norm_legend tuple. A string legend
+  // (Fix B-5) is not iterated character-wise, it is dropped WITH a flag.
+  const normLegend = (items) => {
+    let warning = null;
+    let raw = items;
+    if (typeof raw === 'string') {
+      warning = 'legend_input_is_string';
+      raw = [];
+    }
+    const rows = [];
+    // REVIEW-2026-09-20 #3: a dict-shaped legend ({"ammonite": {"meaning": …}})
+    // is what the model emits when it keys the entries by marker; the old
+    // `items.filter(...)` shape yielded [] for it in the browser.
+    for (const x of rcaDictRows(raw)) {
+      // fossil_legend uses marker+meaning, lithology_legend pattern+meaning.
+      // Carry both columns so neither legend's primary field is demoted into
+      // _extras (which the exporter never reads) and rendered blank.
+      const row = {
+        marker: asStr(x.marker),
+        pattern: asStr(x.pattern),
+        meaning: asStr(x.meaning),
+      };
+      rcaCarryExtras(x, LEGEND_KNOWN, row);
+      rows.push(row);
+    }
+    return { rows, warning };
+  };
+
+  const normCross = (items) => {
+    const rows = [];
+    for (const x of rcaDictRows(items)) {
+      const from = idx(x.from_bed_idx);
+      const to = idx(x.to_bed_idx);
+      const row = {
+        from_section: asStr(x.from_section),
+        from_bed_idx: from.value,
+        to_section: asStr(x.to_section),
+        to_bed_idx: to.value,
+      };
+      const trunc = [];
+      if (from.lossy) trunc.push('from_bed_idx_truncated');
+      if (to.lossy) trunc.push('to_bed_idx_truncated');
+      rcaSetRowWarning(row, trunc);
+      rcaCarryExtras(x, CROSS_KNOWN, row);
+      rows.push(row);
+    }
+    return rows;
+  };
 
   const sections = [];
-  for (const sec of normList('sections')) {
-    if (!sec || typeof sec !== 'object') continue;
-    const confSec = Number(sec.confidence_by_section);
+  for (const sec of rcaDictRows(parsed.sections)) {
     const row = {
       id: asStr(sec.id),
       group: asStr(sec.group),
-      lithology_blocks: normBlocks(sec.lithology_blocks || []),
-      age_units: normUnits(sec.age_units || []),
-      samples: normSamples(sec.samples || []),
+      lithology_blocks: normBlocks(sec.lithology_blocks),
+      age_units: normUnits(sec.age_units),
+      samples: normSamples(sec.samples),
       coordinates_text: asStr(sec.coordinates_text),
       thickness_m: asStr(sec.thickness_m),
-      confidence_by_section: Number.isFinite(confSec) ? Math.max(0, Math.min(1, confSec)) : 0,
+      confidence_by_section: rcaConfidenceClamped(
+        'confidence_by_section' in sec ? sec.confidence_by_section : 0.0),
     };
-    const ex = rcaCarryExtras(sec, SECTION_KNOWN);
-    if (ex) row._extras = ex;
+    rcaCarryExtras(sec, SECTION_KNOWN, row);
     sections.push(row);
   }
-  // Some models emit root `confidence` instead of `overall_confidence`;
-  // fall back so the value isn't silently zeroed.
-  const overall = Number(parsed.overall_confidence != null ? parsed.overall_confidence : parsed.confidence);
-  const ROOT_KNOWN = ['sections', 'fossil_legend', 'lithology_legend', 'cross_beds',
-                     'overall_confidence', 'confidence'];
-  // H5: flag foreign payloads as truncated/unrecognized. Checked BEFORE
-  // building `out` so we can attach the warnings array on the same object.
-  const warnCol = rcaTruncatedWarningIfForeign(parsed, 'columnar_section');
+
+  // Some models emit root `confidence` instead of `overall_confidence`; fall
+  // back so the value is not silently zeroed. Python falls back when the raw
+  // value is None as well as when the key is ABSENT (REVIEW-2026-09-10), and
+  // `float()` — not Number() — decides what a bad value means.
+  let overallRaw = parsed.overall_confidence;
+  if (overallRaw === null || overallRaw === undefined) {
+    overallRaw = 'confidence' in parsed ? parsed.confidence : 0.0;
+  }
+  const confidence = rcaConfidenceClamped(overallRaw);
+
+  const fossil = normLegend(parsed.fossil_legend);
+  const litho = normLegend(parsed.lithology_legend);
+  const legendWarnings = [fossil.warning, litho.warning].filter(Boolean);
+
   const out = {
     sections,
-    fossil_legend: normLegend(normList('fossil_legend')),
-    lithology_legend: normLegend(normList('lithology_legend')),
-    cross_beds: normCross(normList('cross_beds')),
-    confidence: Number.isFinite(overall) ? Math.max(0, Math.min(1, overall)) : 0,
+    fossil_legend: fossil.rows,
+    lithology_legend: litho.rows,
+    cross_beds: normCross(parsed.cross_beds),
+    confidence,
   };
-  const rootEx = rcaCarryExtras(parsed || {}, ROOT_KNOWN);
+  // Python keeps BOTH legends' identical `legend_input_is_string` flags (no
+  // dedup), so a plain array — not rcaPushWarning — is the faithful mirror.
+  if (legendWarnings.length) out._warnings = legendWarnings;
+  // Columnar is the one mode whose root extras KEEP the array-root wrapper
+  // keys (Python builds `root_extras` without _pop_array_root_extras).
+  // H5/REVIEW-2026-09-20 #7: the foreign-payload flag is NOT raised here any
+  // more — Python raises it in the shared `_ok_result`, which the extraction
+  // dispatch mirrors (see rcaUnusablePayloadReason there).
+  const rootEx = rcaTopExtras(parsed, RCA_MODE_ROOT_KEYS.columnar_section, true);
   if (rootEx) out._extras = rootEx;
-  if (warnCol) out._warnings = warnCol;
   return out;
 }
 
 // Normalize the parsed abundance-diagram JSON into the strict result shape.
-// Mirrors rca_core.extractor.normalize_abundance_result (with _extras carry).
+// Mirrors rca_core.extractor.normalize_abundance_result.
+//
+// REVIEW-2026-09-20 #4 (this round): the whole body was rebuilt on the Python
+// rules; the browser copy had drifted in three separate ways.
+//   * BUCKETING: the old JS classified a site by `site_id || site_name ||
+//     location` and an abundance by `abundance || count || percentage`. Python
+//     classifies on KEY PRESENCE (`"name" in item and ("location" in item or
+//     "depth_unit" in item or "age_range" in item)`, then
+//     `"taxon" in item or ("abundance" in item and "level" in item)`, then
+//     `"age" in item and "name" in item`). A `{site_id, name}` row is a *site*
+//     for Python (it has name+location? no → so it is _unclassified) and a site
+//     for the old JS — so the same payload produced rows on one engine and an
+//     empty table on the other.
+//   * SILENT DROP: JS rebuilt `parsed` as a fresh `{sites, abundances, zones}`
+//     object. Python mutates IN PLACE with `setdefault(...).append(item)`, so a
+//     payload carrying BOTH `_array_root` and a named `sites` list keeps every
+//     record, and anything unclassifiable lands in `_unclassified`, which then
+//     survives into the root `_extras` (that is what
+//     `sprintb-abundance-unclassified-in-extras` pins).
+//   * `_warnings`: JS attached `truncated_or_unrecognized_payload` from inside
+//     the normalizer. That flag is not a normalizer concern on the Python side
+//     — `_ok_result` raises it for all eight modes — so abundance payloads
+//     flipped ok=false in the browser only. Removed; the `dict_shaped_array` /
+//     `string_row_coerced` flags from rcaIterRows replace it.
+const _RCA_KNOWN_ABUNDANCE_SITE_KEYS = ['name', 'location', 'age_range', 'depth_unit'];
+const _RCA_KNOWN_ABUNDANCE_ABUNDANCE_KEYS = ['taxon', 'site', 'level', 'depth',
+                                             'abundance', 'abundance_unit'];
+const _RCA_KNOWN_ABUNDANCE_ZONE_KEYS = ['name', 'age', 'level_range'];
+const _RCA_KNOWN_ABUNDANCE_ROOT_KEYS = ['sites', 'abundances', 'zones', 'confidence'];
+
 function rcaNormalizeAbundanceResult(parsed) {
-  // P0-5 (REVIEW-2026-07-25): unwrap top-level array wrappers.
-  // Sprint B (REVIEW-2026-09-04): the old `parsed = { ...dist }` replaced
-  // the payload wholesale, dropping top-level `confidence` (and every other
-  // non-bucket field such as `_note`) whenever the model emitted a bare
-  // array. Mirror the columnar unwrap above and Python
-  // rca_core/extractor.py:1296-1310, which mutates `parsed` in place with
-  // setdefault so `confidence` survives and unclassifiable dicts are kept
-  // under `_unclassified` (they flow into the root `_extras` carry at the
-  // bottom of this function, exactly like Python's top_extras).
-  if (parsed && Array.isArray(parsed._array_root)) {
-    const items = parsed._array_root;
-    const dist = { sites: [], abundances: [], zones: [] };
-    let unclassified = null;
-    for (const item of items) {
-      if (!item || typeof item !== 'object') continue;
-      if (item.site_id || item.site_name || item.location) {
-        dist.sites.push(item);
-      } else if (item.abundance || item.count || item.percentage) {
-        dist.abundances.push(item);
-      } else if (item.zone || item.assemblage) {
-        dist.zones.push(item);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) parsed = {};
+  // H3-fix: unwrap the `_array_root` wrapper IN PLACE (Python 1941-1955),
+  // appending to any bucket the payload already declared. Non-dict items are
+  // skipped outright (unlike the zonation mode, which unclassifies them).
+  if (Array.isArray(parsed._array_root)) {
+    const bucket = (key) => {
+      if (!Array.isArray(parsed[key])) parsed[key] = [];
+      return parsed[key];
+    };
+    for (const item of parsed._array_root) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      if ('name' in item && ('location' in item || 'depth_unit' in item || 'age_range' in item)) {
+        bucket('sites').push(item);
+      } else if ('taxon' in item || ('abundance' in item && 'level' in item)) {
+        bucket('abundances').push(item);
+      } else if ('age' in item && 'name' in item) {
+        bucket('zones').push(item);
       } else {
-        if (!unclassified) unclassified = [];
-        unclassified.push(item);
+        bucket('_unclassified').push(item);
       }
     }
-    const original = parsed || {};
-    parsed = { ...dist };
-    // Walk the ORIGINAL (pre-rewrite) payload, not the freshly-built `dist`
-    // copy, so top-level fields that aren't abundance buckets — most
-    // importantly `confidence` — get carried through instead of being
-    // silently dropped.
-    for (const k of Object.keys(original)) {
-      if (k === '_array_root' || k in parsed) continue;
-      parsed[k] = original[k];
-    }
-    if (unclassified) parsed._unclassified = unclassified;
   }
-  // original body follows
-  const asStr = (v) => (v === null || v === undefined ? '' : String(v));
-  const normList = (key) => (Array.isArray(parsed[key]) ? parsed[key] : []);
-  const SITE_KNOWN = ['name', 'location', 'age_range', 'depth_unit'];
-  const AB_KNOWN = ['taxon', 'site', 'level', 'depth', 'abundance', 'abundance_unit'];
-  const ZONE_KNOWN = ['name', 'age', 'level_range'];
-  const ROOT_KNOWN = ['sites', 'abundances', 'zones', 'confidence'];
-
-  const sites = [];
-  for (const s of normList('sites')) {
-    if (!s || typeof s !== 'object') continue;
+  const warnings = [];
+  const out = { sites: [], abundances: [], zones: [], confidence: 0.0 };
+  for (const site of rcaIterRows(parsed.sites, 'sites', warnings)) {
     const row = {
-      name: asStr(s.name),
-      location: asStr(s.location),
-      age_range: asStr(s.age_range),
-      depth_unit: asStr(s.depth_unit),
+      name: rcaStringifyScalar(site.name),
+      location: rcaStringifyScalar(site.location),
+      age_range: rcaStringifyScalar(site.age_range),
+      depth_unit: rcaStringifyScalar(site.depth_unit),
     };
-    const ex = rcaCarryExtras(s, SITE_KNOWN);
-    if (ex) row._extras = ex;
-    sites.push(row);
+    rcaCarryExtras(site, _RCA_KNOWN_ABUNDANCE_SITE_KEYS, row);
+    out.sites.push(row);
   }
-  const abundances = [];
-  for (const a of normList('abundances')) {
-    if (!a || typeof a !== 'object') continue;
+  for (const ab of rcaIterRows(parsed.abundances, 'abundances', warnings)) {
     const row = {
-      taxon: asStr(a.taxon),
-      site: asStr(a.site),
-      level: asStr(a.level),
-      depth: asStr(a.depth),
-      abundance: asStr(a.abundance),
-      abundance_unit: asStr(a.abundance_unit),
+      taxon: rcaStringifyScalar(ab.taxon),
+      site: rcaStringifyScalar(ab.site),
+      level: rcaStringifyScalar(ab.level),
+      depth: rcaStringifyScalar(ab.depth),
+      abundance: rcaStringifyScalar(ab.abundance),
+      abundance_unit: rcaStringifyScalar(ab.abundance_unit),
     };
-    const ex = rcaCarryExtras(a, AB_KNOWN);
-    if (ex) row._extras = ex;
-    abundances.push(row);
+    rcaCarryExtras(ab, _RCA_KNOWN_ABUNDANCE_ABUNDANCE_KEYS, row);
+    out.abundances.push(row);
   }
-  const zones = [];
-  for (const z of normList('zones')) {
-    if (!z || typeof z !== 'object') continue;
+  for (const z of rcaIterRows(parsed.zones, 'zones', warnings)) {
     const row = {
-      name: asStr(z.name),
-      age: asStr(z.age),
-      level_range: asStr(z.level_range),
+      name: rcaStringifyScalar(z.name),
+      age: rcaStringifyScalar(z.age),
+      level_range: rcaStringifyScalar(z.level_range),
     };
-    const ex = rcaCarryExtras(z, ZONE_KNOWN);
-    if (ex) row._extras = ex;
-    zones.push(row);
+    rcaCarryExtras(z, _RCA_KNOWN_ABUNDANCE_ZONE_KEYS, row);
+    out.zones.push(row);
   }
-  const conf = Number(parsed.confidence);
-  // H5: flag foreign payloads as truncated/unrecognized.
-  const warnAbd = rcaTruncatedWarningIfForeign(parsed, 'abundance_diagram');
-  const out = {
-    sites,
-    abundances,
-    zones,
-    confidence: Number.isFinite(conf) ? Math.max(0, Math.min(1, conf)) : 0,
-  };
-  const rootEx = rcaCarryExtras(parsed || {}, ROOT_KNOWN);
+  // Python: `float(parsed.get("confidence", 0.0))` in a try/except — NO `or`,
+  // so "90%" raises ValueError and yields 0.0 rather than JS parseFloat's 90.
+  out.confidence = rcaConfidenceClamped(
+    Object.prototype.hasOwnProperty.call(parsed, 'confidence') ? parsed.confidence : undefined);
+  // Root extras = every undocumented key, `_array_root`/`_note` stripped, and
+  // `_unclassified` deliberately INCLUDED (it is not a root key), which is how
+  // the unclassifiable records stay visible to the reviewer.
+  const rootEx = rcaTopExtras(parsed, _RCA_KNOWN_ABUNDANCE_ROOT_KEYS, false);
   if (rootEx) out._extras = rootEx;
-  if (warnAbd) out._warnings = warnAbd;
+  if (warnings.length) out._warnings = warnings;
   return out;
 }
 
-// P0-3: phylogenetic tree normalizer — mirrors Python
-// rca_core.extractor._normalize_phylogenetic_tree_into().
-function rcaUnwrapArrayRootPhylo(parsed) {
-  if (!parsed || typeof parsed !== 'object') return parsed;
-  if (!Array.isArray(parsed._array_root)) return parsed;
-  for (const item of parsed._array_root) {
-    if (item && typeof item === 'object' && Array.isArray(item.nodes)) {
-      return item;
+// P0-3 / REVIEW-2026-09-10: phylogenetic tree array-root unwrap.
+// The old JS form REPLACED the payload with the inner item, so
+// {"_array_root":[{nodes:[]}], "confidence":0.9} normalized to confidence 0.0
+// and dropped the outer `legend` / `metadata` — exactly the bug Python fixed by
+// switching to a setdefault merge. Wrapper bookkeeping keys
+// (`_array_root`, `_note`) never participate in the merge.
+function rcaUnwrapArrayRootPhylo(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  if (!Array.isArray(raw._array_root)) return raw;
+  for (const item of raw._array_root) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    if (!Array.isArray(item.nodes)) continue;
+    const merged = { ...item };
+    for (const key of Object.keys(raw)) {
+      if (key === '_array_root' || key === '_note') continue;
+      if (!(key in merged)) merged[key] = raw[key];
     }
+    return merged;
   }
-  return parsed;
+  return raw;
 }
 
-// UI-REVIEW-2026-09-05: zonation / correlation chart normalizer —
-// mirror of rca_core/extractor.py:normalize_zonation_chart_result. All
-// rows string-typed; H8 extras per row under `_extras`; `_array_root`
-// rescue distributes to zonations / zones / correlations with an
-// `_unclassified` carry for anything else.
-function rcaNormalizeZonationChartResult(parsed) {
-if (parsed && Array.isArray(parsed._array_root)) {
-  const items = parsed._array_root;
-  const dist = { zonations: [], zones: [], correlations: [] };
-  let unclassified = null;
-  for (const item of items) {
-    if (!item || typeof item !== 'object') continue;
-    if ('from_zone' in item || 'to_zone' in item) {
-      dist.correlations.push(item);
-    } else if ('name' in item &&
-               ('rank' in item || 'zonation' in item || 'age_span' in item ||
-                'defined_by' in item || 'base_age' in item)) {
-      dist.zones.push(item);
-    } else if ('name' in item &&
-               ('region' in item || 'framework' in item || 'reference' in item)) {
-      dist.zonations.push(item);
-    } else {
-      if (!unclassified) unclassified = [];
-      unclassified.push(item);
-    }
-  }
-  const original = parsed || {};
-  parsed = { ...dist };
-  for (const k of Object.keys(original)) {
-    if (k === '_array_root' || k in parsed) continue;
-    parsed[k] = original[k];
-  }
-  if (unclassified) parsed._unclassified = unclassified;
-}
-const asStr = (v) => (v === null || v === undefined ? '' : String(v));
-const normList = (key) => (Array.isArray(parsed[key]) ? parsed[key] : []);
-const out = { zonations: [], zones: [], correlations: [], confidence: 0 };
-const ZONATIONS_KNOWN = ['name', 'region', 'framework', 'reference'];
-const ZONE_KNOWN = ['name', 'zonation', 'rank', 'age_span', 'base_age',
-                    'top_age', 'stage', 'defined_by', 'note'];
-const CORR_KNOWN = ['from_zone', 'to_zone', 'from_zonation',
-                    'to_zonation', 'basis', 'note'];
-const carry = (item, known, row) => {
-  for (const k of Object.keys(item)) {
-    if (known.indexOf(k) === -1) {
-      if (!row._extras) row._extras = {};
-      row._extras[k] = item[k];
-    }
-  }
-};
-for (const z of normList('zonations')) {
-  if (!z || typeof z !== 'object') continue;
-  const row = { name: asStr(z.name), region: asStr(z.region),
-                framework: asStr(z.framework), reference: asStr(z.reference) };
-  carry(z, ZONATIONS_KNOWN, row);
-  out.zonations.push(row);
-}
-for (const z of normList('zones')) {
-  if (!z || typeof z !== 'object') continue;
-  const row = { name: asStr(z.name), zonation: asStr(z.zonation),
-                rank: asStr(z.rank), age_span: asStr(z.age_span),
-                base_age: asStr(z.base_age), top_age: asStr(z.top_age),
-                stage: asStr(z.stage), defined_by: asStr(z.defined_by),
-                note: asStr(z.note) };
-  carry(z, ZONE_KNOWN, row);
-  out.zones.push(row);
-}
-for (const c of normList('correlations')) {
-  if (!c || typeof c !== 'object') continue;
-  const row = { from_zone: asStr(c.from_zone), to_zone: asStr(c.to_zone),
-                from_zonation: asStr(c.from_zonation),
-                to_zonation: asStr(c.to_zonation),
-                basis: asStr(c.basis), note: asStr(c.note) };
-  carry(c, CORR_KNOWN, row);
-  out.correlations.push(row);
-}
-const cf = parseFloat(parsed.confidence);
-out.confidence = Number.isFinite(cf) ? Math.max(0, Math.min(1, cf)) : 0;
-const knownTop = ['zonations', 'zones', 'correlations', 'confidence',
-                  '_array_root', '_unclassified'];
-const extras = {};
-let hasExtras = false;
-for (const k of Object.keys(parsed)) {
-  if (knownTop.indexOf(k) === -1) { extras[k] = parsed[k]; hasExtras = true; }
-}
-if (parsed._unclassified) { extras._unclassified = parsed._unclassified; hasExtras = true; }
-if (hasExtras) out._extras = extras;
-return out;
-}
+const _RCA_PHYLO_NODE_KEYS = ['id', 'parent', 'name', 'is_leaf',
+                              'branch_length', 'node_age_ma', 'support'];
+const _RCA_PHYLO_NEW_META_KEYS = ['title', 'extraction_timestamp', 'tree_type',
+                                  'scale', 'rooted', 'source'];
+const _RCA_PHYLO_ROOT_KEYS = ['metadata', 'nodes', 'root_ids', 'legend', 'confidence'];
 
+// Mirror of rca_core/extractor.py:_normalize_phylogenetic_tree_into.
+// REVIEW-2026-09-20 #4: rebuilt against the current Python body. The browser
+// copy still had the pre-2026-09-10 shape:
+//   * a FIXED metadata block (version/taxon_group/root_name/total_nodes/
+//     image_source always written), while Python writes only the six canonical
+//     keys and then PRESERVES whatever unknown keys the payload carried — so
+//     JS invented `image_source: ""` for every tree and lost the raw values;
+//   * `rooted: metaRaw.rooted !== false`, which read the string "false" as
+//     rooted — Python uses _coerce_bool_flag(..., True);
+//   * no synthetic-id repair, so an id-less node vanished and the topology
+//     silently collapsed (Python flags `node_missing_id_synthesised`);
+//   * `raw_ids` compared RAW against str-normalised node ids, so
+//     {"root_ids":[1],"nodes":[{"id":"1"}]} threw
+//     "Non-root node 1 must have a parent" in the browser only;
+//   * `_is_leaf_corrected` never written;
+//   * nodes read from `parsed.nodes` only, so a dict-shaped
+//     {"nodes": {"r": {...}}} produced no rows at all.
 function rcaNormalizePhylogeneticTreeResult(parsed) {
-  parsed = rcaUnwrapArrayRootPhylo(parsed);
-  const asStr = (v) => (v === null || v === undefined ? '' : String(v));
-  const asFloat = (v) => {
-    if (v === null || v === undefined) return null;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  };
+  let raw = rcaUnwrapArrayRootPhylo(parsed);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) raw = {};
 
-  const nodesIn = Array.isArray(parsed.nodes) ? parsed.nodes : [];
-  // Build id→node lookup and children counts.
+  const phyloWarnings = [];
+  const fv = (v) => (v === null || v === undefined
+    ? null : rcaPyFloatOrNull(v));
+
+  const nodesIn = rcaDictRows(raw.nodes);
+
+  // Stable synthetic ids for nodes the model left unnamed (Python 2190-2203).
+  // Note the check STRIPS, the assignment does not: "  " is an empty id here.
+  const existingIds = new Set();
+  for (const n of nodesIn) {
+    existingIds.add(rcaPyStr(rcaPyOr(n.id, '')).trim());
+  }
+  let anon = 0;
+  for (const n of nodesIn) {
+    const current = rcaPyStr(rcaPyOr(n.id, ''));
+    if (current.trim()) continue;
+    let candidate = '';
+    for (;;) {
+      anon += 1;
+      candidate = '_anon' + anon;
+      if (!existingIds.has(candidate)) break;
+    }
+    existingIds.add(candidate);
+    n.id = candidate;
+    // Python APPENDS without dedup: two repaired nodes mean two flags.
+    phyloWarnings.push('node_missing_id_synthesised');
+  }
+
   const idToNode = {};
   const childrenCount = {};
   for (const n of nodesIn) {
-    if (!n || typeof n !== 'object') continue;
-    const nid = String(n.id || '');
+    const nid = rcaPyStr(rcaPyOr(n.id, ''));
     if (nid) {
       idToNode[nid] = n;
       childrenCount[nid] = 0;
     }
   }
   for (const n of nodesIn) {
-    if (!n || typeof n !== 'object') continue;
-    const parent = n.parent;
-    if (parent != null) {
-      const pid = String(parent);
-      if (pid in childrenCount) childrenCount[pid] = (childrenCount[pid] || 0) + 1;
+    const parent = n.parent === undefined ? null : n.parent;
+    if (parent !== null) {
+      const pid = rcaPyStr(parent);
+      if (Object.prototype.hasOwnProperty.call(childrenCount, pid)) {
+        childrenCount[pid] = (childrenCount[pid] || 0) + 1;
+      }
     }
   }
 
-  const rootIdsRaw = parsed.root_ids || [];
-  if (!rootIdsRaw.length) throw new Error('root_ids is empty');
-  for (const rid of rootIdsRaw) {
-    if (!(String(rid) in idToNode)) throw new Error('root_ids contains unknown node id: ' + rid);
+  // root_ids normalised to strings ONCE, up front (Sprint B REVIEW-2026-09-04).
+  const rootIdsRaw = rcaPyOr(raw.root_ids, []);
+  let rootIds = [];
+  if (Array.isArray(rootIdsRaw)) {
+    rootIds = rootIdsRaw.map(rcaPyStr);
+  } else if (typeof rootIdsRaw === 'string') {
+    rootIds = Array.from(rootIdsRaw).map(rcaPyStr);
+  } else if (rootIdsRaw && typeof rootIdsRaw === 'object') {
+    rootIds = Object.keys(rootIdsRaw).map(rcaPyStr);
+  }
+  if (!rootIds.length) throw new Error('root_ids is empty');
+  for (const rid of rootIds) {
+    if (!(rid in idToNode)) throw new Error('root_ids contains unknown node id: ' + rid);
   }
 
   const nodesOut = [];
   for (const n of nodesIn) {
-    if (!n || typeof n !== 'object') continue;
-    const nid = String(n.id || '');
+    const nid = rcaPyStr(rcaPyOr(n.id, ''));
     if (!nid) continue;
-
-    const parentVal = n.parent;
-    if (rootIdsRaw.indexOf(nid) === -1) {
-      // Non-root
-      if (parentVal == null) throw new Error('Non-root node ' + nid + ' must have a parent');
-      if (!(String(parentVal) in idToNode)) throw new Error('Node ' + nid + ' references parent not in node ids');
-    } else {
-      // Root
-      if (parentVal != null) throw new Error('Root node ' + nid + ' must have parent == null');
+    const parentVal = n.parent === undefined ? null : n.parent;
+    if (rootIds.indexOf(nid) === -1) {
+      if (parentVal === null) throw new Error('Non-root node ' + nid + ' must have a parent');
+      if (!(rcaPyStr(parentVal) in idToNode)) {
+        throw new Error('Node ' + nid + ' references parent ' + rcaPyStr(parentVal) + ' not in node ids');
+      }
+    } else if (parentVal !== null) {
+      throw new Error('Root node ' + nid + ' must have parent == None, got ' + rcaPyStr(parentVal));
     }
 
-    const isLeafInput = Boolean(n.is_leaf);
+    const isLeafInput = rcaPyTruthy(n.is_leaf);
     const actualIsLeaf = (childrenCount[nid] || 0) === 0;
-    const isLeaf = isLeafInput !== actualIsLeaf ? actualIsLeaf : isLeafInput;
+    const leafCorrected = isLeafInput !== actualIsLeaf;
 
-    const supportRaw = n.support;
-    const support = asFloat(supportRaw);
-    if (support !== null && (support < 0 || support > 100)) {
-      throw new Error('support must be in [0, 100] or null, got ' + support);
+    const support = fv(n.support === undefined ? null : n.support);
+    if (support !== null && !(support >= 0 && support <= 100)) {
+      throw new Error('support must be in [0, 100] or None, got ' + rcaPyFloatStr(support));
     }
 
     const row = {
       id: nid,
-      parent: parentVal != null ? String(parentVal) : null,
-      name: asStr(n.name),
-      is_leaf: isLeaf,
-      branch_length: asFloat(n.branch_length),
-      node_age_ma: asFloat(n.node_age_ma),
+      parent: parentVal !== null ? rcaPyStr(parentVal) : null,
+      name: rcaStringifyScalar(n.name),
+      is_leaf: actualIsLeaf,
+      branch_length: fv(n.branch_length === undefined ? null : n.branch_length),
+      node_age_ma: fv(n.node_age_ma === undefined ? null : n.node_age_ma),
       support: support,
     };
-    // Carry extras (depth_range_m, sequence_count, support_confidence, etc.)
-    const KNOWN = ['id', 'parent', 'name', 'is_leaf', 'branch_length', 'node_age_ma', 'support'];
     const extras = {};
     let hasExtras = false;
     for (const k of Object.keys(n)) {
-      if (!KNOWN.includes(k)) {
-        extras[k] = n[k];
-        hasExtras = true;
-      }
+      if (_RCA_PHYLO_NODE_KEYS.indexOf(k) === -1) { extras[k] = n[k]; hasExtras = true; }
     }
+    if (leafCorrected) { extras._is_leaf_corrected = true; hasExtras = true; }
     if (hasExtras) row.metadata = extras;
     nodesOut.push(row);
   }
 
-  const metaRaw = parsed.metadata || {};
-  const legendRaw = parsed.legend;
-  const conf = Number(parsed.confidence);
-  // H5: flag foreign payloads. Phylo schema requires nodes+root_ids; if
-  // those were missing we already threw above. We still set the warning
-  // here so the surface matches the other 3 normalizers.
-  const warnPhylo = rcaTruncatedWarningIfForeign(parsed, 'phylogenetic_tree');
-  // H6 (REVIEW-2026-08-19): carry extra taxonomy/version metadata from
-  // either parsed.metadata or the root-level. Mirror rca_core/extractor.py
-  // _normalize_phylogenetic_tree_into metadata block.
-  const lift = (k) => (metaRaw[k] != null ? metaRaw[k]
-                       : (parsed[k] != null ? parsed[k] : null));
-  return {
-    metadata: {
-      title: asStr(metaRaw.title || ''),
-      extraction_timestamp: asStr(metaRaw.extraction_timestamp || ''),
-      tree_type: asStr(metaRaw.tree_type || ''),
-      scale: asStr(metaRaw.scale || ''),
-      rooted: Boolean(metaRaw.rooted !== false),
-      source: asStr(metaRaw.source || metaRaw.image_source || parsed.image_source || ''),
-      // New carries (mirror rca_core/extractor.py):
-      version: asStr(lift('version') || '1'),
-      taxon_group: asStr(lift('taxon_group') || ''),
-      root_name: asStr(lift('root_name') || ''),
-      total_nodes: (function () {
-        const n = Number(lift('total_nodes'));
-        return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : null;
-      })(),
-      image_source: asStr(lift('image_source') || ''),
-    },
-    root_ids: rootIdsRaw.map(String),
-    nodes: nodesOut,
-    legend: (legendRaw && typeof legendRaw === 'object') ? legendRaw : {},
-    confidence: Number.isFinite(conf) ? Math.max(0, Math.min(1, conf)) : 0,
-    ...(warnPhylo ? { _warnings: warnPhylo } : {}),
+  const metaRaw = rcaPyOr(raw.metadata, {});
+  const metadata = {
+    title: rcaStringifyScalar(Object.prototype.hasOwnProperty.call(metaRaw, 'title')
+      ? metaRaw.title : ''),
+    extraction_timestamp: rcaStringifyScalar(
+      Object.prototype.hasOwnProperty.call(metaRaw, 'extraction_timestamp')
+        ? metaRaw.extraction_timestamp : ''),
+    tree_type: rcaStringifyScalar(Object.prototype.hasOwnProperty.call(metaRaw, 'tree_type')
+      ? metaRaw.tree_type : ''),
+    scale: rcaStringifyScalar(Object.prototype.hasOwnProperty.call(metaRaw, 'scale')
+      ? metaRaw.scale : ''),
+    rooted: rcaCoerceBoolFlag(
+      Object.prototype.hasOwnProperty.call(metaRaw, 'rooted') ? metaRaw.rooted : undefined, true),
+    // `metadata_raw.get("source", metadata_raw.get("image_source", ""))` is a
+    // KEY-PRESENCE default, not an `or`: an explicit "source": null yields ""
+    // and does NOT fall back to image_source.
+    source: rcaStringifyScalar(
+      Object.prototype.hasOwnProperty.call(metaRaw, 'source')
+        ? metaRaw.source
+        : (Object.prototype.hasOwnProperty.call(metaRaw, 'image_source') ? metaRaw.image_source : '')),
   };
+  for (const k of Object.keys(metaRaw)) {
+    if (_RCA_PHYLO_NEW_META_KEYS.indexOf(k) === -1) metadata[k] = metaRaw[k];
+  }
+
+  const legendRaw = raw.legend;
+  const legend = (legendRaw && typeof legendRaw === 'object' && !Array.isArray(legendRaw))
+    ? { ...legendRaw } : {};
+  const conf = rcaConfidenceClamped(
+    Object.prototype.hasOwnProperty.call(raw, 'confidence') ? raw.confidence : undefined);
+
+  const rootEx = rcaTopExtras(raw, _RCA_PHYLO_ROOT_KEYS, false);
+  const out = {
+    metadata: metadata,
+    root_ids: rootIds,
+    nodes: nodesOut,
+    legend: legend,
+    confidence: conf,
+  };
+  if (rootEx) out._extras = rootEx;
+  if (phyloWarnings.length) out._warnings = phyloWarnings;
+  return out;
+}
+
+// UI-REVIEW-2026-09-05 / REVIEW-2026-09-20 #4: zonation-correlation normalizer,
+// mirror of rca_core/extractor.py:normalize_zonation_chart_result.
+// Three things the browser copy got wrong until this round:
+//   * the `_array_root` unwrap REBUILT `parsed`, so a payload with both a named
+//     `zones` list and a bare array lost one of the two — Python appends in
+//     place with setdefault;
+//   * Python routes NON-DICT array items into `_unclassified` (they stay
+//     visible under `_extras`), JS dropped them on the floor;
+//   * `parsed._note` (safe_json_loads' own wrapper note) leaked into the root
+//     `_extras`; Python runs the leftovers through `_pop_array_root_extras`.
+// The row fields themselves now come from rcaIterRows, so dict-shaped fields
+// ({"zones": {"Z1": {...}}}) and bare-string rows are recovered and flagged
+// instead of collapsing to [] in silence.
+const _RCA_KNOWN_ZONATIONS_KEYS = ['name', 'region', 'framework', 'reference'];
+const _RCA_KNOWN_ZONATION_ZONE_KEYS = ['name', 'zonation', 'rank', 'age_span',
+                                       'base_age', 'top_age', 'stage', 'defined_by', 'note'];
+const _RCA_KNOWN_CORRELATION_KEYS = ['from_zone', 'to_zone', 'from_zonation',
+                                     'to_zonation', 'basis', 'note'];
+const _RCA_KNOWN_ZONATION_ROOT_KEYS = ['zonations', 'zones', 'correlations', 'confidence'];
+
+function rcaNormalizeZonationChartResult(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { zonations: [], zones: [], correlations: [], confidence: 0.0 };
+  }
+  if (Array.isArray(parsed._array_root)) {
+    const bucket = (key) => {
+      if (!Array.isArray(parsed[key])) parsed[key] = [];
+      return parsed[key];
+    };
+    for (const item of parsed._array_root) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        bucket('_unclassified').push(item);
+        continue;
+      }
+      if ('from_zone' in item || 'to_zone' in item) {
+        bucket('correlations').push(item);
+      } else if ('name' in item && ('rank' in item || 'zonation' in item || 'age_span' in item
+                                    || 'defined_by' in item || 'base_age' in item)) {
+        bucket('zones').push(item);
+      } else if ('name' in item && ('region' in item || 'framework' in item || 'reference' in item)) {
+        bucket('zonations').push(item);
+      } else {
+        bucket('_unclassified').push(item);
+      }
+    }
+  }
+  const warnings = [];
+  const out = { zonations: [], zones: [], correlations: [], confidence: 0.0 };
+  for (const z of rcaIterRows(parsed.zonations, 'zonations', warnings)) {
+    const row = {
+      name: rcaStringifyScalar(z.name),
+      region: rcaStringifyScalar(z.region),
+      framework: rcaStringifyScalar(z.framework),
+      reference: rcaStringifyScalar(z.reference),
+    };
+    rcaCarryExtras(z, _RCA_KNOWN_ZONATIONS_KEYS, row);
+    out.zonations.push(row);
+  }
+  for (const z of rcaIterRows(parsed.zones, 'zones', warnings)) {
+    const row = {
+      name: rcaStringifyScalar(z.name),
+      zonation: rcaStringifyScalar(z.zonation),
+      rank: rcaStringifyScalar(z.rank),
+      age_span: rcaStringifyScalar(z.age_span),
+      base_age: rcaStringifyScalar(z.base_age),
+      top_age: rcaStringifyScalar(z.top_age),
+      stage: rcaStringifyScalar(z.stage),
+      defined_by: rcaStringifyScalar(z.defined_by),
+      note: rcaStringifyScalar(z.note),
+    };
+    rcaCarryExtras(z, _RCA_KNOWN_ZONATION_ZONE_KEYS, row);
+    out.zones.push(row);
+  }
+  for (const c of rcaIterRows(parsed.correlations, 'correlations', warnings)) {
+    const row = {
+      from_zone: rcaStringifyScalar(c.from_zone),
+      to_zone: rcaStringifyScalar(c.to_zone),
+      from_zonation: rcaStringifyScalar(c.from_zonation),
+      to_zonation: rcaStringifyScalar(c.to_zonation),
+      basis: rcaStringifyScalar(c.basis),
+      note: rcaStringifyScalar(c.note),
+    };
+    rcaCarryExtras(c, _RCA_KNOWN_CORRELATION_KEYS, row);
+    out.correlations.push(row);
+  }
+  // `float(parsed.get("confidence", 0.0) or 0.0)` — Python `or`, so "" / null /
+  // [] / 0 collapse to 0.0 first, and "90%" raises and lands on 0.0 (the old
+  // parseFloat gave 90 → clamped to 1).
+  out.confidence = rcaConfidenceClamped(
+    rcaPyOr(Object.prototype.hasOwnProperty.call(parsed, 'confidence')
+              ? parsed.confidence : undefined, 0.0));
+  const rootEx = rcaTopExtras(parsed, _RCA_KNOWN_ZONATION_ROOT_KEYS, false);
+  if (rootEx) out._extras = rootEx;
+  if (warnings.length) out._warnings = warnings;
+  return out;
 }
 
 // Build a Newick string from a normalized phylogenetic tree.
-// Mirrors Python rca_core.extractor.to_newick().
+// Mirrors Python rca_core.extractor._build_newick_node().
+// REVIEW-2026-09-20 #5: two serializer divergences.
+//   * ESCAPING: the old mirror rewrote `( ) :` to `_`, so "A(B)" exported as
+//     "A_B_" — the taxon name was destroyed and re-importing the file gave a
+//     different tree. rcaQuoteNewickLabel now applies the Newick single-quote
+//     convention (quote on `()[];,` / whitespace, double embedded quotes).
+//   * NUMBER FORM: `f":{bl}"` / `f"{support}"` are Python `str(float)`, which
+//     keeps the trailing `.0`; `String(95)` gives "95", so the same tree
+//     serialized to two different files per engine. rcaPyFloatStr restores it.
 function rcaBuildNewickNode(nodeId, idToChildren, nodesDict) {
   const children = idToChildren[nodeId] || [];
+  const n = (nodesDict && nodesDict[nodeId]) || {};
   if (!children.length) {
-    const n = nodesDict[nodeId] || {};
-    const name = n.name || '';
-    const bl = n.branch_length;
-    const blStr = bl != null ? ':' + bl : '';
-    const safeName = name.replace(/\(/g, '_').replace(/\)/g, '_').replace(/:/g, '_');
-    return safeName + blStr;
-  } else {
-    const childParts = children.map((cid) => rcaBuildNewickNode(cid, idToChildren, nodesDict));
-    const n = nodesDict[nodeId] || {};
-    const support = n.support;
-    const supportStr = support != null ? String(support) : '';
-    const bl = n.branch_length;
-    const blStr = bl != null ? ':' + bl : '';
-    return '(' + childParts.join(',') + ')' + supportStr + blStr;
+    const name = Object.prototype.hasOwnProperty.call(n, 'name') ? n.name : '';
+    const bl = Object.prototype.hasOwnProperty.call(n, 'branch_length') ? n.branch_length : null;
+    const blStr = bl !== null && bl !== undefined ? ':' + rcaPyFloatStr(bl) : '';
+    return rcaQuoteNewickLabel(name) + blStr;
   }
+  const childParts = children.map((cid) => rcaBuildNewickNode(cid, idToChildren, nodesDict));
+  const support = Object.prototype.hasOwnProperty.call(n, 'support') ? n.support : null;
+  const supportStr = support !== null && support !== undefined ? rcaPyFloatStr(support) : '';
+  const bl = Object.prototype.hasOwnProperty.call(n, 'branch_length') ? n.branch_length : null;
+  const blStr = bl !== null && bl !== undefined ? ':' + rcaPyFloatStr(bl) : '';
+  return '(' + childParts.join(',') + ')' + supportStr + blStr;
 }
 
 function rcaToNewick(tree) {
-  const nodes = Array.isArray(tree.nodes) ? tree.nodes : [];
-  const rootIds = Array.isArray(tree.root_ids) ? tree.root_ids : [];
+  const nodes = rcaPyOr(tree && tree.nodes, []);
+  const rootIds = rcaPyOr(tree && tree.root_ids, []);
+  const nodeList = Array.isArray(nodes) ? nodes : [];
+  const rootList = Array.isArray(rootIds) ? rootIds.map(rcaPyStr) : [];
 
   const nodesDict = {};
-  for (const n of nodes) {
-    if (n && typeof n === 'object') {
-      const nid = String(n.id || '');
+  for (const n of nodeList) {
+    if (n && typeof n === 'object' && !Array.isArray(n)) {
+      const nid = rcaPyStr(rcaPyOr(n.id, ''));
       if (nid) nodesDict[nid] = n;
     }
   }
 
   const idToChildren = {};
-  for (const rid of rootIds) idToChildren[String(rid)] = [];
-  for (const n of nodes) {
-    if (!n || typeof n !== 'object') continue;
-    const pid = n.parent;
-    if (pid != null) {
-      const pidStr = String(pid);
+  for (const rid of rootList) idToChildren[rid] = [];
+  for (const n of nodeList) {
+    if (!n || typeof n !== 'object' || Array.isArray(n)) continue;
+    const pid = n.parent === undefined ? null : n.parent;
+    if (pid !== null) {
+      const pidStr = rcaPyStr(pid);
       if (!(pidStr in idToChildren)) idToChildren[pidStr] = [];
-      idToChildren[pidStr].push(String(n.id || ''));
+      idToChildren[pidStr].push(rcaPyStr(rcaPyOr(n.id, '')));
     }
   }
 
-  const parts = rootIds.map((rid) => rcaBuildNewickNode(String(rid), idToChildren, nodesDict));
+  // Sprint B (REVIEW-2026-09-04): nodes unreachable from any root are still
+  // dropped from the output, but the drop is reported rather than silent —
+  // Python raises a RuntimeWarning naming them, this is the browser mirror.
+  const reachable = new Set();
+  const stack = rootList.filter((rid) => Object.prototype.hasOwnProperty.call(nodesDict, rid));
+  while (stack.length) {
+    const cur = stack.pop();
+    if (reachable.has(cur)) continue;
+    reachable.add(cur);
+    const kids = idToChildren[cur] || [];
+    for (const kid of kids) stack.push(kid);
+  }
+  const unreachable = Object.keys(nodesDict).filter((nid) => !reachable.has(nid)).sort();
+  if (unreachable.length && typeof console !== 'undefined' && console.warn) {
+    console.warn('to_newick: ' + unreachable.length + ' node(s) unreachable from root_ids '
+                 + JSON.stringify(rootList) + ' were dropped from the Newick output: '
+                 + JSON.stringify(unreachable));
+  }
+
+  const parts = rootList.map((rid) => rcaBuildNewickNode(rid, idToChildren, nodesDict));
   return '(' + parts.join(',') + ');';
+}
+
+// ---------------------------------------------------------------------------
+// Network layer: transport error contract, request serialization, CSRF
+// refresh, direct-mode SSRF list.
+//
+// REVIEW-2026-09-20 (frontend parity, network round): these rules mirror the
+// Python side — server.py (CSRF mint + verification, error_key emission),
+// rca_core/error_utils.py (error normalization + retry) and rca_core/ssrf.py
+// (private-address policy). Browsers cannot resolve or pin DNS, so the SSRF
+// half here is necessarily the "best effort" version of that policy; see
+// rcaIsSsrfBlockedHost() for exactly what it can and cannot catch.
+// ---------------------------------------------------------------------------
+
+/**
+ * Whitelist of transport `error_key` values this client is allowed to adopt
+ * from a RESPONSE BODY.
+ *
+ * REVIEW-2026-09-20: the direct (proxy / provider) path lifts `error_key` out
+ * of an attacker-influenced JSON body and app.js renders `t(errorKey)` — with
+ * no gate, an upstream (or a malicious proxy the user pasted into settings)
+ * could push any string into the UI, where it is either shown verbatim or
+ * used as a lookup key. Only keys the Python side actually emits —
+ * `grep -o '"err\\.[A-Za-z0-9_]*"' server.py rca_core/*.py` — plus the keys
+ * this transport produces itself are accepted. `err.extract` is the Python
+ * extractor's "normalizer refused the payload / unknown mode" answer
+ * (rca_core/extractor.py, and the fallback the eight extract modes share).
+ *
+ * NOTE: `err.badRequest`, `err.serverBusy`, `err.imageInvalidBase64` and
+ * `err.mode` are emitted by Python but have no entry in js/i18n.js yet, so
+ * those four currently render as the bare key. Kept in the whitelist because
+ * dropping them would be a worse lie; the translations belong to i18n.js.
+ */
+const RCA_KNOWN_ERROR_KEYS = new Set([
+  // Emitted by server.py / rca_core (mirrors the Python "err.*" corpus).
+  'err.401', 'err.403', 'err.429', 'err.badContentType', 'err.badEndpoint',
+  'err.badMode', 'err.badRequest', 'err.bodyTooLarge', 'err.classify',
+  'err.empty', 'err.exportFailed', 'err.extract', 'err.forbidden', 'err.http',
+  'err.imageDecode', 'err.imageInvalidBase64', 'err.imageRead',
+  'err.imageTooLarge', 'err.mode', 'err.network', 'err.noEndpoint',
+  'err.noImage', 'err.noKey', 'err.parse', 'err.rateLimit', 'err.serverBusy',
+  'err.timeout', 'err.truncated',
+  // Produced by this JS transport only (never lifted from a body, but listed
+  // so rcaKnownErrorKey() stays the single gate for every surfaced key).
+  'err.cancelled', 'err.csrfFetch', 'err.fileTooBig', 'err.networkBackend',
+]);
+
+/**
+ * Gate a candidate `error_key` through RCA_KNOWN_ERROR_KEYS.
+ * @param {*} key - value read from a response body
+ * @param {*} [fallback=null] - returned when the key is unknown
+ * @returns {string|null} the key itself when known, else the fallback
+ */
+function rcaKnownErrorKey(key, fallback) {
+  if (typeof key === 'string' && RCA_KNOWN_ERROR_KEYS.has(key)) return key;
+  if (key && typeof console !== 'undefined' && console.warn) {
+    // Never echo the raw value beyond a diagnostic prefix — it is attacker
+    // controlled, which is exactly why it is being discarded.
+    console.warn('[minimax] discarding untrusted error_key:',
+      String(key).substring(0, 80));
+  }
+  return fallback === undefined ? null : fallback;
+}
+
+/**
+ * Is this backend answer a recoverable CSRF rejection?
+ *
+ * server.py answers 403 + `err.forbidden` for both CSRF failures and
+ * origin failures; only the CSRF half ("Missing CSRF token. Fetch
+ * /api/extract (GET) to obtain a valid token.", "Invalid or expired CSRF
+ * token.") is fixed by minting a new token, so the body marker is required.
+ * @param {Object} payload - parsed backend response
+ * @param {number} [httpStatus] - transport status
+ * @returns {boolean}
+ */
+function rcaIsCsrfRejection(payload, httpStatus) {
+  if (!payload || typeof payload !== 'object') return false;
+  const forbidden = payload.error_key === 'err.forbidden' || httpStatus === 403;
+  if (!forbidden) return false;
+  const body = typeof payload.error_body === 'string' ? payload.error_body : '';
+  return /csrf/i.test(body);
+}
+
+/**
+ * Translate the backend's snake_case ExtractResult mirror into the shape
+ * extractRangeChart returns to app.js.
+ *
+ * The only judgement call is the error key: it goes through
+ * RCA_KNOWN_ERROR_KEYS (REVIEW-2026-09-20), so a body cannot install an
+ * arbitrary i18n key. A failed extraction whose key was discarded still has
+ * to render something translated — `err.http` is the same generic fallback
+ * app.js itself uses when `errorKey` is missing, and the server's own status
+ * text stays available in `errorBody` / `raw`.
+ * @param {Object|null} payload - parsed backend answer
+ * @param {number} [httpStatus] - transport status of the POST
+ * @returns {Object} ExtractResult-shaped result for the UI
+ */
+function rcaBackendExtractResult(payload, httpStatus) {
+  const p = (payload && typeof payload === 'object') ? payload : {};
+  const ok = !!p.ok;
+  const errorKey = rcaKnownErrorKey(p.error_key, ok ? null : 'err.http');
+  return {
+    ok: ok,
+    data: p.data,
+    errorKey: errorKey,
+    // The server puts its status in the body; a transport-level 403/413/429
+    // from _send_json does not, so fall back to what fetch reported.
+    status: (typeof p.status === 'number') ? p.status : (httpStatus || p.status || null),
+    raw: p.raw || '',
+    truncated: !!p.truncated,
+    errorBody: p.error_body || '',
+    partialFailures: p.partial_failures || 0,
+    usage: p.usage || null,
+    latencyMs: p.latency_ms || 0,
+    warning: p.warning || '',
+  };
+}
+
+/**
+ * Append a task to the CSRF-token serialization chain and return its promise.
+ *
+ * REVIEW-2026-09-20: `rcaCallBackend` used to build `myRequest` from
+ * `_pending.then(...)` and then never write the new link back, so `_pending`
+ * stayed the initial `Promise.resolve()` forever — every concurrent caller
+ * took the "queue" branch off an already-resolved promise and the CSRF GETs
+ * raced each other exactly as before the queue existed. The chain is now
+ * real, AND it is failure-tolerant: the stored link swallows rejections so
+ * one cancelled request cannot poison (or deadlock) the callers behind it.
+ * @param {Function} task - async function to run after the previous link
+ * @returns {Promise<*>} the task's own promise (rejections NOT swallowed)
+ */
+function rcaQueueBackendTask(task) {
+  if (!rcaCallBackend._pending) rcaCallBackend._pending = Promise.resolve();
+  const link = rcaCallBackend._pending.then(task, task);
+  rcaCallBackend._pending = link.then(function () { /* settled */ },
+                                     function () { /* settled */ });
+  return link;
+}
+
+/** Hostnames that are always local/metadata, whatever they resolve to. */
+const RCA_BLOCKED_HOST_NAMES = new Set([
+  'localhost', 'ip6-localhost', 'ip6-loopback',
+  'metadata', 'metadata.google.internal', 'metadata.goog',
+  // Docker Desktop host aliases (resolve to the developer machine).
+  'host.docker.internal', 'gateway.docker.internal',
+  'docker.for.mac.localhost', 'docker.for.mac.host.internal',
+]);
+
+/**
+ * True for every IPv4 literal the Python SSRF policy refuses
+ * (rca_core/ssrf.py `_is_non_public_ip`, i.e. `not ip.is_global` plus the
+ * prefixes that stdlib reports as global).
+ * @param {string} host - dotted quad (already canonicalized by `new URL()`)
+ * @returns {boolean}
+ */
+function rcaIsPrivateIpv4Host(host) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(host));
+  if (!m) return false;
+  const o = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+  if (o.some((v) => v > 255)) return false;   // not a literal — a DNS name
+  if (o[0] === 0) return true;                // 0.0.0.0/8 "this network"
+  if (o[0] === 10) return true;               // RFC1918
+  if (o[0] === 127) return true;              // loopback
+  if (o[0] === 169 && o[1] === 254) return true;   // link-local + cloud metadata
+  if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true;
+  if (o[0] === 192 && o[1] === 168) return true;
+  if (o[0] === 100 && o[1] >= 64 && o[1] <= 127) return true;  // CGNAT RFC6598
+  // Deprecated 6to4 relay anycast: is_global == True in the stdlib, so the
+  // Python side blocks it explicitly (REVIEW-2026-09-20 item 14).
+  if (o[0] === 192 && o[1] === 88 && o[2] === 99) return true;
+  if (o[0] === 198 && (o[1] === 18 || o[1] === 19)) return true;  // benchmarking
+  if (o[0] === 192 && o[1] === 0 && (o[2] === 0 || o[2] === 2)) return true;
+  if (o[0] === 198 && o[1] === 51 && o[2] === 100) return true;  // TEST-NET-2
+  if (o[0] === 203 && o[1] === 0 && o[2] === 113) return true;  // TEST-NET-3
+  // Multicast + reserved (240/4) + the limited broadcast address. CPython's
+  // `is_global` still answers True for 224/4, so this is an intentional
+  // fail-closed superset: no HTTP endpoint is addressed as a multicast group.
+  if (o[0] >= 224) return true;
+  return false;
+}
+
+/**
+ * Expand a textual IPv6 literal into its eight 16-bit groups.
+ * Handles `::` compression and a trailing dotted-quad; returns null when the
+ * text is not a valid IPv6 literal.
+ * @param {string} text - IPv6 literal WITHOUT the surrounding brackets
+ * @returns {number[]|null}
+ */
+function rcaParseIpv6Groups(text) {
+  let s = String(text || '').toLowerCase();
+  if (!s) return null;
+  // Trailing embedded IPv4 (e.g. "::ffff:127.0.0.1") -> two hextets. Browsers
+  // normally re-serialize to hex, but a hand-typed baseUrl can arrive here.
+  const v4tail = /:(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (v4tail) {
+    const q = [Number(v4tail[1]), Number(v4tail[2]), Number(v4tail[3]), Number(v4tail[4])];
+    if (q.some((v) => v > 255)) return null;
+    s = s.slice(0, v4tail.index) + ':'
+      + ((q[0] << 8) | q[1]).toString(16) + ':' + ((q[2] << 8) | q[3]).toString(16);
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const parse = (chunk) => {
+    if (chunk === '') return [];
+    return chunk.split(':').map((g) => (/^[0-9a-f]{1,4}$/.test(g) ? parseInt(g, 16) : NaN));
+  };
+  const left = parse(halves[0]);
+  const right = halves.length === 2 ? parse(halves[1]) : null;
+  if (left.some((v) => isNaN(v))) return null;
+  if (right && right.some((v) => isNaN(v))) return null;
+  if (right === null) {
+    if (left.length !== 8) return null;
+    return left;
+  }
+  const fill = 8 - left.length - right.length;
+  if (fill < 0) return null;
+  return left.concat(new Array(fill).fill(0), right);
+}
+
+/**
+ * True for an IPv6 literal the Python SSRF policy refuses.
+ * @param {string} inner - IPv6 literal WITHOUT the surrounding brackets
+ * @returns {boolean}
+ */
+function rcaIsPrivateIpv6Host(inner) {
+  const g = rcaParseIpv6Groups(inner);
+  if (!g) return true;   // bracketed but unparseable -> fail closed
+  /** True when groups [from, to) are all zero. */
+  const zeros = (from, to) => g.slice(from, to).every((v) => v === 0);
+  // IPv4-compatible IPv6 (::/96, the deprecated precursor of v4-mapped):
+  // `::127.0.0.1` and `::169.254.169.254` are is_global == True in the
+  // stdlib and Linux routes them to the embedded IPv4, so the WHOLE block is
+  // rejected exactly like _IPV4_COMPATIBLE_V6 in rca_core/ssrf.py. Covers
+  // `::` (unspecified) and `::1` (loopback) too.
+  if (zeros(0, 6)) return true;
+  const embeddedV4 = () => [
+    (g[6] >> 8) & 255, g[6] & 255, (g[7] >> 8) & 255, g[7] & 255,
+  ].join('.');
+  // IPv4-mapped (::ffff:a.b.c.d) — judged by the embedded v4, like
+  // _is_non_public_ip(ip.ipv4_mapped).
+  if (zeros(0, 5) && g[5] === 0xffff) return rcaIsPrivateIpv4Host(embeddedV4());
+  // NAT64 (RFC 6052): 64:ff9b::/96 and 64:ff9b:1::/48 embed a destination.
+  // The /96 test compares groups 2..5 (the address' bits 32..95), NOT the
+  // leading ones — `64:ff9b::169.254.169.254` must be rejected while
+  // `64:ff9b:2::1` (outside both prefixes) stays reachable.
+  if (g[0] === 0x0064 && g[1] === 0xff9b && (zeros(2, 6) || g[2] === 0x0001)) return true;
+  // 6to4 (2002::/16) embeds an IPv4 destination; Python rejects the prefix.
+  if (g[0] === 0x2002) return true;
+  if ((g[0] & 0xfe00) === 0xfc00) return true;   // unique-local fc00::/7
+  if ((g[0] & 0xffc0) === 0xfe80) return true;   // link-local fe80::/10
+  // IANA special-purpose blocks that are not globally routable and that
+  // `ipaddress` also reports as non-global (100::/64 discard-only,
+  // 2001::/32 Teredo, 2001:2::/48 benchmarking, 2001:10::/28, 2001:db8::/32
+  // documentation). No provider endpoint lives in any of them. Site-local
+  // fec0::/10 is deliberately NOT listed: current CPython still calls it
+  // global, so blocking it here would diverge from the Python half.
+  if (g[0] === 0x0100 && zeros(1, 4)) return true;
+  if (g[0] === 0x2001
+      && (g[1] === 0x0000 || g[1] === 0x0002
+          || (g[1] >= 0x0010 && g[1] <= 0x001f)
+          || g[1] === 0x0db8)) return true;
+  return false;
+}
+
+/**
+ * Direct-mode SSRF gate for a hostname produced by `new URL(...).hostname`.
+ *
+ * LIMITS OF THE BROWSER HALF (documented deliberately, REVIEW-2026-09-20):
+ *   * No DNS and no resolution: a public name that happens to resolve to a
+ *     private address (`evil.example.com -> 127.0.0.1`, or a DNS-rebinding
+ *     TTL-0 record) CANNOT be caught here — the Python side does that with
+ *     `is_private_host()` + `pinned_endpoint_ip()` (server-side pinning).
+ *   * `new URL()` normalizes the odd IPv4 spellings for us: single-label
+ *     decimal (`http://2130706433`), hexadecimal (`http://0x7f000001`), and
+ *     short forms (`http://127.1`, `http://0x7f.1`) all arrive as a canonical
+ *     dotted quad, which is what makes the literal checks above sufficient.
+ *     A name that is not numeric (`cafe`) is left alone by the parser and is
+ *     therefore NOT misread as an address.
+ *   * Redirects are not followed (`redirect: 'manual'` on both POSTs), so a
+ *     `302 Location: http://169.254.169.254/` cannot bypass this list the way
+ *     it bypassed urllib before _NoRedirect existed.
+ * Fail-closed: an empty / unparseable hostname is blocked, matching the
+ * "unresolvable name is unsafe" rule of rca_core/ssrf.py.
+ * @param {string} hostname - lowercased `URL.hostname` (brackets kept for IPv6)
+ * @returns {boolean} true when the direct path must not be used
+ */
+function rcaIsSsrfBlockedHost(hostname) {
+  const host = String(hostname || '').toLowerCase();
+  if (!host) return true;
+  if (host.charAt(0) === '[' && host.slice(-1) === ']') {
+    return rcaIsPrivateIpv6Host(host.slice(1, -1));
+  }
+  if (host.indexOf(':') !== -1) return true;   // bare IPv6 without brackets
+  if (rcaIsPrivateIpv4Host(host)) return true;
+  if (RCA_BLOCKED_HOST_NAMES.has(host)) return true;
+  // RFC 6761: the whole *.localhost zone is loopback, not just the apex.
+  if (host === 'localhost' || host.slice(-10) === '.localhost') return true;
+  // Cloud metadata services also answer on internal-only DNS names.
+  if (host === 'metadata' || host.slice(-9) === '.internal') return true;
+  return false;
 }
 
 // Backend mode: POST to the same-origin Python server, which performs the
@@ -1027,7 +2060,6 @@ function rcaToNewick(tree) {
 // 2. CSRF fetch failure shows better error (CSRF_FETCH_FAILED)
 // 3. Concurrent requests are serialized via a pending queue to prevent token races
 async function rcaCallBackend(opts, base64) {
-  let resp;
   const controller = new AbortController();
   // Allow extra time when the server runs the extraction multiple times.
   const runs = Math.max(1, Math.min(parseInt(opts.runs, 10) || 1, 5));
@@ -1048,91 +2080,79 @@ async function rcaCallBackend(opts, base64) {
     clearTimeout(timer);
     if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
   };
-  try {
-    // Serialize concurrent extractions through a shared pending-promise chain so
-    // a fast user can fire two extractions without the second one's CSRF GET
-    // racing the first's POST (the second will simply queue and execute after).
-    // The promise chain (`_pending`) is reused across calls so we don't race
-    // token updates when multiple extractions run concurrently.
-    if (!rcaCallBackend._pending) rcaCallBackend._pending = Promise.resolve();
-    const myRequest = rcaCallBackend._pending.then(async () => {
-      // Fetch CSRF token before POST. Uses a persistent session token stored
-      // in memory so subsequent requests reuse the same session.
-      // FIX: pass `signal: controller.signal` so a user cancel or the run-aware
-      // timeout fires for the CSRF GET too.
-      let sessionToken = rcaCallBackend._sessionToken || '';
-      let csrfFetchFailed = false;
-      let csrfErrorBody = '';
-      try {
-        const csrfResp = await fetch('/api/extract', {
-          method: 'GET',
-          headers: { 'X-Session-Token': sessionToken },
-          signal: controller.signal,
-        });
-        if (csrfResp.ok) {
-          const csrfData = await csrfResp.json();
-          // Update stored tokens atomically after successful fetch
-          rcaCallBackend._sessionToken = csrfData.session_token;
-          sessionToken = csrfData.session_token;
-          rcaCallBackend._csrfToken = csrfData.csrf_token;
-        } else {
-          // CSRF fetch returned non-OK - capture the error for better diagnostics
-          csrfFetchFailed = true;
-          try {
-            const errText = await csrfResp.text();
-            csrfErrorBody = errText.substring(0, 500);
-          } catch (_e) { /* ignore */ }
-        }
-      } catch (_e) {
-        // Network error on CSRF fetch - capture for better error message
+  // Fetch CSRF token before POST. Uses a persistent session token stored
+  // in memory so subsequent requests reuse the same session.
+  //
+  // Serialize token acquisition through a shared pending-promise chain so a
+  // fast user can fire two extractions without the second one's CSRF GET
+  // racing the first's POST (the second will simply queue and execute after).
+  // The chain (`_pending`) is written back by rcaQueueBackendTask() — see
+  // REVIEW-2026-09-20 there, the queue was decorative before — so token
+  // updates cannot interleave when extractions run concurrently.
+  //
+  // FIX: pass `signal: controller.signal` so a user cancel or the run-aware
+  // timeout fires for the CSRF GET too.
+  const acquireTokens = async () => {
+    let sessionToken = rcaCallBackend._sessionToken || '';
+    let csrfFetchFailed = false;
+    let csrfErrorBody = '';
+    try {
+      const csrfResp = await fetch('/api/extract', {
+        method: 'GET',
+        headers: { 'X-Session-Token': sessionToken },
+        signal: controller.signal,
+      });
+      if (csrfResp.ok) {
+        const csrfData = await csrfResp.json();
+        // Update stored tokens atomically after successful fetch
+        rcaCallBackend._sessionToken = csrfData.session_token;
+        sessionToken = csrfData.session_token;
+        rcaCallBackend._csrfToken = csrfData.csrf_token;
+      } else {
+        // CSRF fetch returned non-OK - capture the error for better diagnostics
         csrfFetchFailed = true;
-        csrfErrorBody = _e && _e.message ? _e.message : 'network error';
-        // REVIEW-2026-11-07 (low): an ABORTED CSRF GET (user pressed Cancel
-        // mid-flight) is not a fetch failure. Without this the catch above
-        // fell through to the err.csrfFetch branch below and the UI showed
-        // "CSRF token failed" for what was really a user cancel.
-        if (_e && _e.name === 'AbortError' && controller.signal.aborted) {
-          return {
-            ok: false,
-            errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout',
-            status: null,
-            errorBody: 'CSRF fetch aborted',
-          };
-        }
+        try {
+          const errText = await csrfResp.text();
+          csrfErrorBody = errText.substring(0, 500);
+        } catch (_e) { /* ignore */ }
       }
-
-      // If CSRF fetch failed and we have no valid token, return error early
-      if (csrfFetchFailed && !rcaCallBackend._csrfToken) {
+    } catch (_e) {
+      // Network error on CSRF fetch - capture for better error message
+      csrfFetchFailed = true;
+      csrfErrorBody = _e && _e.message ? _e.message : 'network error';
+      // REVIEW-2026-11-07 (low): an ABORTED CSRF GET (user pressed Cancel
+      // mid-flight) is not a fetch failure. Without this the catch above
+      // fell through to the err.csrfFetch branch below and the UI showed
+      // "CSRF token failed" for what was really a user cancel.
+      if (_e && _e.name === 'AbortError' && controller.signal.aborted) {
         return {
           ok: false,
-          errorKey: 'err.csrfFetch',
+          errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout',
           status: null,
-          errorBody: 'Failed to obtain CSRF token: ' + csrfErrorBody,
+          errorBody: 'CSRF fetch aborted',
         };
       }
-
-      const csrfToken = rcaCallBackend._csrfToken || '';
-      return { sessionToken, csrfToken };
-    });
-
-    // Wait for token acquisition (and any prior request) to complete
-    let tokenResult;
-    try {
-      tokenResult = await myRequest;
-    } catch (_e) {
-      if (_e && _e.name === 'AbortError') {
-        return { ok: false, errorKey: opts.signal && opts.signal.aborted ? 'err.cancelled' : 'err.timeout' };
-      }
-      return { ok: false, errorKey: 'err.network', errorBody: String(_e) };
     }
 
-    // If token acquisition returned an error object, propagate it
-    if (tokenResult && tokenResult.errorKey) {
-      return tokenResult;
+    // If CSRF fetch failed and we have no valid token, return error early
+    if (csrfFetchFailed && !rcaCallBackend._csrfToken) {
+      return {
+        ok: false,
+        errorKey: 'err.csrfFetch',
+        status: null,
+        errorBody: 'Failed to obtain CSRF token: ' + csrfErrorBody,
+      };
     }
 
-    const { sessionToken, csrfToken } = tokenResult;
+    const csrfToken = rcaCallBackend._csrfToken || '';
+    return { sessionToken, csrfToken };
+  };
 
+  // One extraction POST. Returns { payload, status } on a parsed answer, or
+  // { error: <result object> } for the transport-level failures the caller
+  // used to `return` inline.
+  const postExtract = async (sessionToken, csrfToken) => {
+    let resp;
     try {
       resp = await fetch('/api/extract', {
         method: 'POST',
@@ -1159,19 +2179,23 @@ async function rcaCallBackend(opts, base64) {
       });
     } catch (err) {
       if (err && err.name === 'AbortError') {
-        return { ok: false, errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout' };
+        return {
+          error: {
+            ok: false,
+            errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout',
+          },
+        };
       }
-      return { ok: false, errorKey: 'err.network', errorBody: String(err) };
+      return { error: { ok: false, errorKey: 'err.network', errorBody: String(err) } };
     }
 
     // FIX 1: JSON parse failure now captures HTTP status and response text
-    let payload;
-    let parseErrorBody = '';
-    let parseErrorStatus = resp.status;
     try {
-      payload = await resp.json();
+      const payload = await resp.json();
+      return { payload, status: resp.status };
     } catch (_e) {
       // Try to capture the response text for better error diagnostics
+      let parseErrorBody = '';
       try {
         const rawText = await resp.text();
         parseErrorBody = rawText.substring(0, 500);
@@ -1179,40 +2203,78 @@ async function rcaCallBackend(opts, base64) {
         parseErrorBody = 'could not read response body';
       }
       return {
-        ok: false,
-        errorKey: 'err.parse',
-        status: parseErrorStatus,
-        errorBody: parseErrorBody,
-        raw: parseErrorBody,
+        error: {
+          ok: false,
+          errorKey: 'err.parse',
+          status: resp.status,
+          errorBody: parseErrorBody,
+          raw: parseErrorBody,
+        },
       };
     }
+  };
 
-    // FIX 2: Check for server-side CSRF/auth errors and auto-recover by clearing tokens.
-    // REVIEW-2026-11-07 (low): naming note — 'err.forbidden' is the BACKEND
-    // mode's 403 (same-origin CSRF/origin rejection, token-clearable), while
-    // 'err.403' (set in the direct-mode !resp.ok branch below) is a raw
-    // upstream 403 that needs no token handling. Both are intentionally
-    // distinct keys; the similar names are historical, don't merge them.
-    if (payload.error_key === 'err.forbidden' && payload.error_body && payload.error_body.includes('CSRF')) {
-      // CSRF token was invalid/expired - clear cached tokens so next request fetches fresh ones
-      rcaCallBackend._csrfToken = null;
-      rcaCallBackend._sessionToken = null;
+  try {
+    // `payload` is the last parsed backend answer; `httpStatus` the transport
+    // status that goes with it (the 403 CSRF body carries no status field).
+    let payload = null;
+    let httpStatus = 0;
+    // CSRF silent retry: AT MOST ONE. server.py re-mints a CSRF token on every
+    // GET /api/extract, keeps the session alive by sliding TTL
+    // (_get_csrf_for_session refreshes last_seen), and — since
+    // REVIEW-2026-09-20 — bills the mint to its own rate bucket
+    // ("get:"+ip) instead of the extraction one, so a refresh cannot be
+    // starved by the POST it is recovering for. That makes an automatic retry
+    // cheap and correct where the old code only cleared the tokens and made
+    // the USER retry. Bounding the loop at two attempts is what keeps a
+    // mis-classified rejection from turning into a retry storm.
+    for (let csrfAttempt = 0; csrfAttempt <= 1; csrfAttempt++) {
+      let tokenResult;
+      try {
+        tokenResult = await rcaQueueBackendTask(acquireTokens);
+      } catch (_e) {
+        if (_e && _e.name === 'AbortError') {
+          return {
+            ok: false,
+            errorKey: opts.signal && opts.signal.aborted ? 'err.cancelled' : 'err.timeout',
+          };
+        }
+        return { ok: false, errorKey: 'err.network', errorBody: String(_e) };
+      }
+
+      // If token acquisition returned an error object, propagate it. On the
+      // retry leg the refresh itself failed — report the ORIGINAL rejection
+      // then, because that is the answer the server actually gave.
+      if (tokenResult && tokenResult.errorKey) {
+        if (csrfAttempt === 0 || !payload) return tokenResult;
+        break;
+      }
+
+      const posted = await postExtract(tokenResult.sessionToken, tokenResult.csrfToken);
+      if (posted.error) return posted.error;
+      payload = posted.payload;
+      httpStatus = posted.status;
+
+      // FIX 2 (REVIEW-2026-09-20): recoverable CSRF/auth rejection — drop the
+      // stale pair, mint a fresh one through the same queue, resend ONCE.
+      // REVIEW-2026-11-07 (low): naming note — 'err.forbidden' is the BACKEND
+      // mode's 403 (same-origin CSRF/origin rejection, token-clearable), while
+      // 'err.403' (set in the direct-mode !resp.ok branch of
+      // extractRangeChart) is a raw upstream 403 that needs no token
+      // handling. Both are intentionally distinct keys; the similar names are
+      // historical, don't merge them. An ORIGIN rejection also answers
+      // err.forbidden but its body never says "CSRF", and a new token would
+      // not fix it — hence rcaIsCsrfRejection() checks both.
+      if (csrfAttempt === 0 && rcaIsCsrfRejection(payload, httpStatus)) {
+        rcaCallBackend._csrfToken = null;
+        rcaCallBackend._sessionToken = null;
+        continue;
+      }
+      break;
     }
 
     // The server mirrors the ExtractResult shape with snake_case keys.
-    return {
-      ok: !!payload.ok,
-      data: payload.data,
-      errorKey: payload.error_key,
-      status: payload.status,
-      raw: payload.raw || '',
-      truncated: !!payload.truncated,
-      errorBody: payload.error_body || '',
-      partialFailures: payload.partial_failures || 0,
-      usage: payload.usage || null,
-      latencyMs: payload.latency_ms || 0,
-      warning: payload.warning || '',
-    };
+    return rcaBackendExtractResult(payload, httpStatus);
   } finally {
     cleanup();
   }
@@ -1222,23 +2284,32 @@ async function rcaCallBackend(opts, base64) {
 // dataUrl, mediaType, caption, chartLang }.
 // mode defaults to 'range_chart'; 'columnar_section' switches prompt and
 // normalizer to the columnar-section variants.
-// UI-REVIEW-2026-09-07: vision chart-type classification (auto mode).
-// Mirror of rca_core/extractor.py:normalize_chart_classification —
-// unknown / missing chart_type degrades to "unknown" instead of raising.
+// UI-REVIEW-2026-09-07 / REVIEW-2026-09-20 #8: vision chart-type classifier
+// mirror of rca_core/extractor.py:normalize_chart_classification.
+// Confidence parsing was the drift: `parseFloat("90%")` is 90 in JS (clamped to
+// 1 — the browser was CONFIDENT about a value Python rejects) while Python's
+// `float("90%")` raises ValueError and yields 0.0, and `parseFloat([3])` is 3
+// where `float([3])` raises a TypeError. rcaConfidenceClamped reproduces the
+// raise-to-0.0 rule, rcaPyOr the `... or 0.0` prefix.
 function rcaNormalizeChartClassification(parsed) {
+  // Verbatim KNOWN_CHART_TYPES.
   const KNOWN = ['range_chart', 'columnar_section', 'abundance_diagram',
-                 'phylogenetic_tree', 'zonation_chart',
-                 'chemical_stratigraphy', 'paleomap', 'scatter_plot'];
-  if (!parsed || typeof parsed !== 'object') {
-    return { chart_type: 'unknown', reason: '', confidence: 0 };
+                 'phylogenetic_tree', 'zonation_chart', 'chemical_stratigraphy',
+                 'paleomap', 'scatter_plot'];
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { chart_type: 'unknown', reason: '', confidence: 0.0 };
   }
-  let chartType = String(parsed.chart_type || '').trim().toLowerCase();
+  let chartType = rcaStringifyScalar(rcaPyOr(
+    Object.prototype.hasOwnProperty.call(parsed, 'chart_type') ? parsed.chart_type : '', ''));
+  chartType = chartType.trim().toLowerCase();
   if (KNOWN.indexOf(chartType) === -1) chartType = 'unknown';
-  const conf = parseFloat(parsed.confidence);
   return {
     chart_type: chartType,
-    reason: parsed.reason == null ? '' : String(parsed.reason),
-    confidence: Number.isFinite(conf) ? Math.max(0, Math.min(1, conf)) : 0,
+    reason: parsed.reason === null || parsed.reason === undefined
+      ? '' : rcaStringifyScalar(parsed.reason),
+    confidence: rcaConfidenceClamped(rcaPyOr(
+      Object.prototype.hasOwnProperty.call(parsed, 'confidence') ? parsed.confidence : undefined,
+      0.0)),
   };
 }
 
@@ -1288,55 +2359,24 @@ async function extractRangeChart(opts) {
     return rcaCallBackend(opts, base64);
   }
   // SSRF protection: block private/internal hostnames and cloud metadata
-  // endpoints. `new URL()` already normalizes the odd IPv4 spellings
-  // (decimal "2130706433", hex "0x7f.1", short "127.1") to a canonical
-  // dotted quad, so the IPv4 rules below see a normalized string. IPv6
-  // needs its own pass: the hostname keeps its surrounding brackets and
-  // hex form, so an IPv4-mapped address such as https://[::ffff:a9fe:a9fe]
-  // would otherwise slip past the IPv4 patterns entirely.
+  // endpoints in direct mode. The rules live in rcaIsSsrfBlockedHost() above
+  // (mirrors rca_core/ssrf.py `_is_non_public_ip` + `validate_endpoint`),
+  // including this round's additions: 0.0.0.0/8, the CGNAT range
+  // 100.64.0.0/10, the deprecated 6to4 relay anycast 192.88.99.0/24, the
+  // whole *.localhost zone, the Docker host aliases, IPv4-compatible IPv6
+  // (::/96, i.e. [::127.0.0.1] / [::169.254.169.254]) and 6to4 / NAT64.
+  // `new URL()` normalizes the odd IPv4 spellings (decimal "2130706433", hex
+  // "0x7f.1", short "127.1") to a canonical dotted quad, so the IPv4 rules
+  // see a normalized string; IPv6 keeps its brackets and hex form and gets
+  // its own pass. A host we cannot parse is blocked (fail closed, like the
+  // "DNS failure is unsafe" rule on the Python side).
   let targetHostname;
   try {
     targetHostname = new URL(target).hostname.toLowerCase();
   } catch (_) {
     targetHostname = '';
   }
-  const ssrfBlocked = [
-    'localhost', '127.0.0.1', '0.0.0.0', '::1',
-    '169.254.169.254',   // AWS / Azure metadata
-    'metadata.google.internal', // GCP metadata
-  ];
-  const _isPrivateV4 = (h) => /^10\./.test(h) ||
-    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(h) ||
-    /^192\.168\./.test(h) ||
-    /^127\./.test(h) ||
-    /^169\.254\./.test(h);
-  let isPrivate = _isPrivateV4(targetHostname) ||
-    ssrfBlocked.includes(targetHostname);
-  if (!isPrivate && targetHostname.charAt(0) === '[' && targetHostname.slice(-1) === ']') {
-    const v6 = targetHostname.slice(1, -1);
-    // Loopback (::1), unique-local (fc00::/7) and link-local (fe80::/10).
-    if (v6 === '::1' || /^f[cd][0-9a-f]{2}:/.test(v6) || /^fe[89ab][0-9a-f]:/.test(v6)) {
-      isPrivate = true;
-    } else {
-      // IPv4-mapped (::ffff:a.b.c.d, possibly re-serialized as hex pairs).
-      let mapped = null;
-      let m = v6.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-      if (m) {
-        mapped = m[1];
-      } else if ((m = v6.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/))) {
-        const hi = parseInt(m[1], 16);
-        const lo = parseInt(m[2], 16);
-        mapped = [hi >> 8, hi & 255, lo >> 8, lo & 255].join('.');
-      }
-      if (mapped && _isPrivateV4(mapped)) isPrivate = true;
-    }
-  }
-  // Cloud metadata services also answer on internal-only DNS names.
-  if (!isPrivate && targetHostname &&
-      (targetHostname === 'metadata' || targetHostname.slice(-9) === '.internal')) {
-    isPrivate = true;
-  }
-  if (isPrivate && targetHostname) {
+  if (rcaIsSsrfBlockedHost(targetHostname)) {
     console.error('Insecure endpoint: private/internal URLs are not allowed in direct mode, falling back to backend');
     return rcaCallBackend(opts, base64);
   }
@@ -1519,6 +2559,14 @@ async function extractRangeChart(opts) {
   if (!resp.ok) {
     let detail = '';
     try { detail = await resp.text(); } catch (_e) { /* ignore */ }
+    // REVIEW-2026-09-20 #110 mirror: bound the body BEFORE parsing it, so the
+    // lifted error_key can only ever come from text the user is actually
+    // shown — exactly what rca_core/error_utils.py `_extract_error_code` does
+    // with MAX_ERROR_BODY_CHARS. A body truncated mid-JSON yields no key and
+    // falls through to the status-derived one.
+    const maxBodyChars = (typeof window !== 'undefined' && window.RCAErrorUtils
+      && window.RCAErrorUtils.MAX_ERROR_BODY_CHARS) || 2000;
+    if (detail.length > maxBodyChars) detail = detail.substring(0, maxBodyChars);
     // Phase M fix: try to surface the server's structured error_key
     // from the JSON body when the status is one of the documented
     // ones. Previously resp.text() was used unconditionally, which
@@ -1533,12 +2581,20 @@ async function extractRangeChart(opts) {
     else if (resp.status === 429) errorKey = 'err.429';
     // If the body is JSON, lift the server's error_key (when it
     // matches a known key) so the i18n string is correct.
+    // REVIEW-2026-09-20: "known" is now enforced. This body comes from an
+    // upstream provider or a user-pasted proxy — attacker-shaped — and used
+    // to be copied into `errorKey` verbatim, which app.js then fed to t() and
+    // rendered. Anything outside RCA_KNOWN_ERROR_KEYS is dropped and the
+    // status-derived key above stands.
     let serverKey = null;
     try {
       const j = JSON.parse(detail);
       if (j && typeof j.error_key === 'string') serverKey = j.error_key;
     } catch (_e) { /* not JSON, ignore */ }
-    if (serverKey) errorKey = serverKey;
+    if (serverKey) {
+      const known = rcaKnownErrorKey(serverKey, null);
+      if (known) errorKey = known;
+    }
     return { ok: false, errorKey, status: resp.status, raw: detail };
   }
 
@@ -1608,21 +2664,62 @@ async function extractRangeChart(opts) {
     const why = err && err.message ? err.message : String(err);
     return { ok: false, errorKey: 'err.extract', raw: rawText, truncated, warning: 'normalize failed: ' + why };
   }
-  // H5 (REVIEW-2026-08-19): mirror rca_core/extractor.py:866-880. A
-  // truncated_or_unrecognized_payload in the range_chart path flips the
-  // result to ok=false with err.parse. The other 3 modes keep ok=true
-  // and surface the warning on data._warnings — same as Python.
-  if (data && Array.isArray(data._warnings) &&
-      data._warnings.indexOf('truncated_or_unrecognized_payload') !== -1 &&
-      (mode === 'range_chart' || !mode)) {
+  // REVIEW-2026-09-20 #7 (H5 was mode-conditional): mirror the SHARED
+  // `_ok_result` contract, which every one of the eight Python extract modes
+  // now returns through. Two rules matter:
+  //   * `truncated` is an internal marker the array-root rescue may leave on the
+  //     data; it is read, then DELETED, so it never reaches an export;
+  //   * the flag is only appended to `_warnings` when the ROOT is unrelated
+  //     (rcaUnusablePayloadReason does that), and every mode whose payload is
+  //     unusable flips ok=false — not just range_chart. Before this the browser
+  //     served a foreign or truncated columnar/abundance/phylo/zonation object
+  //     as a confident ok=true empty table.
+  // `warning` carries the Python PROSE (plus the reason) on both the error and
+  // the truncated-success path, exactly like `ExtractResult.warning`, so the
+  // direct and the backend transport answer identically; the
+  // 'truncated_or_unrecognized_payload' token itself lives in `data._warnings`,
+  // where the Python side puts it.
+  let rescuedTruncated = false;
+  if (data && typeof data === 'object') {
+    rescuedTruncated = !!data.truncated;
+    delete data.truncated;
+  }
+  // extractor.py:1391-1406 — a SECOND, range-chart-only guard that runs BEFORE
+  // the shared `_ok_result`: when `normalize_result` itself raised the
+  // foreign-payload flag, the run is a hard error. `_ok_result` alone would
+  // have called it a success, because its `_extracted_any` test counts the
+  // `_warnings` / `_extras` entries the normalizer just attached (Python
+  // oracle, mode=range_chart + {"totally_unrelated_key": 1}: ok=False,
+  // error_key=err.parse, warning="<prose> | rescued inner object: unusable").
+  // The other seven modes have NO such pre-check — their normalizers never set
+  // the tag, so a foreign columnar/abundance payload stays ok=True, which is
+  // exactly what `rcaUnusablePayloadReason` reproduces.
+  if (mode === 'range_chart' && data && Array.isArray(data._warnings)
+      && data._warnings.indexOf('truncated_or_unrecognized_payload') !== -1) {
     return {
       ok: false,
       errorKey: 'err.parse',
       data,
       raw: rawText,
       truncated: !!truncated,
-      warning: 'truncated_or_unrecognized_payload',
+      warning: RCA_TRUNCATION_WARNING + ' | rescued inner object: unusable',
+      reason: 'rescued inner object: unusable',
     };
   }
-  return { ok: true, data, raw: rawText, truncated };
+  const unusable = rcaUnusablePayloadReason(parsed, data, mode, truncated || rescuedTruncated);
+  if (unusable) {
+    return {
+      ok: false,
+      errorKey: 'err.parse',
+      data,
+      raw: rawText,
+      truncated: !!truncated,
+      warning: RCA_TRUNCATION_WARNING + ' | ' + unusable,
+      reason: unusable,
+    };
+  }
+  return {
+    ok: true, data, raw: rawText, truncated,
+    warning: truncated ? RCA_TRUNCATION_WARNING : '',
+  };
 }

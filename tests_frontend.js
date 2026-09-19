@@ -11,6 +11,19 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
+// The browser's `URL` is a CONSTRUCTIBLE WHATWG parser that also carries the
+// object-URL helpers; the sandbox used to stub it as a bare object literal,
+// so `new URL(...)` threw inside js/minimax.js and every direct-mode test ran
+// against an "unparseable" target (empty hostname). Since REVIEW-2026-09-20
+// the SSRF gate fails closed on an empty hostname, which turned that stub into
+// 25 false failures. Hand the context Node's real WHATWG URL — the same
+// parser Chrome/Firefox ship, including the decimal/hex IPv4 normalization the
+// gate relies on — plus the two object-URL helpers js/export.js calls.
+class SandboxURL extends require('url').URL {
+  static createObjectURL() { return 'blob:fake'; }
+  static revokeObjectURL() { /* no-op */ }
+}
+
 // Build a minimal browser-ish context.
 function buildContext() {
   const stored = new Map();
@@ -103,10 +116,7 @@ function buildContext() {
       setItem: (k, v) => { stored.set(k, String(v)); },
       removeItem: (k) => { stored.delete(k); },
     },
-    URL: {
-      createObjectURL: () => 'blob:fake',
-      revokeObjectURL() {},
-    },
+    URL: SandboxURL,
     Blob: class { constructor(){} },
     FileReader: class {
       readAsDataURL() {
@@ -269,7 +279,14 @@ function makeEl(id, tagName) {
 }
 
 let pass = 0, fail = 0;
-function check(name, ok) { if (ok) { pass++; console.log('PASS', name); } else { fail++; console.log('FAIL', name); } }
+function check(name, ok, detail) {
+  if (ok) { pass++; console.log('PASS', name); } else {
+    fail++;
+    // An optional detail makes a parity failure readable without having to
+    // re-run the Python oracle by hand.
+    console.log('FAIL', name + (detail === undefined ? '' : ' — ' + detail));
+  }
+}
 
 // Async tests run fire-and-forget: their assertions land whenever their
 // promise resolves. The summary used to be printed from a fixed 100 ms
@@ -335,6 +352,15 @@ function loadAllScripts(ctx) {
           'globalThis.$ = $;\n' +
           'globalThis.showAlert = showAlert;\n' +
           'globalThis.rcaCleanNameForLookup = rcaCleanNameForLookup;\n' +
+          // REVIEW-2026-09-20 parity tests: the chart-mode detectors and the
+          // GBIF name-verification round need to be reachable from the test.
+          'globalThis.rcaAutoDetectChartMode = rcaAutoDetectChartMode;\n' +
+          'globalThis.rcaAutoDetectChartModeDetailed = rcaAutoDetectChartModeDetailed;\n' +
+          'globalThis.rcaVerifySpeciesNamesAsync = rcaVerifySpeciesNamesAsync;\n' +
+          'globalThis.rcaCancelNameVerify = rcaCancelNameVerify;\n' +
+          'globalThis.rcaResultFilePrefix = rcaResultFilePrefix;\n' +
+          'globalThis.NAME_VERIFY_TIMEOUT_MS = NAME_VERIFY_TIMEOUT_MS;\n' +
+          'globalThis.NAME_VERIFY_BUDGET_MS = NAME_VERIFY_BUDGET_MS;\n' +
           'globalThis.Event = Event;\n' +
           'globalThis.KeyboardEvent = KeyboardEvent;\n' +
           'globalThis.document = document;\n' +
@@ -360,7 +386,16 @@ function loadAllScripts(ctx) {
       // UI-REVIEW-2026-09-05: zonation_chart normalizer.
       // UI-REVIEW-2026-09-07: chart-type classification normalizer.
       'js/minimax.js': ['rcaNormalizeZonationChartResult', 'rcaNormalizeChartClassification'],
-      'js/table.js': ['rcaRenderResults', 'rcaTableConfigs', 'rcaBuildTableExport'],
+      'js/table.js': [
+        'rcaRenderResults', 'rcaTableConfigs', 'rcaBuildTableExport',
+        // REVIEW-2026-09-20 (M4/L2): the exporter mirrors and the shared
+        // agreement-band rule are asserted directly now, so they have to be
+        // reachable from the test context.
+        'rcaRowsForTable', 'rcaRowCellsFor', 'rcaExportCellText',
+        'rcaAgreementBand', 'rcaRowAgreementBand', 'rcaIsDict',
+        'rcaLooksZonationChart', 'rcaLooksAbundance', 'rcaLooksColumnar',
+        'rcaLooksColumnarEmptySections', 'rcaLooksPhylogeneticTree',
+      ],
       'js/export.js': ['rcaToCsv', 'rcaToTsv', 'rcaDownload', 'rcaCopyText'],
       'js/error-utils.js': ['RCAErrorUtils'],
       'js/theme.js': ['rcaTheme'],
@@ -880,16 +915,52 @@ function test_p0_5_array_root_columnar() {
 function test_p0_5_array_root_abundance() {
   const ctx = buildContext();
   loadAllScripts(ctx);
-  const arr = [
-    { site_id: 'S1', location: 'Loc1' },
-    { abundance: 'A', count: 5 },
-    { zone: 'Z1', assemblage: 'ass' },
+  // CONTRACT-UPDATE-2026-09-20 (REVIEW-2026-09-20 #4): the abundance buckets are
+  // keyed on Python's key-PRESENCE probes (rca_core/extractor.py:1941-1955),
+  // not on the loose `site_id` / `count` / `zone` spellings this test used to
+  // pin. Oracle: normalize_abundance_result({"_array_root":[...legacy keys...]})
+  // -> sites/abundances/zones all EMPTY and every record under
+  // _extras._unclassified, i.e. nothing is dropped, nothing is invented.
+  const legacy = [
+    { site_id: 'S1', location: 'Loc1' },   // no `name` -> not a site
+    { abundance: 'A', count: 5 },          // `abundance` without `level`
+    { zone: 'Z1', assemblage: 'ass' },     // neither `name`+`age` nor `taxon`
   ];
-  const wrapped = { _array_root: arr, _note: 'wrap' };
-  const out = ctx.rcaNormalizeAbundanceResult(wrapped);
-  check('p0-5: abundance sites>=1', out.sites && out.sites.length >= 1);
-  check('p0-5: abundance abundances>=1', out.abundances && out.abundances.length >= 1);
-  check('p0-5: abundance zones>=1', out.zones && out.zones.length >= 1);
+  const legacyOut = ctx.rcaNormalizeAbundanceResult({ _array_root: legacy, _note: 'wrap' });
+  check('p0-5: abundance legacy rows empty (sites)',
+        legacyOut.sites && legacyOut.sites.length === 0);
+  check('p0-5: abundance legacy rows empty (abundances)',
+        legacyOut.abundances && legacyOut.abundances.length === 0);
+  check('p0-5: abundance legacy rows empty (zones)',
+        legacyOut.zones && legacyOut.zones.length === 0);
+  check('p0-5: abundance legacy records survive in _extras._unclassified',
+        legacyOut._extras && legacyOut._extras._unclassified
+        && legacyOut._extras._unclassified.length === 3
+        && legacyOut._extras._unclassified[0].site_id === 'S1');
+
+  // The unwrap itself still has to work — with the keys the Python contract
+  // documents (oracle: sites=2 / abundances=2 / zones=1, _unclassified=1).
+  const arr = [
+    { name: 'S1', location: 'Loc1' },                        // site
+    { name: 'S2', depth_unit: 'm' },                         // site (depth_unit)
+    { taxon: 'Pinus', level: '3' },                          // abundance
+    { abundance: '20%', level: '3' },                        // abundance
+    { name: 'Z1', age: 'Holocene' },                         // zone
+    { foo: 1 },                                              // _unclassified
+  ];
+  const out = ctx.rcaNormalizeAbundanceResult({ _array_root: arr, _note: 'wrap' });
+  check('p0-5: abundance sites>=1', out.sites && out.sites.length === 2);
+  check('p0-5: abundance abundances>=1', out.abundances && out.abundances.length === 2);
+  check('p0-5: abundance zones>=1', out.zones && out.zones.length === 1);
+  // Python mutates `parsed` IN PLACE with setdefault: `confidence` is read from
+  // the root, and `_note`/`_array_root` are stripped from `_extras`
+  // (_pop_array_root_extras) so the wrapper never duplicates the payload.
+  check('p0-5: abundance wrapper stripped from _extras',
+        out._extras && out._extras._array_root === undefined
+        && out._extras._note === undefined);
+  check('p0-5: abundance unclassified kept',
+        out._extras._unclassified && out._extras._unclassified.length === 1
+        && out._extras._unclassified[0].foo === 1);
 }
 
 function test_p0_5_non_array_passthrough() {
@@ -1536,9 +1607,18 @@ test_ui_phylo_i18n_keys();
 
 // ---- PR1 H5: truncated_or_unrecognized_payload guard ----
 //
-// Mirror rca_core/extractor.py:866-880. A payload that has none of the
-// mode-known root keys must trip a `truncated_or_unrecognized_payload`
-// warning, and only the range_chart extract path flips ok=false.
+// Mirror rca_core/extractor.py. CONTRACT-UPDATE-2026-09-20 (REVIEW-2026-09-20
+// #7): the flag is raised in TWO places and they are not the same for every
+// mode:
+//   * `normalize_result` (range_chart ONLY, extractor.py:1123-1128) tags a
+//     foreign root itself, and `extract_range_chart` (1391-1406) then turns
+//     that tag into ok=False/err.parse BEFORE the shared `_ok_result` runs;
+//   * the other normalizers do NOT tag their output — they park the foreign
+//     keys under `_extras` and stay ok=True. The shared `_ok_result`
+//     (rcaUnusablePayloadReason) only fires when the payload produced NOTHING
+//     (`_extracted_any` false), which `_extras`/`_warnings` already prevent.
+// So the old "every mode's normalizer must flag" expectation was JS-only and
+// has been replaced by what the Python oracle returns for the same input.
 function test_h5_normalizer_truncated_warning_flag() {
   const ctx = buildContext();
   loadAllScripts(ctx);
@@ -1547,6 +1627,9 @@ function test_h5_normalizer_truncated_warning_flag() {
   check('h5-range-warnings-array', Array.isArray(out._warnings));
   check('h5-range-warning-flag-set',
     out._warnings && out._warnings.indexOf('truncated_or_unrecognized_payload') !== -1);
+  // Python keeps the undocumented root key visible instead of dropping it.
+  check('h5-range-foreign-key-in-extras',
+    out._extras && out._extras.foo === 1);
 }
 test_h5_normalizer_truncated_warning_flag();
 
@@ -1554,8 +1637,12 @@ function test_h5_normalizer_truncated_warning_columnar() {
   const ctx = buildContext();
   loadAllScripts(ctx);
   const out = ctx.rcaNormalizeColumnarResult({ foo: 1 });
-  check('h5-columnar-warning-flag-set',
-    out._warnings && out._warnings.indexOf('truncated_or_unrecognized_payload') !== -1);
+  // Oracle normalize_columnar_result({"foo":1}):
+  //   {"sections":[],"fossil_legend":[],"lithology_legend":[],"cross_beds":[],
+  //    "confidence":0.0,"_extras":{"foo":1}}  — no `_warnings` key at all.
+  check('h5-columnar-warning-flag-set', out._warnings === undefined);
+  check('h5-columnar-foreign-key-in-extras',
+    out._extras && out._extras.foo === 1);
 }
 test_h5_normalizer_truncated_warning_columnar();
 
@@ -1563,8 +1650,10 @@ function test_h5_normalizer_truncated_warning_abundance() {
   const ctx = buildContext();
   loadAllScripts(ctx);
   const out = ctx.rcaNormalizeAbundanceResult({ foo: 1 });
-  check('h5-abundance-warning-flag-set',
-    out._warnings && out._warnings.indexOf('truncated_or_unrecognized_payload') !== -1);
+  // Oracle normalize_abundance_result({"foo":1}): same shape, same silence.
+  check('h5-abundance-warning-flag-set', out._warnings === undefined);
+  check('h5-abundance-foreign-key-in-extras',
+    out._extras && out._extras.foo === 1);
 }
 test_h5_normalizer_truncated_warning_abundance();
 
@@ -1651,12 +1740,18 @@ function test_h8_handlefile_state_file_after_await() {
 }
 test_h8_handlefile_state_file_after_await();
 
-// ---- PR1 H6: phylo metadata full inheritance ----
+// ---- PR1 H6: phylo metadata inheritance ----
 //
-// Mirror rca_core/extractor.py: taxon_group, root_name, total_nodes,
-// version, image_source must be carried onto out.metadata from either
-// parsed.metadata OR the root level. The Python side does this so the
-// frontend can render provenance, license, and dataset identity.
+// CONTRACT-UPDATE-2026-09-20 (REVIEW-2026-09-20 #4): `_normalize_phylogenetic
+// _tree_into` (rca_core/extractor.py:2298-2342) reads the metadata block from
+// ONE source — `raw["metadata"]` — writes the six canonical keys
+// (title / extraction_timestamp / tree_type / scale / rooted / source) and then
+// copies over every OTHER key the metadata block carried (that is how the
+// legacy taxon_group / root_name / total_nodes / version / image_source survive).
+// Root-level siblings are NOT promoted any more: they are undocumented root
+// keys, so they land in `out["_extras"]` untouched. The old JS copy invented
+// `image_source: ""` on every tree and read the taxonomy from the root, so the
+// browser and the server disagreed on the same payload.
 function test_h6_phylo_metadata_inherits_root_taxonomy() {
   const ctx = buildContext();
   loadAllScripts(ctx);
@@ -1667,27 +1762,72 @@ function test_h6_phylo_metadata_inherits_root_taxonomy() {
     root_ids: ['n0'],
     nodes: [{ id: 'n0', parent: null, name: 'Spasmaria', is_leaf: false }],
   });
-  check('h6-taxon_group-present', out.metadata.taxon_group === 'Radiolaria');
-  check('h6-total_nodes-present', out.metadata.total_nodes === 42);
-  check('h6-version-default', out.metadata.version === '1');
-  check('h6-root_name-empty', out.metadata.root_name === '');
-  check('h6-image_source-empty', out.metadata.image_source === '');
+  // Root level: nothing lifted, nothing lost — `_extras` keeps all three.
+  check('h6-taxon_group-present', out.metadata.taxon_group === undefined);
+  check('h6-total_nodes-present', out._extras.total_nodes === 42);
+  check('h6-version-default', out._extras.version === '1');
+  check('h6-root_name-empty', out.metadata.root_name === undefined);
+  check('h6-image_source-empty', out.metadata.image_source === undefined);
+  check('h6-taxon_group-not-fabricated-on-extras',
+    out._extras.taxon_group === 'Radiolaria');
+  // The six canonical keys always exist, with the Python defaults.
+  check('h6-metadata-canonical-keys',
+    out.metadata.title === '' && out.metadata.extraction_timestamp === ''
+    && out.metadata.tree_type === '' && out.metadata.scale === ''
+    && out.metadata.rooted === true && out.metadata.source === '');
+
+  // Inside `metadata`, the same fields are carried through verbatim — this is
+  // the path the provenance UI reads.
+  const inside = ctx.rcaNormalizePhylogeneticTreeResult({
+    metadata: { taxon_group: 'Radiolaria', total_nodes: 42, version: '1', root_name: '' },
+    root_ids: ['n0'],
+    nodes: [{ id: 'n0', parent: null, name: 'Spasmaria', is_leaf: false }],
+  });
+  check('h6-metadata-taxon_group-lifted', inside.metadata.taxon_group === 'Radiolaria');
+  check('h6-metadata-total_nodes-lifted', inside.metadata.total_nodes === 42);
+  check('h6-metadata-version-lifted', inside.metadata.version === '1');
+  check('h6-metadata-root_name-lifted', inside.metadata.root_name === '');
 }
 test_h6_phylo_metadata_inherits_root_taxonomy();
 
 function test_h6_phylo_metadata_promotes_image_source_from_root() {
   const ctx = buildContext();
   loadAllScripts(ctx);
+  // metadata-level `image_source` is the documented alias of `source`
+  // (Python: `s(metadata_raw.get("source", metadata_raw.get("image_source", "")))`),
+  // and because it is not one of the six NEW_META_KEYS it also survives
+  // verbatim next to it.
   const out = ctx.rcaNormalizePhylogeneticTreeResult({
+    metadata: { tree_type: 'cladogram', image_source: 'file.jpg' },
+    root_ids: ['n0'],
+    nodes: [{ id: 'n0', parent: null, name: 'Spasmaria', is_leaf: false }],
+  });
+  check('h6-image_source-on-source', out.metadata.source === 'file.jpg');
+  check('h6-image-source-field', out.metadata.image_source === 'file.jpg');
+  check('h6-tree_type-promoted', out.metadata.tree_type === 'cladogram');
+  // A ROOT-level image_source is not metadata: it must not fabricate a source
+  // and must not vanish either (extractor.py:2330-2342 -> _extras).
+  const rootLevel = ctx.rcaNormalizePhylogeneticTreeResult({
     image_source: 'file.jpg',
     metadata: { tree_type: 'cladogram' },
     root_ids: ['n0'],
     nodes: [{ id: 'n0', parent: null, name: 'Spasmaria', is_leaf: false }],
   });
-  // image_source lives on both .source and .image_source after promotion.
-  check('h6-image_source-on-source', out.metadata.source === 'file.jpg');
-  check('h6-image-source-field', out.metadata.image_source === 'file.jpg');
-  check('h6-tree_type-promoted', out.metadata.tree_type === 'cladogram');
+  check('h6-root-image-source-not-promoted',
+    rootLevel.metadata.source === ''
+    && rootLevel.metadata.image_source === undefined);
+  check('h6-root-image-source-in-extras',
+    rootLevel._extras.image_source === 'file.jpg');
+  // An explicit null `source` wins over the `image_source` fallback: `dict.get`
+  // only defaults when the KEY IS ABSENT (REVIEW-2026-09-10).
+  const nullSource = ctx.rcaNormalizePhylogeneticTreeResult({
+    metadata: { source: null, image_source: 'img' },
+    root_ids: ['n0'],
+    nodes: [{ id: 'n0', parent: null, name: 'A' }],
+  });
+  check('h6-source-null-no-fallback',
+    nullSource.metadata.source === ''
+    && nullSource.metadata.image_source === 'img');
 }
 test_h6_phylo_metadata_promotes_image_source_from_root();
 
@@ -2085,13 +2225,22 @@ test_export_newline_injection_guard();
 
 // H5 end-to-end: extractRangeChart must flip ok=false when the parsed
 // JSON trips the truncated_or_unrecognized_payload warning in range_chart
-// mode, but keep ok=true with the warning attached for the other modes.
+// mode, but keep ok=true for the other modes.
+//
+// CONTRACT-UPDATE-2026-09-20 (REVIEW-2026-09-20 #7): the Python oracle for
+// {"totally_unrelated_key": 1} is
+//   range_chart       -> ok=False, error_key='err.parse',
+//                        warning='<truncation prose> | rescued inner object: unusable',
+//                        data._warnings=['truncated_or_unrecognized_payload']
+//   columnar_section  -> ok=True,  warning='',  NO data._warnings,
+//                        data._extras={'totally_unrelated_key': 1}
+// i.e. the ok=False flip is extractor.py:1391-1406 (range_chart only, and it
+// runs BEFORE the shared `_ok_result`), while the shared guard is what covers
+// the other seven modes. `warning` is the Python prose, not the bare tag — the
+// tag lives in `data._warnings` on both engines.
 function test_h5_extract_range_chart_flip_to_error() {
   const ctx = buildContext();
   loadAllScripts(ctx);
-  // The payload must NOT match any known root (no 'sections' etc.) so the
-  // normalizer flags it. We pre-pend the warning because the warning path
-  // is what extract_range_chart checks post-normalization.
   const payload = JSON.stringify({ totally_unrelated_key: 1 });
   const calls = [];
   ctx.fetch = async (url, opts) => {
@@ -2110,7 +2259,13 @@ function test_h5_extract_range_chart_flip_to_error() {
   }).then((res) => {
     check('h5-range-extract-ok-false', res.ok === false);
     check('h5-range-extract-errorKey-err-parse', res.errorKey === 'err.parse');
-    check('h5-range-extract-warning-flag', res.warning === 'truncated_or_unrecognized_payload');
+    check('h5-range-extract-warning-flag',
+      res.warning === 'Result may be truncated (model hit max_tokens). '
+      + 'Try raising the max_tokens setting and re-running.'
+      + ' | rescued inner object: unusable');
+    check('h5-range-extract-data-warnings',
+      res.data && Array.isArray(res.data._warnings)
+      && res.data._warnings.indexOf('truncated_or_unrecognized_payload') !== -1);
     check('h5-range-extract-fetch-called', calls.length >= 1);
   });
 }
@@ -2132,12 +2287,72 @@ function test_h5_columnar_keeps_ok_true() {
     apiKey: 'test-key',
   }).then((res) => {
     check('h5-columnar-extract-ok-true', res.ok === true);
+    // Oracle extract_columnar_section: NO `_warnings` (only the range-chart
+    // normalizer raises that tag), and the foreign keys stay visible in
+    // `_extras` — that is the whole point of the H8 extras contract.
     check('h5-columnar-extract-warnings-flagged',
-      res.data && Array.isArray(res.data._warnings) &&
-      res.data._warnings.indexOf('truncated_or_unrecognized_payload') !== -1);
+      res.data && res.data._warnings === undefined
+      && res.data._extras && res.data._extras.totally_unrelated_key === 1);
   });
 }
 const _h5C = trackAsync('h5-columnar-extract', test_h5_columnar_keeps_ok_true());
+
+// The SHARED half of the guard (extractor.py `_ok_result`, REVIEW-2026-09-20 #7
+// "扩展到 8 模式"): every mode now answers through one contract, so a payload
+// that rescued NOTHING is a hard error on every mode — not just range_chart —
+// while a payload that produced any content (even only `_extras` /
+// `_unclassified`) stays ok=True. Matrix below is the verbatim Python oracle
+// (`extract_<mode>` with rca_core.extractor.call_llm_api stubbed); the JS
+// direct transport must reproduce it line for line.
+function test_h5_shared_guard_matrix() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const PROSE = 'Result may be truncated (model hit max_tokens). '
+    + 'Try raising the max_tokens setting and re-running.';
+  const TRUNC_NO_ROWS = PROSE + ' | truncated output rescued no usable records';
+  const CASES = [
+    // payload                        mode                 trunc  ok   warning
+    ['{"sections":[]}',                'range_chart',       false, true,  ''],
+    ['{"sections":[]}',                'range_chart',       true,  false, TRUNC_NO_ROWS],
+    ['{"sections":[]}',                'columnar_section',  false, true,  ''],
+    ['{"sections":[]}',                'columnar_section',  true,  false, TRUNC_NO_ROWS],
+    ['{"sites":[],"abundances":[],"zones":[]}', 'abundance_diagram', false, true, ''],
+    ['{"sites":[],"abundances":[],"zones":[]}', 'abundance_diagram', true, false, TRUNC_NO_ROWS],
+    ['{"zonations":[],"zones":[],"correlations":[]}', 'zonation_chart', false, true, ''],
+    ['{"zonations":[],"zones":[],"correlations":[]}', 'zonation_chart', true, false, TRUNC_NO_ROWS],
+    // A truncated run that DID rescue rows stays ok=true, prose warning only.
+    ['{"_array_root":[{"zzz":1}]}',    'range_chart',       true,  true,  PROSE],
+    // Foreign-but-empty abundance root: still ok=true, keys parked in _extras.
+    ['{"some_key":1}',                 'abundance_diagram', false, true,  ''],
+  ];
+  const run = (text, truncated) => {
+    ctx.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'text', text }],
+        stop_reason: truncated ? 'max_tokens' : 'end_turn',
+      }),
+      text: async () => text,
+    });
+  };
+  const steps = CASES.map(([text, mode, truncated, expectOk, expectWarning]) => () => {
+    run(text, truncated);
+    return ctx.extractRangeChart({
+      dataUrl: 'data:image/png;base64,QUFB',
+      mode,
+      baseUrl: 'https://example.com',
+      apiKey: 'test-key',
+    }).then((res) => {
+      const id = 'h5-shared-guard ' + mode + (truncated ? '+trunc' : '');
+      check(id + ' ok', res.ok === expectOk);
+      check(id + ' warning', res.warning === expectWarning);
+      if (!expectOk) check(id + ' errorKey', res.errorKey === 'err.parse');
+    });
+  });
+  // Sequential: every step rewrites ctx.fetch.
+  return steps.reduce((p, step) => p.then(step), Promise.resolve());
+}
+const _h5S = trackAsync('h5-shared-guard-matrix', test_h5_shared_guard_matrix());
 
 // ---------------------------------------------------------------------------
 // Sprint B (REVIEW-2026-09-04) regression tests
@@ -2184,8 +2399,15 @@ test_sprintb_range_chart_roots_exclude_extras();
 
 // Item 9: abundance-mode array rescue must preserve top-level confidence
 // (and other non-bucket fields) and keep unclassifiable dicts under
-// _unclassified, mirroring rca_core/extractor.py:1296-1310 in-place
+// _unclassified, mirroring rca_core/extractor.py:1941-1955 in-place
 // setdefault behavior.
+//
+// CONTRACT-UPDATE-2026-09-20 (REVIEW-2026-09-20 #4): ALL FOUR rows below are
+// unclassifiable for Python — its probes need `name`+(`location`|`depth_unit`|
+// `age_range`), `taxon`, (`abundance`+`level`) or `name`+`age`, and none of
+// `site_id` / `count` / `zone` / `assemblage` satisfies one. The old test only
+// expected `{foo:1}` there because the browser copy still bucketed the other
+// three on its own looser spelling.
 function test_sprintb_abundance_unwrap_keeps_top_level() {
   const ctx = buildContext();
   loadAllScripts(ctx);
@@ -2201,8 +2423,15 @@ function test_sprintb_abundance_unwrap_keeps_top_level() {
   });
   check('sprintb-abundance-confidence-kept', out.confidence === 0.7);
   check('sprintb-abundance-unclassified-in-extras',
-    out._extras && out._extras._unclassified
-    && out._extras._unclassified.length === 1);
+    out._extras && Array.isArray(out._extras._unclassified)
+    && out._extras._unclassified.length === 4);
+  // Python mutates `parsed` in place, so the wrapper never reaches `_extras`
+  // (`_pop_array_root_extras`) but the records all survive in document order.
+  check('sprintb-abundance-unclassified-order',
+    out._extras._unclassified.map((r) => Object.keys(r)[0]).join(',')
+    === 'site_id,abundance,zone,foo');
+  check('sprintb-abundance-wrapper-stripped',
+    out._extras._array_root === undefined && out._extras._note === undefined);
 }
 test_sprintb_abundance_unwrap_keeps_top_level();
 
@@ -2723,9 +2952,25 @@ function test_name_clean_lookup_parity() {
 }
 
 // (R2) A malformed row (null / primitive) inside a result array used to
-// throw out of rcaRenderResults, blanking the entire results panel. Rows
-// that cannot be dereferenced are now skipped, and other_fossils keeps
-// accepting plain strings (exporter.py allows a string row there).
+// throw out of rcaRenderResults, blanking the entire results panel.
+//
+// REVIEW-2026-09-20 (M4): the tolerance rule is rca_core/exporter.py's, NOT
+// "drop whatever cannot be dereferenced". `_table_items` hands EVERY entry of
+// the list to `_row_values`, which writes a non-dict row as a single padded
+// cell (exporter.py:890-906) — it never filters. Dropping them made the
+// browser render 1 row where the GUI grid and the XLSX showed 3 for the SAME
+// payload.
+//
+// Every expected value below was read off the Python oracle
+// (`rca_core.exporter.build_table_export(data, id, Translator('en').t)`) over
+// this exact payload:
+//   species_ranges -> [['1','','','','','',''],
+//                      ['2','not-an-object','','','','',''],
+//                      ['3','X','A','1','2','']]
+//   other_fossils  -> [['1','plain string'],['2',''],['3','']]
+// (exporter.py:395 reads only "fossil" / "text" out of a dict row, so a
+// `{'label': ...}` row is an EMPTY cell on both transports — the old JS
+// `label || species || taxon || name` chain invented keys no producer writes.)
 function test_render_tolerates_malformed_rows() {
   const ctx = buildContext();
   loadAllScripts(ctx);
@@ -2733,6 +2978,7 @@ function test_render_tolerates_malformed_rows() {
     species_ranges: [null, 'not-an-object',
                      { species: 'X', section: 'A', range_base: '1', range_top: '2' }],
     sections: [{ name: 'A' }],
+    biozones: [],
     other_fossils: ['plain string', { label: 'Ammonite' }, null],
   };
   let html = null;
@@ -2740,25 +2986,845 @@ function test_render_tolerates_malformed_rows() {
   catch (e) { check('render-null-row-no-throw', false); return; }
   check('render-null-row-no-throw', true);
   check('render-keeps-valid-row', html.indexOf('>X<') !== -1);
+  // The primitive row is shown as its own text, not dropped.
+  check('render-primitive-row-shown', html.indexOf('not-an-object') !== -1);
   check('render-other-fossils-string-row', html.indexOf('plain string') !== -1);
-  check('render-other-fossils-object-row', html.indexOf('Ammonite') !== -1);
+  check('render-other-fossils-unknown-key-blank', html.indexOf('Ammonite') === -1);
+  check('render-no-object-marker', html.indexOf('[object Object]') === -1);
+  // Row COUNTS mirror the exporter: one rendered row per list entry.
   const exp = ctx.rcaBuildTableExport(data, 'species_ranges');
-  check('render-export-skips-null-row', exp.rows.length === 1
-    && exp.rows[0].indexOf('X') !== -1);
+  check('render-export-keeps-all-rows', exp.rows.length === 3);
+  check('render-export-null-row-is-blank',
+    JSON.stringify(exp.rows[0]) === JSON.stringify(['1', '', '', '', '', '']));
+  check('render-export-primitive-row-single-cell',
+    JSON.stringify(exp.rows[1]) === JSON.stringify(['2', 'not-an-object', '', '', '', '']));
+  check('render-export-valid-row-alive',
+    JSON.stringify(exp.rows[2]) === JSON.stringify(['3', 'X', 'A', '1', '2', '']));
+  const expF = ctx.rcaBuildTableExport(data, 'other_fossils');
+  check('render-export-other-fossils-parity',
+    JSON.stringify(expF.rows)
+    === JSON.stringify([['1', 'plain string'], ['2', ''], ['3', '']]));
+  // The rendered table advertises the same three rows in its header count
+  // (title resolved through t() so the check is language-independent).
+  check('render-species-count-label',
+    html.indexOf(ctx.t('sec.species') + ' <span class="result-count">(3)</span>') !== -1);
 }
 
-// (R3) The SSRF guard must normalize IPv6 forms — a bracketed IPv4-mapped
-// address ([::ffff:a9fe:a9fe] == 169.254.169.254) previously slipped past
-// the IPv4 patterns.
-function test_ssrf_guard_ipv6() {
-  const src = require('fs').readFileSync(
-    path.join(__dirname, 'js', 'minimax.js'), 'utf8');
-  // The guard is inline in the request path; assert its shape rather than
-  // re-implementing it: IPv4-mapped unwrapping must be present.
-  check('ssrf-guard-unwraps-ipv4-mapped', src.indexOf('::ffff:') !== -1);
-  check('ssrf-guard-blocks-ula', /f\[cd\]\[0-9a-f\]/.test(src) || src.indexOf('fe[89ab]') !== -1);
-  check('ssrf-guard-blocks-internal-tld', src.indexOf("'.internal'") !== -1);
+// (M4 / REVIEW-2026-09-20, item e) js/table.js must dispatch to a table set
+// in the SAME order as rca_core/exporter.py:get_configs_for_result, and with
+// the SAME shape predicates. The order used to be abundance → … → zonation
+// fourth, and `hasColumnarShape` accepted ANY `sections` array, so one
+// payload rendered an abundance diagram in the browser and a zones table in
+// the GUI / Excel export.
+//
+// The first half of the check compares the two SOURCE files (so reordering a
+// branch on one side fails here even when no fixture exercises it); the
+// second half is behavioral, on the payloads that actually drifted.
+function test_table_dispatch_order_mirrors_exporter() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const pySrc = fs.readFileSync(path.join(__dirname, 'rca_core', 'exporter.py'), 'utf8');
+  const jsSrc = fs.readFileSync(path.join(__dirname, 'js', 'table.js'), 'utf8');
+  const pyBody = pySrc.slice(pySrc.indexOf('def get_configs_for_result'),
+    pySrc.indexOf('def _abundance_diagram_tables'));
+  const jsBody = jsSrc.slice(jsSrc.indexOf('function rcaTableConfigs'),
+    jsSrc.indexOf('// -------- abundance-diagram'));
+  const orderOf = (src, rx) => {
+    const out = [];
+    let m;
+    const g = new RegExp(rx.source, 'g');
+    while ((m = g.exec(src)) !== null) out.push(m[1]);
+    return out;
+  };
+  const pyOrder = orderOf(pyBody, /if _looks_(zonation_chart|abundance|columnar|phylogenetic_tree)\(/);
+  const jsOrder = orderOf(jsBody, /if \(rcaLooks(ZonationChart|Abundance|Columnar|PhylogeneticTree)\(/);
+  const norm = {
+    zonation_chart: 'ZonationChart', abundance: 'Abundance',
+    columnar: 'Columnar', phylogenetic_tree: 'PhylogeneticTree',
+  };
+  check('dispatch-order-mirror:py-found-all', pyOrder.length === 4);
+  check('dispatch-order-mirror:js-found-all', jsOrder.length === 4);
+  check('dispatch-order-mirror:same-sequence',
+    pyOrder.map((k) => norm[k]).join('>') === jsOrder.join('>'));
+
+  // Behavior: the two shapes that used to disagree.
+  const ids = (d) => ctx.rcaTableConfigs(d).map((c) => c.id).join(',');
+  // Zonation descriptors + abundance rows in one payload: Python picks the
+  // zones tables, so the browser must too.
+  const both = {
+    abundances: [{ taxon: 'T', level: '1' }],
+    correlations: [{ from_zone: 'A', to_zone: 'B' }],
+    zones: [], zonations: [], sections: [], species_ranges: [],
+  };
+  check('dispatch-zonation-beats-abundance',
+    ids(both).indexOf('correlations') !== -1 && ids(both).indexOf('abundances') === -1);
+  const abOnly = { abundances: [{ taxon: 'T', level: '1' }], sections: [], species_ranges: [] };
+  check('dispatch-abundance-when-not-zonation', ids(abOnly).indexOf('abundances') !== -1);
+  // An EMPTY abundances placeholder is every normalized result's default and
+  // must not route anywhere (exporter.py:_looks_abundance).
+  const emptyAb = { abundances: [], sections: [{ name: 'A' }], species_ranges: [{ species: 'X' }] };
+  check('dispatch-empty-abundance-is-range-chart', ids(emptyAb) === 'sections,species_ranges,biozones,other_fossils');
+  // hasColumnarShape: "the FIRST section is a dict carrying an `id`"
+  // (exporter.py:_looks_columnar), not "sections is a non-empty array".
+  check('columnar-predicate-needs-id',
+    ctx.rcaLooksColumnar({ sections: [{ id: 'C1' }] }) === true
+    && ctx.rcaLooksColumnar({ sections: [{ name: 'A' }] }) === false
+    && ctx.rcaLooksColumnar({ sections: ['C1'] }) === false
+    && ctx.rcaLooksColumnar({ sections: [] }) === false
+    && ctx.rcaLooksColumnar(null) === false);
+  check('dispatch-name-only-sections-stays-range-chart',
+    ids({ sections: [{ name: 'A' }], species_ranges: [] }) === 'sections,species_ranges,biozones,other_fossils');
+  check('dispatch-id-sections-is-columnar',
+    ids({ sections: [{ id: 'C1' }], species_ranges: [] }).indexOf('lithology_blocks') !== -1);
+  // Empty sections + a columnar-only key still means columnar (I7 rule).
+  check('dispatch-empty-sections-columnar-fallback',
+    ids({ sections: [], fossil_legend: [{ marker: 'm' }] }).indexOf('fossil_legend') !== -1);
+  // Phylo only after the three above.
+  check('dispatch-phylo-nodes',
+    ids({ nodes: [{ id: 'n1', parent: null }] }) === 'nodes');
+
+  // (item h) The dead `rcaRenderViz` no-op must stay deleted — nothing ever
+  // called it, and #viz-host is preserved by app.js, not by a fake renderer.
+  check('render-viz-dead-code-gone',
+    jsSrc.indexOf('function rcaRenderViz') === -1
+    && jsSrc.indexOf('globalThis.rcaRenderViz') === -1);
 }
+
+// (item g / L2) The low-agreement ROW BAND and the agreement PILL must come
+// from the same integer thresholds, so a row never shows a red "needs
+// review" background under a green/amber pill (or the reverse). The old row
+// rule was `ac <= runs/2`, which flagged 1/2 and 2/4 while the pill called
+// them "mid".
+function test_agreement_band_and_pill_share_thresholds() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const band = (k, n) => ctx.rcaAgreementBand(k, n);
+  check('band-good', band(2, 3) === 'good' && band(3, 3) === 'good' && band(1, 1) === 'good');
+  check('band-mid', band(1, 2) === 'mid' && band(2, 4) === 'mid' && band(3, 8) === 'mid');
+  check('band-low', band(1, 3) === 'low' && band(0, 3) === 'low');
+  check('band-degenerate-n', band(1, 0) === 'low' && band(1, NaN) === 'low');
+  // A non-dict row carries no agreement at all (null = "do not band it"),
+  // which is also what keeps the render loop from dereferencing a string.
+  check('band-skips-malformed-row',
+    ctx.rcaRowAgreementBand(null, 3) === null
+    && ctx.rcaRowAgreementBand('x', 3) === null
+    && ctx.rcaRowAgreementBand({ agreement: '3/3' }, 3) === 'good');
+
+  // Render a mixed species table and assert band == pill for every row.
+  const rows = [
+    { species: 'R23', agreement: '2/3', agreement_count: 2 },
+    { species: 'R13', agreement: '1/3', agreement_count: 1 },
+    { species: 'R33', agreement: '3/3', agreement_count: 3 },
+    { species: 'Rmiss' },
+  ];
+  const html = ctx.rcaRenderResults({
+    confidence: 0.5, runs: 3, sections: [], biozones: [], other_fossils: [],
+    species_ranges: rows,
+  }, '');
+  for (const r of rows) {
+    const at = html.indexOf('>' + r.species + '<');
+    if (at === -1) { check('band-row-present:' + r.species, false); continue; }
+    const trStart = html.lastIndexOf('<tr', at);
+    const trEnd = html.indexOf('</tr>', at);
+    const tr = html.slice(trStart, trEnd);
+    const flagged = tr.indexOf('row-low-agreement') !== -1;
+    const pill = tr.indexOf('pill-good') !== -1 ? 'good'
+      : tr.indexOf('pill-mid') !== -1 ? 'mid' : 'low';
+    check('band-matches-pill:' + r.species, flagged === (pill === 'low'),
+      'flagged=' + flagged + ' pill=' + pill);
+  }
+  // 1/2 is "mid": no red band any more (the old rule flagged it).
+  const half = ctx.rcaRenderResults({
+    confidence: 0.5, runs: 2, sections: [], biozones: [], other_fossils: [],
+    species_ranges: [{ species: 'RH', agreement: '1/2', agreement_count: 1 }],
+  }, '');
+  check('band-mid-1of2-not-flagged',
+    half.indexOf('pill-mid') !== -1 && half.indexOf('row-low-agreement') === -1);
+}
+
+// (item f) Export / rendered cell text must go through the mirror of
+// rca_core/exporter.py:_export_cell_text: NaN/Infinity instances AND the
+// literal texts a producer already stringified blank out instead of reaching
+// the CSV as data that looks real.
+function test_export_cell_text_mirrors_python() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const t2 = (v) => ctx.rcaExportCellText(v);
+  check('celltext-null', t2(null) === '' && t2(undefined) === '');
+  check('celltext-nonfinite-instances',
+    t2(NaN) === '' && t2(Infinity) === '' && t2(-Infinity) === '');
+  check('celltext-nonfinite-texts',
+    t2('nan') === '' && t2('NaN') === '' && t2(' inf ') === ''
+    && t2('-Inf') === '' && t2('+inf') === '' && t2('Infinity') === ''
+    && t2('-infinity') === '');
+  check('celltext-finite-kept',
+    t2(0) === '0' && t2('0') === '0' && t2(1.5) === '1.5'
+    && t2('nanometer') === 'nanometer' && t2('information') === 'information'
+    && t2('Nankinella') === 'Nankinella');
+  // str(True) == 'True' in Python, 'true' in JS.
+  check('celltext-bool-casing', t2(true) === 'True' && t2(false) === 'False');
+  // And the rule is applied on the export path, not just in isolation. The
+  // expected row is what rca_core/exporter.py writes for this payload: the
+  // two optional columns DO exist (a value is present), but the cells read
+  // empty once _export_cell_text has blanked them.
+  const exp = ctx.rcaBuildTableExport({
+    sections: [], biozones: [], other_fossils: [],
+    species_ranges: [{ species: 'X', confidence: NaN, note: 'inf', range_base: 3 }],
+  }, 'species_ranges');
+  const header = exp.headers.join('|');
+  check('celltext-optional-columns-exist',
+    header.indexOf(ctx.t('col.colConfidence')) !== -1
+    && header.indexOf(ctx.t('col.note')) !== -1, header);
+  check('celltext-applied-in-export',
+    JSON.stringify(exp.rows[0])
+      === JSON.stringify(['1', 'X', '', '3', '', '', '', '']),
+    JSON.stringify(exp.rows[0]));
+  // …and in the rendered table (the Python GUI grid renders the very same
+  // build_table_export text).
+  const html = ctx.rcaRenderResults({
+    confidence: 0.5, sections: [], biozones: [], other_fossils: [],
+    species_ranges: [{ species: 'X', note: 'NaN' }],
+  }, '');
+  check('celltext-applied-in-render', html.indexOf('>NaN<') === -1);
+}
+
+// (item j) The SHARED i18n namespaces — everything js/table.js renders and
+// everything the quality badge / GBIF hint block prints — must be present on
+// BOTH sides and in all three languages. The rest of each catalog is
+// surface-specific (the desktop GUI's history / edit / provider keys have no
+// browser counterpart, and vice versa), so only the shared prefixes are
+// locked; a col.* / sec.* key added to one transport alone used to render
+// "[?col.foo]" in the other.
+function test_i18n_shared_namespace_parity() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const pySrc = fs.readFileSync(path.join(__dirname, 'rca_core', 'i18n.py'), 'utf8');
+  const pyLocale = (lang) => {
+    const start = pySrc.indexOf('TRANSLATIONS["' + lang + '"] = {');
+    if (start === -1) return null;
+    const end = pySrc.indexOf('\n}', start);
+    const body = pySrc.slice(start, end);
+    const keys = new Set();
+    let m;
+    const rx = /^    "((?:col|sec|quality|names)\.[A-Za-z0-9_]+)":/gm;
+    while ((m = rx.exec(body)) !== null) keys.add(m[1]);
+    return keys;
+  };
+  const SHARED = ['col.', 'sec.', 'quality.', 'names.'];
+  for (const lang of ['zh', 'en', 'ja']) {
+    const py = pyLocale(lang);
+    check('i18n-py-locale-block:' + lang, py !== null);
+    if (!py) continue;
+    const js = new Set(Object.keys(ctx.RCA_I18N[lang] || {})
+      .filter((k) => SHARED.some((p) => k.indexOf(p) === 0)));
+    const pyOnly = [...py].filter((k) => !js.has(k)).sort();
+    const jsOnly = [...js].filter((k) => !py.has(k)).sort();
+    check('i18n-shared-parity:' + lang, pyOnly.length === 0 && jsOnly.length === 0,
+      'py-only=' + pyOnly.join(',') + ' js-only=' + jsOnly.join(','));
+  }
+  // Every column / section key table.js actually renders must resolve (not
+  // fall through to the "[?key]" placeholder) in the browser catalog.
+  const tableSrc = fs.readFileSync(path.join(__dirname, 'js', 'table.js'), 'utf8');
+  let m;
+  const rx = /'((?:col|sec)\.[A-Za-z0-9_]+)'/g;
+  const used = new Set();
+  while ((m = rx.exec(tableSrc)) !== null) used.add(m[1]);
+  check('i18n-table-keys-nonempty', used.size > 40);
+  for (const lang of ['zh', 'en', 'ja']) {
+    const missing = [...used].filter((k) => !(k in ctx.RCA_I18N[lang])).sort();
+    check('i18n-table-keys-resolve:' + lang, missing.length === 0, missing.join(','));
+  }
+}
+
+// (item e, app.js side) The export filename must follow the tables the file
+// actually contains, so it is derived from the SAME predicates — a
+// `columnar_section_*.json` holding range-chart sheets (or a tree exported as
+// range_chart_*) is the same drift in the other direction.
+function test_export_filename_follows_dispatch() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const FIRST_PREFIX = {
+    zonations: 'zonation_chart_', sites: 'abundance_diagram_',
+    nodes: 'phylogenetic_tree_', sections: null,
+  };
+  const cases = [
+    { label: 'range', data: { sections: [{ name: 'A' }], species_ranges: [{ species: 'X' }] } },
+    { label: 'columnar', data: { sections: [{ id: 'C1' }], species_ranges: [] } },
+    { label: 'columnar-empty', data: { sections: [], fossil_legend: [{ marker: 'm' }] } },
+    { label: 'abundance', data: { abundances: [{ taxon: 'T' }], sections: [] } },
+    { label: 'phylo', data: { nodes: [{ id: 'n1', parent: null }], sections: [] } },
+    { label: 'zonation', data: { correlations: [{ from_zone: 'A' }], sections: [] } },
+    { label: 'empty', data: { sections: [], species_ranges: [] } },
+  ];
+  for (const c of cases) {
+    const prefix = ctx.rcaResultFilePrefix(c.data);
+    const ids = ctx.rcaTableConfigs(c.data).map((x) => x.id);
+    const expected = FIRST_PREFIX[ids[0]] === undefined ? null : FIRST_PREFIX[ids[0]];
+    // 'sections' is the first id for BOTH the range-chart and the columnar
+    // sets, so disambiguate with the presence of the columnar sub-tables.
+    const want = expected === null
+      ? (ids.indexOf('lithology_blocks') !== -1 ? 'columnar_section_' : 'range_chart_')
+      : expected;
+    check('file-prefix-matches-tables:' + c.label, prefix === want,
+      prefix + ' vs ids=' + ids.join(','));
+  }
+  check('file-prefix-null-safe', ctx.rcaResultFilePrefix(null) === 'range_chart_');
+}
+
+// (checklist a, BEHAVIOURAL half) tests/test_chart_mode_parity.py locks the
+// keyword TABLES by source inspection; that proves the lists are equal, not
+// that the two matchers agree on branch ORDER, stem-vs-whole-word handling and
+// the `matched` flag. The golden table below was produced by calling the
+// oracle (`rca_core.chart_mode.auto_detect_chart_mode_ex`) over each input and
+// recording `(mode, matched)` verbatim — so this is the end-to-end check that
+// js/app.js classifies the same caption the same way.
+//
+// The JS detector reads the DOM (caption) + state.file.name exactly like the
+// real page does, and builds `caption + ' ' + fileName`, which is why the
+// filename cases use a LEADING SPACE in the Python-side input too.
+function test_chart_mode_detection_matches_python() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const captionEl = ctx.document.getElementById('caption');
+  const CASES = [
+    // caption, fileName, mode, matched  (oracle: auto_detect_chart_mode_ex)
+    ['', '', 'range_chart', false],
+    ['Conodont range chart', '', 'range_chart', true],
+    ['Columnar section with radiolarian range chart. Zonation of the sections',
+      '', 'range_chart', true],
+    ['Zonation of the sections', '', 'zonation_chart', true],
+    ['Zonations of the formations', '', 'zonation_chart', true],
+    ['Correlation of the measured sections', '', 'range_chart', false],
+    ['Correlation of Triassic radiolarian ZONES and subzones', '', 'zonation_chart', true],
+    ['Pollen percentage diagram', '', 'abundance_diagram', true],
+    ['Isotope chemostratigraphy', '', 'chemical_stratigraphy', true],
+    ['Paleogeographic map', '', 'paleomap', true],
+    ['delta13C biplot', '', 'scatter_plot', true],
+    ['Scatter plot of epsilon Nd', '', 'scatter_plot', true],
+    ['\u03b413C curve above the conodont range chart', '', 'range_chart', true],
+    ['\u53e4\u5730\u7406\u56fe', '', 'paleomap', true],
+    ['\u6563\u70b9\u56fe', '', 'scatter_plot', true],
+    ['\u540c\u4f4d\u7d20\u66f2\u7ebf', '', 'chemical_stratigraphy', true],
+    ['\u67f1\u72b6\u56fe', '', 'columnar_section', true],
+    ['\u5ef6\u9650\u8868', '', 'range_chart', true],
+    ['\u751f\u7269\u5e26\u5bf9\u6bd4', '', 'zonation_chart', true],
+    ['\u041f\u0430\u043b\u0435\u043e\u0433\u0435\u043e\u0433\u0440\u0430\u0444\u0438\u0447\u0435\u0441\u043a\u0430\u044f \u043a\u0430\u0440\u0442\u0430',
+      '', 'paleomap', true],
+    ['\u0418\u0437\u043e\u0442\u043e\u043f\u043d\u0430\u044f \u043a\u0440\u0438\u0432\u0430\u044f',
+      '', 'chemical_stratigraphy', true],
+    ['Phylogenetic tree of the radiolarians', '', 'phylogenetic_tree', true],
+    ['molecular phylogeny', '', 'phylogenetic_tree', true],
+    ['dendrogram', '', 'phylogenetic_tree', true],
+    // False-positive guards: the whole-word rules must refuse these.
+    ['Pollinator study', '', 'range_chart', false],
+    ['colour variation', '', 'range_chart', false],
+    ['Depth range of the samples', '', 'range_chart', false],
+    ['Biozonation', '', 'zonation_chart', true],
+    ['spore abundance', '', 'abundance_diagram', true],
+    ['zone correlation chart', '', 'zonation_chart', true],
+    ['biplot of major elements', '', 'scatter_plot', true],
+    ['crossplot', '', 'scatter_plot', true],
+    ['range charts of the conodonts', '', 'range_chart', true],
+    // Filename-only paths (empty caption).
+    ['', 'pollen-diagram.tiff', 'abundance_diagram', true],
+    ['', 'scatterplot.eps', 'scatter_plot', true],
+    ['', 'columnar_section_measured.png', 'range_chart', false],
+    ['', 'fig_23_zonation.png', 'range_chart', false],
+    ['', 'random-fig.png', 'range_chart', false],
+  ];
+  for (const [cap, fileName, mode, matched] of CASES) {
+    captionEl.value = cap;
+    ctx.state.file = fileName ? { name: fileName } : null;
+    const det = ctx.rcaAutoDetectChartModeDetailed();
+    const label = 'chart-mode:' + (cap || fileName || '(empty)');
+    check(label + '-mode', det.mode === mode, det.mode + ' != ' + mode);
+    check(label + '-matched', det.matched === matched,
+      String(det.matched) + ' != ' + String(matched));
+    // The legacy wrapper must return the same mode — it is what the GUIs and
+    // older call sites still use.
+    check(label + '-legacy', ctx.rcaAutoDetectChartMode() === mode,
+      ctx.rcaAutoDetectChartMode() + ' != ' + mode);
+  }
+  captionEl.value = '';
+  ctx.state.file = null;
+}
+
+// (R3) The SSRF guard must mirror the literal-IP policy of
+// rca_core/ssrf.py (`_is_non_public_ip` + `validate_endpoint_local_ok`),
+// including REVIEW-2026-09-20 item 14: the odd IPv4 spellings, 0.0.0.0/8,
+// 100.64.0.0/10, 192.88.99.0/24, host.docker.internal, IPv4-compatible IPv6
+// ([::127.0.0.1]), the ::ffff family, NAT64 / 6to4 and *.localhost.
+//
+// CONTRACT-UPDATE-2026-09-20: the rules used to be an inline pile of regexes
+// inside the request path, so the only honest assertion was a source grep
+// (`src.indexOf('::ffff:')`, `/f\[cd\]\[0-9a-f\]/`). They now live in
+// rcaIsSsrfBlockedHost(), so these are BEHAVIORAL checks — and the hostnames
+// are the ones `new URL()` hands that function, which is what makes the
+// decimal/hex spellings testable at all. Every expectation below was compared
+// against the Python oracle (`rca_core.ssrf._is_non_public_ip`) over the same
+// literal.
+function test_ssrf_guard_ipv6() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  check('ssrf-guard-function-exists',
+    typeof ctx.rcaIsSsrfBlockedHost === 'function');
+  if (typeof ctx.rcaIsSsrfBlockedHost !== 'function') return;
+
+  const hostOf = (u) => { try { return new URL(u).hostname.toLowerCase(); } catch (_) { return ''; } };
+  const blocked = (u) => ctx.rcaIsSsrfBlockedHost(hostOf(u));
+
+  // Blocked: everything a browser could otherwise be talked into dialling.
+  const BLOCKED = [
+    // IPv4 written the weird way round (normalized by `new URL`).
+    ['https://2130706433/', 'decimal single-label loopback'],
+    ['https://0x7f000001/', 'hexadecimal single-label loopback'],
+    ['https://127.1/', 'two-part short form'],
+    ['https://0x7f.1/', 'hex + short mixed form'],
+    // This-round IPv4 prefixes.
+    ['https://0.0.0.0/', '0/8 unspecified'],
+    ['https://0.1.2.3/', '0/8 (not just 0.0.0.0)'],
+    ['https://100.64.0.1/', 'CGNAT 100.64/10 start'],
+    ['https://100.127.255.255/', 'CGNAT 100.64/10 end'],
+    ['https://192.88.99.7/', '6to4 relay anycast 192.88.99/24'],
+    ['https://169.254.169.254/', 'cloud metadata'],
+    ['https://10.1.2.3/', 'RFC1918'],
+    // Docker host aliases: they resolve to the developer machine.
+    ['https://host.docker.internal:11434/', 'host.docker.internal'],
+    ['https://gateway.docker.internal/', 'gateway.docker.internal'],
+    // localhost zone (RFC 6761) + internal / metadata names.
+    ['https://localhost/', 'localhost apex'],
+    ['https://ollama.localhost:11434/', '*.localhost'],
+    ['https://metadata.google.internal/', 'GCE metadata'],
+    ['https://llm.internal/', '.internal'],
+    // IPv4-compatible IPv6 (::/96) — is_global == True in CPython, routed to
+    // the embedded v4 by the kernel. Previously the biggest hole.
+    ['https://[::127.0.0.1]/', 'IPv4-compatible loopback'],
+    ['https://[::ffff:a9fe:a9fe]/', 'IPv4-mapped link-local metadata'],
+    ['https://[::ffff:7f00:1]/', 'IPv4-mapped loopback'],
+    ['https://[::ffff:6440:1]/', 'IPv4-mapped CGNAT'],
+    ['https://[::]/', 'unspecified'],
+    ['https://[::1]/', 'IPv6 loopback'],
+    ['https://[64:ff9b::a9fe:a9fe]/', 'NAT64 64:ff9b::/96 -> metadata'],
+    ['https://[64:ff9b:1::a00:1]/', 'NAT64 64:ff9b:1::/48 -> RFC1918'],
+    ['https://[2002:7f00:1::]/', '6to4 embedding loopback'],
+    ['https://[fd00::1]/', 'ULA fc00::/7'],
+    ['https://[fe80::2]/', 'link-local fe80::/10'],
+    ['https://[100::1]/', 'discard-only 100::/64'],
+    ['https://[2001:db8::1]/', 'documentation 2001:db8::/32'],
+    // Fail-closed shapes: an unparseable host must never reach fetch().
+    ['https://[not-an-ipv6]/', 'bracketed garbage'],
+    ['https://[::ffff:999.1.1.1]/', 'v4-mapped with an impossible octet'],
+  ];
+  for (const [url, why] of BLOCKED) {
+    check('ssrf-blocks:' + why, blocked(url) === true);
+  }
+
+  // Allowed: the guard must stay precise, not become "https public names
+  // only". A blocked provider endpoint is a user-visible regression.
+  const ALLOWED = [
+    ['https://api.minimaxi.com/', 'public provider name'],
+    ['https://api.anthropic.com/', 'public provider name 2'],
+    ['https://cafe/', 'hex-looking name is not an address'],
+    ['https://localhost.example.com/', 'lookalike suffix, not *.localhost'],
+    ['https://[2606:4700:4700::1111]/', 'public IPv6 literal'],
+    ['https://[::ffff:808:808]/', 'IPv4-mapped PUBLIC v4 (oracle parity)'],
+    ['https://[64:ff9b:2::1]/', 'just outside both NAT64 prefixes'],
+    ['https://[fec0::2]/', 'site-local: CPython still calls it global'],
+    ['https://8.8.8.8/', 'public IPv4 literal'],
+  ];
+  for (const [url, why] of ALLOWED) {
+    check('ssrf-allows:' + why, blocked(url) === false);
+  }
+
+  // A bare IPv6 without brackets cannot come out of `new URL`, but the
+  // helper is public: keep it fail-closed for direct callers too.
+  check('ssrf-blocks:bare-ipv6-no-brackets',
+    ctx.rcaIsSsrfBlockedHost('::1') === true);
+  check('ssrf-blocks:empty-host', ctx.rcaIsSsrfBlockedHost('') === true);
+
+  // The gate must actually be wired into the direct transport: a private
+  // https endpoint is refused and the request is re-routed through the
+  // same-origin backend instead of the browser dialling it.
+  const calls = [];
+  ctx.fetch = async (url, init) => {
+    calls.push({ url, method: (init && init.method) || 'GET' });
+    return {
+      ok: true, status: 200,
+      json: async () => ({ ok: true, data: { species_ranges: [], sections: [] } }),
+      text: async () => '',
+    };
+  };
+  resetBackendSession(ctx);
+  return ctx.extractRangeChart({
+    dataUrl: 'data:image/png;base64,QUFB',
+    mode: 'range_chart',
+    baseUrl: 'https://[::ffff:a9fe:a9fe]:8443',   // == 169.254.169.254
+    apiKey: 'sk', model: 'm', maxTokens: 100,
+    transport: 'direct',
+  }).then(() => {
+    check('ssrf-direct-falls-back-to-backend',
+      calls.length > 0 && calls.every((c) => c.url === '/api/extract'));
+    check('ssrf-direct-never-dials-target',
+      calls.every((c) => c.url.indexOf('a9fe') === -1 && c.url !== '/v1/messages'));
+  });
+}
+const _ssrfGuard = trackAsync('ssrf-guard-ipv6', test_ssrf_guard_ipv6());
+
+// ---------------------------------------------------------------------------
+// REVIEW-2026-09-20 network layer: serialization, CSRF silent retry, the
+// error_key whitelist and the retry-delay semantics.
+// ---------------------------------------------------------------------------
+
+/** Clear rcaCallBackend's module-level session state between tests. */
+function resetBackendSession(ctx) {
+  ctx.rcaCallBackend._sessionToken = '';
+  ctx.rcaCallBackend._csrfToken = '';
+  ctx.rcaCallBackend._pending = null;
+}
+
+/** Minimal non-cancelling AbortSignal for backend opts. */
+function nullSignal() {
+  return { aborted: false, addEventListener() {}, removeEventListener() {} };
+}
+
+/** A successful backend GET/POST responder that records what it saw. */
+function backendResponder(onPost) {
+  const seen = { gets: 0, posts: 0, postHeaders: [], getHeaders: [] };
+  const fetchImpl = async (url, init) => {
+    const method = (init && init.method) || 'GET';
+    if (method === 'GET') {
+      seen.gets += 1;
+      seen.getHeaders.push((init && init.headers) || {});
+      return {
+        ok: true, status: 200,
+        json: async () => ({ session_token: 's' + seen.gets, csrf_token: 'c' + seen.gets }),
+        text: async () => '',
+      };
+    }
+    seen.posts += 1;
+    seen.postHeaders.push((init && init.headers) || {});
+    return onPost ? onPost(seen, init) : {
+      ok: true, status: 200,
+      json: async () => ({ ok: true, data: { species_ranges: [] } }),
+      text: async () => '',
+    };
+  };
+  return { seen, fetchImpl };
+}
+
+// (N1) `rcaCallBackend._pending` is supposed to serialize token acquisition —
+// it used to build a link off `_pending` and then throw the link away, so the
+// stored promise stayed `Promise.resolve()` forever and two fast extractions
+// fired two racing CSRF GETs. Assert the chain is real, survives a rejecting
+// link (a Cancel must not poison the callers behind it), and that concurrent
+// callers get strictly ordered GETs.
+function test_backend_serial_chain() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let inFlight = 0, maxInFlight = 0, gets = 0, posts = 0;
+  const order = [];
+  ctx.fetch = async (url, init) => {
+    if (init && init.method === 'POST') {
+      posts += 1;
+      return { ok: true, status: 200,
+               json: async () => ({ ok: true, data: {} }), text: async () => '' };
+    }
+    gets += 1; inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    order.push('start' + gets);
+    await new Promise((r) => setTimeout(r, 8));
+    order.push('end' + gets);
+    inFlight -= 1;
+    return { ok: true, status: 200,
+             json: async () => ({ session_token: 's' + gets, csrf_token: 'c' + gets }),
+             text: async () => '' };
+  };
+  resetBackendSession(ctx);
+  const opts = {
+    apiKey: 'sk', baseUrl: 'https://example.com', model: 'm', maxTokens: 100,
+    mode: 'range_chart', transport: 'backend', signal: nullSignal(),
+  };
+  const before = ctx.rcaCallBackend._pending;
+  const two = Promise.all([
+    ctx.rcaCallBackend(opts, 'QUFB'),
+    ctx.rcaCallBackend(opts, 'QUFB'),
+  ]).then(([a, b]) => {
+    check('chain-token-get-serialized', maxInFlight === 1);
+    check('chain-get-order-interleaved-nothing',
+      order.join(',') === 'start1,end1,start2,end2');
+    check('chain-both-callers-resolve', a.ok === true && b.ok === true);
+    check('chain-two-get-two-post', gets === 2 && posts === 2);
+  });
+
+  // The chain helper directly: a rejecting task must propagate to ITS caller
+  // only, and the stored link must stay usable for the next caller.
+  const chainProbe = two.then(async () => {
+    check('chain-written-back', !!ctx.rcaCallBackend._pending
+      && ctx.rcaCallBackend._pending !== before);
+    let caught = null;
+    await ctx.rcaQueueBackendTask(() => Promise.reject(new Error('boom')))
+      .catch((e) => { caught = e && e.message; });
+    check('chain-rejection-reaches-its-caller', caught === 'boom');
+    const alive = await ctx.rcaQueueBackendTask(async () => 'alive');
+    check('chain-survives-rejection', alive === 'alive');
+    let secondCallerSawAbort = 'pending';
+    await ctx.rcaQueueBackendTask(() => Promise.reject(new Error('second boom')))
+      .then(() => { secondCallerSawAbort = 'resolved'; }, () => { secondCallerSawAbort = 'rejected'; });
+    const after = await ctx.rcaQueueBackendTask(async () => 'still-running');
+    check('chain-not-poisoned-by-second-rejection',
+      secondCallerSawAbort === 'rejected' && after === 'still-running');
+  });
+  return chainProbe;
+}
+const _chain = trackAsync('backend-serial-chain', test_backend_serial_chain());
+
+// (N2a) A 403 whose body says CSRF is now RECOVERED, not just reported: the
+// backend re-mints the token on GET /api/extract (sliding TTL, and the mint
+// bills to its own rate bucket since REVIEW-2026-09-20), so the frontend must
+// re-GET and resend ONCE instead of telling the user to press the button
+// again.
+// (N2b) …and exactly once: a rejection that survives the retry must not turn
+// into a hammering loop.
+function test_backend_csrf_silent_retry() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+
+  // --- recovered on the second attempt -------------------------------------
+  const ok = backendResponder((seen, init) => (seen.posts === 1
+    ? { ok: false, status: 403,
+        json: async () => ({ ok: false, error_key: 'err.forbidden',
+                             error_body: 'Invalid or expired CSRF token.' }),
+        text: async () => 'Invalid or expired CSRF token.' }
+    : { ok: true, status: 200,
+        json: async () => ({ ok: true, data: { species_ranges: [] } }),
+        text: async () => '' }));
+  ctx.fetch = ok.fetchImpl;
+  resetBackendSession(ctx);
+  const opts = {
+    apiKey: 'sk', baseUrl: 'https://example.com', model: 'm', maxTokens: 100,
+    mode: 'range_chart', transport: 'backend', signal: nullSignal(),
+  };
+  return ctx.rcaCallBackend(opts, 'QUFB').then((res) => {
+    check('csrf-retry-recovered', res.ok === true);
+    check('csrf-retry-two-gets', ok.seen.gets === 2);
+    check('csrf-retry-two-posts', ok.seen.posts === 2);
+    check('csrf-retry-clears-stale-token',
+      ok.seen.postHeaders[0]['X-CSRF-Token'] === 'c1'
+      && ok.seen.postHeaders[1]['X-CSRF-Token'] === 'c2');
+    // The stale pair really was dropped: the recovery GET starts a NEW
+    // session (empty X-Session-Token) instead of replaying 's1', which is
+    // what server.py's sliding-TTL mint expects from a client that was told
+    // its token is no longer valid.
+    check('csrf-retry-drops-stale-session',
+      ok.seen.getHeaders[0]['X-Session-Token'] === ''
+      && ok.seen.getHeaders[1]['X-Session-Token'] === '');
+
+    // --- the retry also fails: stop, surface the rejection, no storm -------
+    const storm = backendResponder(() => ({
+      ok: false, status: 403,
+      json: async () => ({ ok: false, error_key: 'err.forbidden',
+                           error_body: 'Missing CSRF token. Fetch /api/extract (GET) to obtain a valid token.' }),
+      text: async () => 'missing csrf',
+    }));
+    ctx.fetch = storm.fetchImpl;
+    resetBackendSession(ctx);
+    return ctx.rcaCallBackend(opts, 'QUFB').then((r2) => {
+      check('csrf-storm-bounded-to-one-retry',
+        storm.seen.posts === 2 && storm.seen.gets === 2);
+      check('csrf-storm-surfaces-forbidden',
+        r2.ok === false && r2.errorKey === 'err.forbidden');
+    });
+  }).then(() => {
+    // --- an ORIGIN 403 (same err.forbidden, no CSRF in the body) must NOT be
+    // retried: a new token cannot fix it. -----------------------------------
+    const origin = backendResponder(() => ({
+      ok: false, status: 403,
+      json: async () => ({ ok: false, error_key: 'err.forbidden',
+                           error_body: 'Origin mismatch: request came from http://evil.example' }),
+      text: async () => 'origin mismatch',
+    }));
+    ctx.fetch = origin.fetchImpl;
+    resetBackendSession(ctx);
+    const opts2 = {
+      apiKey: 'sk', baseUrl: 'https://example.com', model: 'm', maxTokens: 100,
+      mode: 'range_chart', transport: 'backend', signal: nullSignal(),
+    };
+    return ctx.rcaCallBackend(opts2, 'QUFB').then((r3) => {
+      check('csrf-origin-403-not-retried', origin.seen.posts === 1);
+      check('csrf-origin-403-key-preserved',
+        r3.ok === false && r3.errorKey === 'err.forbidden');
+    });
+  });
+}
+const _csrfRetry = trackAsync('backend-csrf-silent-retry', test_backend_csrf_silent_retry());
+
+// (N3) An `error_key` read out of a response body is attacker-shaped input:
+// it used to be copied into `result.errorKey` verbatim, and app.js renders
+// that through t(). Only keys that exist in the known corpus may be adopted.
+function test_backend_error_key_whitelist() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const opts = (transport, baseUrl) => ({
+    apiKey: 'sk', baseUrl: baseUrl || 'https://example.com', model: 'm',
+    maxTokens: 100, mode: 'range_chart', transport, signal: nullSignal(),
+    dataUrl: 'data:image/png;base64,QUFB', mediaType: 'image/png',
+  });
+
+  // A hostile body cannot install an arbitrary i18n key (and the raw value is
+  // not echoed into the result either).
+  const hostile = backendResponder(() => ({
+    ok: false, status: 400,
+    json: async () => ({ ok: false, error_key: 'err.<img src=x onerror=alert(1)>',
+                         error_body: 'provider said no' }),
+    text: async () => 'no',
+  }));
+  ctx.fetch = hostile.fetchImpl;
+  resetBackendSession(ctx);
+  return ctx.rcaCallBackend(opts('backend'), 'QUFB').then((res) => {
+    check('errkey-unknown-backend-dropped',
+      res.ok === false && res.errorKey === 'err.http');
+    check('errkey-unknown-not-echoed', String(res.errorKey).indexOf('<img') === -1);
+    check('errkey-body-still-shown', res.errorBody === 'provider said no');
+
+    // A known key is adopted verbatim — the whitelist must not flatten the
+    // server's specific diagnostics.
+    const known = backendResponder(() => ({
+      ok: false, status: 429,
+      json: async () => ({ ok: false, error_key: 'err.rateLimit',
+                           error_body: 'slow down' }),
+      text: async () => 'slow down',
+    }));
+    ctx.fetch = known.fetchImpl;
+    resetBackendSession(ctx);
+    return ctx.rcaCallBackend(opts('backend'), 'QUFB').then((r2) => {
+      check('errkey-known-backend-adopted', r2.errorKey === 'err.rateLimit');
+      check('errkey-known-not-replaced-by-generic', r2.status === 429);
+    });
+  }).then(() => {
+    // ok=true with a stray key: no error surfaced at all.
+    const good = backendResponder(() => ({
+      ok: true, status: 200,
+      json: async () => ({ ok: true, error_key: 'err.not-a-real-key',
+                           data: { species_ranges: [] } }),
+      text: async () => '',
+    }));
+    ctx.fetch = good.fetchImpl;
+    resetBackendSession(ctx);
+    return ctx.rcaCallBackend(opts('backend'), 'QUFB').then((r3) => {
+      check('errkey-ok-true-no-key', r3.ok === true && r3.errorKey === null);
+    });
+  }).then(() => {
+    // --- direct transport: same whitelist, plus the #110 truncation bound. --
+    const directWith = (bodyText, status) => {
+      ctx.fetch = async () => ({
+        ok: false, status: status,
+        json: async () => { throw new Error('not json'); },
+        text: async () => bodyText,
+      });
+      return ctx.extractRangeChart(opts('direct', 'https://api.example.com'));
+    };
+    return directWith('{"error_key":"err.injected.key"}', 400).then((r4) => {
+      check('errkey-direct-unknown-dropped',
+        r4.ok === false && r4.errorKey === 'err.http');
+      return directWith('{"error_key":"err.bodyTooLarge"}', 400);
+    }).then((r5) => {
+      check('errkey-direct-known-adopted', r5.errorKey === 'err.bodyTooLarge');
+      return directWith('{"error_key":"err.401"}', 403);
+    }).then((r6) => {
+      // The body key wins over the status-derived one — that is the point of
+      // lifting it (unchanged from before the whitelist existed).
+      check('errkey-direct-403-body-key', r6.errorKey === 'err.401');
+      // A key sitting BEYOND MAX_ERROR_BODY_CHARS is cut off with the body it
+      // came in, so it cannot surface (mirror of error_utils.py #110).
+      const MAX = ctx.RCAErrorUtils.MAX_ERROR_BODY_CHARS;
+      const padded = '{"pad":"' + 'a'.repeat(MAX) + '","error_key":"err.rateLimit"}';
+      return directWith(padded, 429).then((r7) => {
+        check('errkey-direct-truncated-key-dropped', r7.errorKey === 'err.429');
+        check('errkey-direct-body-bounded', (r7.raw || '').length === MAX);
+      });
+    });
+  });
+}
+const _errKey = trackAsync('backend-error-key-whitelist', test_backend_error_key_whitelist());
+
+// (N4) error-utils retry semantics mirrored this round:
+//   #108 1 s floor that a `maxDelay` below it still overrides,
+//   #109 no sleep after the LAST attempt and onRetry called once per retry,
+//   #110 the error code is parsed out of the TRUNCATED body only.
+function test_error_utils_retry_and_truncation() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const delay = (o) => ctx.getRetryDelay(o);
+  const hdr = (map) => ({ get: (k) => map[String(k).toLowerCase()] });
+
+  check('eu-floor-lifts-retry-after-zero',
+    delay({ status: 429, headers: hdr({ 'retry-after': '0' }), attempt: 0, maxDelay: 60 }) >= 1.0);
+  check('eu-floor-lifts-retry-after-ms-zero',
+    delay({ status: 429, headers: hdr({ 'retry-after-ms': '0' }), attempt: 0, maxDelay: 60 }) >= 1.0);
+  check('eu-retry-after-above-floor-kept',
+    delay({ status: 429, headers: hdr({ 'retry-after': '5' }), attempt: 0, maxDelay: 60 }) === 5);
+  check('eu-floor-default-first-attempt',
+    delay({ status: 503, attempt: 0, initialDelay: 0.8, backoffFactor: 1.6, maxDelay: 30 }) >= 1.0);
+  check('eu-maxdelay-zero-still-wins',
+    delay({ status: 429, headers: hdr({ 'retry-after': '30' }), attempt: 2, maxDelay: 0 }) === 0);
+  check('eu-maxdelay-below-floor-wins',
+    delay({ status: 429, attempt: 5, initialDelay: 0.4, backoffFactor: 1, maxDelay: 0.5 }) === 0.5);
+
+  // #109: spy on the timers the loop arms (abortableSleep is the only user of
+  // setTimeout inside retryWithBackoff) and run them immediately.
+  const realSetTimeout = ctx.setTimeout;
+  const sleeps = [];
+  ctx.setTimeout = (fn, ms) => { sleeps.push(ms); return realSetTimeout(fn, 0); };
+  let attempts = 0;
+  const onRetryCalls = [];
+  return ctx.retryWithBackoff(async () => {
+    attempts += 1;
+    const e = new Error('HTTP 503'); e.status = 503;
+    throw e;
+  }, {
+    maxRetries: 2, initialDelay: 0.01, backoffFactor: 1.0, maxDelay: 60,
+    onRetry: (a, d) => onRetryCalls.push([a, d]),
+  }).then(() => null, () => null).then(() => {
+    ctx.setTimeout = realSetTimeout;
+    check('eu-throws-after-last-attempt', attempts === 3);
+    check('eu-no-sleep-after-last-failure', sleeps.length === 2);
+    check('eu-onretry-count-equals-retries', onRetryCalls.length === 2);
+    check('eu-onretry-receives-the-real-delay',
+      onRetryCalls.length === 2 && onRetryCalls[0][1] === sleeps[0] / 1000);
+    check('eu-loop-delay-carries-floor', sleeps.every((ms) => ms >= 1000));
+  }).then(() => {
+    // The `retryable` predicate path: a result that keeps being refused is
+    // returned after the last attempt WITHOUT a further sleep.
+    const real2 = ctx.setTimeout;
+    const sleeps2 = [];
+    ctx.setTimeout = (fn, ms) => { sleeps2.push(ms); return real2(fn, 0); };
+    let calls = 0;
+    return ctx.retryWithBackoff(async () => { calls += 1; return { status: 503 }; }, {
+      maxRetries: 2, initialDelay: 0.01, backoffFactor: 1, maxDelay: 60,
+      retryable: (r) => r.status === 503,
+    }).then((last) => {
+      ctx.setTimeout = real2;
+      check('eu-predicate-attempts', calls === 3);
+      check('eu-predicate-returns-last-result', last && last.status === 503);
+      check('eu-predicate-no-trailing-sleep', sleeps2.length === 2);
+    });
+  }).then(() => {
+    // #110: normalizeError must parse the stored (truncated) body only.
+    const MAX = ctx.RCAErrorUtils.MAX_ERROR_BODY_CHARS;
+    check('eu-max-body-chars-exported', MAX === 2000);
+    const shortBody = '{"error_code":"RATE_LIMITED","message":"no"}';
+    const norm1 = ctx.normalizeError(429, shortBody, 'HTTP 429');
+    check('eu-code-parsed-from-short-body', norm1.errorCode === 'RATE_LIMITED');
+    const longBody = '{"pad":"' + 'a'.repeat(MAX) + '","error_code":"HIDDEN"}';
+    const norm2 = ctx.normalizeError(429, longBody, 'HTTP 429');
+    check('eu-body-truncated', norm2.body.length === MAX);
+    check('eu-code-beyond-truncation-dropped', norm2.errorCode === null);
+    check('eu-extract-code-empty-body-null', ctx.extractErrorCode('') === null);
+    check('eu-extract-code-parses-given-text',
+      ctx.extractErrorCode('{"code":"X"}') === 'X');
+  });
+}
+const _euRetry = trackAsync('error-utils-retry-truncation', test_error_utils_retry_and_truncation());
 
 // (R4) i18n: every language must carry the same placeholders as the Python
 // dictionary. The zh abundance message had dropped {sample}, so Chinese
@@ -2828,7 +3894,16 @@ function test_quality_zonation_content_keys() {
 
 test_name_clean_lookup_parity();
 test_render_tolerates_malformed_rows();
-test_ssrf_guard_ipv6();
+// REVIEW-2026-09-20 (M4 / L2 / item e-g, j): the exporter-mirror locks.
+test_table_dispatch_order_mirrors_exporter();
+test_agreement_band_and_pill_share_thresholds();
+test_export_cell_text_mirrors_python();
+test_i18n_shared_namespace_parity();
+test_export_filename_follows_dispatch();
+test_chart_mode_detection_matches_python();
+// test_ssrf_guard_ipv6() and the four network-layer tests now self-register
+// with trackAsync() at their definition site (they are async), so they must
+// NOT be called again here.
 test_i18n_placeholder_parity();
 test_quality_msg_key_parity();
 test_quality_zonation_content_keys();

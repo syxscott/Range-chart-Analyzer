@@ -27,6 +27,19 @@ const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const MAX_ERROR_BODY_CHARS = 2000;
 
 /**
+ * REVIEW-2026-09-20 #108 (mirror of rca_core/error_utils.py
+ * MIN_RETRY_DELAY_SECONDS): floor for every computed retry delay. A provider
+ * legitimately answers a 429 with ``Retry-After: 0`` (or ``Retry-After-Ms: 0``,
+ * or an HTTP-date that has already passed), which used to be honoured
+ * literally: the retry loop then hammered the endpoint back-to-back with zero
+ * spacing, which is exactly what turns a rate limit into a longer BAN.
+ * The floor is applied BELOW the ceiling, so a caller that caps under it
+ * (``maxDelay = 0``, i.e. the tests that must not sleep) still gets its
+ * ceiling — see getRetryDelay().
+ */
+const MIN_RETRY_DELAY_SECONDS = 1.0;
+
+/**
  * Normalize an HTTP error into a structured form.
  * Handles various error body formats: empty, plain text, JSON, arbitrary bytes.
  * @param {number|null} status - HTTP status code
@@ -36,8 +49,14 @@ const MAX_ERROR_BODY_CHARS = 2000;
  */
 function normalizeError(status, bodyText, message) {
     const body = (bodyText || '').substring(0, MAX_ERROR_BODY_CHARS);
+    // REVIEW-2026-11-07 (low): test the STORED (truncated) form, not the full
+    // decoded text — mirrors _decode_body/normalize_http_error in
+    // rca_core/error_utils.py. A message that embeds the full body also
+    // embeds its truncated prefix, so this covers both cases.
     const messageCarriesBody = !body || message.indexOf(body) >= 0;
-    const errorCode = extractErrorCode(bodyText);
+    // REVIEW-2026-09-20 #110: parse exactly what is stored (see
+    // extractErrorCode()).
+    const errorCode = extractErrorCode(body);
     const retryHint = getRetryHint(status, errorCode);
 
     return {
@@ -52,13 +71,21 @@ function normalizeError(status, bodyText, message) {
 
 /**
  * Try to extract a machine-readable error code from the body.
- * @param {string|null} bodyText
+ *
+ * REVIEW-2026-09-20 #110 (mirror of rca_core/error_utils.py
+ * _extract_error_code): callers must hand in the body AFTER the
+ * MAX_ERROR_BODY_CHARS trim (normalizeError() does that), so the ``[CODE]``
+ * prefix the user sees can only ever come from text that is actually
+ * displayed — and a huge hostile body costs one bounded parse instead of a
+ * second unbounded one. A body truncated mid-JSON simply yields no code,
+ * like any other non-JSON error body.
+ * @param {string|null} body - Already-truncated error body text
  * @returns {string|null}
  */
-function extractErrorCode(bodyText) {
-    if (!bodyText) return null;
+function extractErrorCode(body) {
+    if (!body) return null;
     try {
-        const data = JSON.parse(bodyText);
+        const data = JSON.parse(body);
         if (typeof data === 'object' && data !== null) {
             // Common error code locations
             for (const key of ['error_code', 'code', 'type', 'error.type']) {
@@ -214,7 +241,14 @@ function getRetryDelay({
         delay = baseDelay * jitter;
     }
 
-    return Math.min(delay, maxDelay);
+    // REVIEW-2026-09-20 #108 (mirror of get_retry_delay()): cap first, then
+    // lift to the 1 s floor. A ``Retry-After: 0`` (or an already-elapsed HTTP
+    // date) is honoured as "no information" rather than as "hammer me again
+    // immediately"; a caller that caps below the floor (``maxDelay = 0``, i.e.
+    // the tests that must not sleep) still gets its ceiling because the floor
+    // itself is clamped to it.
+    delay = Math.min(delay, maxDelay);
+    return Math.max(delay, Math.min(MIN_RETRY_DELAY_SECONDS, maxDelay));
 }
 
 /**
@@ -254,6 +288,20 @@ function abortableSleep(ms, signal) {
  * @param {Function|null} [options.onRetry=null] - Callback: (attempt, delay, error)
  * @param {AbortSignal|null} [options.signal=null] - AbortSignal to cancel retries
  * @returns {Promise<*>} The function's return value
+ *
+ * REVIEW-2026-09-20 #109 (mirror of retry_with_backoff(), and of the
+ * `if attempt == retries - 1: return` guard in
+ * rca_core/llm.py:call_llm_api_with_retry): the loop must NOT sleep once more
+ * after the LAST attempt — previously the "result deemed retryable" path fell
+ * through to the delay/sleep block even when no retry could follow, so a
+ * 3-retry loop slept 4 times and ``on_retry`` reported a retry that never
+ * happened. Both failure paths now ``break`` before the delay is computed, so
+ * onRetry() and the sleep run exactly once per ACTUAL retry.
+ *
+ * The delay itself comes from getRetryDelay(), i.e. it carries the 1 s floor
+ * (#108) — matching the two Python NETWORK retry loops (extractor.py
+ * `_call_llm` and llm.py `call_llm_api_with_retry`, both of which go through
+ * error_utils.get_retry_delay) — which is what this browser path mirrors.
  */
 async function retryWithBackoff(func, {
     maxRetries = 3,
@@ -382,6 +430,10 @@ window.RCAErrorUtils = {
     retryWithBackoff,
     abortableSleep,
     extractFetchError,
+    // REVIEW-2026-09-20 #110 / #108: exported so the parity tests can pin the
+    // truncated-body contract and the delay floor directly.
+    extractErrorCode,
     RETRYABLE_STATUS,
     MAX_ERROR_BODY_CHARS,
+    MIN_RETRY_DELAY_SECONDS,
 };

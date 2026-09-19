@@ -20,6 +20,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import sys
 import time
@@ -30,6 +31,14 @@ from urllib.parse import unquote, urlparse
 # --- Sliding-window rate limiter (30 requests / minute per remote IP) ---
 _RATE_WINDOW_SEC = 60
 _RATE_MAX_REQUESTS = 30
+# REVIEW-2026-09-20: the CSRF-mint GET and the provenance GET used to consume
+# the SAME bucket as POST /api/extract, so any web page could drive a victim's
+# browser with 30 free GETs per minute (no CSRF token needed, no auth) and
+# every later legitimate extraction then got 429 - the cheap request starves
+# the expensive one. Each endpoint now has its own bucket key AND a higher
+# cap, so token minting can never crowd out extractions.
+_RATE_MAX_REQUESTS_GET = 120
+_RATE_MAX_REQUESTS_PROV = 60
 _rate_history: dict[str, collections.deque] = {}
 _rate_lock = threading.Lock()
 # REVIEW-2026-09-10: sweep fully-expired entries once the map is this large,
@@ -60,6 +69,26 @@ _SESSION_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-]{8,128}")
 _PROVENANCE_CLIENT_HEADER = "X-RCA-Client"
 _PROVENANCE_CLIENT_VALUE = "range-chart-analyzer"
 
+# REVIEW-2026-09-20: ``X-RCA-Client`` is a FIXED, source-visible string, so it
+# is an anti-scanner measure, not authentication: any process that can reach
+# the port can read the whole audit trail (image fingerprints, provider
+# endpoints/models, per-slot LLM replies) with one curl. The endpoint now ALSO
+# requires that the caller is either (a) connected over loopback - the only way
+# the local GUI uses it - or (b) presenting the shared secret
+# ``RCA_PROVENANCE_TOKEN`` (env) in ``X-Provenance-Token``, compared in
+# constant time. With no token configured the endpoint stays loopback-only;
+# with a token configured EVERY caller (loopback included) must present it, so
+# an operator who deliberately exposes the server cannot leave the audit trail
+# readable by the whole network.
+_PROVENANCE_TOKEN_HEADER = "X-Provenance-Token"
+_PROVENANCE_TOKEN_ENV = "RCA_PROVENANCE_TOKEN"
+# REVIEW-2026-09-20: ``int(_prov_match.group(1))`` sat OUTSIDE the try, and the
+# \d+ pattern accepted a 5000-digit id: ``int()`` on > 4300 digits raises
+# ValueError (CPython integer-string limit), which escaped do_GET and closed the
+# connection with no JSON response at all. 12 digits is far past any real
+# history id (and ``int(...)`` on <= 12 digits can never hit the limit).
+_PROVENANCE_ID_RE = re.compile(r"^/api/history/(\d{1,12})/provenance$")
+
 # Sprint B (REVIEW-2026-09-04) #1: per-request timeout clamp + the slack
 # added on top of timeout_sec to form the multi-run *batch* budget.
 # Module-level so regression tests can shrink them (the clamps inline in
@@ -68,6 +97,19 @@ _PROVENANCE_CLIENT_VALUE = "range-chart-analyzer"
 _MIN_EXTRACT_TIMEOUT_SEC = 10
 _MAX_EXTRACT_TIMEOUT_SEC = 300
 _MULTI_RUN_TIMEOUT_SLACK_SEC = 10
+
+# REVIEW-2026-09-20: the SINGLE-run path had no deadline at all. `Handler.timeout`
+# (60 s) and _BODY_DEADLINE_SEC only cover the inbound socket; the outbound
+# request is bounded by a per-RECV inactivity timeout, so a slow-drip provider
+# (one byte every 299 s) kept a handler thread - and its 20 MB request body -
+# alive forever, 30 of them per rate-limit window. The multi-run branch already
+# had a batch budget (Sprint B #1); single-run gets the same treatment: a hard
+# wall-clock cutoff of ``timeout_sec`` x the maximum number of outbound attempts
+# the stack can spend on one extraction, plus slack.
+#   attempts: llm.call_llm_api_with_retry (retries=3) + the extractor's
+#   empty-reply re-ask + the "auto" mode classification round-trip + 1 spare.
+_SINGLE_RUN_MAX_ATTEMPTS = 6
+_SINGLE_RUN_DEADLINE_SLACK_SEC = 15
 
 
 # S8 fix: redact API-key-like patterns from error_body before echoing to the UI.
@@ -139,6 +181,29 @@ def _raw_text(entry) -> str:
     if isinstance(entry, dict):
         return entry.get("text", "") or ""
     return entry or ""
+
+
+def _safe_confidence(result) -> float:
+    """Best-effort numeric confidence of an ExtractResult for the audit row.
+
+    REVIEW-2026-09-20: ``float((result.data or {}).get("confidence", 0.0))``
+    assumed ``result.data`` is a dict. A provider that answers with a JSON
+    array / string / number at the root (or an ``{"confidence": "high"}``) made
+    the call raise AttributeError/TypeError/ValueError - inside
+    ``_write_history_record`` that aborted the whole audit write (swallowed by
+    its blanket except), so the extraction silently vanished from history.
+    Any unusable value degrades to 0.0 and the record still gets written.
+    """
+    data = getattr(result, "data", None)
+    if not isinstance(data, dict):
+        return 0.0
+    try:
+        value = data.get("confidence", 0.0)
+        if value is None:
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _validate_provider_fields(provider_raw: dict) -> str:
@@ -381,9 +446,20 @@ def _write_history_record(result, mode, runs, provider, max_tokens,
                     meta["seed"] = eb["seed"]
         # image_sha256: prefer the one already-computed by the extractor
         # (covers clipboard-paste paths), else hash now.
-        sha = getattr(result, "image_sha256", "") or compute_image_sha256_from_b64(
-            getattr(result, "_image_b64_for_audit", "")
-        )
+        #
+        # REVIEW-2026-09-20: when NEITHER is available the old code hashed the
+        # EMPTY string, producing the e3b0c442... (sha256 of b"") sentinel.
+        # HistoryStore.get_by_sha256 then grouped every such record as "the
+        # same image", so an audit query for one figure returned unrelated
+        # extractions. A missing fingerprint is now recorded as missing (the
+        # column is nullable) instead of as a bogus shared digest.
+        sha = getattr(result, "image_sha256", "") or ""
+        if not sha:
+            _audit_b64 = getattr(result, "_image_b64_for_audit", "") or ""
+            if _audit_b64:
+                sha = compute_image_sha256_from_b64(_audit_b64)
+            else:
+                meta["image_sha256_missing"] = True
         meta.setdefault("image_sha256", sha)
         meta.setdefault("runs", runs)
 
@@ -419,7 +495,7 @@ def _write_history_record(result, mode, runs, provider, max_tokens,
             runs=runs,
             result=result.data if result.ok and isinstance(result.data, dict) else {},
             raw=(result.raw or "")[:8192],
-            confidence=float((result.data or {}).get("confidence", 0.0) or 0.0),
+            confidence=_safe_confidence(result),
             partial_failures=partial_failures,
             duration_ms=duration_ms if duration_ms is not None else int(getattr(result, "latency_ms", 0) or 0),
             status_code=getattr(result, "status", None),
@@ -450,8 +526,15 @@ STATIC_ALLOWED_ENTRIES = (
     "css",
     "assets",
     "app",
-    "references",
     "favicon.ico",
+    # REVIEW-2026-09-20: "references" (604 MB of research-paper PDFs and
+    # markdown notes, vendored for the docs/ pipeline) used to be on this list.
+    # Nothing in the web frontend, in app/ (the PyWebView loading screen) or in
+    # gui_fluent_history_detail.py's embedded HTML requests it — verified by
+    # grepping every JS/HTML/PY file for a ``/references`` URL — so serving it
+    # only turned the same-origin static handler into a bulk file download of
+    # non-app content (and one paper PDF is larger than the 50 MB guard, so the
+    # handler paid a getsize + reject round-trip for nothing).
 )
 
 # Expected host allowlist — populated when the server starts based on
@@ -460,6 +543,22 @@ STATIC_ALLOWED_ENTRIES = (
 # of the client-controlled ``Host`` header (which a DNS-rebinding
 # attacker can spoof).
 EXPECTED_HOSTS: set[str] = set()
+
+
+def _host_forms(host: str, port: int) -> "list[str]":
+    """netloc shapes a browser may present as its Origin for *host*:*port*.
+
+    REVIEW-2026-09-20: only ``host:port`` was registered. A page loaded from
+    the default port sends ``Origin: http://192.168.1.20`` — netloc WITHOUT a
+    port — which never matched the allowlist, so every extraction 403'd. The
+    port-less form is only added when it is genuinely the default port (80),
+    so a mismatched ``http://host`` Origin cannot reach a server on 8000.
+    """
+    bare = f"[{host}]" if ":" in host else host
+    forms = [f"{bare}:{port}"]
+    if port == 80:
+        forms.append(bare)
+    return forms
 
 
 def populate_expected_hosts(host: str, port: int) -> None:
@@ -478,13 +577,21 @@ def populate_expected_hosts(host: str, port: int) -> None:
     wrapper anchor the CSRF check to addresses this machine actually
     serves on. Call it from every startup path (``main()`` and
     ``app.py:_start_server``).
+
+    REVIEW-2026-09-20: the set is CLEARED first and every entry is added in
+    both its ``host:port`` and (default-port only) port-less form. Previously
+    the set only ever GREW, so a second ``populate_expected_hosts`` call on a
+    different port (app.py probing 8000 then 8765, a test suite that starts
+    several servers, a re-bind after ``--port`` reselection) left every
+    earlier port allowlisted forever — the allowlist silently accumulated
+    addresses the process no longer serves.
     """
     host = (host or "").strip()
-    EXPECTED_HOSTS.add(f"localhost:{port}")
-    EXPECTED_HOSTS.add(f"127.0.0.1:{port}")
-    EXPECTED_HOSTS.add(f"[::1]:{port}")
+    EXPECTED_HOSTS.clear()
+    for alias in ("localhost", "127.0.0.1", "::1"):
+        EXPECTED_HOSTS.update(_host_forms(alias, port))
     if host and host not in ("0.0.0.0", "::", ""):
-        EXPECTED_HOSTS.add(f"{host}:{port}")
+        EXPECTED_HOSTS.update(_host_forms(host, port))
     if host in ("0.0.0.0", "::", ""):
         # Wildcard bind — enumerate this machine's own addresses so LAN
         # clients can reach the CSRF check with their real Origin.
@@ -498,16 +605,44 @@ def populate_expected_hosts(host: str, port: int) -> None:
             if ip in seen:
                 continue
             seen.add(ip)
-            if ":" in ip:
-                EXPECTED_HOSTS.add(f"[{ip}]:{port}")
-            else:
-                EXPECTED_HOSTS.add(f"{ip}:{port}")
+            EXPECTED_HOSTS.update(_host_forms(ip, port))
+
+
+def is_loopback_bind(host: str) -> bool:
+    """True when *host* binds loopback only (the safe default)."""
+    host = (host or "").strip().strip("[]")
+    if host in ("", "localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_loopback_addr(addr: str) -> bool:
+    """True for the peer address of a connection from this very machine.
+
+    Handles the IPv4-mapped IPv6 spelling (``::ffff:127.0.0.1``) a dual-stack
+    ``ThreadingHTTPServer`` reports for loopback v4 clients, and the
+    ``fe80::1%eth0`` scope-id form. Non-parseable addresses are NOT loopback
+    (fail closed).
+    """
+    bare = (addr or "").split("%", 1)[0].strip("[]")
+    try:
+        ip = ipaddress.ip_address(bare)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        return mapped.is_loopback
+    return ip.is_loopback
+
 
 # CSRF token storage: thread-safe dict mapping session tokens to CSRF tokens.
 # In a production system you'd use a proper session store (Redis, DB, etc.).
 # For this single-server application, an in-memory dict with a lock suffices.
 _csrf_lock = threading.RLock()
-_csrf_store: dict[str, tuple[str, float]] = {}  # session_token -> (csrf_token, created_at)
+_csrf_store: dict[str, tuple[str, float]] = {}  # session_token -> (csrf_token, last_seen_at)
 _CSRF_TOKEN_TTL_SEC = 3600  # 1 hour
 
 
@@ -517,15 +652,30 @@ def _generate_csrf_token() -> str:
 
 
 def _get_csrf_for_session(session_token: str) -> str | None:
-    """Retrieve the CSRF token for a given session, or None if not found or expired."""
+    """Retrieve the CSRF token for a given session, or None if not found or expired.
+
+    REVIEW-2026-09-20: a successful lookup SLIDES the expiry forward (the stored
+    timestamp is the last validated use, not the mint time). With the previous
+    absolute TTL a page left open across the hour boundary failed its NEXT
+    extraction with a bare 403 - and the client cannot silently repair it,
+    because the token mint is a separate request the caller has already moved
+    past. Sliding keeps an actively used session alive while an abandoned token
+    still dies after the same idle period, which is the property the TTL exists
+    for. The token is deliberately NOT consumed (single-use): the web client
+    fires several parallel extractions with the same pair, so one-shot tokens
+    would need a per-request mint the frontend does not implement.
+    """
     with _csrf_lock:
         entry = _csrf_store.get(session_token)
         if entry is None:
             return None
-        csrf_token, created_at = entry
-        if time.time() - created_at > _CSRF_TOKEN_TTL_SEC:
+        csrf_token, last_seen = entry
+        now = time.time()
+        if now - last_seen > _CSRF_TOKEN_TTL_SEC:
             _csrf_store.pop(session_token, None)
             return None
+        # Slide: cheap dict write, keeps the entry from expiring mid-session.
+        _csrf_store[session_token] = (csrf_token, now)
         return csrf_token
 
 
@@ -544,6 +694,8 @@ def _set_csrf_for_session(session_token: str, csrf_token: str) -> None:
         # them. Sweep expired entries first — they are the natural
         # eviction candidates — and only fall back to FIFO for the
         # still-valid ones if the store is genuinely over the cap.
+        # REVIEW-2026-09-20: the timestamp is now "last validated use" (see
+        # _get_csrf_for_session), so this sweep evicts IDLE-out tokens.
         now = time.time()
         expired = [k for k, (_t, created) in _csrf_store.items()
                    if now - created > _CSRF_TOKEN_TTL_SEC]
@@ -558,9 +710,48 @@ def _set_csrf_for_session(session_token: str, csrf_token: str) -> None:
                 break
 
 
-def _check_rate_limit(ip: str) -> tuple[bool, int]:
-    """Return (allowed, seconds_until_reset). Sliding window 30 req / 60 s."""
+def _rate_bucket(addr: str) -> str:
+    """Map a socket address to its rate-limit key.
+
+    REVIEW-2026-09-20: an IPv6 client owns at least a /64 by RFC 4291 and a
+    privacy-extension host rotates its interface identifier every few hours
+    (RFC 8981), so keying the sliding window on the FULL address let one
+    machine mint a fresh 30-req/min budget per temporary address - the limit
+    protected nobody. IPv6 keys are now aggregated to their /64 (the smallest
+    allocation a site can receive); IPv4 stays exact, where a shared CGNAT
+    /24 could otherwise punish innocent neighbours.
+    """
+    if not addr:
+        return "unknown"
+    # `client_address` may carry a scope id (fe80::1%eth0) - not part of the key.
+    bare = addr.split("%", 1)[0].strip("[]")
+    if ":" in bare:
+        try:
+            ip = ipaddress.ip_address(bare)
+        except ValueError:
+            return bare
+        v4 = ip.ipv4_mapped
+        if v4 is not None:
+            return str(v4)
+        try:
+            return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+        except ValueError:  # pragma: no cover - defensive
+            return str(ip)
+    return bare
+
+
+def _check_rate_limit(ip: str, bucket: str = "",
+                      max_requests: int = _RATE_MAX_REQUESTS) -> tuple[bool, int]:
+    """Return (allowed, seconds_until_reset). Sliding window per (bucket, IP).
+
+    ``bucket`` separates the budgets of endpoints with different costs (the
+    free CSRF-mint GET must not starve the paid POST); ``max_requests`` is the
+    cap for that bucket.
+    """
     now = time.time()
+    key = _rate_bucket(ip)
+    if bucket:
+        key = f"{bucket}:{key}"
     with _rate_lock:
         # REVIEW-2026-09-10: an entry used to be deleted only when THAT SAME
         # ip returned after its window had slid fully empty, so a one-shot
@@ -573,9 +764,9 @@ def _check_rate_limit(ip: str) -> tuple[bool, int]:
                      if not w or w[-1] < cutoff_sweep]
             for k in stale:
                 _rate_history.pop(k, None)
-        window = _rate_history.get(ip)
+        window = _rate_history.get(key)
         if window is None:
-            _rate_history[ip] = collections.deque([now], maxlen=_RATE_MAX_REQUESTS)
+            _rate_history[key] = collections.deque([now], maxlen=max_requests)
             return True, 0
         cutoff = now - _RATE_WINDOW_SEC
         while window and window[0] < cutoff:
@@ -584,9 +775,9 @@ def _check_rate_limit(ip: str) -> tuple[bool, int]:
         # empty, recycle the entry so ``_rate_history`` cannot grow without
         # bound across many distinct (or rotating) client IPs.
         if not window:
-            del _rate_history[ip]
+            del _rate_history[key]
             return True, 0
-        if len(window) >= _RATE_MAX_REQUESTS:
+        if len(window) >= max_requests:
             oldest = window[0]
             wait = int(oldest + _RATE_WINDOW_SEC - now) + 1
             return False, max(1, wait)
@@ -611,6 +802,46 @@ _CONTENT_TYPES = {
 MAX_BODY_BYTES = 20 * 1024 * 1024  # S9 fix: 20 MB cap (was 40 MB).
 # Multi-run (runs<=5) means concurrent decoded images could use up to
 # ~5 * 15 MB ≈ 75 MB; 20 MB cap keeps total memory safe for 2 GB machines.
+
+# REVIEW-2026-09-20: static files are streamed in chunks of this size instead
+# of being slurped into one bytes object (see do_GET).
+_STATIC_CHUNK_BYTES = 64 * 1024
+
+# REVIEW-2026-09-20: global memory budget. MAX_BODY_BYTES caps ONE request, and
+# _BoundedThreadingHTTPServer caps one batch of connections at
+# ``max_workers`` (default 32), so 32 simultaneous 20 MB uploads = 640 MB of
+# raw bytes plus their base64/pillow decodes and enhancement copies - far past
+# what the 2 GB target machines of this project tolerate, and a cheap
+# self-DoS. Requests whose declared body is above the threshold below must hold
+# a token from this counting semaphore for the whole time their bytes are
+# resident (read -> decode -> enhance -> extract); the 5th concurrent big
+# upload gets a structured 503 instead of pushing the process into swap.
+_BIG_BODY_BYTES = 5 * 1024 * 1024
+_BIG_BODY_CONCURRENCY = 4
+_BIG_BODY_SLOTS = threading.BoundedSemaphore(_BIG_BODY_CONCURRENCY)
+
+
+def _acquire_big_body_slot(length: int) -> bool:
+    """Take a memory-budget token for a large body. Never blocks.
+
+    Returns True when the caller holds a token (and must release it), False
+    when the request should be rejected with 503. Small bodies return True
+    immediately without consuming a token (see the paired release helper).
+    """
+    if length <= _BIG_BODY_BYTES:
+        return True
+    return _BIG_BODY_SLOTS.acquire(blocking=False)
+
+
+def _release_big_body_slot(length: int) -> None:
+    """Give back the token taken by :func:`_acquire_big_body_slot`."""
+    if length > _BIG_BODY_BYTES:
+        try:
+            _BIG_BODY_SLOTS.release()
+        except ValueError:
+            # Cannot happen (one acquire per release) but never let a
+            # bookkeeping slip take down a handler thread.
+            pass
 
 
 # Bug-6 fix: client-controlled ``provider.endpoint`` is now validated
@@ -645,6 +876,76 @@ except Exception:
     # If opener construction fails, fall back to stdlib defaults. The
     # endpoint validator is still active as a first line of defence.
     pass
+
+
+def _cache_singleton_safe():
+    """Return the shared result cache, or None when it cannot be opened.
+
+    REVIEW-2026-09-20: ``get_cache()`` itself was never wrapped, only its
+    ``.get()``/``.put()`` calls. That is backwards: ``ResultCache()`` opens (and
+    runs DDL against) ``~/.range_chart_analyzer/extract_cache.sqlite`` inside the
+    constructor, so a corrupt DB, a read-only HOME, or a full disk raised out of
+    ``get_cache()`` BEFORE any handler-level try covered it:
+
+      * single-run: /api/extract answered nothing at all (the connection closed
+        mid-request) for EVERY extraction, forever;
+      * multi-run: same, and the pre-existing ``try: cache = get_cache()`` at
+        the prefill site was unreachable dead code because the key-building
+        loop above it already raised.
+
+    The cache is an optimisation: failing to open it must degrade to "always
+    miss", never to a broken connection.
+    """
+    try:
+        from rca_core.cache import get_cache
+        return get_cache()
+    except Exception as exc:  # noqa: BLE001 - any cache failure = no cache
+        try:
+            sys.stderr.write(
+                f"[cache] unavailable, continuing without cache: "
+                f"{type(exc).__name__}: {exc}\n")
+        except Exception:
+            pass
+        return None
+
+
+def _spawn_extract_thread(mode: str, common: dict,
+                         label: str = "extract") -> concurrent.futures.Future:
+    """Run ``extract`` in a DAEMON thread and return its Future.
+
+    REVIEW-2026-09-20: the multi-run fan-out used a per-request
+    ``ThreadPoolExecutor``. Since CPython 3.9 its workers are NON-daemon and
+    ``concurrent.futures.thread`` registers an atexit hook that JOINS them, so
+    after Ctrl+C the interpreter waited for every in-flight (and every still
+    QUEUED, the queue is FIFO ahead of the sentinel) LLM call - worst case
+    several hundred seconds during which the console looks hung, exactly the
+    window in which a researcher presses Ctrl+C twice and files a "server
+    won't die" bug.
+
+    The futures returned here are plain ``concurrent.futures.Future`` objects,
+    so ``concurrent.futures.wait(...)`` / ``.result()`` at the call sites keep
+    working unchanged - only the thread behind them becomes a daemon, which
+    ``python server.py`` + Ctrl+C can then abandon. A request in flight is lost
+    on exit; that was already true (the client socket goes away with the
+    process).
+    """
+    fut: "concurrent.futures.Future[ExtractResult]" = concurrent.futures.Future()
+
+    def _worker():
+        if not fut.set_running_or_notify_cancel():
+            return  # cancelled before we started
+        try:
+            # Resolve `extract` from module globals at CALL time so tests (and
+            # the GUI embedding) can keep monkeypatching ``server.extract``.
+            result = extract(mode=mode, **common)
+        except BaseException as exc:  # noqa: BLE001 - re-raised via the future
+            fut.set_exception(exc)
+        else:
+            fut.set_result(result)
+
+    t = threading.Thread(target=_worker, name=f"rca-{label}", daemon=True)
+    t.start()
+    return fut
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -829,14 +1130,27 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         # CSRF token endpoint: issue a token for the client to use in subsequent POSTs.
         if urlparse(self.path).path.rstrip("/") == "/api/extract":
-            # Apply the same per-IP rate limit as POST so a single client
-            # cannot mint unbounded CSRF tokens (LOW: unauthenticated GET
-            # was previously uncapped).
+            # Apply a per-IP rate limit so a single client cannot mint
+            # unbounded CSRF tokens (LOW: unauthenticated GET was previously
+            # uncapped).
+            #
+            # REVIEW-2026-09-20: this used to consume the SAME bucket as the
+            # extraction POST, so any web page the victim visited could drive
+            # 30 free GETs per minute from their browser and every real
+            # extraction that followed got 429 - a cross-site denial of service
+            # with no CSRF token, no auth and no privileges needed. The mint now
+            # has its OWN bucket key ("get:"+ip) with a higher cap, which both
+            # keeps the token-flood bound and removes the cross-endpoint
+            # starvation. (The alternative — requiring a custom header on the
+            # GET — was rejected because it needs a js/minimax.js change; see
+            # the report.)
             try:
                 client_ip = self.client_address[0]
             except Exception:
                 client_ip = "unknown"
-            allowed, wait_sec = _check_rate_limit(client_ip)
+            allowed, wait_sec = _check_rate_limit(
+                client_ip, bucket="get",
+                max_requests=_RATE_MAX_REQUESTS_GET)
             if not allowed:
                 self._send_json(429, {
                     "ok": False,
@@ -876,7 +1190,7 @@ class Handler(BaseHTTPRequestHandler):
         # ``_history_store_singleton()`` instead of per-request DDL.
         from urllib.parse import urlparse as _urlparse
         _parsed_path = _urlparse(self.path).path
-        _prov_match = re.match(r"^/api/history/(\d+)/provenance$", _parsed_path)
+        _prov_match = _PROVENANCE_ID_RE.match(_parsed_path)
         if _prov_match:
             client_header = (
                 self.headers.get(_PROVENANCE_CLIENT_HEADER) or ""
@@ -888,7 +1202,32 @@ class Handler(BaseHTTPRequestHandler):
                 client_ip = self.client_address[0]
             except Exception:
                 client_ip = "unknown"
-            allowed, wait_sec = _check_rate_limit(client_ip)
+            # REVIEW-2026-09-20: ``X-RCA-Client`` is a constant published in the
+            # source, so it stops browsers/casual scanners but is NOT
+            # authentication: on a ``--host 0.0.0.0`` deployment every machine
+            # on the LAN could enumerate the audit trail (image SHA-256s,
+            # provider endpoints and model names, per-slot LLM replies). The
+            # caller must now also be loopback, or present the
+            # ``RCA_PROVENANCE_TOKEN`` shared secret.
+            configured_token = (os.environ.get(_PROVENANCE_TOKEN_ENV) or "").strip()
+            provided_token = (self.headers.get(_PROVENANCE_TOKEN_HEADER) or "").strip()
+            if configured_token:
+                if not provided_token or not secrets.compare_digest(
+                        provided_token.encode("utf-8"),
+                        configured_token.encode("utf-8")):
+                    self._send_json(403, {"error": "forbidden"})
+                    return
+            elif not _is_loopback_addr(client_ip):
+                self._send_json(403, {
+                    "error": "forbidden",
+                    "hint": f"provenance is loopback-only unless "
+                            f"{_PROVENANCE_TOKEN_ENV} is set",
+                })
+                return
+            # Its own rate bucket too (same starvation argument as the mint GET).
+            allowed, wait_sec = _check_rate_limit(
+                client_ip, bucket="prov",
+                max_requests=_RATE_MAX_REQUESTS_PROV)
             if not allowed:
                 self._send_json(429, {
                     "ok": False,
@@ -900,7 +1239,15 @@ class Handler(BaseHTTPRequestHandler):
             if store is None:
                 self._send_json(503, {"error": "history store unavailable"})
                 return
-            record_id = int(_prov_match.group(1))
+            # REVIEW-2026-09-20: the pattern caps the id at 12 digits and the
+            # conversion is guarded, so a hostile id can neither raise
+            # ValueError out of do_GET (no response at all, socket closed) nor
+            # be an unbounded-length enumeration probe.
+            try:
+                record_id = int(_prov_match.group(1))
+            except ValueError:
+                self._send_json(404, {"error": "not found"})
+                return
             rec = store.get(record_id)
             if rec is None:
                 self._send_json(404, {"error": "not found"})
@@ -935,40 +1282,54 @@ class Handler(BaseHTTPRequestHandler):
             return
         # 50 MB cap on static files so a runaway client cannot OOM the
         # server by requesting a multi-GB image.
+        #
+        # REVIEW-2026-09-20: the body used to be ``f.read()`` into one bytes
+        # object *and* written in one shot, so N concurrent clients each pinned
+        # a up-to-50 MB buffer (plus a copy in ``wfile``); the size also came
+        # from a separate ``os.path.getsize()`` that could race the read. The
+        # file is now opened first (size from ``os.fstat`` of that fd, so no
+        # TOCTOU) and streamed to the socket with ``shutil.copyfileobj`` in
+        # 64 KB chunks, which caps the per-request memory at the chunk size
+        # regardless of the file size.
         try:
-            file_size = os.path.getsize(target)
+            _fh = open(target, "rb")
         except OSError:
             self._send_json(500, {"error": "read error"})
             return
-        if file_size > 50 * 1024 * 1024:
-            self._send_json(413, {"error": "file too large"})
-            return
         try:
-            with open(target, "rb") as f:
-                data = f.read()
-        except OSError:
-            self._send_json(500, {"error": "read error"})
+            with _fh as f:
+                try:
+                    file_size = os.fstat(f.fileno()).st_size
+                except OSError:
+                    self._send_json(500, {"error": "read error"})
+                    return
+                if file_size > 50 * 1024 * 1024:
+                    self._send_json(413, {"error": "file too large"})
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", _CONTENT_TYPES[ext])
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("X-Frame-Options", "DENY")
+                self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+                # UI-REVIEW-2026-08-01 (B1): `default-src 'self'` alone blocks the
+                # upload preview (data: URLs in <img src>) and strips the inline
+                # style attributes the result renderer emits (raw-response <pre>,
+                # empty-row padding), so the main upload->extract flow looked
+                # broken under the default backend deployment. script-src still
+                # falls back to 'self' (no inline scripts), keeping the security
+                # posture for scripts intact.
+                self.send_header(
+                    "Content-Security-Policy",
+                    "default-src 'self'; img-src 'self' data:; "
+                    "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
+                )
+                self.send_header("Content-Length", str(file_size))
+                self.end_headers()
+                shutil.copyfileobj(f, self.wfile, _STATIC_CHUNK_BYTES)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            # A client that hangs up mid-download is not an error worth a
+            # traceback; ``handle_one_request`` swallows the same classes.
             return
-        self.send_response(200)
-        self.send_header("Content-Type", _CONTENT_TYPES[ext])
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
-        # UI-REVIEW-2026-08-01 (B1): `default-src 'self'` alone blocks the
-        # upload preview (data: URLs in <img src>) and strips the inline
-        # style attributes the result renderer emits (raw-response <pre>,
-        # empty-row padding), so the main upload->extract flow looked
-        # broken under the default backend deployment. script-src still
-        # falls back to 'self' (no inline scripts), keeping the security
-        # posture for scripts intact.
-        self.send_header(
-            "Content-Security-Policy",
-            "default-src 'self'; img-src 'self' data:; "
-            "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
-        )
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
 
     def do_POST(self) -> None:
         # LOW-2: strip trailing slash so /api/extract/ is also accepted.
@@ -1041,6 +1402,39 @@ class Handler(BaseHTTPRequestHandler):
                 "error_body": f"Content-Length {length} exceeds limit of {MAX_BODY_BYTES}",
             })
             return
+
+        # REVIEW-2026-09-20: global memory budget (item 9). A large upload costs
+        # the server its bytes several times over (raw body -> decoded JPEG ->
+        # PIL image -> base64 of the enhanced copy), and neither MAX_BODY_BYTES
+        # (one request) nor the bounded thread pool (connections) bounded the
+        # SUM across concurrent requests, so ~40 simultaneous 20 MB posts were
+        # enough to drive a 2 GB box into swap. Big bodies must now hold a token
+        # from the counting semaphore for the whole read/decode/enhance/extract
+        # span, and the loser gets a structured 503 instead of an OOM.
+        #
+        # The token is taken AFTER rate limiting + CSRF + size validation on
+        # purpose: unauthenticated or malformed traffic must never be able to
+        # consume the budget (that would turn a memory guard into a trivial
+        # extraction outage). Small bodies short-circuit the semaphore.
+        if not _acquire_big_body_slot(length):
+            self._send_json(503, {
+                "ok": False,
+                "error_key": "err.serverBusy",
+                "error_body": ("Server is at its concurrent large-upload limit "
+                               "(%d). Retry shortly." % _BIG_BODY_CONCURRENCY),
+            })
+            return
+        try:
+            self._handle_extract_body(length)
+        finally:
+            _release_big_body_slot(length)
+
+    def _handle_extract_body(self, length: int) -> None:
+        """Read, validate and run one /api/extract request.
+
+        Split out of :meth:`do_POST` so the big-body memory token taken there
+        can be released in a ``finally`` without re-indenting the whole handler.
+        """
         try:
             raw = self._read_body_with_deadline(length)
             if raw is None:
@@ -1327,43 +1721,62 @@ class Handler(BaseHTTPRequestHandler):
             force_rerun = bool(req.get("force_rerun"))
             cache_hit = None
             ckey = None
+            # REVIEW-2026-09-20 (item 1): ``get_cache()`` runs DDL against
+            # ~/.range_chart_analyzer/extract_cache.sqlite in its constructor, so
+            # the unguarded call below raised BEFORE any handler-level try could
+            # cover it and /api/extract closed the connection for every single-run
+            # request. Cache access now goes through the guarded singleton helper,
+            # ``cache is None`` skips all key/get/put work, and the request
+            # degrades to "always miss".
+            cache = None if force_rerun else _cache_singleton_safe()
             if not force_rerun:
-                from rca_core.cache import get_cache
                 from rca_core.prompt import prompt_version_for_mode
-                cache = get_cache()
-                # C1 fix: use stable business fields only — never repr(provider)
-                # (repr includes uuid4 id + time.time() which change on every
-                # request, making the single-run cache命中率 ≈ 0).
-                prov = common["provider"]
-                ckey = cache.make_key(
-                    endpoint=prov.endpoint if prov else "",
-                    model=prov.model if prov else "",
-                    api_format=prov.api_format.value if prov else "",
-                    extra_headers=_stable_extra_headers(prov),
-                    extra_body=_stable_extra_body(prov),
-                    prompt_version=prompt_version_for_mode(mode),
-                    max_tokens=common["max_tokens"],
-                    chart_lang=common["chart_lang"],
-                    mode=mode,
-                    image_b64=common["image_b64"],
-                    caption=common["caption"],
-                    media_type=common["media_type"],
-                )
-                # REVIEW-2026-09-10: the cache is an optimisation, so a
-                # corrupt or unopenable cache file must degrade to a miss.
-                # Previously a single bad cache left every request raising
-                # here (get_cache() only publishes the singleton after a
-                # successful construction, so each call re-raised) and the
-                # endpoint could never answer again, with no self-heal.
-                try:
-                    cache_hit = cache.get(ckey)
-                except Exception:
-                    cache_hit = None
+                if cache is not None:
+                    # C1 fix: use stable business fields only — never repr(provider)
+                    # (repr includes uuid4 id + time.time() which change on every
+                    # request, making the single-run cache命中率 ≈ 0).
+                    prov = common["provider"]
+                    try:
+                        ckey = cache.make_key(
+                            endpoint=prov.endpoint if prov else "",
+                            model=prov.model if prov else "",
+                            api_format=prov.api_format.value if prov else "",
+                            extra_headers=_stable_extra_headers(prov),
+                            extra_body=_stable_extra_body(prov),
+                            prompt_version=prompt_version_for_mode(mode),
+                            max_tokens=common["max_tokens"],
+                            chart_lang=common["chart_lang"],
+                            mode=mode,
+                            image_b64=common["image_b64"],
+                            caption=common["caption"],
+                            media_type=common["media_type"],
+                        )
+                    except Exception:
+                        ckey = None
+                    # REVIEW-2026-09-10: the cache is an optimisation, so a
+                    # corrupt or unopenable cache file must degrade to a miss.
+                    # Previously a single bad cache left every request raising
+                    # here (get_cache() only publishes the singleton after a
+                    # successful construction, so each call re-raised) and the
+                    # endpoint could never answer again, with no self-heal.
+                    if ckey:
+                        try:
+                            cache_hit = cache.get(ckey)
+                        except Exception:
+                            cache_hit = None
+            # REVIEW-2026-09-20 (item 6): ``cache.get()`` hands back whatever the
+            # sqlite blob decoded to, and the key is not content-validated. A
+            # non-dict entry (a stale writer, a truncated blob, a hand-edited DB)
+            # used to reach ``cache_hit.pop(...)``/``["_auto_mode"]`` and raise
+            # TypeError inside the hit branch — again killing the request that the
+            # cache was supposed to make fast. Non-dict payloads count as a miss.
+            if cache_hit is not None and not isinstance(cache_hit, dict):
+                cache_hit = None
             if cache_hit is not None:
                 # FIX (quality): ensure the quality badge is present even on
                 # a cache hit. The cached payload may predate the quality
                 # scorer if an older client wrote it.
-                if isinstance(cache_hit, dict) and "quality" not in cache_hit:
+                if "quality" not in cache_hit:
                     cache_hit["quality"] = _safe_score_range_chart(cache_hit)
                 # REVIEW-2026-09-10: the truncation signal lives on
                 # ExtractResult, never inside result.data, so a cache hit used
@@ -1372,24 +1785,74 @@ class Handler(BaseHTTPRequestHandler):
                 # next user of the same figure), while the attached report
                 # asserted truncated: False. The flags ride along with the
                 # cached payload under reserved keys and are stripped here.
-                cached_truncated = None
-                cached_warning = ""
-                if isinstance(cache_hit, dict):
-                    cached_truncated = cache_hit.pop("_cache_truncated", None)
-                    cached_warning = cache_hit.pop("_cache_warning", "") or ""
+                cached_truncated = cache_hit.pop("_cache_truncated", None)
+                cached_warning = cache_hit.pop("_cache_warning", "") or ""
                 if mode_source:
                     cache_hit["_auto_mode"] = {"mode": mode, "source": mode_source}
-                if isinstance(cache_hit, dict):
-                    cache_hit["report"] = build_extraction_report(
-                        data=cache_hit, mode=mode, mode_used=mode,
-                        mode_source=mode_source,
-                        truncated=cached_truncated, warning=cached_warning)
+                cache_hit["report"] = build_extraction_report(
+                    data=cache_hit, mode=mode, mode_used=mode,
+                    mode_source=mode_source,
+                    truncated=cached_truncated, warning=cached_warning)
                 self._send_json(200, {"ok": True, "data": cache_hit,
                                       "cached": True,
                                       "truncated": cached_truncated,
                                       "warning": cached_warning})
                 return
-            result = extract(mode=mode, **common)
+            # REVIEW-2026-09-20 (item 8): SINGLE-run had no wall-clock deadline.
+            # ``Handler.timeout`` (60 s) and _BODY_DEADLINE_SEC bound the INBOUND
+            # socket only; the outbound LLM call is bounded by a per-recv
+            # inactivity timeout, so a provider that trickles one byte every
+            # 299 s kept the handler thread - and its up-to-20 MB body, and its
+            # big-body memory token - alive indefinitely, 30 times per rate-limit
+            # window. The multi-run branch already had a batch budget (Sprint B
+            # #1); single-run gets the same treatment, computed the same way:
+            # timeout_sec x the maximum number of outbound attempts the stack can
+            # spend on one extraction, plus slack. The worker runs in a daemon
+            # thread (see _spawn_extract_thread) so abandoning a hung call costs
+            # neither a leaked non-daemon thread nor a Ctrl+C hang.
+            run_deadline = (timeout_sec * _SINGLE_RUN_MAX_ATTEMPTS
+                            + _SINGLE_RUN_DEADLINE_SLACK_SEC)
+            fut = _spawn_extract_thread(mode, common)
+            try:
+                result = fut.result(timeout=run_deadline)
+            except concurrent.futures.TimeoutError:
+                fut.cancel()
+                # Mirror the runs>=2 branch: a structured error JSON, never a
+                # bare exception out of do_POST.
+                self._send_json(200, {
+                    "ok": False,
+                    "data": None,
+                    "error_key": "err.timeout",
+                    "status": None,
+                    "raw": "",
+                    "truncated": False,
+                    "error_body": _redact_error_body(
+                        f"single-run deadline after {run_deadline}s "
+                        f"(timeout_sec={timeout_sec} x "
+                        f"{_SINGLE_RUN_MAX_ATTEMPTS} attempts + slack)"),
+                    "usage": {},
+                    "latency_ms": int(run_deadline * 1000),
+                    "warning": "",
+                })
+                return
+            except Exception as exc:
+                # extract() is documented to return ExtractResult, but a
+                # monkeypatched/GUI-supplied callable may raise; keep the
+                # "always JSON" contract instead of dropping the connection.
+                fut.cancel()
+                self._send_json(200, {
+                    "ok": False,
+                    "data": None,
+                    "error_key": "err.http",
+                    "status": None,
+                    "raw": "",
+                    "truncated": False,
+                    "error_body": _redact_error_body(str(exc)),
+                    "usage": {},
+                    "latency_ms": 0,
+                    "warning": "",
+                })
+                return
             # FIX (quality): score single-run results too for a consistent
             # quality badge in the UI.
             if result.ok and result.data and isinstance(result.data, dict):
@@ -1490,44 +1953,59 @@ class Handler(BaseHTTPRequestHandler):
         # writes clobbered each other and only the first slot's result
         # was retained. We salt each slot's key with ``run_idx`` so the
         # slots are independently addressable.
-        from rca_core.cache import get_cache
+        #
+        # REVIEW-2026-09-20 (item 1): the key loop below called
+        # ``get_cache().make_key(...)`` once per slot with NO guard, which made
+        # the ``try: cache = get_cache()`` that used to sit at the prefill site
+        # unreachable dead code — with a broken cache DB every multi-run request
+        # raised here and dropped the connection. One guarded probe now feeds
+        # key building, prefill and write-back; ``cache is None`` (or a failed
+        # ``make_key``) leaves the slot key as None, which means "no cache for
+        # this slot", never "failed request".
         from rca_core.prompt import prompt_version_for_mode
         prov = common["provider"]
-        slot_keys = []
+        cache = _cache_singleton_safe()
+        slot_keys: list = []
         for run_idx in range(runs):
-            slot_ckey = get_cache().make_key(
-                endpoint=prov.endpoint if prov else "",
-                model=prov.model if prov else "",
-                api_format=prov.api_format.value if prov else "",
-                extra_headers=_stable_extra_headers(prov),
-                extra_body=_stable_extra_body(prov),
-                prompt_version=prompt_version_for_mode(mode),
-                max_tokens=common["max_tokens"],
-                chart_lang=common["chart_lang"],
-                mode=mode,
-                image_b64=common["image_b64"],
-                caption=common["caption"],
-                media_type=common["media_type"],
-                run_idx=run_idx,
-            )
+            slot_ckey = None
+            if cache is not None:
+                try:
+                    slot_ckey = cache.make_key(
+                        endpoint=prov.endpoint if prov else "",
+                        model=prov.model if prov else "",
+                        api_format=prov.api_format.value if prov else "",
+                        extra_headers=_stable_extra_headers(prov),
+                        extra_body=_stable_extra_body(prov),
+                        prompt_version=prompt_version_for_mode(mode),
+                        max_tokens=common["max_tokens"],
+                        chart_lang=common["chart_lang"],
+                        mode=mode,
+                        image_b64=common["image_b64"],
+                        caption=common["caption"],
+                        media_type=common["media_type"],
+                        run_idx=run_idx,
+                    )
+                except Exception:
+                    slot_ckey = None
             slot_keys.append(slot_ckey)
 
         if not force_rerun:
             # REVIEW-2026-09-10: a broken cache degrades to a miss instead of
             # failing the whole request (see the single-run probe above).
-            try:
-                cache = get_cache()
-            except Exception:
-                cache = None
             for run_idx, ckey in enumerate(slot_keys):
                 cached = None
-                if cache is not None:
+                if cache is not None and ckey:
                     try:
                         cached = cache.get(ckey)
                     except Exception:
                         cached = None
+                # REVIEW-2026-09-20 (item 6): a non-dict entry would otherwise be
+                # merged as if it were an extraction payload (see the single-run
+                # guard for the full rationale); drop it as a miss.
+                if cached is not None and not isinstance(cached, dict):
+                    cached = None
                 if cached is not None:
-                    if isinstance(cached, dict) and "quality" not in cached:
+                    if "quality" not in cached:
                         cached["quality"] = _safe_score_range_chart(cached)
                     # P0-4 (REVIEW-2026-07-25): KEYED BY SLOT INDEX so
                     # non-contiguous cache hits do not cause the
@@ -1539,15 +2017,20 @@ class Handler(BaseHTTPRequestHandler):
         ok_datas = [slot_results[i] for i in range(runs) if i in slot_results]
 
         misses = runs - len(slot_results)
-        # REVIEW-2026-09-10: whether this request performed ANY live call.
-        # When every slot was a cache hit the audit row already exists (the
-        # run that filled the cache wrote it), so writing another one would
-        # duplicate it - and because no live run exists to supply a
-        # fingerprint, the duplicate carried the empty-bytes sentinel SHA
-        # (e3b0c442...), which HistoryStore.get_by_sha256 then groups with
-        # every other such record as "the same image". The single-run path
-        # already skips on cache hits for exactly this reason.
-        all_slots_from_cache = (misses <= 0 and not force_rerun)
+        # REVIEW-2026-09-10 / REVIEW-2026-09-20 (item 5): how many LIVE (not
+        # cache-served) slots actually produced a payload. The audit row's image
+        # fingerprint and per-run request metadata can only come from a live run,
+        # and the runs that filled the cache already wrote their own audit rows,
+        # so the write at the end of this branch is gated on this counter.
+        #
+        # The previous gate was "did this request perform ANY live call"
+        # (``misses > 0``), which was only HALF the condition: the mixed case -
+        # some slots cached, every live slot FAILING - still reached the write
+        # with ``first_ok_sha == ""`` because the merge succeeded on the cached
+        # payloads, i.e. exactly the duplicate sentinel-SHA (e3b0c442...) row
+        # that HistoryStore.get_by_sha256 later groups as "the same image".
+        # "At least one successful live slot" covers both shapes.
+        live_ok_count = 0
         if misses <= 0:
             # All runs were cache hits — merge directly.
             pass  # falls through to merge
@@ -1574,101 +2057,113 @@ class Handler(BaseHTTPRequestHandler):
             # budget measured from submission time, and synthesize an
             # ``err.timeout`` failure for every run that did not finish.
             #
-            # The executor is managed explicitly instead of via ``with``:
-            # leaving a ThreadPoolExecutor context manager blocks on exit
-            # (shutdown(wait=True)) for the very hung calls we are
-            # abandoning. With ``shutdown(wait=False, cancel_futures=True)``
-            # we return immediately; the already-running stragglers keep
-            # their threads until the underlying LLM socket timeout
-            # (<= timeout_sec, clamped to <= 300 s) fires, and queued
-            # not-yet-started runs are cancelled.
-            executor = concurrent.futures.ThreadPoolExecutor(max_workers=misses)
-            try:
-                pending = []  # list of (run_idx, future)
-                for run_idx in range(runs):
-                    if run_idx in slot_results:
-                        continue  # cache hit — already in slot_results
-                    pending.append((run_idx, executor.submit(extract, mode=mode, **common)))
-                futures = [f for _, f in pending]
-                _, not_done = concurrent.futures.wait(
-                    futures,
-                    timeout=per_future_timeout,
-                    return_when=concurrent.futures.ALL_COMPLETED,
-                )
-                for run_idx, fut in pending:
-                    if fut in not_done:
-                        # Batch budget exhausted before this run finished —
-                        # record a synthetic timeout failure instead of
-                        # blocking the client indefinitely.
+            # REVIEW-2026-09-20 (item 13): the explicit
+            # ``ThreadPoolExecutor(max_workers=misses)`` +
+            # ``shutdown(wait=False, cancel_futures=True)`` was replaced by
+            # daemon-thread futures (see _spawn_extract_thread). ``wait=False``
+            # only avoids BLOCKING on the shutdown; it does not stop
+            # ``concurrent.futures.thread`` from joining its NON-daemon workers
+            # at interpreter exit, so after Ctrl+C the process still waited for
+            # every in-flight AND every still-queued slot - up to
+            # ``runs`` x 300 s of a console that looks hung. ``shutdown()`` also
+            # cannot cancel a running worker, so the executor bought nothing here
+            # beyond thread reuse: ``misses`` is bounded by ``runs`` (<= 5) and
+            # one batch of futures is submitted per request. Same futures
+            # interface, no exit-time join, no per-request pool object to leak.
+            pending = []  # list of (run_idx, future)
+            for run_idx in range(runs):
+                if run_idx in slot_results:
+                    continue  # cache hit — already in slot_results
+                pending.append((run_idx, _spawn_extract_thread(
+                    mode, common, label=f"extract-run-{run_idx}")))
+            futures = [f for _, f in pending]
+            _, not_done = concurrent.futures.wait(
+                futures,
+                timeout=per_future_timeout,
+                return_when=concurrent.futures.ALL_COMPLETED,
+            )
+            for run_idx, fut in pending:
+                if fut in not_done:
+                    # Batch budget exhausted before this run finished —
+                    # record a synthetic timeout failure instead of
+                    # blocking the client indefinitely.
+                    fut.cancel()
+                    r = ExtractResult(
+                        ok=False, error_key="err.timeout",
+                        error_body=(
+                            f"batch timeout after {per_future_timeout}s "
+                            f"(run {run_idx} did not finish)"
+                        ),
+                    )
+                else:
+                    try:
+                        r = fut.result()
+                    except Exception as exc:
+                        # Sprint B (REVIEW-2026-09-04) #1: align with
+                        # the single-run error structure — exception
+                        # text belongs in error_body (redacted before
+                        # it reaches the client), not in raw.
                         r = ExtractResult(
-                            ok=False, error_key="err.timeout",
-                            error_body=(
-                                f"batch timeout after {per_future_timeout}s "
-                                f"(run {run_idx} did not finish)"
-                            ),
+                            ok=False, error_key="err.http",
+                            error_body=str(exc),
                         )
-                    else:
-                        try:
-                            r = fut.result()
-                        except Exception as exc:
-                            # Sprint B (REVIEW-2026-09-04) #1: align with
-                            # the single-run error structure — exception
-                            # text belongs in error_body (redacted before
-                            # it reaches the client), not in raw.
-                            r = ExtractResult(
-                                ok=False, error_key="err.http",
-                                error_body=str(exc),
-                            )
-                    # H-1 fix: update max_run_latency regardless of r.ok — only
-                    # skip when latency_ms is None/0 (no request was made).
-                    if r.latency_ms not in (None, 0):
-                        max_run_latency = max(max_run_latency, int(r.latency_ms))
-                    if r.ok and r.data is not None:
-                        if not force_rerun:
-                            # Cache writes are best-effort (see the
-                            # single-run path): a broken cache must not turn
-                            # a completed run into a failed request.
+                # H-1 fix: update max_run_latency regardless of r.ok — only
+                # skip when latency_ms is None/0 (no request was made).
+                if r.latency_ms not in (None, 0):
+                    max_run_latency = max(max_run_latency, int(r.latency_ms))
+                if r.ok and r.data is not None:
+                    live_ok_count += 1
+                    if not force_rerun:
+                        # Cache writes are best-effort (see the
+                        # single-run path): a broken cache must not turn
+                        # a completed run into a failed request.
+                        # REVIEW-2026-09-20 (item 1): the write used to call
+                        # ``get_cache()`` again — unguarded construction inside
+                        # the ``if``, which only the surrounding ``except`` hid,
+                        # and which would have raised per slot when the cache
+                        # singleton was unavailable. Reuse the probe from the
+                        # key-building step and skip when there is no cache or
+                        # no key for this slot.
+                        if cache is not None and slot_keys[run_idx]:
                             try:
-                                get_cache().put(slot_keys[run_idx], r.data)
+                                cache.put(slot_keys[run_idx], r.data)
                             except Exception:
                                 pass
-                        # P0-4 (REVIEW-2026-07-25): store under slot index.
-                        # ok_datas is rebuilt in slot order before merge.
-                        slot_results[run_idx] = r.data
-                        # P1 fix (2026-08-06): keep the fingerprint + request
-                        # metadata from the first successful live run so the
-                        # merged audit record is as complete as a single-run
-                        # record.
-                        if not first_ok_sha and getattr(r, "image_sha256", ""):
-                            first_ok_sha = r.image_sha256
-                        if first_ok_meta is None and getattr(r, "request_meta", None):
-                            first_ok_meta = r.request_meta
-                        ok_datas = [slot_results[i] for i in range(runs) if i in slot_results]
-                        any_truncated = any_truncated or bool(r.truncated)
-                        if r.raw:
-                            # REVIEW-2026-09-10: keep the SLOT index with the
-                            # text. Appending positionally made
-                            # raw_responses.run_idx the position among the
-                            # SURVIVING runs, so a failed or cache-hit slot
-                            # shifted every later label and the audit trail
-                            # attributed one slot's reply to another.
-                            raws.append({'run_idx': run_idx, 'text': r.raw})
-                        u = r.usage or {}
-                        total_in += int(u.get("input_tokens") or 0)
-                        total_out += int(u.get("output_tokens") or 0)
-                        total_cr += int(u.get("cache_read_tokens") or 0)
-                        total_cc += int(u.get("cache_creation_tokens") or 0)
-                        est_in = est_in or bool(u.get("estimated"))
-                        est_out = est_out or bool(u.get("estimated"))
-                        if not merged_warning and getattr(r, "warning", ""):
-                            merged_warning = r.warning
-                    else:
-                        last_fail = r
-                        partial_fails += 1
-                        if not merged_warning and getattr(r, "warning", ""):
-                            merged_warning = r.warning
-            finally:
-                executor.shutdown(wait=False, cancel_futures=True)
+                    # P0-4 (REVIEW-2026-07-25): store under slot index.
+                    # ok_datas is rebuilt in slot order before merge.
+                    slot_results[run_idx] = r.data
+                    # P1 fix (2026-08-06): keep the fingerprint + request
+                    # metadata from the first successful live run so the
+                    # merged audit record is as complete as a single-run
+                    # record.
+                    if not first_ok_sha and getattr(r, "image_sha256", ""):
+                        first_ok_sha = r.image_sha256
+                    if first_ok_meta is None and getattr(r, "request_meta", None):
+                        first_ok_meta = r.request_meta
+                    ok_datas = [slot_results[i] for i in range(runs) if i in slot_results]
+                    any_truncated = any_truncated or bool(r.truncated)
+                    if r.raw:
+                        # REVIEW-2026-09-10: keep the SLOT index with the
+                        # text. Appending positionally made
+                        # raw_responses.run_idx the position among the
+                        # SURVIVING runs, so a failed or cache-hit slot
+                        # shifted every later label and the audit trail
+                        # attributed one slot's reply to another.
+                        raws.append({'run_idx': run_idx, 'text': r.raw})
+                    u = r.usage or {}
+                    total_in += int(u.get("input_tokens") or 0)
+                    total_out += int(u.get("output_tokens") or 0)
+                    total_cr += int(u.get("cache_read_tokens") or 0)
+                    total_cc += int(u.get("cache_creation_tokens") or 0)
+                    est_in = est_in or bool(u.get("estimated"))
+                    est_out = est_out or bool(u.get("estimated"))
+                    if not merged_warning and getattr(r, "warning", ""):
+                        merged_warning = r.warning
+                else:
+                    last_fail = r
+                    partial_fails += 1
+                    if not merged_warning and getattr(r, "warning", ""):
+                        merged_warning = r.warning
         total_latency = int((time.perf_counter() - batch_t0) * 1000)
         if not ok_datas:
             r = last_fail
@@ -1769,11 +2264,18 @@ class Handler(BaseHTTPRequestHandler):
             for _k, _v in (first_ok_meta or {}).items():
                 multi_meta.setdefault(_k, _v)
             multi_result.request_meta = multi_meta
-            if not all_slots_from_cache:
-                # Every slot served from the cache means the originating live
-                # runs already wrote their audit rows; writing another would
-                # duplicate them (and stamp it with the empty-bytes sentinel
-                # SHA, since no live run exists to supply a fingerprint).
+            if live_ok_count <= 0:
+                # REVIEW-2026-09-20 (item 5): nothing in this response came from
+                # a live call, so (a) the runs that filled the cache already
+                # wrote their audit rows — a second record duplicates them — and
+                # (b) there is no live run to supply image_sha256 /
+                # request_meta, so the duplicate used to be stamped with the
+                # empty-bytes sentinel SHA that HistoryStore.get_by_sha256 then
+                # groups as "the same image". This covers the all-cache-hit case
+                # AND the previously unguarded mixed case (some slots cached,
+                # every live slot failed but the merge still succeeded).
+                pass
+            else:
                 _write_history_record(
                     multi_result, mode=mode, runs=runs,
                     provider=provider, max_tokens=common["max_tokens"],
@@ -1828,6 +2330,27 @@ def main() -> None:
     # for real browser clients (the old allowlist rejected every LAN
     # Origin with a 403).
     populate_expected_hosts(args.host, args.port)
+
+    # REVIEW-2026-09-20 (item 4): the default bind stays loopback-only, but
+    # ``--host 0.0.0.0``/``::`` is a documented option, and this server has NO
+    # authentication: /api/extract lets any peer spend the operator's LLM quota
+    # and (with provider fields supplied from the request) drive outbound
+    # requests, while the audit endpoints expose the local history. Make the
+    # exposure explicit at startup instead of letting it be an accident, and
+    # point at the two knobs that do exist. Deliberately a warning, not a
+    # refusal, so scripted/LAN deployments keep working.
+    if not is_loopback_bind(args.host):
+        sys.stderr.write(
+            "\n"
+            "WARNING: binding to {host!r} exposes this server to EVERY peer that\n"
+            "can reach port {port} - /api/extract is unauthenticated (CSRF/Origin\n"
+            "checks only stop cross-site browsers), so any such peer can spend your\n"
+            "LLM quota, read the audit endpoints, and drive outbound provider\n"
+            "requests from this machine. Prefer the default 127.0.0.1 plus an SSH\n"
+            "or reverse tunnel; otherwise terminate TLS and add authentication in\n"
+            "front of it (see proxy/), and set RCA_PROVENANCE_TOKEN to keep the\n"
+            "provenance endpoint closed.\n\n".format(host=args.host, port=args.port)
+        )
 
     httpd = _make_bounded_server(args.host, args.port, args.max_threads)
     url = f"http://{args.host}:{args.port}/"

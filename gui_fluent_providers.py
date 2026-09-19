@@ -951,7 +951,14 @@ class ProvidersPage(ScrollArea):
         from PySide6.QtCore import QThread
 
         class _Worker(QThread):
-            done = Signal(object)
+            # REVIEW-2026-09-20: (worker, result) — carrying the worker lets
+            # the page connect a BOUND METHOD. A bound method of a QObject is
+            # resolved by Qt to a queued (auto) connection, so the handler
+            # runs on the GUI thread. The single-payload version was wired
+            # through a lambda, and a lambda has no receiver QObject → DIRECT
+            # connection → `_on_test_done` mutated the card widgets AND wrote
+            # the ProviderStore (update + save) from inside this thread.
+            done = Signal(object, object)
             def __init__(self, p, parent=None):
                 super().__init__(parent)
                 self._p = p
@@ -972,19 +979,27 @@ class ProvidersPage(ScrollArea):
                             # Match the shape returned by test_llm_connection
                             # so _on_test_done renders a graceful failure
                             # instead of a crash.
-                            self.done.emit({
+                            self.done.emit(self, {
                                 "ok": False,
                                 "error": f"bad endpoint: {why}",
                             })
                             return
                 except Exception as e:
                     log.exception("connection-test endpoint validation failed")
-                    self.done.emit({
+                    self.done.emit(self, {
                         "ok": False,
                         "error": f"endpoint validation error: {e}",
                     })
                     return
-                self.done.emit(test_llm_connection(self._p, timeout_sec=8))
+                # REVIEW-2026-09-20: BUG13 parity with the SettingsPage probe
+                # worker — an exception escaping run() used to kill the thread
+                # without ever emitting done(), leaving the card stuck on the
+                # ⏳ "testing" badge (and the worker in _test_workers) forever.
+                try:
+                    self.done.emit(self, test_llm_connection(self._p, timeout_sec=8))
+                except Exception as exc:
+                    log.exception("connection test raised in worker thread")
+                    self.done.emit(self, {"ok": False, "error": str(exc)})
 
         # FIX (H1): do NOT disconnect/quit any in-flight worker. Each test
         # runs to completion and reports to its own card via the worker→card
@@ -995,14 +1010,35 @@ class ProvidersPage(ScrollArea):
         # deallocated mid-run (the reason the old code retired workers).
         w = _Worker(provider)
         self._test_workers[w] = card
-        # Capture both worker and card by value: the worker lets us drop the
-        # reference from _test_workers when it finishes; the card is the
-        # starting card, which _on_test_done resolves to the live card.
-        w.done.connect(lambda res, _w=w, _card=card: self._on_test_done(_w, _card, res))
-        w.finished.connect(lambda _w=w: self._test_workers.pop(_w, None))
+        # REVIEW-2026-09-20: bound methods of this page (a QObject) → queued
+        # connections that run on the GUI thread. The card is resolved from
+        # the worker→card map instead of a closure capture, so the handler
+        # signature no longer needs the starting card at connect time.
+        w.done.connect(self._on_worker_done)
+        w.finished.connect(self._on_worker_finished)
         w.start()
 
+    def _on_worker_done(self, worker, res):
+        """GUI-thread slot for ``_Worker.done`` (see _test)."""
+        self._on_test_done(worker, self._test_workers.get(worker), res)
+
+    def _on_worker_finished(self, worker):
+        """GUI-thread slot for ``QThread.finished``: drop the strong ref.
+
+        The old lambda ran in the worker thread and popped the page's dict
+        from there — a data race against the GUI thread's own reads of
+        _test_workers (and closeEvent's clear()).
+        """
+        self._test_workers.pop(worker, None)
+
     def _on_test_done(self, worker, card, res):
+        # REVIEW-2026-09-20: `card` may be None when the worker had already
+        # been dropped from _test_workers (window teardown) — guard the whole
+        # handler instead of dereferencing card.provider deep inside it.
+        if card is None:
+            self._testing_ids.discard(
+                getattr(getattr(worker, "_p", None), "id", "") or "")
+            return
         # FIX (H2): the `card` captured at start time may have been orphaned
         # by a `_refresh()` (setParent(None)) since the worker was launched.
         # Writing to an orphan updates an invisible widget while the real,

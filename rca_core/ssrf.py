@@ -50,6 +50,22 @@ _ALLOW_PRIVATE = os.environ.get("RCA_ALLOW_PRIVATE", "").strip() == "1"
 _NAT64_WELL_KNOWN = ipaddress.ip_network("64:ff9b::/96")
 _NAT64_PREFIX_48 = ipaddress.ip_network("64:ff9b:1::/48")
 
+# REVIEW-2026-09-20 (item 14): two more ways to write a private IPv4 address
+# that ``ipaddress`` reports as GLOBAL, so they slipped through the old check:
+#
+#   * IPv4-compatible IPv6 (``::/96``, the deprecated precursor of v4-mapped):
+#     ``::127.0.0.1`` and, worse, ``::169.254.169.254`` both have is_global ==
+#     True on CPython 3.9-3.13, and glibc/Linux routes them to the embedded
+#     IPv4 — a direct shot at loopback services and cloud metadata. The whole
+#     block is rejected (see _is_non_public_ip), not just the private embeds:
+#     no real provider endpoint is addressed this way.
+#   * ``192.88.99.0/24`` — the deprecated 6to4 anycast relay prefix
+#     (RFC 7526). ``is_global`` is True for it, but it is unassignable and was
+#     historically abused to bounce traffic onward.
+_IPV4_COMPATIBLE_V6 = ipaddress.ip_network("::/96")
+_6TO4_RELAY_ANYCAST = ipaddress.ip_network("192.88.99.0/24")
+_6TO4_PREFIX = ipaddress.ip_network("2002::/16")
+
 
 def _is_non_public_ip(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bool:
     """Return True if *ip* is unsafe to connect to (private/loopback/...).
@@ -57,8 +73,14 @@ def _is_non_public_ip(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bo
     Single source of truth for "is this address public?". Augments
     ``ip.is_global`` with:
       * IPv4-mapped IPv6 (``::ffff:a.b.c.d``) — checks the embedded v4.
+      * IPv4-compatible IPv6 (``::a.b.c.d``) — checks the embedded v4 and
+        rejects the block outright (REVIEW-2026-09-20).
+      * 6to4 (``2002:a.b.c.d::/48``) — checks the embedded v4
+        (REVIEW-2026-09-20; CPython already flags the prefix as non-global,
+        the explicit check keeps that true if the stdlib table ever changes).
       * NAT64 prefixes (``64:ff9b::/96``, ``64:ff9b:1::/48``) which embed a
         destination IPv4 and are NOT reliably flagged by ``is_global``.
+      * ``192.88.99.0/24`` (deprecated 6to4 relay anycast).
     """
     if isinstance(ip, ipaddress.IPv6Address):
         # An IPv4-mapped address carries an embedded IPv4; reject if that
@@ -69,6 +91,23 @@ def _is_non_public_ip(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bo
         # NAT64: the low 32 bits encode an IPv4 destination.
         if ip in _NAT64_WELL_KNOWN or ip in _NAT64_PREFIX_48:
             return True
+        # REVIEW-2026-09-20: IPv4-compatible IPv6 (::/96). ``is_global`` says
+        # "yes, global" for these, which is why ::169.254.169.254 used to pass
+        # the whole validator chain.
+        if ip in _IPV4_COMPATIBLE_V6:
+            return True
+        # REVIEW-2026-09-20: 6to4 embeds an IPv4 destination in bits 16..47.
+        sixtofour = getattr(ip, "sixtofour", None)
+        if sixtofour is not None and _is_non_public_ip(sixtofour):
+            return True
+        if ip in _6TO4_PREFIX:
+            # Anything inside 2002::/16 that the helper above did not resolve
+            # to a usable public v4 is unreachable at best.
+            return True
+        return not ip.is_global
+    # REVIEW-2026-09-20: deprecated 6to4 relay anycast (is_global == True).
+    if ip in _6TO4_RELAY_ANYCAST:
+        return True
     return not ip.is_global
 
 
@@ -257,19 +296,35 @@ def pinned_endpoint_ip(endpoint: str) -> str:
         infos = socket.getaddrinfo(bare, None)
     except socket.gaierror as exc:
         raise ValueError(f"DNS resolution failed for {bare!r}: {exc}") from exc
+    # REVIEW-2026-09-20 (item 15): this used to ``return`` on the FIRST entry
+    # it liked, so with an answer of [public, private] it handed back the
+    # public one and never looked at the rest — while the module's own
+    # documented policy (and ``is_private_host``) is "check ALL addresses and
+    # reject if ANY is non-public". A rebinding server that returns a public
+    # A record plus a private one therefore passed a check it was written to
+    # fail, and any later consumer that re-resolves (or that iterates the
+    # answer set itself) can pick the private one. Validate the whole set
+    # first, then pin the first usable address.
+    usable: "list[str]" = []
     for info in infos:
         try:
             addr = info[4][0]
             ip = ipaddress.ip_address(addr)
         except (ValueError, IndexError):
-            continue
+            # An entry we cannot classify is treated as unsafe (fail closed),
+            # matching is_private_host()'s handling of the same shape.
+            raise ValueError(
+                f"host {bare!r} resolved to an unclassifiable address "
+                f"{addr!r}")
         if not loopback_ok and not _ALLOW_PRIVATE and _is_non_public_ip(ip):
             raise ValueError(
                 f"host {bare!r} resolves to non-public IP {ip}; "
                 "set RCA_ALLOW_PRIVATE=1 to override"
             )
-        return str(ip)
-    raise ValueError(f"no usable address for host {bare!r}")
+        usable.append(str(ip))
+    if not usable:
+        raise ValueError(f"no usable address for host {bare!r}")
+    return usable[0]
 
 
 def _looks_like_ip(s: str) -> bool:
@@ -337,60 +392,128 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
             raise
 
 
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """Plain-HTTP twin of :class:`_PinnedHTTPSConnection` (no TLS wrapping).
+
+    REVIEW-2026-09-20 (item 17): the pinning layer used to cover https only,
+    because ``make_pinning_opener`` registered just ``_PinnedHTTPSHandler``.
+    Every ``http://`` request the process made therefore re-resolved DNS at
+    connect time and skipped the SSRF check entirely — which is exactly the
+    shape of a local Ollama endpoint (``http://127.0.0.1:11434``, allowed on
+    any scheme by ``validate_endpoint_local_ok``), and of any redirect-free
+    cleartext call made through the installed opener. Cleartext is still
+    rejected for non-loopback provider endpoints by ``validate_endpoint``;
+    pinning adds the missing rebinding guard on top of that policy instead of
+    changing it.
+    """
+
+    def connect(self):
+        if self._tunnel_host:
+            return super().connect()
+        host = self.host
+        try:
+            ipaddress.ip_address(host)
+            ip = host
+        except ValueError:
+            ip = pinned_endpoint_ip(f"http://{host}:{self.port}")
+        self.sock = socket.create_connection(
+            (str(ip), self.port), timeout=self.timeout,
+            source_address=self.source_address,
+        )
+
+
 def make_pinning_opener():
     """Build a urllib opener that pins DNS and refuses 3xx redirects.
 
-    For direct (non-proxied) HTTPS requests the handler resolves the target
-    host to a single public IP *once* (via ``pinned_endpoint_ip``) and
-    connects to that exact IP while keeping the original hostname as the
-    SNI / Host header — closing the DNS-rebinding TOCTOU window. Requests
-    that go through a proxy are handled by urllib's normal tunneling (the
-    endpoint validator has already rejected private/loopback targets). The
-    opener also refuses any 3xx redirect, so a ``302 Location:
-    http://169.254.169.254/...`` cannot bypass the endpoint validator.
+    For direct (non-proxied) requests the handler resolves the target host to
+    a single validated IP *once* (via ``pinned_endpoint_ip``) and connects to
+    that exact IP while keeping the original hostname visible as the SNI /
+    Host header — closing the DNS-rebinding TOCTOU window. Requests that go
+    through a proxy are handled by urllib's normal tunneling (the endpoint
+    validator has already rejected private/loopback targets). The opener also
+    refuses any 3xx redirect, so a ``302 Location: http://169.254.169.254/...``
+    cannot bypass the endpoint validator.
+
+    Both https (since Sprint B) and http (REVIEW-2026-09-20, item 17) are
+    pinned.
+
+    NOTE (REVIEW-2026-09-20): ``install_opener`` at the bottom of this module
+    is a PROCESS-WIDE side effect, not scoped to rca_core: every
+    ``urllib.request.urlopen`` in the interpreter — including the GBIF /
+    mindat lookups in ``rca_core/names.py`` — now goes through this handler,
+    so those calls are pinned and no-redirect too. That is deliberate (they
+    fetch https URLs from public hosts, and pinning protects them from the
+    same rebinding attack), but it means a name that resolves to a
+    private/loopback address will now fail with ``URLError("SSRF: ...")``
+    there as well, and a server that answers with a 3xx will fail instead of
+    following. Keep that in mind before adding a new outbound caller — or pass
+    an explicit opener built by ``build_opener()`` if a call must opt out.
     """
+
+    def _pin(req, scheme: str):
+        """Rewrite *req* to dial the validated IP; return the SNI hostname.
+
+        Raises ``urllib.error.URLError`` (never a bare ``ValueError``) so
+        callers keep the documented ``urlopen`` failure contract.
+        """
+        host = req.host
+        try:
+            ip = pinned_endpoint_ip(f"{scheme}://{host}")
+        except ValueError as exc:
+            # Non-public or unresolvable direct target -> refuse.
+            # (Loopback is exempt inside pinned_endpoint_ip, matching
+            # validate_endpoint_local_ok — Sprint B REVIEW-2026-09-04.)
+            raise urllib.error.URLError(f"SSRF: {exc}") from exc
+        # Original hostname (strip port / brackets) for SNI + Host.
+        orig_host = (
+            host[1:host.index("]")] if host.startswith("[")
+            else host.split(":")[0]
+        )
+        # REVIEW-2026-09-10: preserve an explicit port. `req.host` is
+        # "host[:port]"; overwriting it with the bare IP silently reset
+        # the port to 443, so an https endpoint on a non-default port was
+        # unreachable — and the request (key, prompt, image) was delivered
+        # to whatever happens to listen on 443 of that host, i.e. a
+        # service the user never addressed.
+        #
+        # REVIEW-2026-09-20 (item 16): ``int()`` of the port half of
+        # ``req.host`` is attacker-influenced (it comes from the URL), and the
+        # ValueError it raises for e.g. "http://a.com:99999x/" escaped BOTH
+        # except clauses the call sites use (they catch HTTPError/URLError),
+        # so the guard that is supposed to answer "SSRF: ..." crashed the
+        # caller with an unexpected exception type. Parse inside the try and
+        # convert to URLError, i.e. the same fail-closed contract.
+        orig_port = None
+        try:
+            if host.startswith("["):
+                after_bracket = host.split("]", 1)[1]
+                if after_bracket.startswith(":"):
+                    orig_port = int(after_bracket[1:])
+                elif after_bracket:
+                    raise ValueError(f"bad host:port {host!r}")
+            elif ":" in host:
+                orig_port = int(host.rsplit(":", 1)[1])
+        except ValueError as exc:
+            raise urllib.error.URLError(
+                f"SSRF: invalid port in target {host!r}: {exc}") from exc
+        default_port = 443 if scheme == "https" else 80
+        pinned = f"[{ip}]" if ":" in ip else ip
+        if orig_port is not None and orig_port != default_port:
+            req.host = f"{pinned}:{orig_port}"
+            host_header = f"{orig_host}:{orig_port}"
+        else:
+            req.host = pinned
+            host_header = orig_host
+        # Rewrite the connection target to the pinned IP while keeping
+        # the original hostname visible to the server (Host / SNI).
+        req.add_unredirected_header("Host", host_header)
+        return orig_host
 
     class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         def https_open(self, req):
             # Only reached for direct requests; ProxyHandler handles proxied
             # ones before us, so req.host is the real target (host:port).
-            host = req.host
-            try:
-                ip = pinned_endpoint_ip(f"https://{host}")
-            except ValueError as exc:
-                # Non-public or unresolvable direct target -> refuse.
-                # (Loopback is exempt inside pinned_endpoint_ip, matching
-                # validate_endpoint_local_ok — Sprint B REVIEW-2026-09-04.)
-                raise urllib.error.URLError(f"SSRF: {exc}") from exc
-            # Original hostname (strip port / brackets) for SNI + Host.
-            orig_host = (
-                host[1:host.index("]")] if host.startswith("[")
-                else host.split(":")[0]
-            )
-            # REVIEW-2026-09-10: preserve an explicit port. `req.host` is
-            # "host[:port]"; overwriting it with the bare IP silently reset
-            # the port to 443, so an https endpoint on a non-default port was
-            # unreachable — and the request (key, prompt, image) was delivered
-            # to whatever happens to listen on 443 of that host, i.e. a
-            # service the user never addressed.
-            orig_port = None
-            if host.startswith("["):
-                after_bracket = host.split("]", 1)[1]
-                if after_bracket.startswith(":"):
-                    orig_port = int(after_bracket[1:])
-            elif ":" in host:
-                orig_port = int(host.rsplit(":", 1)[1])
-            pinned = f"[{ip}]" if ":" in ip else ip
-            if orig_port is not None and orig_port != 443:
-                req.host = f"{pinned}:{orig_port}"
-                host_header = f"{orig_host}:{orig_port}"
-            else:
-                req.host = pinned
-                host_header = orig_host
-            # Rewrite the connection target to the pinned IP while keeping
-            # the original hostname visible to the server (Host / SNI).
-            req.add_unredirected_header("Host", host_header)
-            sni = orig_host
+            sni = _pin(req, "https")
 
             def _conn_factory(host_arg, timeout=req.timeout, **kw):
                 conn = _PinnedHTTPSConnection(host_arg, timeout=timeout,
@@ -400,7 +523,19 @@ def make_pinning_opener():
 
             return self.do_open(_conn_factory, req)
 
-    return urllib.request.build_opener(_PinnedHTTPSHandler(), _NoRedirect())
+    class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            # REVIEW-2026-09-20 (item 17): plain HTTP is pinned with the exact
+            # same code path as HTTPS (see _PinnedHTTPConnection).
+            _pin(req, "http")
+
+            def _conn_factory(host_arg, timeout=req.timeout, **kw):
+                return _PinnedHTTPConnection(host_arg, timeout=timeout)
+
+            return self.do_open(_conn_factory, req)
+
+    return urllib.request.build_opener(
+        _PinnedHTTPSHandler(), _PinnedHTTPHandler(), _NoRedirect())
 
 
 __all__ = [

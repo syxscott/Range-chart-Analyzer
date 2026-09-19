@@ -3,6 +3,13 @@ must catch missing required fields and violated scientific constraints
 before CSV / xlsx / JSON export.
 
 REVIEW-2026-07-25 P2-5.
+
+REVIEW-2026-09-20: the validator returns ``(ok, issues, warnings)`` now, and
+only BLOCKING defects are in ``issues``: a blank ``section`` / ``range_base``
+/ ``range_top`` — which the extractor emits on purpose for single-column rows
+and open-ended ranges — is a non-blocking WARNING. The tests below that
+asserted ``ok is False`` for a blank optional field were updated accordingly
+(each change is marked).
 """
 from __future__ import annotations
 
@@ -22,9 +29,10 @@ class TestExportInvariants:
             "biozones": [{"name": "B"}],
             "sections": [{"name": "X"}],
         }
-        ok, issues = validate_export_invariants(data)
+        ok, issues, warnings = validate_export_invariants(data)
         assert ok
         assert issues == []
+        assert warnings == []
 
     def test_missing_species_field_is_an_issue(self):
         data = {
@@ -34,7 +42,7 @@ class TestExportInvariants:
             "biozones": [{"name": "B"}],
             "sections": [{"name": "X"}],
         }
-        ok, issues = validate_export_invariants(data)
+        ok, issues, _warnings = validate_export_invariants(data)
         assert not ok
         assert any(i.get("missing") == "species" for i in issues)
 
@@ -48,13 +56,19 @@ class TestExportInvariants:
             "biozones": [{"name": "B"}],
             "sections": [{"name": "X"}],
         }
-        ok, issues = validate_export_invariants(data)
+        ok, issues, _warnings = validate_export_invariants(data)
         assert not ok
         assert any(i.get("constraint") == "range_base_le_range_top"
                    for i in issues)
 
     def test_multiple_issues_per_row(self):
-        """A row with multiple problems should report ALL of them."""
+        """A row with multiple problems should report ALL of them.
+
+        REVIEW-2026-09-20: `section` moved from issues to warnings — an empty
+        section is a legal single-section row, not a defect that may block an
+        export. `species` (a row that cannot be identified at all) still
+        blocks.
+        """
         data = {
             "species_ranges": [
                 {"species": "", "section": "", "range_base": "9",
@@ -63,11 +77,29 @@ class TestExportInvariants:
             "biozones": [{"name": "B"}],
             "sections": [{"name": "X"}],
         }
-        ok, issues = validate_export_invariants(data)
+        ok, issues, warnings = validate_export_invariants(data)
         assert not ok
         missing = {i.get("missing") for i in issues}
         assert "species" in missing
-        assert "section" in missing
+        warned = {w.get("missing") for w in warnings}
+        assert "section" in warned
+        assert all(w.get("severity") == "warning" for w in warnings)
+
+    def test_blank_optional_fields_warn_but_do_not_block(self):
+        """REVIEW-2026-09-20: the extractor's own single-section / open-range
+        rows must stay exportable."""
+        data = {
+            "species_ranges": [
+                {"species": "G", "section": "", "range_base": "",
+                 "range_top": "9", "biozone": "B"},
+            ],
+            "biozones": [],
+            "sections": [],
+        }
+        ok, issues, warnings = validate_export_invariants(data)
+        assert ok, f"blank optional fields must not block: {issues}"
+        assert issues == []
+        assert {w["missing"] for w in warnings} == {"section", "range_base"}
 
     def test_other_fossils_non_dict_is_allowed(self):
         """other_fossils plain-string rows are valid and skipped by the
@@ -78,7 +110,7 @@ class TestExportInvariants:
             "sections": [],
             "other_fossils": ["Genus A sp.", "Genus B sp."],
         }
-        ok, issues = validate_export_invariants(data)
+        ok, issues, _warnings = validate_export_invariants(data)
         assert ok, f"string other_fossils must pass: {issues}"
         assert issues == []
 
@@ -88,7 +120,7 @@ class TestExportInvariants:
             "biozones": [{"age": "Albian"}],  # no name
             "sections": [],
         }
-        ok, issues = validate_export_invariants(data)
+        ok, issues, _warnings = validate_export_invariants(data)
         assert not ok
 
     def test_to_xlsx_raises_on_invariant_violation(self):
@@ -112,6 +144,23 @@ class TestExportInvariants:
             issues_literal = str(exc).split("export invariants violated:", 1)[1].strip()
             issues = ast.literal_eval(issues_literal)
             assert len(issues) > 0
+
+    def test_to_xlsx_does_not_raise_on_warnings(self):
+        """REVIEW-2026-09-20: a warning-only row still writes a workbook,
+        and the warnings are handed back through ``warnings_out``."""
+        data = {
+            "species_ranges": [
+                {"species": "G", "section": "", "range_base": "",
+                 "range_top": "", "biozone": ""},
+            ],
+            "biozones": [],
+            "sections": [],
+        }
+        got = []
+        blob = to_xlsx(data, warnings_out=got)
+        assert isinstance(blob, bytes) and blob
+        assert {w["missing"] for w in got} >= {"section", "range_base", "range_top"}
+
 
     def test_to_xlsx_succeeds_on_clean_data(self):
         """Sanity check: clean data passes through to_xlsx without error."""

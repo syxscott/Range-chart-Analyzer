@@ -77,7 +77,7 @@ class TestValidateExportInvariantsBed:
                 }
             ],
         }
-        ok, issues = validate_export_invariants(data)
+        ok, issues, _warnings = validate_export_invariants(data)
         # Should NOT flag as NaN or invalid - the bed strings are valid
         constraint_issues = [i for i in issues if i.get("constraint") == "range_base_le_range_top"]
         assert len(constraint_issues) == 0, f"Unexpected constraint issues: {constraint_issues}"
@@ -96,7 +96,7 @@ class TestValidateExportInvariantsBed:
                 }
             ],
         }
-        ok, issues = validate_export_invariants(data)
+        ok, issues, _warnings = validate_export_invariants(data)
         constraint_issues = [i for i in issues if i.get("constraint") == "range_base_le_range_top"]
         assert len(constraint_issues) == 0, f"Unexpected constraint issues: {constraint_issues}"
 
@@ -114,7 +114,7 @@ class TestValidateExportInvariantsBed:
                 }
             ],
         }
-        ok, issues = validate_export_invariants(data)
+        ok, issues, _warnings = validate_export_invariants(data)
         constraint_issues = [i for i in issues if i.get("constraint") == "range_base_le_range_top"]
         assert len(constraint_issues) > 0, "Should detect Bed 23c > Bed 22 violation"
 

@@ -211,7 +211,7 @@ def test_build_table_export_zones():
 
 
 def test_export_invariants_pass():
-    ok, issues = validate_export_invariants(SAMPLE)
+    ok, issues, _warnings = validate_export_invariants(SAMPLE)
     assert ok, issues
 
 

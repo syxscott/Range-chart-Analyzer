@@ -109,7 +109,9 @@ class TestExtractDispatchesByMode(unittest.TestCase):
     def test_unknown_mode_returns_error(self):
         r = extract(mode="not-a-mode", image_b64="QQ==", media_type="image/png")
         self.assertFalse(r.ok)
-        self.assertEqual(r.error_key, "err.http")
+        # REVIEW-2026-09-20 #13: "err.http" was the OLD (wrong) key - an
+        # unknown mode is a caller/config error, not an HTTP failure.
+        self.assertEqual(r.error_key, "err.extract")
 
     def test_empty_image_returns_error(self):
         r = extract(mode="range_chart", image_b64="", media_type="image/png")

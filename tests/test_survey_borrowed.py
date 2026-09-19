@@ -122,6 +122,31 @@ def test_report_truncation_and_timescale_stamp():
     assert rep["timescale"]["ics_version"].startswith("ICS v")
 
 
+def test_report_counts_untracked_tables_and_keeps_reasons_per_table():
+    """REVIEW-2026-09-20: ``rows.other`` was promised by the docstring but
+    never written, and one figure-level note was reused as the reason of
+    EVERY empty table."""
+    data = {
+        "species_ranges": [{"species": "A"}],
+        "sections": [],
+        "biozones": [],
+        # A table _TRACKED_LIST_KEYS never learned about, plus a scalar that
+        # must not be counted as rows.
+        "minor_fossils": [{"x": 1}, {"x": 2}],
+        "confidence": 0.9,
+        "_extras": {"sections_note": "the column is cut off at the margin"},
+    }
+    rep = build_extraction_report(data=data, mode="range_chart")
+    assert rep["rows"]["species_ranges"] == 1
+    assert rep["rows"]["other"] == 2
+    assert rep["other_keys"] == ["minor_fossils"]
+    reasons = {e["key"]: e["reason"] for e in rep["empty_tables"]}
+    # Only the table with its own note gets an explanation; the other stays
+    # honestly reasonless instead of inheriting the neighbour's note.
+    assert reasons["sections"] == "the column is cut off at the margin"
+    assert reasons["biozones"] == ""
+
+
 def test_report_schema_version_and_degenerate_input():
     rep = build_extraction_report(data="not a dict", mode="range_chart")
     assert rep["schema_version"] == REPORT_SCHEMA_VERSION

@@ -387,6 +387,59 @@ class _ProvenanceFetchWorker(QThread):
                     pass
 
 
+# REVIEW-2026-09-20: fallback register used when the app-wide orphan register
+# (gui_fluent._orphaned_workers) cannot be imported — e.g. this dialog is
+# exercised in isolation. It holds the same guarantee: a strong Python
+# reference for as long as the thread runs, dropped when it finishes.
+_detached_workers: list = []
+
+
+def _register_running_worker(w) -> None:
+    """Keep *w* alive until its thread finishes, then free it.
+
+    Delegates to the application-wide orphan register
+    (``gui_fluent._park_orphaned_worker``, the mechanism ``closeEvent`` uses
+    for the extract / connection-test threads) so a QThread that outlives
+    this dialog can never be garbage-collected mid-run — Qt6 aborts the
+    whole process with qFatal("QThread: Destroyed while thread is still
+    running") when that happens. The worker is deliberately created WITHOUT a
+    Qt parent (see _on_export_provenance), because parenting it to the dialog
+    would delete the C++ thread object as soon as the dialog is destroyed.
+
+    Call AFTER ``start()``: the shared register drops its reference
+    immediately when the thread has already finished, which is exactly the
+    desired behaviour for a request that completed during the call.
+    """
+    if w is None:
+        return
+    try:
+        from gui_fluent import _park_orphaned_worker
+        _park_orphaned_worker(w)
+        return
+    except Exception:
+        # ImportError (dialog used standalone) or a torn-down register —
+        # fall back to the local list below rather than losing the guarantee.
+        logger.debug("orphan register unavailable, using local fallback",
+                     exc_info=True)
+    if w in _detached_workers:
+        return
+    _detached_workers.append(w)
+
+    def _drop():
+        try:
+            _detached_workers.remove(w)
+        except ValueError:
+            pass
+    try:
+        w.finished.connect(_drop)
+        w.finished.connect(w.deleteLater)
+    except (RuntimeError, TypeError):
+        _drop()
+        return
+    if not w.isRunning():
+        _drop()
+
+
 class HistoryDetailDialog(QDialog):
     """Modal that shows the full content of one HistoryRecord.
 
@@ -577,13 +630,22 @@ class HistoryDetailDialog(QDialog):
             return
         path = f"/api/history/{self._rec.id}/provenance"
         self.btn_prov.setEnabled(False)
-        worker = _ProvenanceFetchWorker(self._rec.id, port, path, parent=self)
+        # REVIEW-2026-09-20: NO Qt parent. The worker used to be parented to
+        # this dialog, so closing the dialog while the fetch was still in
+        # flight deleted the QThread from C++ → qFatal("QThread: Destroyed
+        # while thread is still running") took the whole process down. The
+        # dialog is also deleteLater()'d by HistoryPage after exec() (see
+        # gui_fluent_pages), so parenting would have destroyed it anyway. The
+        # shared orphan register (gui_fluent._park_orphaned_worker) keeps the
+        # wrapper alive below and drops + deleteLater()s it on finished().
+        worker = _ProvenanceFetchWorker(self._rec.id, port, path)
         self._prov_worker = worker
         # Bound method of this QDialog -> queued (auto) connection, so the
         # status handling + save dialog always run on the GUI thread.
         worker.done.connect(self._on_provenance_fetched)
         worker.finished.connect(self._on_prov_thread_finished)
         worker.start()
+        _register_running_worker(worker)
 
     def _on_prov_thread_finished(self) -> None:
         # Safety net: drop the strong ref when the thread finished without

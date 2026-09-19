@@ -16,7 +16,7 @@ import io
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 from .db import Database
 
@@ -38,31 +38,70 @@ import os
 LOCK_PATH = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer", "lock")
 
 
-def make_thumbnail(image_bytes: bytes, *, mime_hint: str = "") -> bytes:
-    """Return a small JPEG thumbnail of *image_bytes*.
+def _coerce_image_bytes(image: Any) -> bytes:
+    """Accept bytes-like input OR a filesystem path and return bytes.
 
-    The previous design stored the full decoded preview at whatever size
-    the caller happened to pass in. A 4000-px-wide preview can run to
-    hundreds of KB; multiplied by hundreds of history rows the DB
-    balloons into the GB range. This helper enforces a hard cap:
-
-      * long edge ≤ ``THUMBNAIL_MAX_EDGE`` (200 px)
-      * JPEG quality ``THUMBNAIL_JPEG_QUALITY`` (70)
-      * final byte size ≤ ``THUMBNAIL_MAX_BYTES`` (20 KB)
-
-    Falls back to the input bytes (truncated) when Pillow is missing or
-    decode fails — the GUI must still display *something*.
+    REVIEW-2026-09-20 (finding 9): ``gui.py::_maybe_thumbnail`` calls
+    ``make_thumbnail(self.image_path)`` with a PATH STRING. A str has no
+    ``__buffer__``, so the Pillow open always failed and the old fallback
+    returned ``path[:20480]`` — the source-file name, stored in the
+    ``image_thumbnail`` BLOB column as text. Reading the file here turns that
+    call site into a real thumbnail without touching the GUI.
     """
-    if not image_bytes:
-        return b""
+    if isinstance(image, (bytes, bytearray, memoryview)):
+        return bytes(image)
+    if isinstance(image, str) and image:
+        try:
+            if os.path.isfile(image):
+                with open(image, "rb") as fh:
+                    return fh.read()
+        except OSError:
+            return b""
+    return b""
+
+
+def make_thumbnail_with_size(
+    image_bytes: Any, *, mime_hint: str = ""
+) -> tuple[bytes, Optional[int], Optional[int]]:
+    """Return ``(jpeg_bytes, width, height)`` for a capped thumbnail.
+
+    ``make_thumbnail`` keeps the historical bytes-only contract for its
+    callers; this companion also reports the size of the image that is
+    actually being stored, which is what the history row's
+    ``image_width`` / ``image_height`` must describe.
+
+    REVIEW-2026-09-20 (finding 9):
+    * every failure path (Pillow missing, undecodable input, encoder error)
+      now returns ``b"", None, None``. The previous fallback stored the first
+      20 KB of the ORIGINAL file — a truncated JPEG/PNG header, i.e. a blob
+      that no decoder accepts, so the History page rendered an empty box and
+      the recorded width/height claimed a size for an image that could not be
+      shown. Storing nothing is honest, and the row cap keeps the DB small
+      either way.
+    * the Pillow path applies ``ImageOps.exif_transpose`` first: a phone
+      photo carries its rotation in EXIF Orientation, and without this the
+      thumbnail was landscape for a portrait shot (and its reported size was
+      transposed relative to what viewers show).
+    """
+    raw = _coerce_image_bytes(image_bytes)
+    if not raw:
+        return b"", None, None
     try:
-        from PIL import Image  # type: ignore
+        from PIL import Image, ImageOps  # type: ignore
     except Exception:
-        # No Pillow — fall back to truncated raw bytes. The bytes are
-        # truncated so a single broken file can't fill the DB.
-        return image_bytes[:THUMBNAIL_MAX_BYTES]
+        # No Pillow: no thumbnail at all rather than an undecodable fragment.
+        return b"", None, None
     try:
-        img = Image.open(io.BytesIO(image_bytes))
+        img = Image.open(io.BytesIO(raw))
+        # Orientation first — resizing a transposed bitmap bakes the wrong
+        # aspect ratio in. A corrupt EXIF block must not cost us the
+        # thumbnail, so the transpose is best-effort.
+        try:
+            transposed = ImageOps.exif_transpose(img)
+            if transposed is not None:
+                img = transposed
+        except Exception:
+            pass
         # Normalize mode: PNG with RGBA, palette, etc. → RGB for JPEG.
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
@@ -71,8 +110,8 @@ def make_thumbnail(image_bytes: bytes, *, mime_hint: str = "") -> bytes:
         long_edge = max(w, h)
         if long_edge > THUMBNAIL_MAX_EDGE:
             scale = THUMBNAIL_MAX_EDGE / long_edge
-            nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
-            img = img.resize((nw, nh), Image.LANCZOS)
+            w, h = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+            img = img.resize((w, h), Image.LANCZOS)
         out = io.BytesIO()
         # Lower quality iteratively until we fit under the byte cap.
         # Quality 70 typically lands well under 20 KB at 200 px.
@@ -81,11 +120,28 @@ def make_thumbnail(image_bytes: bytes, *, mime_hint: str = "") -> bytes:
             out.seek(0); out.truncate(0)
             img.save(out, format="JPEG", quality=quality, optimize=True)
             if out.tell() <= THUMBNAIL_MAX_BYTES:
-                return out.getvalue()
+                return out.getvalue(), int(w), int(h)
             quality -= 15
-        return out.getvalue()
+        return out.getvalue(), int(w), int(h)
     except Exception:
-        return image_bytes[:THUMBNAIL_MAX_BYTES]
+        return b"", None, None
+
+
+def make_thumbnail(image_bytes: Any, *, mime_hint: str = "") -> bytes:
+    """Return a small JPEG thumbnail of *image_bytes*.
+
+    ``image_bytes`` may be raw image bytes or a path to an image file
+    (``gui.py`` passes a path). Returns ``b""`` when no decodable thumbnail
+    can be produced — see :func:`make_thumbnail_with_size` for the full
+    contract and the size the caller must store alongside it.
+
+    Caps:
+
+      * long edge ≤ ``THUMBNAIL_MAX_EDGE`` (200 px)
+      * JPEG quality ``THUMBNAIL_JPEG_QUALITY`` (70)
+      * final byte size ≤ ``THUMBNAIL_MAX_BYTES`` (20 KB)
+    """
+    return make_thumbnail_with_size(image_bytes, mime_hint=mime_hint)[0]
 
 
 @dataclass
@@ -94,8 +150,10 @@ class HistoryRecord:
     timestamp: float = 0.0
     source_file: str = ""
     image_thumbnail: bytes | None = None  # small JPEG/PNG bytes
-    image_width: int = 0
-    image_height: int = 0
+    # Source image size in pixels. May be None (``add`` stores NULL) when no
+    # thumbnail could be produced, i.e. there is nothing to size.
+    image_width: int | None = 0
+    image_height: int | None = 0
     provider_id: str = ""
     provider_name: str = ""
     model: str = ""
@@ -189,6 +247,39 @@ def _row_to_record(row) -> HistoryRecord:
 _MAX_RAW_BYTES = 8 * 1024
 
 
+def _decode_audit_value(value: Any) -> Any:
+    """Read back a ``record_edits.before`` / ``.after`` column value.
+
+    REVIEW-2026-09-20 (finding 8): these columns used to be declared ``JSON``,
+    and a JSON-affinity column keeps the value's own storage class — so
+    ``json.dumps(12)`` (the TEXT ``"12"``) came back as the INTEGER 12,
+    ``json.dumps(12.5)`` as a REAL, and the unconditional ``json.loads()``
+    raised ``TypeError`` on them. The bare ``except`` then reported the edit
+    as having NO previous/new value: every numeric audit entry (bed index,
+    token count, age) was lost from the history detail dialog.
+
+    Only genuine text is decoded now; anything SQLite already stored as a
+    number / blob / None IS the value and is adopted as written. Databases
+    created before the column was retyped to TEXT keep their integer rows,
+    and this reader makes them readable again, so no migration is needed.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = bytes(value).decode("utf-8")
+        except Exception:
+            return None
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            # Genuinely malformed legacy content: keep the raw text rather
+            # than pretending the edit had no value.
+            return value
+    return value
+
+
 class HistoryStore:
     """CRUD over the history table."""
 
@@ -212,8 +303,28 @@ class HistoryStore:
         # Bug-8 fix: shrink the thumbnail to the standard size before
         # storage so a caller passing a giant preview doesn't blow up
         # the DB. Idempotent — already-small thumbnails pass through.
+        # REVIEW-2026-09-20 (finding 9): the helper now also reports the
+        # dimensions of the image it actually produced. When it could not
+        # produce one (no Pillow / undecodable bytes) the blob is dropped
+        # instead of a truncated, non-decodable fragment being stored — and
+        # the width/height that described that fragment go NULL, so no
+        # consumer renders a phantom aspect ratio for a picture the row does
+        # not carry.
         if rec.image_thumbnail:
-            rec.image_thumbnail = make_thumbnail(rec.image_thumbnail)
+            thumb, tw, th = make_thumbnail_with_size(rec.image_thumbnail)
+            if thumb:
+                rec.image_thumbnail = thumb
+                # Fill in the pair when the caller did not know it (server.py
+                # inserts 0/0) so the History preview can reserve its box;
+                # never overwrite dimensions the caller measured itself.
+                if not rec.image_width and tw:
+                    rec.image_width = tw
+                if not rec.image_height and th:
+                    rec.image_height = th
+            else:
+                rec.image_thumbnail = None
+                rec.image_width = None
+                rec.image_height = None
         raw = rec.raw if len(rec.raw) <= _MAX_RAW_BYTES else rec.raw[:_MAX_RAW_BYTES]
         request_meta_json = json.dumps(rec.request_meta, ensure_ascii=False) if rec.request_meta else None
         cur = self.db.execute(
@@ -340,18 +451,15 @@ class HistoryStore:
         )
         out = []
         for row in rows:
-            before = None
-            after = None
-            try:
-                if row["before"] is not None:
-                    before = json.loads(row["before"])
-            except Exception:
-                before = None
-            try:
-                if row["after"] is not None:
-                    after = json.loads(row["after"])
-            except Exception:
-                after = None
+            # REVIEW-2026-09-20 (finding 8): the old code always called
+            # ``json.loads`` on the column value. SQLite gives JSON-affinity
+            # columns (and TEXT columns holding valid JSON scalars) back as
+            # native types, so an audit entry written as before=12 came back
+            # as int 12 -> TypeError -> except -> None, silently losing the
+            # value. _decode_audit_value only parses strings and adopts
+            # already-decoded values as-is.
+            before = _decode_audit_value(row["before"])
+            after = _decode_audit_value(row["after"])
             out.append({
                 "id": row["id"],
                 "timestamp": row["timestamp"],
@@ -598,17 +706,28 @@ class HistoryStore:
 
         # ---- Entities ----
 
-        # Original image entity (rca:image:{sha256_of_source})
+        # Original image entity (rca:image:{content_sha256})
+        # REVIEW-2026-09-20 (finding 10): the two branches used to hash
+        # DIFFERENT things — the source *path string* when ``source_file`` was
+        # set, the *content* hash only for clipboard pastes. The same image
+        # therefore produced two different entity ids depending on how it was
+        # imported, so ``prov:used`` on the extraction activity could never be
+        # joined across records and the id was not the content fingerprint its
+        # name claims. Unify on the content hash: the stored ``image_sha256``
+        # first, then the bytes on disk, and keep the path hash only as a
+        # documented last-resort fallback.
         source_path = record.source_file or ""
-        # REVIEW-2026-11-07 (low): when the source path is missing (e.g. a
-        # clipboard paste), most records still carry the content hash
-        # (image_sha256). Prefer it over record_id — the content hash is
-        # the stable identity and keeps the entity id meaningful; record_id
-        # stays only as the last resort.
-        if source_path:
+        content_sha = record.image_sha256 or _file_content_sha256(source_path)
+        if content_sha:
+            image_entity_id = f"rca:image:{content_sha}"
+        elif source_path:
+            # Fallback (finding 10): the file is gone / unreadable and the
+            # record carries no content hash. A path-string hash is still a
+            # deterministic id, but it is NOT a content fingerprint — two
+            # different images at the same path would collide, and the id is
+            # indistinguishable from a content hash by shape alone. Kept only
+            # so the entity id never degenerates into the bare record id.
             image_entity_id = f"rca:image:{_sha256(source_path)}"
-        elif record.image_sha256:
-            image_entity_id = f"rca:image:{record.image_sha256}"
         else:
             image_entity_id = f"rca:image:{record_id}"
         doc.setdefault("prov:entity", []).append({
@@ -693,7 +812,12 @@ class HistoryStore:
                 "@id": agent_id,
                 "prov:type": "prov:Agent",
             }
-            edit_activity["prov:wasGeneratedBy"] = {"@id": activity_id}
+            # REVIEW-2026-09-20 (finding 10): this used to also set
+            # ``prov:wasGeneratedBy = activity_id`` on the ACTIVITY, i.e. the
+            # edit generated itself — invalid PROV-O (wasGeneratedBy relates an
+            # Entity to the Activity that generated it). The generated entity
+            # already carries the correct back-link just below, so the
+            # self-reference is dropped rather than moved.
 
             doc.setdefault("prov:activity", []).append(edit_activity)
 
@@ -747,6 +871,37 @@ def _sha256(s: str) -> str:
     """Return lowercase hex SHA-256 of the input string."""
     import hashlib
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def _file_content_sha256(path: str) -> str:
+    """Return lowercase hex SHA-256 of the BYTES at ``path``; '' if unreadable.
+
+    REVIEW-2026-09-20 (finding 10): lets ``to_prov_jsonld`` keep using a
+    content fingerprint for the source-image entity even when the record was
+    saved before ``image_sha256`` was populated. Streamed in 256 KB chunks so
+    a phone-photo sized import cannot be blocked on memory; any OSError or
+    permission error yields '' and the caller falls back explicitly.
+    """
+    if not path:
+        return ""
+    import hashlib
+    try:
+        if not os.path.isfile(path):
+            return ""
+        digest = hashlib.sha256()
+        with open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(256 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return ""
+    except Exception:
+        # Fail-open like the rest of the provenance builders: an exotic
+        # filesystem error must not break History export.
+        return ""
 
 
 # Shared PROV-O JSON-LD context used by to_prov_jsonld()

@@ -133,8 +133,8 @@ function _clamp01(x) { return Math.min(1.0, Math.max(0.0, x)); }
 // branch behaves identically in the browser-only path.
 // ---------------------------------------------------------------------------
 
-const _AGE_UNIT_RE = /(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:Ma|Myr|Mya|m\.?\s*y\.?|million\s+years?(?:\s+ago)?)\b/i;
-const _AGE_RANGE_RE = /(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:[-–—]|\bto\b)\s*([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:Ma|Myr|Mya|m\.?\s*y\.?|million\s+years?(?:\s+ago)?)\b/i;
+const _AGE_UNIT_RE = /(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b/i;
+const _AGE_RANGE_RE = /(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:[-–—]|\bto\b)\s*([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b/i;
 
 function _explicitMaValues(text) {
   const out = [];
@@ -157,113 +157,235 @@ function _looksLikeAge(v) {
 
 function _regExpEscape(s) { return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'); }
 
-// Sprint B (REVIEW-2026-09-04): deterministic stage lookup for a Ma value,
-// mirroring rca_core/standards/ics.py:ics_stage_from_age (ics.py:38-74).
-// The previous `top_ma <= ma <= base_ma` first-hit loop depended on object
-// key order, so a Ma exactly on a stage boundary resolved differently in
-// JS vs Python (259.51 Ma -> Capitanian in JS, Wuchiapingian in Python).
-// Python semantics reproduced here:
-//   1. a strict interior hit (top < ma < base) wins immediately — interior
-//      matches are unique in a gapless table;
-//   2. at an exact boundary the boundary belongs to the YOUNGER stage whose
-//      base it defines — first base match (abs(base-ma) <= 1e-9) wins
-//      (259.51 -> Wuchiapingian; 254.14 -> Changhsingian);
-//   3. a value equal to a stage's top (e.g. 0.0 -> Holocene) is the last
-//      fallback.
-// Returns null when no stage matches (same as the Python None).
-function _icsStageFromAge(stages, ma) {
-  let interior = null;
-  let baseMatch = null;
-  let topMatch = null;
-  for (const name of Object.keys(stages)) {
-    const info = stages[name];
-    const top = typeof info.top_ma === 'number' ? info.top_ma : 0;
-    const base = typeof info.base_ma === 'number' ? info.base_ma : 0;
-    if (top < ma && ma < base) { interior = name; break; }
-    if (baseMatch === null && Math.abs(base - ma) <= 1e-9) baseMatch = name;
-    if (topMatch === null && Math.abs(top - ma) <= 1e-9) topMatch = name;
-  }
-  if (interior !== null) return interior;
-  if (baseMatch !== null) return baseMatch;
-  return topMatch;
+// REVIEW-2026-09-20: the bundled table carries the Cambrian intervals that
+// have no ratified name yet as "Stage 2" … "Stage 10", and TWO of them share
+// their span with the ratified name adopted since:
+//   Wuliuan == Stage 5 (504.5-506.5 Ma), Jiangshanian == Stage 9 (491.0-494.2).
+// Which of the two a lookup returned therefore depended purely on key order
+// (505 Ma resolved to "Stage 5" here but "Wuliuan" in Python, whose JSON
+// inserts the rows in a different order). Mirrors ics.py:_INFORMAL_STAGE_RE /
+// _prefer_formal: within each of the three match groups the RATIFIED name
+// wins over the informal "Stage N" synonym covering the same interval.
+const _INFORMAL_STAGE_RE = /^\s*(?:unnumbered|unnamed|stage)\s+[\dxvi]+\s*$/i;
+
+function _isInformalStageName(name) {
+  return _INFORMAL_STAGE_RE.test(String(name === null || name === undefined ? '' : name));
 }
 
-// Resolve a bound label to {name, ma} or null. Mirrors
-// ics_resolve_age_bound: explicit Ma literals (range-aware, prefer picks
-// older/younger end), Chinese stage aliases, series/epoch labels,
-// whole-word stage names, period names.
-function _resolveAgeBound(text, prefer) {
-  const s = String(text || '').trim();
-  if (!s) return null;
-  const stages = (typeof globalThis !== 'undefined' && globalThis.RCA_ICS_TABLE) ? globalThis.RCA_ICS_TABLE : null;
-  if (!stages) return null;
+// First formal (ratified) name in the list, else the first entry, else null.
+function _preferFormal(names) {
+  for (const name of names) {
+    if (!_isInformalStageName(name)) return name;
+  }
+  return names.length ? names[0] : null;
+}
 
+// Deterministic stage lookup for a Ma value, mirroring
+// rca_core/standards/ics.py:ics_stage_from_age. Python semantics reproduced:
+//   1. a strict interior hit (top < ma < base) wins — interior matches are
+//      unique in a gapless table EXCEPT for the duplicate Cambrian rows, so
+//      every group is collected and filtered through _preferFormal;
+//   2. at an exact boundary, the boundary belongs to the YOUNGER stage whose
+//      BASE it defines (259.51 -> Wuchiapingian, 254.14 -> Changhsingian);
+//   3. a value equal to a stage's top (0.0 -> Holocene) is the last fallback.
+// Python's if/elif means one row can only be in ONE of the two boundary
+// groups; the same is reproduced below.
+// Returns null when no stage matches (same as the Python None).
+function _icsStageFromAge(stages, ma) {
+  const interior = [];
+  const baseMatch = [];
+  const topMatch = [];
+  for (const name of Object.keys(stages)) {
+    const info = stages[name] || {};
+    const top = typeof info.top_ma === 'number' ? info.top_ma : 0;
+    const base = typeof info.base_ma === 'number' ? info.base_ma : 0;
+    if (top < ma && ma < base) { interior.push(name); continue; }
+    if (Math.abs(base - ma) <= 1e-9) baseMatch.push(name);
+    else if (Math.abs(top - ma) <= 1e-9) topMatch.push(name);
+  }
+  if (interior.length) return _preferFormal(interior);
+  if (baseMatch.length) return _preferFormal(baseMatch);
+  if (topMatch.length) return _preferFormal(topMatch);
+  return null;
+}
+
+// Mirror of ics.py:ics_parse_age_range — every stage name of the table found
+// in the text, ordered by first appearance, REPEATS FOLDED OUT
+// (REVIEW-2026-09-20): "Wuchiapingian to Changhsingian, see Wuchiapingian"
+// used to yield three hits, and every consumer walking consecutive pairs
+// then judged a stage against itself.
+function _icsParseAgeRange(stages, text) {
+  const s = String(text === null || text === undefined ? '' : text);
+  if (!s) return [];
+  const matches = [];
+  for (const stageName of Object.keys(stages)) {
+    const re = new RegExp('\\b' + _regExpEscape(stageName) + '\\b', 'gi');
+    let m;
+    while ((m = re.exec(s)) !== null) {
+      matches.push({ idx: m.index, name: stageName });
+      if (m.index === re.lastIndex) re.lastIndex += 1;  // empty-match guard
+    }
+  }
+  // Python sorts by position only — a STABLE sort, so two names starting at
+  // the same offset keep their table order. Array#sort is stable in ES2019+.
+  matches.sort((a, b) => a.idx - b.idx);
+  const seen = new Set();
+  const ordered = [];
+  for (const hit of matches) {
+    if (seen.has(hit.name)) continue;
+    seen.add(hit.name);
+    ordered.push(hit.name);
+  }
+  return ordered;
+}
+
+// Mirror of ics.py:_resolve_prefer (REVIEW-2026-09-20). ``prefer`` used to be
+// compared with === "younger" at every branch, so any other spelling — "Older",
+// " TOP", "youngest", "bottom", an absent/None value from a JSON payload —
+// silently took the INVERSE branch and exported the wrong end of the interval.
+// Empty/None keeps the documented default ("older"); any other unknown value
+// raises instead of quietly inverting a FAD/LAD export.
+const _PREFER_OLDER = ['older', 'oldest', 'old', 'base', 'bottom'];
+const _PREFER_YOUNGER = ['younger', 'youngest', 'young', 'top', 'upper'];
+
+function _resolvePrefer(prefer) {
+  const key = String(prefer === null || prefer === undefined ? '' : prefer)
+    .trim().toLowerCase();
+  if (!key || _PREFER_OLDER.indexOf(key) !== -1) return true;
+  if (_PREFER_YOUNGER.indexOf(key) !== -1) return false;
+  const known = _PREFER_OLDER.concat(_PREFER_YOUNGER).filter(
+    (v, i, arr) => arr.indexOf(v) === i).sort();
+  throw new Error('prefer must be an \'older\'/\'younger\' spelling (got '
+    + JSON.stringify(prefer) + '); known values: ' + known.join(', '));
+}
+
+// Mirror of ics.py:_stage_bound — base_ma is the OLDER (larger) number,
+// top_ma the YOUNGER (smaller) one.
+function _stageBound(info, wantOlder) {
+  const base = typeof info.base_ma === 'number' ? info.base_ma : 0;
+  const top = typeof info.top_ma === 'number' ? info.top_ma : 0;
+  return wantOlder ? (base || 0) : (top || 0);
+}
+
+// Mirror of ics.py:_series_bounds_for: the explicit override wins when the
+// label carries one (Pleistocene's named stages end at 0.129 but the epoch
+// runs to 0.0117), otherwise first stage's base / last stage's top.
+function _seriesBoundsFor(stages, ent) {
+  if (ent.bounds) return [ent.bounds[0], ent.bounds[1]];
+  const first = stages[ent.stages[0]];
+  const last = stages[ent.stages[ent.stages.length - 1]];
+  if (!first || !last) return [null, null];
+  return [(first.base_ma || 0), (last.top_ma || 0)];
+}
+
+// Resolve a bound label to {name, ma} or null. Mirrors the FULL decision tree
+// of rca_core/standards/ics.py:ics_resolve_age_bound, in its order:
+//   1. explicit numeric Ma literal (single value or range);
+//   2. Chinese stage-name alias;
+//   3. ICS stage name(s) — BEFORE series (REVIEW-2026-09-10), so
+//      "Late Permian (Wuchiapingian)" resolves to the precise stage named in
+//      the label instead of silently discarding it for the Lopingian series;
+//   4. series/epoch label (English then Chinese);
+//   5. period name (English then Chinese).
+function _resolveAgeBound(text, prefer) {
+  const wantOlder = _resolvePrefer(prefer);
+  const s = String(text === null || text === undefined ? '' : text).trim();
+  const stages = (typeof globalThis !== 'undefined' && globalThis.RCA_ICS_TABLE) ? globalThis.RCA_ICS_TABLE : null;
+  if (!s || !stages || Object.keys(stages).length === 0) return null;
+
+  // 1. Explicit numeric ages (range-aware): older = max, younger = min.
   const vals = _explicitMaValues(s);
   if (vals.length > 0) {
-    const ma = prefer === 'younger' ? Math.min.apply(null, vals) : Math.max.apply(null, vals);
-    // Sprint B (REVIEW-2026-09-04): deterministic boundary resolution via
-    // _icsStageFromAge (mirrors ics.py:ics_stage_from_age) instead of the
-    // key-order-dependent first `top <= ma <= base` hit.
+    let ma = vals[0];
+    for (const v of vals) {
+      if (wantOlder ? v > ma : v < ma) ma = v;
+    }
     return { name: _icsStageFromAge(stages, ma), ma };
   }
 
-  const cnStages = globalThis.RCA_ICS_CN_STAGES;
-  if (cnStages) {
-    for (const alias of Object.keys(cnStages)) {
-      if (s.indexOf(alias) !== -1) {
-        const st = cnStages[alias];
-        if (stages[st]) return { name: st, ma: (stages[st].base_ma + stages[st].top_ma) / 2 };
-      }
+  // 2. Chinese stage-name alias. REVIEW-2026-09-20: the alias resolves to that
+  // very stage, so it takes the SAME bound rule as step 3 (base/top by
+  // prefer), not the old midpoint.
+  const cnStages = globalThis.RCA_ICS_CN_STAGES || {};
+  for (const alias of Object.keys(cnStages)) {
+    if (s.indexOf(alias) !== -1) {
+      const st = cnStages[alias];
+      if (stages[st]) return { name: st, ma: _stageBound(stages[st], wantOlder) };
     }
   }
 
+  // 3. ICS stage name(s) -> order-independent range bounds.
+  const found = _icsParseAgeRange(stages, s);
+  if (found.length === 1) {
+    // REVIEW-2026-09-20: a single named stage is one ENDPOINT of the caller's
+    // range, not a point in time. The midpoint made prefer="older" and
+    // prefer="younger" return the SAME number, so a species whose FAD and LAD
+    // both read "Wuchiapingian" exported a zero-duration range
+    // (FAD == LAD == 256.8). Take the stage's own bound instead.
+    const info = stages[found[0]];
+    if (info) return { name: found[0], ma: _stageBound(info, wantOlder) };
+  } else if (found.length > 1) {
+    // Stage range: max-of-bases / min-of-tops, honoring ``prefer``. Python's
+    // max()/min() return the FIRST extremal element, so the comparison below
+    // is strictly greater/less — never >= / <=.
+    const bases = [];
+    const tops = [];
+    for (const st of found) {
+      if (!stages[st]) continue;
+      bases.push([st, stages[st].base_ma || 0]);
+      tops.push([st, stages[st].top_ma || 0]);
+    }
+    if (bases.length && tops.length) {
+      let pick = wantOlder ? bases[0] : tops[0];
+      for (const cand of (wantOlder ? bases : tops)) {
+        if (wantOlder ? cand[1] > pick[1] : cand[1] < pick[1]) pick = cand;
+      }
+      return { name: pick[0], ma: pick[1] };
+    }
+  }
+
+  // 4. Series/epoch labels (English then Chinese).
   const series = globalThis.RCA_ICS_SERIES || {};
   const norm = s.toLowerCase();
   for (const label of Object.keys(series)) {
-    if (new RegExp('\\b' + _regExpEscape(label) + '\\b', 'i').test(norm)) {
-      const ent = series[label];
-      const first = stages[ent.stages[0]];
-      const last = stages[ent.stages[ent.stages.length - 1]];
-      if (first && last) {
-        const older = ent.bounds ? ent.bounds[0] : first.base_ma;
-        const younger = ent.bounds ? ent.bounds[1] : last.top_ma;
-        return { name: ent.name, ma: prefer === 'younger' ? younger : older };
-      }
+    if (!new RegExp('\\b' + _regExpEscape(label) + '\\b').test(norm)) continue;
+    const bounds = _seriesBoundsFor(stages, series[label]);
+    if (bounds[0] !== null && bounds[0] !== undefined) {
+      return {
+        name: series[label].name,
+        ma: wantOlder ? bounds[0] : bounds[1],
+      };
     }
   }
   const cnSeries = globalThis.RCA_ICS_CN_SERIES || {};
   for (const alias of Object.keys(cnSeries)) {
-    if (s.indexOf(alias) !== -1) {
-      const ent = series[cnSeries[alias]];
-      if (!ent) continue;
-      const first = stages[ent.stages[0]];
-      const last = stages[ent.stages[ent.stages.length - 1]];
-      if (first && last) {
-        const older = ent.bounds ? ent.bounds[0] : first.base_ma;
-        const younger = ent.bounds ? ent.bounds[1] : last.top_ma;
-        return { name: ent.name, ma: prefer === 'younger' ? younger : older };
-      }
+    if (s.indexOf(alias) === -1) continue;
+    const ent = series[cnSeries[alias]];
+    if (!ent) continue;
+    const bounds = _seriesBoundsFor(stages, ent);
+    if (bounds[0] !== null && bounds[0] !== undefined) {
+      return { name: ent.name, ma: wantOlder ? bounds[0] : bounds[1] };
     }
   }
 
-  for (const k of Object.keys(stages)) {
-    if (new RegExp('\\b' + _regExpEscape(k) + '\\b', 'i').test(s)) {
-      return { name: k, ma: (stages[k].base_ma + stages[k].top_ma) / 2 };
-    }
-  }
-
+  // 5. Period-level fallback (English then Chinese). Python returns the
+  // CANONICAL period name ("Permian"), not the matched label.
   const periods = globalThis.RCA_ICS_PERIODS || {};
+  const periodNames = globalThis.RCA_ICS_PERIOD_NAMES || {};
   for (const label of Object.keys(periods)) {
-    if (new RegExp('\\b' + label + '\\b', 'i').test(norm)) {
-      const b = periods[label];
-      return { name: label, ma: prefer === 'younger' ? b[1] : b[0] };
+    if (!new RegExp('\\b' + _regExpEscape(label) + '\\b').test(norm)) continue;
+    const b = periods[label];
+    if (b && b[0] !== null && b[0] !== undefined) {
+      return { name: periodNames[label] || label, ma: wantOlder ? b[0] : b[1] };
     }
   }
   const cnPeriods = globalThis.RCA_ICS_CN_PERIODS || {};
+  const cnPeriodNames = globalThis.RCA_ICS_CN_PERIOD_NAMES || {};
   for (const alias of Object.keys(cnPeriods)) {
-    if (s.indexOf(alias) !== -1) {
-      const b = cnPeriods[alias];
-      return { name: alias, ma: prefer === 'younger' ? b[1] : b[0] };
+    if (s.indexOf(alias) === -1) continue;
+    const b = cnPeriods[alias];
+    if (b && b[0] !== null && b[0] !== undefined) {
+      return { name: cnPeriodNames[alias] || alias, ma: wantOlder ? b[0] : b[1] };
     }
   }
   return null;
@@ -562,12 +684,16 @@ function scoreAccuracy(data) {
     ? globalThis.RCA_ICS_TABLE
     : null;
   if (stages) {
+    // Mirror of rca_core/standards/ics.py:ics_age_compare — the Python oracle
+    // compares the MIDPOINT of each stage's span, not its base, so a pair of
+    // stages whose bases coincide with a third stage's top must order the same
+    // way on both engines.
     const icsAgeCompare = (s1, s2) => {
       if (!stages[s1] || !stages[s2]) return null;
-      const b1 = stages[s1].base_ma;
-      const b2 = stages[s2].base_ma;
-      if (b1 > b2) return -1;
-      if (b1 < b2) return 1;
+      const mid1 = ((stages[s1].base_ma || 0) + (stages[s1].top_ma || 0)) / 2;
+      const mid2 = ((stages[s2].base_ma || 0) + (stages[s2].top_ma || 0)) / 2;
+      if (mid1 > mid2) return -1;  // stage1 is OLDER (higher Ma)
+      if (mid1 < mid2) return 1;   // stage1 is YOUNGER
       return 0;
     };
     for (const sec of sects2) {
@@ -575,13 +701,12 @@ function scoreAccuracy(data) {
       const secName = String(sec.name || sec.id || '').trim();
       if (!secName) continue;
       const ageRange = String(sec.age_range || '');
-      const found = [];
-      for (const stageName of Object.keys(stages)) {
-        const re = new RegExp('\\b' + stageName.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + '\\b', 'i');
-        const m = re.exec(ageRange);
-        if (m) found.push({name: stageName, idx: m.index});
-      }
-      found.sort((a, b) => a.idx - b.idx);
+      // REVIEW-2026-09-20: go through the shared _icsParseAgeRange mirror so
+      // repeated mentions of one stage ("Wuchiapingian to Changhsingian, see
+      // Wuchiapingian") fold out exactly like Python's ics_parse_age_range.
+      // Without the dedup the trailing repeat made the pair walker judge a
+      // stage against itself and against a stage the text never juxtaposed.
+      const found = _icsParseAgeRange(stages, ageRange);
       if (found.length < 2) continue;
       // M6 (REVIEW-2026-08-19): Proportional accuracy — every adjacent
       // pair contributes one check, and `passed` reflects the fraction
@@ -592,14 +717,14 @@ function scoreAccuracy(data) {
       let stageViolations = 0;
       let stageChecks = 0;
       for (let i = 0; i < found.length - 1; i += 1) {
-        const cmp = icsAgeCompare(found[i].name, found[i + 1].name);
+        const cmp = icsAgeCompare(found[i], found[i + 1]);
         if (cmp === null) continue;
         stageChecks += 1;
         if (cmp > 0) {
           stageViolations += 1;
           issues.push({
             severity: 'warning', msg_key: 'quality.stage_order_reversed',
-            params: {section: secName, detail: found[i].name + ' above ' + found[i + 1].name}
+            params: {section: secName, detail: found[i] + ' above ' + found[i + 1]}
           });
         }
       }
@@ -771,8 +896,11 @@ function scoreConsistency(data) {
       const icsAgeCompare2 = (s1, s2) => {
         const a = stages2[s1]; const b = stages2[s2];
         if (!a || !b) return null;
-        if (a.base_ma > b.base_ma) return -1;
-        if (a.base_ma < b.base_ma) return 1;
+        // Same oracle as Python's ics_age_compare: midpoint of the span.
+        const midA = ((a.base_ma || 0) + (a.top_ma || 0)) / 2;
+        const midB = ((b.base_ma || 0) + (b.top_ma || 0)) / 2;
+        if (midA > midB) return -1;
+        if (midA < midB) return 1;
         return 0;
       };
       // Same curated zone->stage map as rca_core/quality.py (species-

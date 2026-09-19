@@ -282,6 +282,39 @@ def _looks_like_payload_root(parsed: Any) -> bool:
     return isinstance(parsed, dict) and bool(_KNOWN_ROOT_KEYS & parsed.keys())
 
 
+def _looks_like_payload_list(parsed: Any) -> bool:
+    """Array counterpart of ``_looks_like_payload_root``.
+
+    REVIEW-2026-09-20 #101: models that hit the ``max_tokens`` ceiling inside
+    a top-level array (``[{"species": ..., "section": ...}, {"spe``) produce a
+    repair that parses to a LIST, never a dict, so the dict-only guard of
+    Level 3.5 threw the repaired payload away and Level 4 rescued a single
+    inner row — the exact data loss the level exists to prevent. The same
+    "is this the payload or just prose?" question therefore has to be asked
+    of arrays too:
+
+    * the majority of the elements are objects (a ``[...]`` of bare scalars is
+      far more likely to be a sentence fragment in prose than an extraction);
+    * and either one of those objects carries a known root key (an array of
+      wrapper objects), or at least one looks like a DATA ROW (a few fields),
+      which is what a cut row array contains.
+
+    Used by safe_json_loads Level 3.5 only — Levels 3/3.2/5/6 keep wrapping
+    any array unconditionally, as before.
+    """
+    if not isinstance(parsed, list) or not parsed:
+        return False
+    dicts = [item for item in parsed if isinstance(item, dict)]
+    if not dicts or len(dicts) * 2 < len(parsed):
+        return False
+    if any(_looks_like_payload_root(item) for item in dicts):
+        return True
+    # Row-shaped: at least one object with a couple of fields. One stray
+    # ``{"a": 1}`` in prose does not satisfy this, and a real single-row
+    # payload has nowhere else to land (Level 4 drops arrays).
+    return any(len(item) >= 2 for item in dicts)
+
+
 # Angle-bracket placeholders are how the prompt contract and a model's
 # restatement of it mark "fill this in": "<binomial>", "<section name>",
 # "<one of the list above>". A fenced block dense with them is an example,
@@ -339,6 +372,53 @@ def _fence_placeholder_count(block: str) -> int:
     return len(_PLACEHOLDER_RE.findall(block))
 
 
+def _best_payload_rank(text: str) -> tuple[int, int]:
+    """``(payload_score, -placeholder_count)`` of the best object in ``text``.
+
+    REVIEW-2026-09-20 #102: the same two signals the multi-fence rule uses —
+    payload-key density first, then the angle-bracket placeholders that mark a
+    restated contract ("<binomial>", "<section name>") — so a fenced EXAMPLE and
+    an unfenced payload built from the same schema compare by their contents
+    instead of tying. ``(0, 0)`` when nothing parses, which never beats a
+    real block.
+    """
+    best: tuple[int, int] | None = None
+    for cand in extract_all_balanced_json_objects(text):
+        parsed = _try_parse_object(cand)
+        if parsed is None:
+            continue
+        score = _payload_score(parsed)
+        if _looks_like_payload_root(parsed) and score <= 0:
+            # A root-keyed object whose schema-ish keys cancelled the payload
+            # keys is still a payload candidate, not prose.
+            score += 100
+        rank = (score, -_fence_placeholder_count(cand))
+        if best is None or rank > best:
+            best = rank
+    return best if best is not None else (0, 0)
+
+
+def _split_around_fences(text: str,
+                         matches: list[Any]) -> tuple[str, str]:
+    """Return ``(outside, unfenced)`` for the collected fence matches.
+
+    ``outside`` is the text with every complete fenced span REMOVED (the
+    prose around the fences), ``unfenced`` the same text with only the
+    ``` delimiters dropped so the blocks stay readable in place.
+    """
+    outside: list[str] = []
+    unfenced: list[str] = []
+    prev = 0
+    for m in matches:
+        outside.append(text[prev:m.start()])
+        unfenced.append(text[prev:m.start()])
+        unfenced.append(m.group(1))
+        prev = m.end()
+    outside.append(text[prev:])
+    unfenced.append(text[prev:])
+    return "\n".join(outside), "".join(unfenced).strip()
+
+
 def strip_markdown_fence(text: str) -> str:
     """Strip markdown code fences (```json ... ```) from a model response.
 
@@ -353,13 +433,23 @@ def strip_markdown_fence(text: str) -> str:
     non-greedy regex returned only the FIRST block, so a reply that restated
     a JSON-Schema example in one fence and put the real payload in a later
     fence had the schema evict the real data. Now ALL fenced blocks are
-    collected and strictly parsed one by one; the FIRST block that parses to
-    a dict containing one of the ``_KNOWN_ROOT_KEYS`` is returned. If no
-    block qualifies (unparseable blocks, or dicts without any known root
-    key) the original behaviour is preserved and the FIRST block is
-    returned, so existing single-fence callers see no change.
+    collected and strictly parsed one by one; the block that actually looks
+    like the payload wins (ranked on placeholder density, then position).
+    If no block qualifies the FIRST block is returned.
 
-    Returns the cleaned string unchanged if no fence is present.
+    REVIEW-2026-09-20 #102: a SINGLE fence used to short-circuit to
+    ``blocks[0]`` before any of that selection ran, which let "Level 3 accepts
+    any dict" hand back a restated EXAMPLE whenever the real payload sat in
+    the prose *after* the fence (the model echoes the contract in a ```json
+    block, then answers in plain text). One block now goes through the same
+    ranking as many, and whichever block that ranking picks is then compared
+    with the text OUTSIDE the fences on the same two signals (payload-key
+    density, then placeholder density): when that prose holds the better
+    payload the delimiters are removed and the whole text is returned so the
+    later levels score every candidate (Level 4 picks the payload). Ties go to
+    the block, so the answer is exactly the pre-existing one whenever the
+    fence really is the best payload — the locked single-fence cases cannot
+    regress.
     """
     if not text:
         return text
@@ -373,19 +463,16 @@ def strip_markdown_fence(text: str) -> str:
     # fell through to Level 4's scorer (a different rule than the JS mirror
     # applies at this point). Selecting over the block list for every shape
     # keeps the two engines on one rule.
-    blocks = [
-        b.strip()
-        for b in re.findall(
-            r"```(?:json)?\s*\n?(.*?)\n?```", s, re.DOTALL | re.IGNORECASE
-        )
-    ]
-    if len(blocks) == 1:
-        return blocks[0]
+    matches = list(re.finditer(
+        r"```(?:json)?\s*\n?(.*?)\n?```", s, re.DOTALL | re.IGNORECASE
+    ))
+    blocks = [m.group(1).strip() for m in matches]
     if blocks:
         qualifying = [
             (i, b) for i, b in enumerate(blocks)
             if _looks_like_payload_root(_try_parse_object(b))
         ]
+        chosen: str
         if qualifying:
             # Prefer the block with the FEWEST schema-placeholder tokens, then
             # the earliest. A model that restates the contract first (a very
@@ -395,12 +482,30 @@ def strip_markdown_fence(text: str) -> str:
             # the payload that followed it. Rank on placeholder density so the
             # real rows win, while an ordinary earlier payload still wins on
             # the index tie-break.
-            return min(qualifying,
-                       key=lambda ib: (_fence_placeholder_count(ib[1]), ib[0]))[1]
-        # No block carries a known root key — keep the historical
-        # first-block behaviour (safe_json_loads' later fallback chain
-        # still gets a chance to rescue the right object).
-        return blocks[0]
+            chosen = min(qualifying,
+                         key=lambda ib: (_fence_placeholder_count(ib[1]),
+                                         ib[0]))[1]
+        else:
+            # No block carries a known root key — keep the historical
+            # first-block behaviour (safe_json_loads' later fallback chain
+            # still gets a chance to rescue the right object).
+            chosen = blocks[0]
+        # Whichever rule picked it, the chosen block must still be the best
+        # payload available: a restated example qualifies by key name yet is
+        # placeholder-ridden, and the real rows may sit in the prose AFTER the
+        # fence. Ties go to the block, so every historically-correct answer is
+        # reproduced byte for byte.
+        #
+        # PERF: the prose is scanned FIRST, and a ``(0, 0)`` rank (no parseable
+        # object outside the fences — the overwhelmingly common shape) skips
+        # the block scan entirely. Without that short-circuit every clean
+        # fenced reply paid for a second O(candidates) enumeration of a payload
+        # that Level 3 was about to parse in one go.
+        outside, unfenced = _split_around_fences(s, matches)
+        outside_rank = _best_payload_rank(outside)
+        if outside_rank > (0, 0) and outside_rank > _best_payload_rank(chosen):
+            return unfenced
+        return chosen
     # Otherwise strip any leading/trailing fence lines defensively.
     s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.MULTILINE | re.IGNORECASE)
     s = re.sub(r"\s*```$", "", s, flags=re.MULTILINE)
@@ -477,7 +582,10 @@ def _repair_truncated_json(text: str) -> str | None:
     stack: list[str] = []
     in_string = False
     escape = False
-    outer_ever_closed = False
+    # REVIEW-2026-09-20 #103: the dead ``outer_ever_closed`` flag was dropped
+    # here — both "the outer container already closed" cases return early
+    # (see the two ``return None`` branches below), so the flag was written
+    # once and never read.
     boundaries: list[tuple[int, tuple[str, ...]]] = []
     for i, c in enumerate(s):
         if escape:
@@ -553,6 +661,19 @@ def safe_json_loads(text: str) -> dict[str, Any]:
     s = strip_markdown_fence(s)
 
     # Level 2: strip raw control characters that json.loads rejects.
+    #
+    # REVIEW-2026-09-20 #104 (deliberately still a DELETE, not an escape):
+    # escaping these the way Level 3.2 escapes \\t\\r\\n would be the more
+    # information-preserving choice, but the class here is the NON-whitespace
+    # control range (0x00-0x08, 0x0b, 0x0c, 0x0e-0x1f) — binary junk from a
+    # mojibake / clipboard round-trip, never meaningful text. Turning a NUL
+    # into "\\u0000" would hand a literal U+0000 to the downstream chain, and
+    # XML (xlsx: openpyxl raises IllegalCharacterError) and CSV cannot carry
+    # it at all, so a "recovered" character becomes a crashed export instead
+    # of one dropped byte. The whitespace family (\\t \\r \\n), which IS
+    # meaningful inside a caption, is precisely what this class excludes;
+    # those survive Level 2 and are escaped losslessly by Level 3.2 below.
+    # Parity: js/json-utils.js Level 2 uses the identical delete regex.
     _ctrl_re = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
     s = _ctrl_re.sub("", s)
 
@@ -596,7 +717,14 @@ def safe_json_loads(text: str) -> dict[str, Any]:
     # find the inner ROW objects of the (now unbalanced) outer payload —
     # discarding every completed row above the cut. Close the brackets at
     # the last complete element instead; only accept repairs that yield a
-    # recognizable payload root (otherwise fall through to Level 4).
+    # recognizable payload (otherwise fall through to Level 4).
+    #
+    # REVIEW-2026-09-20 #101: the guard used to be dict-only, so a reply cut
+    # inside a TOP-LEVEL array — whose repair parses to a list — was thrown
+    # away here and Level 4 then rescued one inner row. The array counterpart
+    # of _looks_like_payload_root() admits a repaired row array (wrapped in
+    # the same ``_array_root`` envelope every other level uses, which the
+    # extractor's normalizers already unwrap).
     if s and s[0] in "{[":
         repaired = _repair_truncated_json(s)
         if repaired is not None:
@@ -606,6 +734,9 @@ def safe_json_loads(text: str) -> dict[str, Any]:
                 parsed = None
             if isinstance(parsed, dict) and _looks_like_payload_root(parsed):
                 return _promote_wrapper(parsed)
+            if isinstance(parsed, list) and _looks_like_payload_list(parsed):
+                return {"_array_root": parsed,
+                        "_note": "model returned a top-level array; wrapping for diagnostics"}
 
     # Level 4: balanced-object enumeration + scoring (HIGH FIX).
     candidates = extract_all_balanced_json_objects(s)

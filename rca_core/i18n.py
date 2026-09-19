@@ -144,6 +144,20 @@ TRANSLATIONS["zh"] = {
     "col.age": "年代",
     "col.agreement": "一致性",
     "col.fossil": "化石记录",
+    # REVIEW-2026-09-20 (finding 12): exporter.py renders these seven columns
+    # and two sheet titles ("Species range" sheet extra columns, columnar
+    # lithology / cross-bed sheets). They existed only in js/i18n.js, so the
+    # desktop export printed raw keys like "col.rangeTopBed". Values are
+    # copied verbatim from js/i18n.js — reword there as well.
+    "col.authorYear": "作者/年份",
+    "col.rangeTopBed": "顶部床位",
+    "col.rangeTopIdx": "顶部索引",
+    "col.endpointKind": "端点类型",
+    "col.occurrenceMode": "产出方式",
+    "col.colConfidence": "行置信度",
+    "col.note": "备注",
+    "sec.columnarLithology": "岩性图例 (Lithology Legend)",
+    "sec.crossBeds": "对比层 (Cross Beds)",
     "sec.sites": "站点 / 岩心 (Sites)",
     "sec.abundances": "丰度记录 (Abundances)",
     "sec.zones": "孢粉带 (Zones)",
@@ -530,6 +544,17 @@ TRANSLATIONS["en"] = {
     "col.age": "Age",
     "col.agreement": "Agreement",
     "col.fossil": "Fossil record",
+    # REVIEW-2026-09-20 (finding 12): see the zh block comment — exporter
+    # column/sheet titles that only existed in js/i18n.js.
+    "col.authorYear": "Author & year",
+    "col.rangeTopBed": "Top bed",
+    "col.rangeTopIdx": "Top index",
+    "col.endpointKind": "Endpoint kind",
+    "col.occurrenceMode": "Occurrence mode",
+    "col.colConfidence": "Row confidence",
+    "col.note": "Note",
+    "sec.columnarLithology": "Lithology Legend",
+    "sec.crossBeds": "Cross Beds",
     "sec.sites": "Sites",
     "sec.abundances": "Abundances",
     "sec.zones": "Zones",
@@ -910,6 +935,17 @@ TRANSLATIONS["ja"] = {
     "col.age": "年代",
     "col.agreement": "一致度",
     "col.fossil": "化石記録",
+    # REVIEW-2026-09-20 (finding 12): see the zh block comment — exporter
+    # column/sheet titles that only existed in js/i18n.js.
+    "col.authorYear": "著者/年",
+    "col.rangeTopBed": "上限層",
+    "col.rangeTopIdx": "上限インデックス",
+    "col.endpointKind": "端点種別",
+    "col.occurrenceMode": "産出様式",
+    "col.colConfidence": "行信頼度",
+    "col.note": "備考",
+    "sec.columnarLithology": "岩性凡例",
+    "sec.crossBeds": "対比層",
     "sec.sites": "地点 / コア (Sites)",
     "sec.abundances": "産出頻度 (Abundances)",
     "sec.zones": "花粉帯 (Zones)",

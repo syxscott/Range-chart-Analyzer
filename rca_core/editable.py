@@ -16,12 +16,19 @@ Example
         "sections": {0: {"name": "Updated Section A"}},
     }
     apply_edits(result_dict, edits)
+
+REVIEW-2026-09-20 adds a second edit form: ``{"_deleted_keys": ["biozone"]}``
+inside a row edit removes fields the user cleared (the previous per-cell diff
+only ever walked the AFTER row, so a cleared field survived the replay and the
+resulting row combined values from both versions).
 """
 
 from __future__ import annotations
 
 import copy
 from typing import Any
+
+from .exporter import COL_TYPES, _find_cfg, get_config
 
 _LIST_KEYS = (
     "sections", "species_ranges", "biozones",
@@ -37,7 +44,83 @@ _LIST_KEYS = (
     # apply_edits() silently no-op'd — the same class of bug the abundance
     # addition above fixed. report.py already tracks all three keys.
     "nodes", "zonations", "correlations",
+    # REVIEW-2026-09-20: the columnar sub-tables. In a columnar result these
+    # lists are NESTED (``sections[i]["lithology_blocks"]``) and their edits
+    # are already captured through the ``sections`` row diff above — but a
+    # payload produced by the old exporter Apply-edits path carried them as
+    # bogus TOP-LEVEL keys (rca_core/exporter.py used to write
+    # ``data["lithology_blocks"]``, which nothing in the model reads). Listing
+    # the ids here means such a legacy payload still round-trips instead of
+    # the diff quietly ignoring a list it does not recognise.
+    "lithology_blocks", "age_units", "samples",
 )
+
+# Rows that are plain scalars, not dicts (normalize_result emits
+# ``other_fossils`` as a list of fossil names). The "new row" template has to
+# match, or the GUI inserts a dict into a string list.
+_SCALAR_LIST_KEYS = ("other_fossils",)
+
+# Row-edit key that lists the columns capture_edits saw DISAPPEAR between
+# before/after. ``apply_edits`` deletes them on replay.
+_DELETED_KEYS = "_deleted_keys"
+
+
+def _default_for(table_id: str, data_key: str) -> Any:
+    """A model-native empty value for one column, from COL_TYPES."""
+    t = COL_TYPES.get(table_id, {}).get(data_key, "str")
+    if t == "list":
+        return []
+    if t in ("int", "float", "number", "bool_yn", "nullable_str"):
+        # None means "not filled in" for every one of these; the renderers
+        # already map None -> "" and None -> "N".
+        return None
+    return ""
+
+
+def _template_from_cfg(cfg: dict[str, Any] | None, list_key: str) -> dict[str, Any]:
+    """Build a row template from a table config's column metadata.
+
+    REVIEW-2026-09-20: the templates used to be a hand-maintained dict here,
+    duplicating (and drifting from) the exporter's TABLE_CONFIGS:
+    ``other_fossils`` got ``{"text": ""}`` while the model row is a plain
+    string / ``fossil`` key, and the columnar ``sections`` template carried
+    the RANGE-CHART fields (name / age_range / formations), so "Add row" on a
+    columnar section created a row with none of the columns that table shows
+    (id / group / thickness_m / coordinates_text). Driving the template off
+    ``data_keys`` + ``COL_TYPES`` removes the second source of truth.
+    """
+    if not cfg:
+        return {}
+    keys = list(cfg.get("data_keys") or cfg.get("cols") or [])
+    table_id = cfg.get("id") or list_key
+    out: dict[str, Any] = {}
+    for k in keys:
+        if k == "agreement":
+            continue  # computed at merge time, never typed
+        out[k] = _default_for(table_id, k)
+    return out
+
+
+def new_row_template(list_key: str, data: dict[str, Any] | None = None) -> Any:
+    """Return an empty row for ``list_key`` — the columns the UI shows.
+
+    Used when the user clicks 'Add row' on a table.
+
+    ``data`` (REVIEW-2026-09-20) is the result being edited: the table id
+    ``sections`` means two different schemas (range-chart vs columnar), so
+    only the result's shape can pick the right one. Without it the
+    range-chart preset is used, as before.
+
+    Returns a plain ``""`` for a scalar list key (``other_fossils``).
+    """
+    if list_key in _SCALAR_LIST_KEYS:
+        return ""
+    cfg = _find_cfg(list_key, data) if data else get_config(list_key)
+    if cfg is None:
+        return {}
+    tpl = _template_from_cfg(cfg, list_key)
+    return tpl
+
 
 
 def _coerce(value: Any) -> Any:
@@ -91,12 +174,29 @@ def capture_edits(before: dict[str, Any], after: dict[str, Any]) -> dict[str, An
                     scalar_changed = True
                 continue
             cell_edits: dict[str, Any] = {}
-            for col, av in ai.items():
+            # REVIEW-2026-09-20: the diff runs over the UNION of both rows'
+            # keys. It used to walk only ``ai`` (the after row), so a field
+            # the user CLEARED — normalize_result drops empty keys, and
+            # "delete this cell" in the GUI removes them — was never recorded:
+            # replaying the edit left the old value in place and produced a
+            # CHIMERIC row (before's deleted field + after's other fields),
+            # i.e. a row that exists in neither version and may carry a stale
+            # range_top against a new range_base. Deletions now travel as a
+            # ``_deleted_keys`` list which apply_edits replays with pop().
+            for col in list(bi) + [k for k in ai if k not in bi]:
                 if col == "_extras":
                     continue   # never edit internal extras via UI
-                bv = bi.get(col)
-                if _coerce(av) != _coerce(bv):
-                    cell_edits[col] = av
+                if col in ai and col in bi:
+                    if _coerce(ai[col]) != _coerce(bi[col]):
+                        cell_edits[col] = ai[col]
+                elif col in ai:
+                    bv = None
+                    av = ai[col]
+                    if _coerce(av) != _coerce(bv):
+                        cell_edits[col] = av
+                else:  # present before, gone after -> a deletion
+                    deleted = cell_edits.setdefault(_DELETED_KEYS, [])
+                    deleted.append(col)
             if cell_edits:
                 edits[i] = cell_edits
         if scalar_changed:
@@ -176,6 +276,15 @@ def apply_edits(result: dict[str, Any], edits: dict[str, Any]) -> dict[str, Any]
             for col, val in cell_edits.items():
                 if col == "_extras":
                     continue
+                if col == _DELETED_KEYS:
+                    # REVIEW-2026-09-20: replay a field removal (see
+                    # capture_edits). Without this branch the list would be
+                    # written onto the row as a bogus ``_deleted_keys`` field.
+                    if isinstance(val, (list, tuple)):
+                        for drop in val:
+                            if isinstance(drop, str):
+                                item.pop(drop, None)
+                    continue
                 # Deep copy so a list-typed value (e.g. formations) written
                 # onto the result isn't shared with the edits payload.
                 item[col] = copy.deepcopy(val)
@@ -195,50 +304,3 @@ def is_dirty(before: dict[str, Any], after: dict[str, Any]) -> bool:
     """True when ``after`` differs from ``before`` on any editable field."""
     return bool(capture_edits(before, after))
 
-
-def new_row_template(list_key: str) -> dict[str, Any]:
-    """Return an empty row with the columns the UI expects for ``list_key``.
-    Used when the user clicks 'Add row' on a table."""
-    templates = {
-        "sections": {
-            "name": "", "age_range": "", "formations": [],
-            "formation_thickness_m": "", "coordinates": "",
-        },
-        "species_ranges": {
-            "species": "", "section": "", "range_top": "",
-            "range_base": "", "biozone": "",
-        },
-        "biozones": {"name": "", "section": "", "age": "", "thickness_m": ""},
-        "fossil_legend": {"marker": "", "meaning": ""},
-        "lithology_legend": {"pattern": "", "meaning": ""},
-        "cross_beds": {
-            "from_section": "", "from_bed_idx": None,
-            "to_section": "", "to_bed_idx": None,
-        },
-        "other_fossils": {"text": ""},
-        # Abundance-diagram tables (pollen / percentage-diagram).
-        "sites": {
-            "name": "", "location": "", "age_range": "", "depth_unit": "",
-        },
-        "abundances": {
-            "taxon": "", "site": "", "level": "", "depth": "",
-            "abundance": "", "abundance_unit": "",
-        },
-        "zones": {
-            "name": "", "age": "", "level_range": "",
-        },
-        # REVIEW-2026-09-10: see the _LIST_KEYS note above.
-        "nodes": {
-            "id": "", "parent": "", "name": "", "is_leaf": None,
-            "branch_length": None, "node_age_ma": None, "support": None,
-        },
-        "zonations": {
-            "name": "", "region": "", "framework": "", "reference": "",
-        },
-        "correlations": {
-            "from_zone": "", "to_zone": "",
-            "from_zonation": "", "to_zonation": "",
-            "basis": "", "note": "",
-        },
-    }
-    return copy.deepcopy(templates.get(list_key, {}))

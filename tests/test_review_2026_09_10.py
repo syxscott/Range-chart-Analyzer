@@ -433,7 +433,13 @@ class TestMiscFixes:
         from rca_core.report import build_extraction_report
         r = build_extraction_report(data={"sections": [], "_extras": ["x"]},
                                     mode="range_chart")
-        assert r["empty_tables"][0]["reason"] == "not readable in this figure"
+        # REVIEW-2026-09-20: this used to assert
+        # ``reason == "not readable in this figure"`` — a cause the report
+        # INVENTED for every empty table. The point of the test is that a
+        # non-dict ``_extras`` must not raise; an empty table whose payload
+        # says nothing now reports no reason at all ("") instead of a made-up
+        # one, so the pinned string was the codified bug and is dropped.
+        assert r["empty_tables"][0]["reason"] == ""
 
     def test_report_truncation_unknown_is_null(self):
         from rca_core.report import build_extraction_report
@@ -459,7 +465,7 @@ class TestMiscFixes:
                                        "ref": "Kamata, 1996"}]}],
             "fossil_legend": [], "lithology_legend": [], "cross_beds": [],
             "confidence": 0.65})
-        ok, issues = validate_export_invariants(res)
+        ok, issues, _warnings = validate_export_invariants(res)
         assert ok, issues
         assert to_xlsx(res)                      # used to raise ValueError
 

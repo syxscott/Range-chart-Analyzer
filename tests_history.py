@@ -129,7 +129,17 @@ def test_mode_filter():
 
 
 def test_thumbnail_round_trip():
-    """Image bytes survive a save / load round trip."""
+    """Image bytes survive a save / load round trip.
+
+    UPDATED 2026-09-20 (finding 9): this test used to assert byte-for-byte
+    equality with the input, which only passed because the (truncated,
+    undecodable) 67-byte PNG was stored VERBATIM by the old fallback — the
+    History page then showed an empty box while the row claimed real
+    dimensions. ``add`` now always re-encodes through Pillow and, when it
+    cannot, stores nothing. So the contract checked here is
+    "a stored thumbnail decodes and keeps the recorded size", plus an
+    explicit check that garbage in yields no thumbnail and no size.
+    """
     store, td = fresh_store()
     try:
         # 1x1 transparent PNG (real 67-byte PNG)
@@ -148,8 +158,31 @@ def test_thumbnail_round_trip():
             result={},
         ))
         loaded = store.get(rid)
-        check("history-thumb-bytes-match", loaded.image_thumbnail == png_bytes)
+        stored = loaded.image_thumbnail or b""
+        check("history-thumb-stored", len(stored) > 0)
+        check("history-thumb-is-jpeg", stored[:2] == b"\xff\xd8")
+        try:
+            from PIL import Image
+            import io as _io
+            img = Image.open(_io.BytesIO(stored))
+            check("history-thumb-decodable", img.size[0] >= 1 and img.size[1] >= 1)
+        except Exception as exc:
+            check("history-thumb-decodable", False)
+            print("  stored thumbnail is undecodable:", exc)
         check("history-thumb-width", loaded.image_width == 1)
+
+        # Undecodable input: no blob, no invented size (finding 9).
+        # _row_to_record maps a NULL width back to 0, so assert falsiness.
+        bad_id = store.add(HistoryRecord(
+            timestamp=time.time(),
+            image_thumbnail=b"this is not an image" * 40,
+            image_width=640, image_height=480,
+            result={},
+        ))
+        bad = store.get(bad_id)
+        check("history-thumb-garbage-empty", not bad.image_thumbnail)
+        check("history-thumb-garbage-size-cleared",
+              not bad.image_width and not bad.image_height)
     finally:
         import shutil; shutil.rmtree(td, ignore_errors=True)
 

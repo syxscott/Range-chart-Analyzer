@@ -16,20 +16,28 @@ import copy
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+from functools import cmp_to_key
 from typing import Any, Optional
 
 
-# P0-6: 10 common ICZN open-nomenclature markers.
+# ICZN open-nomenclature markers (P0-6).
 # Long-pattern forms must appear before shorter sub-patterns (e.g. ex gr.
-# before gr., s.str. before s., comb. nov. before nov.).
+# before gr., s.str. before s. — the ordering only matters for the labels
+# this list produces, not for correctness of the match).
 _QUALIFIER_PATTERNS = [
     (re.compile(r"\bex\s+gr(?:oup)?\.?\b", re.IGNORECASE), "ex gr."),
     (re.compile(r"\bs\.?\s*l\.?\b", re.IGNORECASE), "s.l."),
     (re.compile(r"\bs\.?\s*str\.?\b", re.IGNORECASE), "s.str."),
     (re.compile(r"\bsp\.?\b", re.IGNORECASE), "sp."),
     (re.compile(r"\bspp\.?\b", re.IGNORECASE), "spp."),
-    (re.compile(r"\bcf\.?\s+", re.IGNORECASE), "cf."),
-    (re.compile(r"\baff\.?\s+", re.IGNORECASE), "aff."),
+    # REVIEW-2026-09-20: cf./aff. required TRAILING WHITESPACE (`\s+`), so the
+    # very common trailing-suffix forms "Genus cf." / "Genus aff." — nothing
+    # after the marker — never matched and the specimen was deduped together
+    # with the identified "Genus". `\b` after the optional dot matches at an
+    # end of string as well, and still rejects look-alikes ("coffee",
+    # "affinis") because the dot is optional on both sides of the boundary.
+    (re.compile(r"\bcf\.?\b", re.IGNORECASE), "cf."),
+    (re.compile(r"\baff\.?\b", re.IGNORECASE), "aff."),
     (re.compile(r"\?\s*$"), "?"),
     (re.compile(r"\bnom\.?\s+(dub|nud|nov|cons|obl|rej|van)\b", re.IGNORECASE), "nom. \\1"),
     (re.compile(r"\bcomb\.?\s+nov\.?\b", re.IGNORECASE), "comb. nov."),
@@ -60,12 +68,10 @@ def _norm(s):
     if not s:
         return ""
     t = str(s).strip()
-    # B-1 fix: do NOT strip sp./cf./aff. here — that info is preserved by
-    # _extract_qualifiers and carried into the dedup key as a separate
-    # component so "Genus sp." and "Genus" are NOT merged together.
-    # The original code stripped these suffixes, causing indeterminate
-    # (sp.) / cf. specimens to be silently collapsed into the identified
-    # species — a serious taxonomic data-integrity bug.
+    # Open-nomenclature markers (sp./cf./aff./…) are deliberately NOT stripped
+    # here: _extract_qualifiers carries them as a separate component of the
+    # dedup key so an indeterminate "Genus sp." never collapses into the
+    # identified "Genus".
     t = re.sub(r"\s+", " ", t)
     return t.lower()
 
@@ -143,20 +149,38 @@ def _mode(values):
     for v in values:
         if isinstance(v, (dict, list, set, tuple)):
             continue
-        if v and str(v).strip():
-            non_empty.append(v)
+        # REVIEW-2026-09-20: the filter used to be ``if v and str(v).strip()``,
+        # which dropped every FALSY-BUT-REAL observation: 0, 0.0 and False are
+        # legitimate values (0 % abundance, an empty part of the diagram,
+        # ``reworked: False``). With votes [0, 0, 12] the two zeros were
+        # discarded and the merge answered 12; with [0, 0] it answered '' —
+        # i.e. real data turned into "nothing recorded". Only ``None`` and
+        # blank/whitespace strings count as missing.
+        if v is None or not str(v).strip():
+            continue
+        non_empty.append(v)
     if not non_empty:
         return ""
-    counts = Counter(non_empty)
+    # REVIEW-2026-09-20: vote on the SAME normalized string pool
+    # ``_merge_scalar_field`` uses (``_str_for_merge``), so 1 and 1.0 are one
+    # and the same candidate on every code path instead of two votes that
+    # Counter happens to fold together in run order. The representative value
+    # keeps the field's original type (an int index stays an int).
+    counts: Counter = Counter()
+    representative: dict[str, Any] = {}
+    for v in non_empty:
+        key = _str_for_merge(v)
+        counts[key] += 1
+        representative.setdefault(key, v)
     top = max(counts.values())
-    top_vals = [v for v in counts if counts[v] == top]
-    if len(top_vals) == 1:
-        return top_vals[0]
+    top_keys = [k for k, c in counts.items() if c == top]
+    if len(top_keys) == 1:
+        return representative[top_keys[0]]
     # H4: tie at the top count - covers BOTH all-unique (top==1) and partial
     # ties (2v2/3v3). Break deterministically by sorted order so input order
     # never silently decides the merged string across sessions. (Previously
     # only all-unique was sorted; partial ties fell to first-seen input order.)
-    return sorted(top_vals, key=str)[0]
+    return representative[sorted(top_keys)[0]]
 
 
 # Sentinel returned by _merge_field_across_runs to signal "no consensus"
@@ -206,14 +230,53 @@ def _merge_scalar_field(values):
 
 
 def _stable_typed_mode(values, expected_type):
-    """Return a deterministic mode while preserving the requested type."""
-    valid = [v for v in values if type(v) is expected_type]
+    """Return a deterministic mode while preserving the requested type.
+
+    REVIEW-2026-09-20: the filter used to be ``type(v) is expected_type``, so
+    an integral float vote — which is exactly what JSON hands back for "3.0"
+    after ``json.loads`` — was silently discarded for ``range_top_idx`` /
+    ``range_base_idx``. With runs [3, 3.0, 3] only two votes survived, and
+    with [3.0, 3.0] the field disappeared from the merged row entirely while
+    the string endpoint kept its value. The JS mirror
+    (``js/aggregate.mergeTypedInteger``) accepts any ``Number.isInteger``
+    value, so integral floats are folded into the int pool here too and
+    re-cast to int so the merged row keeps a stable type. ``bool`` is an int
+    subclass in Python but is NOT a number in JS, so it stays excluded.
+    """
+    valid: list[Any] = []
+    for v in values:
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, expected_type):
+            valid.append(v)
+        elif (expected_type is int and isinstance(v, float)
+              and v.is_integer()):
+            valid.append(int(v))
     if not valid:
         return _NO_MERGE
     counts = Counter(valid)
     top = max(counts.values())
     tied = [value for value, count in counts.items() if count == top]
     return sorted(tied)[0]
+
+
+def _add_row_warning(row: dict, flag: str) -> None:
+    """Append a merge-stage warning to a row using the extractor's convention.
+
+    ``rca_core/extractor.py`` writes ``row["_warning"]`` as a single string
+    when there is one flag and as a list when there are several; downstream
+    consumers (server, GUI, js/table.js) accept both shapes. Merged rows must
+    not invent a third shape, so the existing value is normalised to a list
+    before the new flag is appended.
+    """
+    existing = row.get("_warning")
+    if existing in (None, ""):
+        row["_warning"] = flag
+        return
+    flags = list(existing) if isinstance(existing, list) else [existing]
+    if flag not in flags:
+        flags.append(flag)
+    row["_warning"] = flags[0] if len(flags) == 1 else flags
 
 
 def _merge_confidence(values):
@@ -492,49 +555,50 @@ def _looks_phylogenetic(data: Optional[dict]) -> bool:
 def _auto_detect_schema(results):
     """Pick the schema that matches the majority of inputs.
 
-    Tie-breaking: when two shape-detectors both meet the threshold
-    (or both fall short by the same margin), we apply a deterministic
-    preference order — phylogenetic > columnar > abundance > range-chart.
-    Phylogenetic is the most specific shape (nodes[].id plus a single
-    metadata dict); misdetecting it as range-chart is the worst failure
-    because it destroys the primary row key. The previous version had no
-    phylo branch at all and silently demoted phylo to range-chart.
+    REVIEW-2026-09-20: the threshold and the preference order used to be
+    inconsistent in two ways:
+
+    * ``half = (n + 1) // 2`` labelled a bare 1 vote out of 2 a "majority", so
+      every branch below the phylo check was reachable by a minority.
+    * The fallback compared detectors pairwise (``phy > col and phy > ab``,
+      then ``col > ab``), which is NOT a total order: ``[phylo, columnar]``
+      returned phylo, but adding one more run of any other shape
+      (``[phylo, columnar, abundance]``) made all three counts equal, the
+      strict ``>`` comparisons all failed, and the answer became RANGE_CHART —
+      the phylo preference vanished as more data arrived.
+
+    Both problems are gone by using one rule twice: a STRICT majority
+    (``count * 2 > n``) wins, and whenever no shape holds one — or several do,
+    since the detectors are independent — the declared preference order
+    phylogenetic > columnar > abundance breaks the tie. That order is now the
+    only thing deciding equal counts, so the choice is monotonic and cannot
+    depend on the argument order of ``results``. Phylogenetic stays first
+    because it is the most specific shape (``nodes[].id`` plus a single
+    ``metadata`` dict); misdetecting it as range-chart is the worst failure
+    because it destroys the primary row key.
     """
     if not results:
         return RANGE_CHART_SCHEMA
     n = len(results)
-    ab = sum(1 for r in results if _looks_abundance(r))
-    col = sum(1 for r in results if _looks_columnar(r))
-    phy = sum(1 for r in results if _looks_phylogenetic(r))
-    half = (n + 1) // 2
-    ab_passes = ab >= half
-    col_passes = col >= half
-    phy_passes = phy >= half
-    if phy_passes:
-        return PHYLOGENETIC_TREE_SCHEMA
-    if col_passes and ab_passes:
-        # Both detectors agree there's a majority — prefer the more
-        # specific one. Counts break the tie if they disagree.
-        if col > ab:
-            return COLUMNAR_SECTION_SCHEMA
-        if ab > col:
-            return ABUNDANCE_DIAGRAM_SCHEMA
-        return COLUMNAR_SECTION_SCHEMA  # tie → columnar (more specific)
-    if col_passes:
-        return COLUMNAR_SECTION_SCHEMA
-    if ab_passes:
-        return ABUNDANCE_DIAGRAM_SCHEMA
-    # Neither detector hit majority. Apply deterministic preference so
-    # the result is the same across runs. Phylo beats both when at least
-    # one run has it (handles the 1-run / 2-run edge case where no shape
-    # meets majority but phylo is clearly present).
-    if phy > col and phy > ab:
-        return PHYLOGENETIC_TREE_SCHEMA
-    if col > ab:
-        return COLUMNAR_SECTION_SCHEMA
-    if ab > col:
-        return ABUNDANCE_DIAGRAM_SCHEMA
-    return RANGE_CHART_SCHEMA
+    counts = [
+        (PHYLOGENETIC_TREE_SCHEMA, sum(1 for r in results if _looks_phylogenetic(r))),
+        (COLUMNAR_SECTION_SCHEMA, sum(1 for r in results if _looks_columnar(r))),
+        (ABUNDANCE_DIAGRAM_SCHEMA, sum(1 for r in results if _looks_abundance(r))),
+    ]
+    # Declared preference order, filtered to shapes that were seen at all.
+    ranked = [(sch, c) for sch, c in counts if c > 0]
+    if not ranked:
+        return RANGE_CHART_SCHEMA
+    # A strict majority decides; among several majorities the preference order
+    # does. Without any majority, fall back to the highest count, again with
+    # the same order breaking ties.
+    majority = [(sch, c) for sch, c in ranked if c * 2 > n]
+    pool = majority or ranked
+    best = max(c for _s, c in pool)
+    for sch, c in pool:  # `ranked` is already in preference order
+        if c == best:
+            return sch
+    return RANGE_CHART_SCHEMA  # unreachable, kept as a defensive default
 
 
 def _empty_for(schema: MergeSchema, runs_n: int) -> dict[str, Any]:
@@ -580,9 +644,25 @@ def _is_chimeric_row(group: list, merged: dict) -> bool:
 
 
 def _mode_keys(d_items, keys):
+    """Majority-vote the schema-declared fields of a merged row.
+
+    REVIEW-2026-09-20: this path now shares ``_merge_scalar_field``'s caliber
+    by construction: both vote through ``_mode``, which (a) only treats
+    ``None``/blank strings as missing — 0, 0.0 and False are real observations
+    again — and (b) buckets votes by ``_str_for_merge`` so 1 and 1.0 are one
+    candidate instead of two order-dependent ones. What is deliberately kept
+    is the RAW representative value (int 0, not "0"): the JS mirror
+    (``rcaAggMode`` over ``strModeFields``) returns the original value too,
+    and these fields land in CSV/XLSX/JSON, so stringifying here would be a
+    fresh Python↔JS divergence rather than a fix.
+
+    Like JS, the declared fields win over the generic per-key merge that ran
+    before them (JS skips those keys with ``if (aggr[k] !== undefined)
+    continue``), so a schema-declared field is resolved in exactly one place.
+    """
     out = {}
     for k in keys:
-        out[k] = _mode([d.get(k, "") for d in d_items])
+        out[k] = _mode([d.get(k) for d in d_items if isinstance(d, dict)])
     return out
 
 
@@ -701,6 +781,23 @@ def _merge_primary_list(runs, schema, n):
                     if quals:
                         aggr["species"] = most_common_original
 
+        # REVIEW-2026-09-20: the two bed indices are voted independently, so a
+        # run-A base and a run-B top can recombine into an inverted pair even
+        # though every source row was sane (the extractor already swaps
+        # inverted pairs per row). An inverted pair exports as a species that
+        # dies before it appears, and quality.py reads the *string* endpoints,
+        # so nothing else catches it. Repair the order and flag it with the
+        # same ``index_order_swap`` marker the extractor uses.
+        if schema.primary_list_key == "species_ranges":
+            top_idx = aggr.get("range_top_idx")
+            base_idx = aggr.get("range_base_idx")
+            if (isinstance(top_idx, (int, float)) and not isinstance(top_idx, bool)
+                    and isinstance(base_idx, (int, float))
+                    and not isinstance(base_idx, bool)
+                    and base_idx > top_idx):
+                aggr["range_top_idx"], aggr["range_base_idx"] = base_idx, top_idx
+                _add_row_warning(aggr, "index_order_swap")
+
         # P1-1 (REVIEW-2026-07-25): bio-geological consistency gate.
         # If every contributing run produced a DIFFERENT (range_base,
         # range_top, biozone) tuple for this species — i.e. no run ever
@@ -718,23 +815,43 @@ def _merge_primary_list(runs, schema, n):
 
     # Apply schema sort_keys (e.g. agreement_count desc, species asc).
     if schema.sort_keys:
-        def sortkey(row):
-            keys = []
-            for field, direction in schema.sort_keys:
-                v = row.get(field)
-                # numeric field if possible, else str fallback
+        # REVIEW-2026-09-20 (1): the old key function negated only the NUMERIC
+        # branch, so a declared string sort with direction "desc" silently
+        # sorted ascending. The JS mirror compares with a single `cmp` and
+        # applies `-cmp` for "desc" regardless of type, so both types now
+        # honour the direction.
+        # REVIEW-2026-09-20 (2): rows tying on every declared key kept their
+        # merge order, which is first-seen-run order — the same set of runs
+        # therefore produced different row orders across sessions. The
+        # schema's primary id fields are appended as ascending tiebreakers so
+        # the order is a pure function of the merged data.
+        tiebreakers = [
+            (k, "asc") for k in schema.primary_id_keys
+            if k not in {f for f, _d in schema.sort_keys}
+        ]
+        effective_keys = list(schema.sort_keys) + tiebreakers
+
+        def _sort_tuple(row, field):
+            """(rank, number, lowered, raw) — rank keeps numbers before str."""
+            v = row.get(field)
+            try:
+                num_v = float(v) if v is not None else None
+            except (TypeError, ValueError):
                 num_v = None
-                try:
-                    num_v = float(v) if v is not None else None
-                except (TypeError, ValueError):
-                    pass
-                if num_v is not None:
-                    keys.append((0, num_v if direction == "asc" else -num_v))
-                else:
-                    s = (str(v) if v is not None else "").lower()
-                    keys.append((1, s))
-            return keys
-        merged.sort(key=sortkey)
+            if num_v is not None and not isinstance(v, (dict, list)):
+                return (0, num_v, "", "")
+            s = "" if v is None else str(v)
+            return (1, 0.0, s.lower(), s)
+
+        def _compare(a, b):
+            for fld, direction in effective_keys:
+                ta, tb = _sort_tuple(a, fld), _sort_tuple(b, fld)
+                if ta != tb:
+                    c = -1 if ta < tb else 1
+                    return -c if direction == "desc" else c
+            return 0
+
+        merged.sort(key=cmp_to_key(_compare))
     else:
         merged.sort(key=lambda row: str(row.get("id") or row.get("species") or ""))
     return merged
@@ -926,29 +1043,38 @@ def merge_results(
                 break
 
     # For phylogenetic tree, metadata and legend are single dicts (not
-    # lists). They are identical across runs for the same image; preserve
-    # from the first run to keep them in the merged output.
+    # lists). They are usually identical across runs for the same image;
+    # preserve them so the merged output keeps the figure-level context.
     if sch.primary_list_key == "nodes" and sch is not RANGE_CHART_SCHEMA:
         for key in ("metadata", "legend"):
-            if runs and isinstance(runs[0], dict) and key in runs[0]:
-                # REVIEW-2026-09-10: deep-copy, not alias. The JS mirror does
-                # (deepClone) and the single-run path above already does; the
-                # bare alias let a caller's in-place edit of the merged result
-                # rewrite the source run, breaking audit integrity.
-                out[key] = copy.deepcopy(runs[0][key])
+            # REVIEW-2026-09-20: this used to read ``runs[0]`` only, so when
+            # the first run answered without a metadata/legend block (a common
+            # degradation) the blocks observed by the OTHER runs were dropped
+            # even though the single-run path keeps them — raising the run
+            # count lost data. Scan every run, same rule as the `_extras` /
+            # `_warnings` loop above: first run that has the key wins.
+            for run in runs:
+                if isinstance(run, dict) and key in run:
+                    # REVIEW-2026-09-10: deep-copy, not alias. The JS mirror
+                    # does (deepClone) and the single-run path above already
+                    # does; the bare alias let a caller's in-place edit of the
+                    # merged result rewrite the source run, breaking audit
+                    # integrity.
+                    out[key] = copy.deepcopy(run[key])
+                    break
 
-    confs = []
-    # M-1 fix (REVIEW-2026-07-25): merged confidence is a SIMPLE AVERAGE of
-    # per-run confidences. The previous comment claimed consensus-rate
-    # weighting (weight each run by the fraction of its primary rows reaching
-    # row-level consensus), but the implementation used `w = int(r.get("runs")
-    # or 1)`, which is always 1 for single-run results, so the math reduces to
-    # a plain mean. Consensus-rate weighting would require row-level agreement
-    # fractions that are not available on the merged `runs` objects, so we
-    # keep the simple average and document it honestly rather than imply a
-    # weighting that isn't computed. This is defensible: in multi-run mode each
-    # run contributes one confidence, and averaging them is the unbiased merge
-    # when no per-row consensus signal is present.
+    # Weighted-mean confidence (M-1 / REVIEW-2026-09-20 comment correction).
+    # The claim that this is a "simple average" was wrong: each run is
+    # weighted by its OWN ``runs`` field, so a run that itself already
+    # aggregated k sub-attempts contributes k times. When every run reports
+    # ``runs`` = 1 (the normal case for freshly extracted runs, which is why
+    # the old comment read as true) the formula reduces to a plain mean;
+    # with differing ``runs`` values it does NOT, and both engines are pinned
+    # to the weighted result by tests/test_confidence_weighted_parity.py
+    # (0.9 with runs=3 plus 0.5 with runs=1 → 0.8, not 0.7). A missing /
+    # blank / unparsable ``runs`` falls back to weight 1. Consensus-rate
+    # weighting is still NOT computed — that would need row-level agreement
+    # fractions which are not available on the run objects.
     weight_n = 0
     weight_sum = 0.0
     for r in runs:
@@ -959,8 +1085,6 @@ def merge_results(
             c = float(raw)
         except (TypeError, ValueError):
             continue
-        # Each run is weighted uniformly (its own `runs` count is ~1 here, so
-        # this is effectively a simple average across runs).
         try:
             w = int(r.get("runs") or 1)
         except (TypeError, ValueError):

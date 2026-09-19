@@ -266,12 +266,21 @@ def test_get_api_extract_returns_csrf():
 
 def test_get_api_extract_rate_limited():
     """GET is also rate-limited — a single client must not be able to
-    mint unbounded CSRF tokens."""
+    mint unbounded CSRF tokens.
+
+    REVIEW-2026-09-20 update: the burst count was hardcoded to ``range(50)``
+    against the shared 30 req/min POST bucket. The mint GET now has its OWN
+    bucket and cap (``srv._RATE_MAX_REQUESTS_GET``) precisely so it can no
+    longer starve extractions, so the loop is sized from that constant instead
+    of a literal. The intent (an unbounded flood must still be capped) is
+    unchanged, and the bare ``check()`` got an ``assert`` so a regression fails
+    under pytest instead of only printing FAIL in the script runner.
+    """
     base, httpd, t = _start()
     try:
         seen_429 = False
-        # Hit the rate limit (default 30 req/minute) and look for 429.
-        for _ in range(50):
+        # Hit the rate limit (mint-GET bucket) and look for 429.
+        for _ in range(srv._RATE_MAX_REQUESTS_GET + 20):
             try:
                 urllib.request.urlopen(base + "/api/extract", timeout=2)
             except urllib.error.HTTPError as e:
@@ -279,8 +288,29 @@ def test_get_api_extract_rate_limited():
                     seen_429 = True
                     break
         check("get-api-rate-limited", seen_429)
+        assert seen_429, "CSRF-mint GET flood was never rate limited"
     finally:
         _stop(httpd, t)
+
+
+def test_get_mint_has_its_own_rate_bucket():
+    """REVIEW-2026-09-20: flooding the free CSRF-mint GET must not consume the
+    paid POST budget (cross-site denial of service with no privileges)."""
+    srv._rate_history.clear()
+    try:
+        for _ in range(srv._RATE_MAX_REQUESTS_GET + 5):
+            allowed, _wait = srv._check_rate_limit(
+                "203.0.113.7", bucket="get",
+                max_requests=srv._RATE_MAX_REQUESTS_GET)
+        # The mint bucket is exhausted...
+        assert allowed is False
+        # ...yet a plain extraction POST from the same IP still has its full
+        # window available.
+        for _ in range(srv._RATE_MAX_REQUESTS):
+            post_allowed, _wait = srv._check_rate_limit("203.0.113.7")
+            assert post_allowed, "POST bucket was crowded out by the GET flood"
+    finally:
+        srv._rate_history.clear()
 
 
 # ---------------------------------------------------------------------------

@@ -45,6 +45,11 @@ const RCA_STORE = {
   apiKey: 'rca.apiKey',
   endpoint: 'rca.endpoint',
   model: 'rca.model',
+  // REVIEW-2026-09-20: this key used to be spelled as a bare
+  // `'rca.maxTokens'` literal at both call sites in app.js (load + save),
+  // which is how a renamed/removed store key slips past a grep for
+  // `RCA_STORE.`. Every namespaced key now goes through this table.
+  maxTokens: 'rca.maxTokens',
   proxy: 'rca.proxy',
   mode: 'rca.mode',
   maxEdge: 'rca.maxEdge',

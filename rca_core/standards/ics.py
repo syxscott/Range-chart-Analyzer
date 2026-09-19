@@ -44,6 +44,36 @@ except (OSError, json.JSONDecodeError) as _exc:  # pragma: no cover - resource i
     ICS_2024 = {}
 
 
+# REVIEW-2026-09-20: the bundled table carries the Cambrian intervals that
+# have no ratified name yet as "Stage 2" … "Stage 10", and TWO of them share
+# their span with the ratified name that has since been adopted:
+#   Wuliuan  == Stage 5   (504.5 – 506.5 Ma)
+#   Jiangshanian == Stage 9 (491.0 – 494.2 Ma)
+# The table itself is official data and stays untouched; what must not depend
+# on JSON key order is which of the two names a lookup returns.
+_INFORMAL_STAGE_RE = re.compile(r"^\s*(?:unnumbered|unnamed|stage)\s+[\dxvi]+\s*$",
+                                re.IGNORECASE)
+
+
+def _is_informal_stage_name(name: str) -> bool:
+    """True for "Stage 5" / "Unnamed stage 3" style placeholder names."""
+    return bool(_INFORMAL_STAGE_RE.match(str(name or "")))
+
+
+def _prefer_formal(names: list[str]) -> Optional[str]:
+    """First formal (ratified) name in *names*, else the first entry, else None.
+
+    A deprecated informal synonym must never win over the ratified stage name
+    that covers the same interval: exports keyed on "Stage 5" are unreadable
+    to every downstream consumer, and which one the previous first-seen
+    ``break`` returned was pure dict ordering.
+    """
+    for name in names:
+        if not _is_informal_stage_name(name):
+            return name
+    return names[0] if names else None
+
+
 def ics_stage_from_age(ma: float) -> Optional[str]:
     """Given a Ma value, return the corresponding ICS Stage name.
 
@@ -62,25 +92,32 @@ def ics_stage_from_age(ma: float) -> Optional[str]:
          Capitanian; 254.14 Ma -> Changhsingian, not Wuchiapingian);
       3. a value equal to a stage's top (e.g. 0.0 -> Holocene) is the
          last fallback.
+    Within each of those three groups the RATIFIED name wins over the
+    informal "Stage N" synonym covering the same interval
+    (REVIEW-2026-09-20; see ``_INFORMAL_STAGE_RE``).
     """
-    interior: Optional[str] = None
-    base_match: Optional[str] = None
-    top_match: Optional[str] = None
+    interior: list[str] = []
+    base_match: list[str] = []
+    top_match: list[str] = []
     for name, info in ICS_2024.items():
         top = info.get("top_ma", 0)
         base = info.get("base_ma", 0)
         if top < ma < base:
-            interior = name
-            break
-        if base_match is None and abs(base - ma) <= 1e-9:
-            base_match = name
-        if top_match is None and abs(top - ma) <= 1e-9:
-            top_match = name
-    if interior is not None:
-        return interior
-    if base_match is not None:
-        return base_match
-    return top_match
+            interior.append(name)
+            continue
+        if abs(base - ma) <= 1e-9:
+            base_match.append(name)
+        elif abs(top - ma) <= 1e-9:
+            top_match.append(name)
+    # REVIEW-2026-09-20: `break` on the first interior hit made the duplicate
+    # Cambrian rows order-dependent — 505 Ma resolved to whichever of
+    # "Stage 5" / "Wuliuan" json.loads happened to insert first, so the same
+    # age exported different stage names across table rebuilds.
+    if interior:
+        return _prefer_formal(interior)
+    if base_match:
+        return _prefer_formal(base_match)
+    return _prefer_formal(top_match)
 
 
 def ics_age_compare(stage1: str, stage2: str) -> Optional[int]:
@@ -135,7 +172,12 @@ def ics_parse_age_range(text: str) -> list[str]:
     - "Early Triassic" -> [] (no specific stage)
 
     Returns a list of stage names found in the text (may be empty).
-    The stages are returned in the order they appear in the text.
+    The stages are returned in the order they appear in the text, with
+    repeats folded out (REVIEW-2026-09-20): "Wuchiapingian to Changhsingian,
+    see Wuchiapingian" used to yield ["Wuchiapingian", "Changhsingian",
+    "Wuchiapingian"], and every consumer that walks consecutive pairs
+    (quality._score_cross_era_accuracy) then judged a stage against itself or
+    against a stage the text never juxtaposed.
     """
     if not text:
         return []
@@ -148,7 +190,14 @@ def ics_parse_age_range(text: str) -> list[str]:
 
     # Sort by position in text (first appearance first)
     matches.sort(key=lambda x: x[0])
-    return [name for _, name in matches]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for _, name in matches:
+        if name in seen:
+            continue
+        seen.add(name)
+        ordered.append(name)
+    return ordered
 
 
 _EXPLICIT_MA_PATTERN = re.compile(
@@ -399,6 +448,44 @@ def _explicit_ma_values(text: str) -> list[float]:
     return values
 
 
+# REVIEW-2026-09-20: ``prefer`` used to be compared with ``== "older"`` at
+# every branch, so any other spelling — "Older", " older", "youngest",
+# "bottom", a None from a JSON payload — silently took the *inverse* branch
+# and exported the wrong end of the interval. Normalise once at the entry
+# point, reject unknown values loudly, and let the branches read one boolean.
+_PREFER_OLDER = ("older", "oldest", "old", "base", "bottom")
+_PREFER_YOUNGER = ("younger", "youngest", "young", "top", "upper")
+
+
+def _resolve_prefer(prefer: Any) -> bool:
+    """Return True for the older end, False for the younger end.
+
+    Empty/None keeps the documented default (``"older"``). Any other unknown
+    value raises instead of quietly inverting a FAD/LAD export.
+    """
+    key = str(prefer if prefer is not None else "").strip().lower()
+    if not key or key in _PREFER_OLDER:
+        return True
+    if key in _PREFER_YOUNGER:
+        return False
+    raise ValueError(
+        "prefer must be an 'older'/'younger' spelling "
+        f"(got {prefer!r}); known values: "
+        + ", ".join(sorted(set(_PREFER_OLDER) | set(_PREFER_YOUNGER)))
+    )
+
+
+def _stage_bound(info: dict, want_older: bool) -> float:
+    """The requested end of one ICS row: base_ma (older) or top_ma (younger).
+
+    Geological convention inside the table: base_ma is the OLDER (larger)
+    number and top_ma the YOUNGER (smaller) one.
+    """
+    base = info.get("base_ma", 0) or 0
+    top = info.get("top_ma", 0) or 0
+    return base if want_older else top
+
+
 def ics_resolve_age_bound(
     text: Any, prefer: str = "older"
 ) -> tuple[Optional[str], Optional[float]]:
@@ -408,9 +495,12 @@ def ics_resolve_age_bound(
     ("Wuchiapingian"), a series/epoch name ("Lopingian", "Pleistocene"),
     or a period name ("Permian"). ``ma`` is the resolved numeric age.
 
-    ``prefer`` selects which end of an interval literal to use when the
-    label is a range: ``"older"`` (default) returns the older end
-    (259.51 for "259.51-254.14 Ma"), ``"younger"`` the younger end.
+    ``prefer`` selects which end of an interval to use: ``"older"`` (default)
+    returns the older end (259.51 for "259.51-254.14 Ma" and for a single
+    named stage's base), ``"younger"`` the younger end. Spellings are
+    normalised case- and whitespace-insensitively ("Older", " TOP",
+    "youngest" all work); an unrecognised value raises ``ValueError`` rather
+    than silently resolving the opposite bound.
 
     Numeric ages are accepted only when an explicit geologic-age unit is
     present (for example ``"260 Ma"`` or ``"260 Myr"``). Bare numbers are
@@ -420,16 +510,18 @@ def ics_resolve_age_bound(
     Resolution order:
       1. an explicit numeric age literal (single value or range);
       2. a Chinese stage-name alias (e.g. ``"吴家坪阶"``);
-      3. a series/epoch label (English or Chinese, e.g. "Late Permian",
+      3. an ICS stage name (or stage range) -> the requested bound of the
+         covered interval;
+      4. a series/epoch label (English or Chinese, e.g. "Late Permian",
          ``"晚二叠世"``, "Pleistocene") -> interval name + the requested
          bound;
-      4. an ICS stage name -> that stage, Ma as the stage midpoint;
       5. a period name (English or Chinese) -> period name + the requested
          period bound.
 
     Returns ``(None, None)`` when ``text`` is empty/unresolvable or the ICS
     table failed to load, so callers can leave unsupported fields blank.
     """
+    want_older = _resolve_prefer(prefer)
     if not text or not ICS_2024:
         return None, None
     text = str(text).strip()
@@ -437,7 +529,7 @@ def ics_resolve_age_bound(
     # 1. Explicit numeric ages (range-aware).
     values = _explicit_ma_values(text)
     if values:
-        ma = max(values) if prefer == "older" else min(values)
+        ma = max(values) if want_older else min(values)
         return ics_stage_from_age(ma), ma
 
     # 2. Chinese stage-name alias.
@@ -445,9 +537,10 @@ def ics_resolve_age_bound(
         if alias in text:
             info = ICS_2024.get(stage)
             if info:
-                base = info.get("base_ma", 0) or 0
-                top = info.get("top_ma", 0) or 0
-                return stage, (base + top) / 2
+                # REVIEW-2026-09-20: same bound rule as the stage branch in
+                # step 3 — the alias resolves to that very stage, so it must
+                # not keep the old midpoint behaviour.
+                return stage, _stage_bound(info, want_older)
 
     # 3. ICS stage name(s) -> order-independent range bounds.
     # REVIEW-2026-09-10: stages now resolve BEFORE series, so both this
@@ -470,13 +563,19 @@ def ics_resolve_age_bound(
     stages = ics_parse_age_range(text)
     if stages:
         if len(stages) == 1:
-            # Single stage: midpoint is the only sensible answer.
+            # REVIEW-2026-09-20: a single named stage is one endpoint of the
+            # caller's own range, not a point in time. The midpoint made
+            # prefer="older" and prefer="younger" return the SAME number, so
+            # a species whose FAD and LAD both read "Wuchiapingian" exported a
+            # zero-duration range (FAD == LAD == 256.8) to DwC/PBDB - and the
+            # midpoint is inside neither the FAD nor the LAD question that was
+            # asked. Take the stage's own bound, symmetric with the range
+            # branch below and with _CN_STAGE_ALIASES: prefer="older" ->
+            # base_ma, prefer="younger" -> top_ma.
             stage = stages[0]
             info = ICS_2024.get(stage)
             if info:
-                base = info.get("base_ma", 0) or 0
-                top = info.get("top_ma", 0) or 0
-                return stage, (base + top) / 2
+                return stage, _stage_bound(info, want_older)
         else:
             # Stage range: pick the boundary that matches ``prefer``.
             bases = [
@@ -490,7 +589,7 @@ def ics_resolve_age_bound(
             if bases and tops:
                 # In geological convention, base_ma > top_ma and a LARGER
                 # Ma is OLDER. So "older" = max(bases), "younger" = min(tops).
-                if prefer == "older":
+                if want_older:
                     name, ma = max(bases, key=lambda x: x[1])
                 else:
                     name, ma = min(tops, key=lambda x: x[1])
@@ -502,25 +601,25 @@ def ics_resolve_age_bound(
         if re.search(r"\b" + re.escape(label) + r"\b", norm):
             older, younger = _series_bounds_for(label, stages)
             if older is not None:
-                return name, older if prefer == "older" else younger
+                return name, older if want_older else younger
     for alias, label in _CN_SERIES_ALIASES.items():
         if alias in text:
             name, stages = _SERIES_STAGE_LISTS[label]
             older, younger = _series_bounds_for(label, stages)
             if older is not None:
-                return name, older if prefer == "older" else younger
+                return name, older if want_older else younger
 
     # 5. Period-level fallback (English then Chinese).
     for label, period in _EN_PERIOD_ALIASES.items():
         if re.search(r"\b" + re.escape(label) + r"\b", norm):
             base, top = _PERIOD_BOUNDS.get(period, (None, None))
             if base is not None:
-                return period, base if prefer == "older" else top
+                return period, base if want_older else top
     for alias, period in _CN_PERIOD_ALIASES.items():
         if alias in text:
             base, top = _PERIOD_BOUNDS.get(period, (None, None))
             if base is not None:
-                return period, base if prefer == "older" else top
+                return period, base if want_older else top
     return None, None
 
 
@@ -558,10 +657,16 @@ def ics_age_range_bounds(text: Any) -> tuple[Optional[float], Optional[float]]:
             return _series_bounds_for(label, _SERIES_STAGE_LISTS[label][1])
     for label, period in _EN_PERIOD_ALIASES.items():
         if re.search(r"\b" + re.escape(label) + r"\b", norm):
-            return _PERIOD_BOUNDS.get(period)
+            # REVIEW-2026-09-20: a bare .get() returned None for a period the
+            # (possibly degraded — see M7(b)) table has no row for, and the
+            # documented contract is a 2-tuple: `older, younger =
+            # ics_age_range_bounds(...)` then raised
+            # "TypeError: cannot unpack non-sequence NoneType" in the exporter
+            # instead of leaving the two age columns blank.
+            return _PERIOD_BOUNDS.get(period, (None, None))
     for alias, period in _CN_PERIOD_ALIASES.items():
         if alias in text:
-            return _PERIOD_BOUNDS.get(period)
+            return _PERIOD_BOUNDS.get(period, (None, None))
     return None, None
 
 

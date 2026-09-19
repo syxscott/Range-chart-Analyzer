@@ -54,17 +54,24 @@ def _sheet_for(wb, table_id):
 # ---------------------------------------------------------------------------
 
 class TestToXlsxFormulaInjection(unittest.TestCase):
-    """to_xlsx must mirror to_csv's OWASP formula-injection mitigation."""
+    """to_xlsx must mirror to_csv's OWASP formula-injection mitigation.
 
-    def _species_sheet_cells(self, data):
-        wb = _make_workbook(data)
-        # species_ranges sheet — pick the sheet whose first cell is the
-        # "#" header and whose first column has integer index values.
-        for ws in wb.worksheets:
-            v = ws.cell(row=2, column=2).value if ws.max_row >= 2 else None
-            if isinstance(v, str) and v.startswith("=cmd"):
-                return ws
-        return None
+    REVIEW-2026-09-20: the mitigation used to be asserted on the stored VALUE
+    ("the cell must read ``'=cmd...``"), which is a CSV idiom. In a workbook
+    that apostrophe is part of the data — the sheet, the GUI re-import and
+    every downstream diff then carry a species name that starts with a quote.
+    The assertions moved to what actually protects Excel: the cell is stored
+    as a string (never data_type 'f') and flagged ``quotePrefix``, which makes
+    Excel show the apostrophe without it being in the value.
+    """
+
+    def _is_text_guarded(self, cell):
+        """A guarded cell: stored as text, flagged quotePrefix, clean value."""
+        self.assertNotEqual(cell.data_type, "f",
+                            f"formula-injection: cell kept as formula: {cell.value!r}")
+        style = getattr(cell, "_style", None)
+        self.assertTrue(getattr(style, "quotePrefix", 0),
+                        "expected the quotePrefix style flag on a guarded cell")
 
     def test_formula_trigger_is_text_not_formula(self):
         """A leading '=' cell must NOT be written as an openpyxl formula."""
@@ -87,12 +94,11 @@ class TestToXlsxFormulaInjection(unittest.TestCase):
         ws = _sheet_for(wb, "species_ranges")
         # Column 2 = species (1=# index column)
         cell = ws.cell(row=2, column=2)
-        # openpyxl records data_type 'f' for live formulas, 's' for text
-        self.assertNotEqual(cell.data_type, "f",
-                            f"formula-injection: cell kept as formula: value={cell.value!r}")
-        # Mitigation: prefix with single quote so Excel treats as text
-        self.assertEqual(cell.value, "'=cmd|'/C calc'!A0",
-                         "expected leading single-quote sanitizer prefix")
+        self._is_text_guarded(cell)
+        # REVIEW-2026-09-20: the VALUE stays the scientific text — no
+        # apostrophe baked into it.
+        self.assertEqual(cell.value, "=cmd|'/C calc'!A0",
+                         "quotePrefix must guard the cell without corrupting its value")
 
     def test_hyperlink_trigger_is_text_not_formula(self):
         """=HYPERLINK(...) must not become a live formula in XLSX."""
@@ -112,8 +118,8 @@ class TestToXlsxFormulaInjection(unittest.TestCase):
         }
         wb = _make_workbook(data)
         cell = _sheet_for(wb, "species_ranges").cell(row=2, column=2)
-        self.assertNotEqual(cell.data_type, "f")
-        self.assertTrue(str(cell.value).startswith("'"))
+        self._is_text_guarded(cell)
+        self.assertEqual(cell.value, '=HYPERLINK("http://evil/")')
 
     def test_negative_and_at_triggers_are_sanitized(self):
         """'-foo' and '@foo' must also be sanitized (OWASP coverage)."""
@@ -130,10 +136,35 @@ class TestToXlsxFormulaInjection(unittest.TestCase):
         ws = _sheet_for(wb, "sections")
         name_cell = ws.cell(row=2, column=2)
         age_cell = ws.cell(row=2, column=3)
-        self.assertNotEqual(name_cell.data_type, "f")
-        self.assertNotEqual(age_cell.data_type, "f")
-        self.assertTrue(str(name_cell.value).startswith("'"))
-        self.assertTrue(str(age_cell.value).startswith("'"))
+        self._is_text_guarded(name_cell)
+        self._is_text_guarded(age_cell)
+        self.assertEqual(name_cell.value, "-bad")
+        self.assertEqual(age_cell.value, "@bad")
+
+    def test_illegal_control_characters_are_stripped(self):
+        """REVIEW-2026-09-20: a stray \\x07 in a model string used to raise
+        openpyxl's IllegalCharacterError and kill the WHOLE workbook."""
+        data = {
+            "sections": [{"name": "S\x071", "age_range": "Perm\x00ian",
+                          "formations": [], "formation_thickness_m": "",
+                          "coordinates": ""}],
+            "species_ranges": [],
+            "biozones": [],
+            "other_fossils": [],
+        }
+        wb = _make_workbook(data)
+        ws = _sheet_for(wb, "sections")
+        self.assertEqual(ws.cell(row=2, column=2).value, "S1")
+        self.assertEqual(ws.cell(row=2, column=3).value, "Permian")
+
+    def test_whitespace_hidden_formula_is_guarded_in_tsv(self):
+        """REVIEW-2026-09-20: the TSV collapse re-opened the injection hole —
+        a trigger hidden behind blanks survived sanitization and appeared at
+        the start of the final cell text."""
+        text = exporter.to_tsv(["c"], [["   =HYPERLINK(\"http://evil/\")"]])
+        cell = text.split("\n")[1]
+        self.assertTrue(cell.startswith("'"),
+                        f"TSV cell must keep the formula guard: {cell!r}")
 
     def test_plain_text_is_unchanged(self):
         """Cells without formula triggers must not get a spurious quote prefix."""
@@ -150,6 +181,8 @@ class TestToXlsxFormulaInjection(unittest.TestCase):
         # Layout: col1=# index, col2=name, col3=age_range, ...
         self.assertEqual(ws.cell(row=2, column=2).value, "Pingdingshan")
         self.assertEqual(ws.cell(row=2, column=2).data_type, "s")
+        self.assertFalse(getattr(ws.cell(row=2, column=2)._style, "quotePrefix", 0),
+                         "unguarded text must not carry quotePrefix")
 
 
 # ---------------------------------------------------------------------------

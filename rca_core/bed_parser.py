@@ -70,6 +70,22 @@ def _sub_is_bed_label(sub: str, had_bed_word: bool) -> bool:
     return bool(_SUB_RE.match(sub))
 
 
+def _has_stray_residue(s: str, end: int) -> bool:
+    """True when a match stopped before the end of the label.
+
+    REVIEW-2026-09-10 allowed this for the BARE form only, so the two spellings
+    of the same bed disagreed:
+        "23 to 25"   -> None      "Bed 23 to 25" -> bed 23  (!)
+        "12.5"       -> None      "Bed 12.5"     -> bed 12  (!)
+    A range / a decimal age read as a single bed number is a wrong scientific
+    value, and the "Bed"-prefixed form is the one the models emit MOST, so the
+    check now covers both branches. A trailing parenthesis / bracket is still
+    tolerated ("Bed 23 (Fig. 4)" is bed 23 with a citation).
+    """
+    rest = s[end:].strip()
+    return bool(rest) and not rest.startswith(("(", "["))
+
+
 def parse_bed(value: Any) -> Optional[dict[str, Any]]:
     """Parse a Bed identifier string.
 
@@ -85,6 +101,10 @@ def parse_bed(value: Any) -> Optional[dict[str, Any]]:
     REVIEW-2026-09-10: returns ``None`` for ages / thicknesses / ranges that
     merely START with a number — ``"253 Ma"``, ``"0.5 Ma"``, ``"23 m"``,
     ``"23-25"`` — instead of silently reporting a wrong bed number.
+
+    REVIEW-2026-09-20: the same rejection now applies to the ``Bed``-prefixed
+    spelling — ``"Bed 23 to 25"`` and ``"Bed 12.5"`` are a range and a decimal,
+    not beds 23 and 12.
     """
     if not value:
         return None
@@ -96,6 +116,8 @@ def parse_bed(value: Any) -> Optional[dict[str, Any]]:
         sub = m.group(2)
         if not _sub_is_bed_label(sub, had_bed_word=True):
             return None
+        if _has_stray_residue(s, m.end()):
+            return None
         return {"bed_num": int(m.group(1)), "bed_sub": sub.lower(), "raw": s}
     m = _BARE_NUM_RE.match(s)
     if m:
@@ -104,8 +126,7 @@ def parse_bed(value: Any) -> Optional[dict[str, Any]]:
             return None
         # A bare number followed by more content ("23-25", "23 to 25") is a
         # range or a sentence, not a single bed.
-        rest = s[m.end():].strip()
-        if rest and not rest.startswith(("(", "[")):
+        if _has_stray_residue(s, m.end()):
             return None
         return {"bed_num": int(m.group(1)), "bed_sub": sub.lower(), "raw": s}
     return None

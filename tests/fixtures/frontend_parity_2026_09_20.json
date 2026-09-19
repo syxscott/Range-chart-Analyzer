@@ -1,0 +1,3520 @@
+{
+ "generated_by": "tests/gen_frontend_parity_fixtures.py",
+ "cases": [
+  {
+   "group": "range_chart",
+   "id": "rc_empty",
+   "payload": {},
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_foreign",
+   "payload": {
+    "totally_unrelated": 1
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0,
+    "_extras": {
+     "totally_unrelated": 1
+    },
+    "_warnings": [
+     "truncated_or_unrecognized_payload"
+    ]
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_non_dict",
+   "payload": [
+    "a",
+    "b"
+   ],
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0,
+    "_warnings": [
+     "normalize_non_dict_input"
+    ]
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_none",
+   "payload": null,
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0,
+    "_warnings": [
+     "normalize_non_dict_input"
+    ]
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_array_root_mixed",
+   "payload": {
+    "_array_root": [
+     {
+      "name": "S1",
+      "age_range": "Cretaceous"
+     },
+     {
+      "species": "Sp a",
+      "range_top": "10",
+      "range_base": "2"
+     },
+     {
+      "name": "Postouwia Zone",
+      "age": "Permian"
+     },
+     "bare fossil label",
+     {
+      "foo": 1
+     }
+    ],
+    "confidence": 0.5,
+    "other_fossils": [
+     "brachiopod",
+     {
+      "label": "Ammonite"
+     },
+     ""
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "Cretaceous",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Sp a",
+      "section": "",
+      "range_top": "10",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [
+     {
+      "name": "Postouwia Zone",
+      "section": "",
+      "age": "Permian",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     }
+    ],
+    "other_fossils": [
+     "bare fossil label",
+     "brachiopod",
+     "Ammonite"
+    ],
+    "confidence": 0.5,
+    "_unclassified": [
+     {
+      "foo": 1
+     }
+    ]
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_array_root_string_rows",
+   "payload": {
+    "_array_root": [
+     "   ",
+     "Trilobite",
+     {
+      "name": "S",
+      "formations": "Fm A"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S",
+      "age_range": "",
+      "formations": [
+       "Fm A"
+      ],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [
+     "Trilobite"
+    ],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_dict_shaped_sections",
+   "payload": {
+    "sections": {
+     "Pingdingshan": {
+      "age_range": "Triassic"
+     },
+     "unclear": {
+      "name": "",
+      "age_range": "X"
+     },
+     "0": {
+      "age_range": "Y"
+     },
+     "not_a_dict": 5
+    }
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "Pingdingshan",
+      "age_range": "Triassic",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "_extras": {
+       "wrapper_key": "Pingdingshan"
+      }
+     },
+     {
+      "name": "",
+      "age_range": "X",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "_extras": {
+       "wrapper_key": "unclear"
+      }
+     },
+     {
+      "name": "0",
+      "age_range": "Y",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "_extras": {
+       "wrapper_key": "0"
+      }
+     }
+    ],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_string_row_biozones",
+   "payload": {
+    "biozones": [
+     "Clarkina postbitteri Zone",
+     {
+      "name": "X Zone"
+     }
+    ],
+    "sections": [
+     "Alpha"
+    ],
+    "species_ranges": [
+     "Beta"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "Alpha",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Beta",
+      "section": "",
+      "range_top": "",
+      "range_base": "",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [
+     {
+      "name": "Clarkina postbitteri Zone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     },
+     {
+      "name": "X Zone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     }
+    ],
+    "other_fossils": [],
+    "confidence": 0.0,
+    "_warnings": [
+     "string_row_coerced"
+    ]
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_iron_rule_species",
+   "payload": {
+    "species_ranges": [
+     {
+      "species": "Postouwia Zone",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "Genuine taxon",
+      "range_top": "6",
+      "range_base": "2"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "Postouwia Zone",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": "[zone-mislabel-warning]",
+      "_warning": "iron_rule_zone_label"
+     },
+     {
+      "species": "Genuine taxon",
+      "section": "",
+      "range_top": "6",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0,
+    "_warnings": [
+     "iron_rule_zone_label"
+    ]
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_index_order_swap",
+   "payload": {
+    "species_ranges": [
+     {
+      "species": "A",
+      "range_top_idx": 2,
+      "range_base_idx": 9
+     },
+     {
+      "species": "B",
+      "range_top_idx": 9,
+      "range_base_idx": 2
+     },
+     {
+      "species": "C",
+      "range_top_idx": "2.7",
+      "range_base_idx": 1
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "",
+      "range_top": "",
+      "range_base": "",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": 9,
+      "range_base_idx": 2,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": "",
+      "_warning": "index_order_swap"
+     },
+     {
+      "species": "B",
+      "section": "",
+      "range_top": "",
+      "range_base": "",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": 9,
+      "range_base_idx": 2,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     },
+     {
+      "species": "C",
+      "section": "",
+      "range_top": "",
+      "range_base": "",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": 1,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_zone_type_ladder",
+   "payload": {
+    "biozones": [
+     {
+      "name": "Interval zonule",
+      "age": "a"
+     },
+     {
+      "name": "Subzone oppel",
+      "age": "b"
+     },
+     {
+      "name": "Assemblage Zone",
+      "age": "c"
+     },
+     {
+      "name": "Acme of X",
+      "age": "d"
+     },
+     {
+      "name": "Lineage something",
+      "age": "e"
+     },
+     {
+      "name": "Wuchiapingian range zone",
+      "age": "f"
+     },
+     {
+      "name": "Plain",
+      "age": "g",
+      "zone_type": 0
+     },
+     {
+      "name": "Plain2",
+      "age": "g",
+      "zone_type": false
+     },
+     {
+      "name": "Plain3",
+      "age": "g",
+      "zone_type": "subzone"
+     },
+     {
+      "name": "Plain4",
+      "age": "g",
+      "zone_type": "not-a-type"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [],
+    "biozones": [
+     {
+      "name": "Interval zonule",
+      "section": "",
+      "age": "a",
+      "thickness_m": "",
+      "zone_type": "interval_zone"
+     },
+     {
+      "name": "Subzone oppel",
+      "section": "",
+      "age": "b",
+      "thickness_m": "",
+      "zone_type": "subzone"
+     },
+     {
+      "name": "Assemblage Zone",
+      "section": "",
+      "age": "c",
+      "thickness_m": "",
+      "zone_type": "assemblage_zone"
+     },
+     {
+      "name": "Acme of X",
+      "section": "",
+      "age": "d",
+      "thickness_m": "",
+      "zone_type": "acme_zone"
+     },
+     {
+      "name": "Lineage something",
+      "section": "",
+      "age": "e",
+      "thickness_m": "",
+      "zone_type": "lineage_zone"
+     },
+     {
+      "name": "Wuchiapingian range zone",
+      "section": "",
+      "age": "f",
+      "thickness_m": "",
+      "zone_type": "range_zone"
+     },
+     {
+      "name": "Plain",
+      "section": "",
+      "age": "g",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     },
+     {
+      "name": "Plain2",
+      "section": "",
+      "age": "g",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     },
+     {
+      "name": "Plain3",
+      "section": "",
+      "age": "g",
+      "thickness_m": "",
+      "zone_type": "subzone"
+     },
+     {
+      "name": "Plain4",
+      "section": "",
+      "age": "g",
+      "thickness_m": "",
+      "zone_type": "not-a-type"
+     }
+    ],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_other_fossils_shapes",
+   "payload": {
+    "other_fossils": {
+     "a": {
+      "label": "Ammonite"
+     },
+     "b": "Brachiopod",
+     "c": {
+      "x": 1
+     },
+     "d": {
+      "name": "Crinoid"
+     }
+    }
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [
+     "Ammonite",
+     "Brachiopod",
+     "Crinoid"
+    ],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_other_fossils_string",
+   "payload": {
+    "other_fossils": "Ostracod"
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [
+     "Ostracod"
+    ],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_note_and_extras",
+   "payload": {
+    "_array_root": [
+     {
+      "name": "S",
+      "age_range": "J"
+     }
+    ],
+    "_note": "model returned a top-level array",
+    "_extras": {
+     "caption": "Fig 3"
+    }
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S",
+      "age_range": "J",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0,
+    "_extras": {
+     "_extras": {
+      "caption": "Fig 3"
+     }
+    }
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_confidence_shapes",
+   "payload": {
+    "sections": [
+     {
+      "name": "S"
+     }
+    ],
+    "confidence": "90%"
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_confidence_bool",
+   "payload": {
+    "sections": [
+     {
+      "name": "S"
+     }
+    ],
+    "confidence": true
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 1.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_confidence_list",
+   "payload": {
+    "sections": [
+     {
+      "name": "S"
+     }
+    ],
+    "confidence": [
+     3
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_confidence_absent",
+   "payload": {
+    "sections": [
+     {
+      "name": "S"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_species_field_types",
+   "payload": {
+    "species_ranges": [
+     {
+      "species": "A",
+      "author_year": null,
+      "reworked": true,
+      "occurrence_mode": " REWORKED ",
+      "endpoint_kind": "Projected",
+      "confidence": "0.42",
+      "range_top_idx": 4,
+      "range_base_idx": 1,
+      "note": "n",
+      "formations": [
+       "x"
+      ],
+      "unexpected": 7
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "",
+      "range_top": "",
+      "range_base": "",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": 4,
+      "range_base_idx": 1,
+      "endpoint_kind": "projected",
+      "occurrence_mode": "reworked",
+      "confidence": 0.42,
+      "note": "n",
+      "_extras": {
+       "formations": [
+        "x"
+       ],
+       "unexpected": 7
+      }
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_section_formations_string",
+   "payload": {
+    "sections": [
+     {
+      "name": "S",
+      "formations": " Nanling Fm ",
+      "coordinates": {
+       "lat": 1
+      },
+      "thickness_m": 12.5
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S",
+      "age_range": "",
+      "formations": [
+       "Nanling Fm"
+      ],
+      "formation_thickness_m": "",
+      "coordinates": "{'lat': 1}",
+      "_extras": {
+       "thickness_m": 12.5
+      }
+     }
+    ],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "columnar_section",
+   "id": "col_empty",
+   "payload": {},
+   "extra": null,
+   "python": {
+    "sections": [],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "columnar_section",
+   "id": "col_foreign",
+   "payload": {
+    "totally_unrelated": 1
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.0,
+    "_extras": {
+     "totally_unrelated": 1
+    }
+   }
+  },
+  {
+   "group": "columnar_section",
+   "id": "col_dict_shaped",
+   "payload": {
+    "sections": {
+     "Ki-1": {
+      "group": "G",
+      "lithology_blocks": {
+       "b1": {
+        "pattern": "x",
+        "range_top_idx": "8.5",
+        "range_base_idx": 3
+       }
+      },
+      "samples": [
+       {
+        "bed_idx": 2.5,
+        "fossil_marker": "a"
+       }
+      ],
+      "age_units": [
+       {
+        "label": "u",
+        "range_top_idx": 1,
+        "range_base_idx": 5
+       }
+      ]
+     }
+    }
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "id": "",
+      "group": "G",
+      "lithology_blocks": [
+       {
+        "pattern": "x",
+        "range_top_idx": 8,
+        "range_base_idx": 3,
+        "_warning": "range_top_idx_truncated"
+       }
+      ],
+      "age_units": [
+       {
+        "label": "u",
+        "range_top_idx": 5,
+        "range_base_idx": 1,
+        "_warning": "index_order_swap"
+       }
+      ],
+      "samples": [
+       {
+        "bed_idx": 2,
+        "fossil_marker": "a",
+        "ref": "",
+        "_warning": "bed_idx_truncated"
+       }
+      ],
+      "coordinates_text": "",
+      "thickness_m": "",
+      "confidence_by_section": 0.0
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "columnar_section",
+   "id": "col_lossy_indices",
+   "payload": {
+    "sections": [
+     {
+      "id": "A",
+      "lithology_blocks": [
+       {
+        "pattern": "p",
+        "range_top_idx": "x",
+        "range_base_idx": 3
+       },
+       {
+        "pattern": "q",
+        "range_top_idx": 9.7,
+        "range_base_idx": "2.0"
+       },
+       {
+        "pattern": "r",
+        "range_top_idx": true,
+        "range_base_idx": null
+       }
+      ]
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "id": "A",
+      "group": "",
+      "lithology_blocks": [
+       {
+        "pattern": "p",
+        "range_top_idx": null,
+        "range_base_idx": 3,
+        "_warning": "range_top_idx_unparseable"
+       },
+       {
+        "pattern": "q",
+        "range_top_idx": 9,
+        "range_base_idx": 2,
+        "_warning": [
+         "range_top_idx_truncated",
+         "range_base_idx_truncated"
+        ]
+       },
+       {
+        "pattern": "r",
+        "range_top_idx": null,
+        "range_base_idx": null,
+        "_warning": "range_top_idx_unparseable"
+       }
+      ],
+      "age_units": [],
+      "samples": [],
+      "coordinates_text": "",
+      "thickness_m": "",
+      "confidence_by_section": 0.0
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "columnar_section",
+   "id": "col_index_swap_units",
+   "payload": {
+    "sections": [
+     {
+      "id": "A",
+      "age_units": [
+       {
+        "label": "u",
+        "range_top_idx": 1,
+        "range_base_idx": 6
+       }
+      ],
+      "cross_beds": []
+     }
+    ],
+    "cross_beds": [
+     {
+      "from_section": "A",
+      "from_bed_idx": 1.5,
+      "to_section": "B",
+      "to_bed_idx": 2.5
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "id": "A",
+      "group": "",
+      "lithology_blocks": [],
+      "age_units": [
+       {
+        "label": "u",
+        "range_top_idx": 6,
+        "range_base_idx": 1,
+        "_warning": "index_order_swap"
+       }
+      ],
+      "samples": [],
+      "coordinates_text": "",
+      "thickness_m": "",
+      "confidence_by_section": 0.0,
+      "_extras": {
+       "cross_beds": []
+      }
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [
+     {
+      "from_section": "A",
+      "from_bed_idx": 1,
+      "to_section": "B",
+      "to_bed_idx": 2,
+      "_warning": [
+       "from_bed_idx_truncated",
+       "to_bed_idx_truncated"
+      ]
+     }
+    ],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "columnar_section",
+   "id": "col_legend_string",
+   "payload": {
+    "fossil_legend": "none",
+    "lithology_legend": "none"
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.0,
+    "_warnings": [
+     "legend_input_is_string",
+     "legend_input_is_string"
+    ]
+   }
+  },
+  {
+   "group": "columnar_section",
+   "id": "col_legend_dict",
+   "payload": {
+    "fossil_legend": {
+     "ammonite": {
+      "meaning": "M",
+      "marker": "a"
+     }
+    },
+    "lithology_legend": {
+     "sand": {
+      "meaning": "sandstone",
+      "pattern": "p"
+     }
+    }
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "fossil_legend": [
+     {
+      "marker": "a",
+      "pattern": "",
+      "meaning": "M"
+     }
+    ],
+    "lithology_legend": [
+     {
+      "marker": "",
+      "pattern": "p",
+      "meaning": "sandstone"
+     }
+    ],
+    "cross_beds": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "columnar_section",
+   "id": "col_array_root",
+   "payload": {
+    "_array_root": [
+     {
+      "id": "A",
+      "group": "G"
+     },
+     {
+      "meaning": "m",
+      "marker": "k"
+     },
+     {
+      "meaning": "m2",
+      "pattern": "p"
+     },
+     {
+      "from_section": "a",
+      "to_section": "b"
+     },
+     {
+      "zz": 1
+     },
+     "bare string"
+    ],
+    "confidence": 0.4
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "id": "A",
+      "group": "G",
+      "lithology_blocks": [],
+      "age_units": [],
+      "samples": [],
+      "coordinates_text": "",
+      "thickness_m": "",
+      "confidence_by_section": 0.0
+     }
+    ],
+    "fossil_legend": [
+     {
+      "marker": "k",
+      "pattern": "",
+      "meaning": "m"
+     }
+    ],
+    "lithology_legend": [
+     {
+      "marker": "",
+      "pattern": "p",
+      "meaning": "m2"
+     }
+    ],
+    "cross_beds": [
+     {
+      "from_section": "a",
+      "from_bed_idx": null,
+      "to_section": "b",
+      "to_bed_idx": null
+     }
+    ],
+    "confidence": 0.4,
+    "_extras": {
+     "_array_root": [
+      {
+       "id": "A",
+       "group": "G"
+      },
+      {
+       "meaning": "m",
+       "marker": "k"
+      },
+      {
+       "meaning": "m2",
+       "pattern": "p"
+      },
+      {
+       "from_section": "a",
+       "to_section": "b"
+      },
+      {
+       "zz": 1
+      },
+      "bare string"
+     ],
+     "_unclassified": [
+      {
+       "zz": 1
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "columnar_section",
+   "id": "col_overall_null",
+   "payload": {
+    "sections": [
+     {
+      "id": "A"
+     }
+    ],
+    "overall_confidence": null,
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "id": "A",
+      "group": "",
+      "lithology_blocks": [],
+      "age_units": [],
+      "samples": [],
+      "coordinates_text": "",
+      "thickness_m": "",
+      "confidence_by_section": 0.0
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "columnar_section",
+   "id": "col_confidence_string",
+   "payload": {
+    "sections": [
+     {
+      "id": "A",
+      "confidence_by_section": "90%"
+     }
+    ],
+    "overall_confidence": "0.75"
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "id": "A",
+      "group": "",
+      "lithology_blocks": [],
+      "age_units": [],
+      "samples": [],
+      "coordinates_text": "",
+      "thickness_m": "",
+      "confidence_by_section": 0.0
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.75
+   }
+  },
+  {
+   "group": "abundance_diagram",
+   "id": "ab_empty",
+   "payload": {},
+   "extra": null,
+   "python": {
+    "sites": [],
+    "abundances": [],
+    "zones": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "abundance_diagram",
+   "id": "ab_foreign",
+   "payload": {
+    "totally_unrelated": 1
+   },
+   "extra": null,
+   "python": {
+    "sites": [],
+    "abundances": [],
+    "zones": [],
+    "confidence": 0.0,
+    "_extras": {
+     "totally_unrelated": 1
+    }
+   }
+  },
+  {
+   "group": "abundance_diagram",
+   "id": "ab_array_root_review_inputs",
+   "payload": {
+    "_array_root": [
+     {
+      "site_id": "S1",
+      "location": "Loc1"
+     },
+     {
+      "abundance": "A",
+      "count": 5
+     },
+     {
+      "zone": "Z1",
+      "assemblage": "ass"
+     },
+     {
+      "foo": 1
+     }
+    ],
+    "confidence": 0.7,
+    "_note": "wrap"
+   },
+   "extra": null,
+   "python": {
+    "sites": [],
+    "abundances": [],
+    "zones": [],
+    "confidence": 0.7,
+    "_extras": {
+     "_unclassified": [
+      {
+       "site_id": "S1",
+       "location": "Loc1"
+      },
+      {
+       "abundance": "A",
+       "count": 5
+      },
+      {
+       "zone": "Z1",
+       "assemblage": "ass"
+      },
+      {
+       "foo": 1
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "abundance_diagram",
+   "id": "ab_array_root_py_buckets",
+   "payload": {
+    "_array_root": [
+     {
+      "name": "S1",
+      "location": "Loc1"
+     },
+     {
+      "taxon": "Pinus",
+      "level": "3"
+     },
+     {
+      "abundance": "20%",
+      "level": "3"
+     },
+     {
+      "name": "Z1",
+      "age": "Holocene"
+     },
+     {
+      "name": "S2",
+      "depth_unit": "m"
+     },
+     "bare string",
+     {
+      "foo": 1
+     }
+    ],
+    "confidence": "0.5"
+   },
+   "extra": null,
+   "python": {
+    "sites": [
+     {
+      "name": "S1",
+      "location": "Loc1",
+      "age_range": "",
+      "depth_unit": ""
+     },
+     {
+      "name": "S2",
+      "location": "",
+      "age_range": "",
+      "depth_unit": "m"
+     }
+    ],
+    "abundances": [
+     {
+      "taxon": "Pinus",
+      "site": "",
+      "level": "3",
+      "depth": "",
+      "abundance": "",
+      "abundance_unit": ""
+     },
+     {
+      "taxon": "",
+      "site": "",
+      "level": "3",
+      "depth": "",
+      "abundance": "20%",
+      "abundance_unit": ""
+     }
+    ],
+    "zones": [
+     {
+      "name": "Z1",
+      "age": "Holocene",
+      "level_range": ""
+     }
+    ],
+    "confidence": 0.5,
+    "_extras": {
+     "_unclassified": [
+      {
+       "foo": 1
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "abundance_diagram",
+   "id": "ab_array_root_appends",
+   "payload": {
+    "sites": [
+     {
+      "name": "S0"
+     }
+    ],
+    "_array_root": [
+     {
+      "name": "S1",
+      "location": "L"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sites": [
+     {
+      "name": "S0",
+      "location": "",
+      "age_range": "",
+      "depth_unit": ""
+     },
+     {
+      "name": "S1",
+      "location": "L",
+      "age_range": "",
+      "depth_unit": ""
+     }
+    ],
+    "abundances": [],
+    "zones": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "abundance_diagram",
+   "id": "ab_dict_shaped",
+   "payload": {
+    "sites": {
+     "Suigetsu": {
+      "location": "L"
+     }
+    },
+    "abundances": {
+     "Pinus": {
+      "level": "1",
+      "abundance": "30%"
+     }
+    },
+    "zones": {
+     "Z1": {
+      "age": "X"
+     }
+    }
+   },
+   "extra": null,
+   "python": {
+    "sites": [
+     {
+      "name": "Suigetsu",
+      "location": "L",
+      "age_range": "",
+      "depth_unit": ""
+     }
+    ],
+    "abundances": [
+     {
+      "taxon": "Pinus",
+      "site": "",
+      "level": "1",
+      "depth": "",
+      "abundance": "30%",
+      "abundance_unit": ""
+     }
+    ],
+    "zones": [
+     {
+      "name": "Z1",
+      "age": "X",
+      "level_range": ""
+     }
+    ],
+    "confidence": 0.0,
+    "_warnings": [
+     "dict_shaped_array"
+    ]
+   }
+  },
+  {
+   "group": "abundance_diagram",
+   "id": "ab_string_rows",
+   "payload": {
+    "sites": [
+     "Alpha"
+    ],
+    "abundances": [
+     "Pinus"
+    ],
+    "zones": [
+     "Z"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sites": [
+     {
+      "name": "Alpha",
+      "location": "",
+      "age_range": "",
+      "depth_unit": ""
+     }
+    ],
+    "abundances": [],
+    "zones": [
+     {
+      "name": "Z",
+      "age": "",
+      "level_range": ""
+     }
+    ],
+    "confidence": 0.0,
+    "_warnings": [
+     "string_row_coerced"
+    ]
+   }
+  },
+  {
+   "group": "abundance_diagram",
+   "id": "ab_confidence_percent",
+   "payload": {
+    "sites": [
+     {
+      "name": "S"
+     }
+    ],
+    "confidence": "90%"
+   },
+   "extra": null,
+   "python": {
+    "sites": [
+     {
+      "name": "S",
+      "location": "",
+      "age_range": "",
+      "depth_unit": ""
+     }
+    ],
+    "abundances": [],
+    "zones": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "abundance_diagram",
+   "id": "ab_confidence_bool",
+   "payload": {
+    "sites": [
+     {
+      "name": "S"
+     }
+    ],
+    "confidence": false
+   },
+   "extra": null,
+   "python": {
+    "sites": [
+     {
+      "name": "S",
+      "location": "",
+      "age_range": "",
+      "depth_unit": ""
+     }
+    ],
+    "abundances": [],
+    "zones": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "abundance_diagram",
+   "id": "ab_note_extras",
+   "payload": {
+    "sites": [
+     {
+      "name": "S",
+      "unexpected": 1
+     }
+    ],
+    "abundances": [
+     {
+      "taxon": "T",
+      "level": "1",
+      "extra": 2
+     }
+    ],
+    "zones": [],
+    "confidence": 0.1,
+    "_note": "n"
+   },
+   "extra": null,
+   "python": {
+    "sites": [
+     {
+      "name": "S",
+      "location": "",
+      "age_range": "",
+      "depth_unit": "",
+      "_extras": {
+       "unexpected": 1
+      }
+     }
+    ],
+    "abundances": [
+     {
+      "taxon": "T",
+      "site": "",
+      "level": "1",
+      "depth": "",
+      "abundance": "",
+      "abundance_unit": "",
+      "_extras": {
+       "extra": 2
+      }
+     }
+    ],
+    "zones": [],
+    "confidence": 0.1
+   }
+  },
+  {
+   "group": "zonation_chart",
+   "id": "zo_empty",
+   "payload": {},
+   "extra": null,
+   "python": {
+    "zonations": [],
+    "zones": [],
+    "correlations": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "zonation_chart",
+   "id": "zo_foreign",
+   "payload": {
+    "unrelated": 1
+   },
+   "extra": null,
+   "python": {
+    "zonations": [],
+    "zones": [],
+    "correlations": [],
+    "confidence": 0.0,
+    "_extras": {
+     "unrelated": 1
+    }
+   }
+  },
+  {
+   "group": "zonation_chart",
+   "id": "zo_array_root_mixed",
+   "payload": {
+    "_array_root": [
+     {
+      "from_zone": "a",
+      "to_zone": "b"
+     },
+     {
+      "name": "n",
+      "rank": "Zone"
+     },
+     {
+      "name": "z",
+      "region": "r"
+     },
+     "str",
+     {
+      "x": 1
+     }
+    ],
+    "confidence": "0.7",
+    "_note": "n"
+   },
+   "extra": null,
+   "python": {
+    "zonations": [
+     {
+      "name": "z",
+      "region": "r",
+      "framework": "",
+      "reference": ""
+     }
+    ],
+    "zones": [
+     {
+      "name": "n",
+      "zonation": "",
+      "rank": "Zone",
+      "age_span": "",
+      "base_age": "",
+      "top_age": "",
+      "stage": "",
+      "defined_by": "",
+      "note": ""
+     }
+    ],
+    "correlations": [
+     {
+      "from_zone": "a",
+      "to_zone": "b",
+      "from_zonation": "",
+      "to_zonation": "",
+      "basis": "",
+      "note": ""
+     }
+    ],
+    "confidence": 0.7,
+    "_extras": {
+     "_unclassified": [
+      "str",
+      {
+       "x": 1
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "zonation_chart",
+   "id": "zo_dict_shaped",
+   "payload": {
+    "zones": {
+     "Z1": {
+      "rank": "Zone"
+     }
+    },
+    "zonations": [
+     {
+      "name": "N"
+     }
+    ],
+    "correlations": [
+     "c1"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "zonations": [
+     {
+      "name": "N",
+      "region": "",
+      "framework": "",
+      "reference": ""
+     }
+    ],
+    "zones": [
+     {
+      "name": "Z1",
+      "zonation": "",
+      "rank": "Zone",
+      "age_span": "",
+      "base_age": "",
+      "top_age": "",
+      "stage": "",
+      "defined_by": "",
+      "note": ""
+     }
+    ],
+    "correlations": [],
+    "confidence": 0.0,
+    "_warnings": [
+     "dict_shaped_array"
+    ]
+   }
+  },
+  {
+   "group": "zonation_chart",
+   "id": "zo_string_rows",
+   "payload": {
+    "zonations": [
+     "Global scale"
+    ],
+    "zones": [
+     "X Zone"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "zonations": [
+     {
+      "name": "Global scale",
+      "region": "",
+      "framework": "",
+      "reference": ""
+     }
+    ],
+    "zones": [
+     {
+      "name": "X Zone",
+      "zonation": "",
+      "rank": "",
+      "age_span": "",
+      "base_age": "",
+      "top_age": "",
+      "stage": "",
+      "defined_by": "",
+      "note": ""
+     }
+    ],
+    "correlations": [],
+    "confidence": 0.0,
+    "_warnings": [
+     "string_row_coerced"
+    ]
+   }
+  },
+  {
+   "group": "zonation_chart",
+   "id": "zo_confidence_percent",
+   "payload": {
+    "zones": [
+     {
+      "name": "n",
+      "rank": "Zone"
+     }
+    ],
+    "confidence": "90%"
+   },
+   "extra": null,
+   "python": {
+    "zonations": [],
+    "zones": [
+     {
+      "name": "n",
+      "zonation": "",
+      "rank": "Zone",
+      "age_span": "",
+      "base_age": "",
+      "top_age": "",
+      "stage": "",
+      "defined_by": "",
+      "note": ""
+     }
+    ],
+    "correlations": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "zonation_chart",
+   "id": "zo_root_extras",
+   "payload": {
+    "zonations": [],
+    "zones": [],
+    "correlations": [],
+    "confidence": 0,
+    "extra_root": 1
+   },
+   "extra": null,
+   "python": {
+    "zonations": [],
+    "zones": [],
+    "correlations": [],
+    "confidence": 0.0,
+    "_extras": {
+     "extra_root": 1
+    }
+   }
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_basic",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "Root",
+      "is_leaf": false
+     },
+     {
+      "id": "a",
+      "parent": "r",
+      "name": "Taxon A",
+      "is_leaf": true,
+      "branch_length": 0.1,
+      "support": 95
+     },
+     {
+      "id": "b",
+      "parent": "r",
+      "name": "Taxon B",
+      "is_leaf": true,
+      "branch_length": 0.2
+     }
+    ],
+    "metadata": {
+     "title": "T",
+     "rooted": true
+    },
+    "confidence": 0.9
+   },
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "T",
+     "extraction_timestamp": "",
+     "tree_type": "",
+     "scale": "",
+     "rooted": true,
+     "source": ""
+    },
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "Root",
+      "is_leaf": false,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null
+     },
+     {
+      "id": "a",
+      "parent": "r",
+      "name": "Taxon A",
+      "is_leaf": true,
+      "branch_length": 0.1,
+      "node_age_ma": null,
+      "support": 95.0
+     },
+     {
+      "id": "b",
+      "parent": "r",
+      "name": "Taxon B",
+      "is_leaf": true,
+      "branch_length": 0.2,
+      "node_age_ma": null,
+      "support": null
+     }
+    ],
+    "legend": {},
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_numeric_root_ids",
+   "payload": {
+    "root_ids": [
+     1
+    ],
+    "nodes": [
+     {
+      "id": "1",
+      "parent": null,
+      "name": "A",
+      "is_leaf": true
+     }
+    ],
+    "confidence": 0.9
+   },
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "",
+     "extraction_timestamp": "",
+     "tree_type": "",
+     "scale": "",
+     "rooted": true,
+     "source": ""
+    },
+    "root_ids": [
+     "1"
+    ],
+    "nodes": [
+     {
+      "id": "1",
+      "parent": null,
+      "name": "A",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null
+     }
+    ],
+    "legend": {},
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_missing_ids",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "Root"
+     },
+     {
+      "parent": "r",
+      "name": "Anon one"
+     },
+     {
+      "parent": "r",
+      "name": "Anon two",
+      "id": "  "
+     },
+     {
+      "id": "_anon1",
+      "parent": "r",
+      "name": "Clash"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "",
+     "extraction_timestamp": "",
+     "tree_type": "",
+     "scale": "",
+     "rooted": true,
+     "source": ""
+    },
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "Root",
+      "is_leaf": false,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null
+     },
+     {
+      "id": "_anon2",
+      "parent": "r",
+      "name": "Anon one",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     },
+     {
+      "id": "_anon3",
+      "parent": "r",
+      "name": "Anon two",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     },
+     {
+      "id": "_anon1",
+      "parent": "r",
+      "name": "Clash",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     }
+    ],
+    "legend": {},
+    "confidence": 0.0,
+    "_warnings": [
+     "node_missing_id_synthesised",
+     "node_missing_id_synthesised"
+    ]
+   }
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_dict_nodes",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": {
+     "r": {
+      "parent": null,
+      "is_leaf": false
+     },
+     "a": {
+      "parent": "r",
+      "name": "A",
+      "is_leaf": true
+     }
+    }
+   },
+   "extra": null,
+   "python_error": "ValueError",
+   "python_message": "root_ids contains unknown node id: r"
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_array_root_wrap",
+   "payload": {
+    "_array_root": [
+     {
+      "root_ids": [
+       "r"
+      ],
+      "nodes": [
+       {
+        "id": "r",
+        "parent": null,
+        "name": "A"
+       }
+      ]
+     }
+    ],
+    "confidence": 0.6,
+    "_note": "wrap",
+    "legend": {
+     "a": 1
+    },
+    "metadata": {
+     "title": "outer"
+    }
+   },
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "outer",
+     "extraction_timestamp": "",
+     "tree_type": "",
+     "scale": "",
+     "rooted": true,
+     "source": ""
+    },
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     }
+    ],
+    "legend": {
+     "a": 1
+    },
+    "confidence": 0.6
+   }
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_rooted_strings",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A"
+     }
+    ],
+    "metadata": {
+     "rooted": "false"
+    }
+   },
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "",
+     "extraction_timestamp": "",
+     "tree_type": "",
+     "scale": "",
+     "rooted": false,
+     "source": ""
+    },
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     }
+    ],
+    "legend": {},
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_rooted_weird",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A"
+     }
+    ],
+    "metadata": {
+     "rooted": "yes",
+     "source": null,
+     "image_source": "img"
+    }
+   },
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "",
+     "extraction_timestamp": "",
+     "tree_type": "",
+     "scale": "",
+     "rooted": true,
+     "source": "",
+     "image_source": "img"
+    },
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     }
+    ],
+    "legend": {},
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_is_leaf_corrected",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "R",
+      "is_leaf": true
+     },
+     {
+      "id": "a",
+      "parent": "r",
+      "name": "A",
+      "is_leaf": false
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "",
+     "extraction_timestamp": "",
+     "tree_type": "",
+     "scale": "",
+     "rooted": true,
+     "source": ""
+    },
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "R",
+      "is_leaf": false,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     },
+     {
+      "id": "a",
+      "parent": "r",
+      "name": "A",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     }
+    ],
+    "legend": {},
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_extra_metadata",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A"
+     }
+    ],
+    "metadata": {
+     "taxon_group": "Ammonoidea",
+     "root_name": "R",
+     "total_nodes": 2,
+     "version": "2",
+     "title": "T"
+    },
+    "confidence": 0.3,
+    "extra_root": {
+     "a": 1
+    },
+    "_note": "n"
+   },
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "T",
+     "extraction_timestamp": "",
+     "tree_type": "",
+     "scale": "",
+     "rooted": true,
+     "source": "",
+     "taxon_group": "Ammonoidea",
+     "root_name": "R",
+     "total_nodes": 2,
+     "version": "2"
+    },
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     }
+    ],
+    "legend": {},
+    "confidence": 0.3,
+    "_extras": {
+     "extra_root": {
+      "a": 1
+     }
+    }
+   }
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_node_extras",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "R",
+      "depth_range_m": 12,
+      "support_confidence": 0.4
+     },
+     {
+      "id": "a",
+      "parent": "r",
+      "name": "A",
+      "support": "88"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "",
+     "extraction_timestamp": "",
+     "tree_type": "",
+     "scale": "",
+     "rooted": true,
+     "source": ""
+    },
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "R",
+      "is_leaf": false,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "depth_range_m": 12,
+       "support_confidence": 0.4
+      }
+     },
+     {
+      "id": "a",
+      "parent": "r",
+      "name": "A",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": 88.0,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     }
+    ],
+    "legend": {},
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_support_out_of_range",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A",
+      "support": 400
+     }
+    ]
+   },
+   "extra": null,
+   "python_error": "ValueError",
+   "python_message": "support must be in [0, 100] or None, got 400.0"
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_empty_root_ids",
+   "payload": {
+    "root_ids": [],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null
+     }
+    ]
+   },
+   "extra": null,
+   "python_error": "ValueError",
+   "python_message": "root_ids is empty"
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_foreign",
+   "payload": {
+    "unrelated": 1
+   },
+   "extra": null,
+   "python_error": "ValueError",
+   "python_message": "root_ids is empty"
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_confidence_percent",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A"
+     }
+    ],
+    "confidence": "90%"
+   },
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "",
+     "extraction_timestamp": "",
+     "tree_type": "",
+     "scale": "",
+     "rooted": true,
+     "source": ""
+    },
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     }
+    ],
+    "legend": {},
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_non_dict_nodes",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     "r"
+    ]
+   },
+   "extra": null,
+   "python_error": "ValueError",
+   "python_message": "root_ids contains unknown node id: r"
+  },
+  {
+   "group": "chart_classification",
+   "id": "cc_percent",
+   "payload": {
+    "chart_type": "range_chart",
+    "confidence": "90%",
+    "reason": "r"
+   },
+   "extra": null,
+   "python": {
+    "chart_type": "range_chart",
+    "reason": "r",
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "chart_classification",
+   "id": "cc_bool",
+   "payload": {
+    "chart_type": "PALEOMAP",
+    "confidence": true
+   },
+   "extra": null,
+   "python": {
+    "chart_type": "paleomap",
+    "reason": "",
+    "confidence": 1.0
+   }
+  },
+  {
+   "group": "chart_classification",
+   "id": "cc_unknown_type",
+   "payload": {
+    "chart_type": "bogus",
+    "confidence": 0.4
+   },
+   "extra": null,
+   "python": {
+    "chart_type": "unknown",
+    "reason": "",
+    "confidence": 0.4
+   }
+  },
+  {
+   "group": "chart_classification",
+   "id": "cc_list",
+   "payload": {
+    "chart_type": "range_chart",
+    "confidence": [
+     3
+    ]
+   },
+   "extra": null,
+   "python": {
+    "chart_type": "range_chart",
+    "reason": "",
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "chart_classification",
+   "id": "cc_none",
+   "payload": {
+    "chart_type": null,
+    "reason": null,
+    "confidence": null
+   },
+   "extra": null,
+   "python": {
+    "chart_type": "unknown",
+    "reason": "",
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "chart_classification",
+   "id": "cc_valid_range",
+   "payload": {
+    "chart_type": "zonation_chart",
+    "confidence": 0.87
+   },
+   "extra": null,
+   "python": {
+    "chart_type": "zonation_chart",
+    "reason": "",
+    "confidence": 0.87
+   }
+  },
+  {
+   "group": "chart_classification",
+   "id": "cc_non_dict",
+   "payload": "range_chart",
+   "extra": null,
+   "python": {
+    "chart_type": "unknown",
+    "reason": "",
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "chart_classification",
+   "id": "cc_empty",
+   "payload": {},
+   "extra": null,
+   "python": {
+    "chart_type": "unknown",
+    "reason": "",
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "to_newick",
+   "id": "nw_plain",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "is_leaf": false
+     },
+     {
+      "id": "a",
+      "parent": "r",
+      "name": "A",
+      "is_leaf": true,
+      "branch_length": 0.1
+     },
+     {
+      "id": "b",
+      "parent": "r",
+      "name": "B",
+      "is_leaf": true
+     }
+    ],
+    "confidence": 1.0
+   },
+   "extra": null,
+   "python": "((A:0.1,B));"
+  },
+  {
+   "group": "to_newick",
+   "id": "nw_special_labels",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "is_leaf": false,
+      "support": 95
+     },
+     {
+      "id": "a",
+      "parent": "r",
+      "name": "A(B)",
+      "is_leaf": true
+     },
+     {
+      "id": "b",
+      "parent": "r",
+      "name": "C:D",
+      "is_leaf": true,
+      "branch_length": 0.25
+     },
+     {
+      "id": "c",
+      "parent": "r",
+      "name": "it's",
+      "is_leaf": true
+     },
+     {
+      "id": "d",
+      "parent": "r",
+      "name": "spaced label",
+      "is_leaf": true
+     },
+     {
+      "id": "e",
+      "parent": "r",
+      "name": "[square]",
+      "is_leaf": true
+     },
+     {
+      "id": "f",
+      "parent": "r",
+      "name": "",
+      "is_leaf": true
+     },
+     {
+      "id": "g",
+      "parent": "r",
+      "name": "plain",
+      "is_leaf": true
+     }
+    ],
+    "confidence": 1.0
+   },
+   "extra": null,
+   "python": "(('A(B)','C:D':0.25,it's,'spaced label','[square]','',plain)95.0);"
+  },
+  {
+   "group": "to_newick",
+   "id": "nw_forest",
+   "payload": {
+    "root_ids": [
+     "r1",
+     "r2"
+    ],
+    "nodes": [
+     {
+      "id": "r1",
+      "parent": null,
+      "is_leaf": true,
+      "name": "X"
+     },
+     {
+      "id": "r2",
+      "parent": null,
+      "is_leaf": false,
+      "name": "Y"
+     },
+     {
+      "id": "c",
+      "parent": "r2",
+      "name": "Z",
+      "is_leaf": true
+     }
+    ]
+   },
+   "extra": null,
+   "python": "(X,(Z));"
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_plain",
+   "payload": "{\"sections\": [{\"name\": \"A\"}]}",
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "A"
+     }
+    ]
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_single_fence",
+   "payload": "Here:\n```json\n{\"sections\": [{\"id\": \"A\", \"group\": \"G\"}], \"overall_confidence\": 0.9}\n```\nThanks",
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "id": "A",
+      "group": "G"
+     }
+    ],
+    "overall_confidence": 0.9
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_two_fences",
+   "payload": "Schema:\n```json\n{\"properties\": {\"sections\": {\"type\": \"array\"}}, \"required\": [\"sections\"], \"format\": \"rca-v1\"}\n```\nResult:\n```json\n{\"sections\": [{\"id\": \"A\", \"group\": \"G\"}], \"overall_confidence\": 0.9}\n```",
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "id": "A",
+      "group": "G"
+     }
+    ],
+    "overall_confidence": 0.9
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_fence_then_prose_payload",
+   "payload": "Contract:\n```json\n{\"properties\": {\"sections\": {\"type\": \"array\"}}, \"required\": [\"sections\"], \"format\": \"rca-v1\"}\n```\nThe answer is {\"sections\": [{\"id\": \"A\", \"group\": \"G\"}], \"overall_confidence\": 0.9} done",
+   "extra": null,
+   "python": {
+    "properties": {
+     "sections": {
+      "type": "array"
+     }
+    },
+    "required": [
+     "sections"
+    ],
+    "format": "rca-v1"
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_prose_only_payload",
+   "payload": "Sure! {\"confidence\": 0.5, \"sections\": [{\"name\": \"A\"}]} + tail",
+   "extra": null,
+   "python": {
+    "confidence": 0.5,
+    "sections": [
+     {
+      "name": "A"
+     }
+    ]
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_placeholder_fence",
+   "payload": "```json\n{\"sections\": [{\"name\": \"<section name>\", \"age_range\": \"<one of the list above>\"}]}\n```\n```json\n{\"sections\": [{\"name\": \"Ki\",\"age_range\":\"J\"}]}\n```",
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "Ki",
+      "age_range": "J"
+     }
+    ]
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_no_qualifying_block",
+   "payload": "```json\n{\"properties\": {\"a\": 1}}\n```\nand\n```json\n{\"required\": [\"x\"]}\n```",
+   "extra": null,
+   "python": {
+    "properties": {
+     "a": 1
+    }
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_top_level_array",
+   "payload": "[{\"species\": \"A\", \"section\": \"S\"}]",
+   "extra": null,
+   "python": {
+    "_array_root": [
+     {
+      "species": "A",
+      "section": "S"
+     }
+    ],
+    "_note": "model returned a top-level array; wrapping for diagnostics"
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_truncated_array",
+   "payload": "[{\"species\": \"A\", \"section\": \"S\"}, {\"spe",
+   "extra": null,
+   "python": {
+    "_array_root": [
+     {
+      "species": "A",
+      "section": "S"
+     }
+    ],
+    "_note": "model returned a top-level array; wrapping for diagnostics"
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_truncated_object",
+   "payload": "{\"sections\": [{\"name\": \"A\"}, {\"name\": \"B\"}, {\"na",
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "A"
+     },
+     {
+      "name": "B"
+     }
+    ]
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_truncated_scalar_array",
+   "payload": "[\"a\", \"b\", \"c",
+   "extra": null,
+   "python_error": "ValueError",
+   "python_message": "no JSON object found in '[\"a\", \"b\", \"c'"
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_wrapper_data",
+   "payload": "{\"data\": {\"sections\": [{\"name\": \"A\"}]}, \"confidence\": 0.2}",
+   "extra": null,
+   "python": {
+    "confidence": 0.2,
+    "sections": [
+     {
+      "name": "A"
+     }
+    ]
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_control_in_string",
+   "payload": "{\"sections\": [{\"name\": \"A\nB\"}], \"confidence\": 0.1}",
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "A\nB"
+     }
+    ],
+    "confidence": 0.1
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_nul_junk",
+   "payload": "{\"sections\": [{\"name\": \"A\"}]}\u0000\u0007",
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "A"
+     }
+    ]
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_nan_literal",
+   "payload": "{\"confidence\": NaN}",
+   "extra": null,
+   "python_error": "ValueError",
+   "python_message": "no JSON object found in '{\"confidence\": NaN}'"
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_empty",
+   "payload": "",
+   "extra": null,
+   "python_error": "ValueError",
+   "python_message": "empty text"
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_no_json",
+   "payload": "I cannot read this figure.",
+   "extra": null,
+   "python_error": "ValueError",
+   "python_message": "no JSON object found in 'I cannot read this figure.'"
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_nested_candidates",
+   "payload": "{\"metadata\": {\"title\": \"x\"}, \"sections\": [{\"name\": \"A\"}]}",
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "x"
+    },
+    "sections": [
+     {
+      "name": "A"
+     }
+    ]
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_zonation_fence",
+   "payload": "```json\n{\"zonations\": [{\"name\": \"N\"}], \"correlations\": []}\n```",
+   "extra": null,
+   "python": {
+    "zonations": [
+     {
+      "name": "N"
+     }
+    ],
+    "correlations": []
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_unclosed_fence",
+   "payload": "```json\n{\"sections\": [{\"name\": \"A\"}]}",
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "A"
+     }
+    ]
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_01",
+   "payload": "Late Permian (Wuchiapingian)",
+   "extra": "older",
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 259.51
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_02",
+   "payload": "Late Permian (Wuchiapingian)",
+   "extra": "younger",
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 254.14
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_03",
+   "payload": "Wuchiapingian",
+   "extra": "older",
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 259.51
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_04",
+   "payload": "Wuchiapingian",
+   "extra": "younger",
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 254.14
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_05",
+   "payload": "Wuchiapingian - Changhsingian",
+   "extra": "older",
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 259.51
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_06",
+   "payload": "Wuchiapingian - Changhsingian",
+   "extra": "younger",
+   "python": {
+    "name": "Changhsingian",
+    "ma": 251.902
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_07",
+   "payload": "Changhsingian - Wuchiapingian",
+   "extra": "younger",
+   "python": {
+    "name": "Changhsingian",
+    "ma": 251.902
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_08",
+   "payload": "Changhsingian - Wuchiapingian",
+   "extra": "older",
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 259.51
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_09",
+   "payload": "259.51 Ma",
+   "extra": "older",
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 259.51
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_10",
+   "payload": "254.14 Ma",
+   "extra": "older",
+   "python": {
+    "name": "Changhsingian",
+    "ma": 254.14
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_11",
+   "payload": "251.902 Ma",
+   "extra": "older",
+   "python": {
+    "name": "Induan",
+    "ma": 251.902
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_12",
+   "payload": "505 Ma",
+   "extra": "older",
+   "python": {
+    "name": "Wuliuan",
+    "ma": 505.0
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_13",
+   "payload": "Pleistocene",
+   "extra": "older",
+   "python": {
+    "name": "Pleistocene",
+    "ma": 2.58
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_14",
+   "payload": "Pleistocene",
+   "extra": "younger",
+   "python": {
+    "name": "Pleistocene",
+    "ma": 0.0117
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_15",
+   "payload": "Late Pennsylvanian",
+   "extra": "older",
+   "python": {
+    "name": "Pennsylvanian",
+    "ma": 323.4
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_16",
+   "payload": "Permian",
+   "extra": "older",
+   "python": {
+    "name": "Permian",
+    "ma": 298.9
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_17",
+   "payload": "Permian",
+   "extra": "younger",
+   "python": {
+    "name": "Permian",
+    "ma": 251.902
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_18",
+   "payload": "吴家坪阶",
+   "extra": "older",
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 259.51
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_19",
+   "payload": "吴家坪阶",
+   "extra": "younger",
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 254.14
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_20",
+   "payload": "晚二叠世",
+   "extra": "older",
+   "python": {
+    "name": "Lopingian",
+    "ma": 259.51
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_21",
+   "payload": "Older",
+   "extra": "Older",
+   "python": null
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_22",
+   "payload": "Wuchiapingian",
+   "extra": " BASE ",
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 259.51
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_23",
+   "payload": "Wuchiapingian",
+   "extra": "youngest",
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 254.14
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_24",
+   "payload": "Wuchiapingian",
+   "extra": null,
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 259.51
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_25",
+   "payload": "Wuchiapingian",
+   "extra": "",
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 259.51
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_26",
+   "payload": "260 Ma - 250 Ma",
+   "extra": "older",
+   "python": {
+    "name": "Capitanian",
+    "ma": 260.0
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_27",
+   "payload": "260 Ma - 250 Ma",
+   "extra": "younger",
+   "python": {
+    "name": "Induan",
+    "ma": 250.0
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_28",
+   "payload": "0 Ma",
+   "extra": "younger",
+   "python": {
+    "name": "Holocene",
+    "ma": 0.0
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_29",
+   "payload": "something unresolvable",
+   "extra": "older",
+   "python": null
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_30",
+   "payload": "",
+   "extra": "older",
+   "python": null
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_31",
+   "payload": "Wuchiapingian",
+   "extra": "middle",
+   "python_error": "ValueError",
+   "python_message": "prefer must be an 'older'/'younger' spelling (got 'middle'); known values: base, bottom, old, older, oldest, top, upper, young, younger, youngest"
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_32",
+   "payload": "Capitanian",
+   "extra": "older",
+   "python": {
+    "name": "Capitanian",
+    "ma": 264.28
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_33",
+   "payload": " Guadalupian ",
+   "extra": "younger",
+   "python": {
+    "name": "Guadalupian",
+    "ma": 259.51
+   }
+  }
+ ]
+}

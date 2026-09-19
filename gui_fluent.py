@@ -165,7 +165,7 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict) -> None:
-    """Atomic JSON dump: write to .tmp then os.replace (POSIX + Win).
+    """Atomic JSON dump: write to a unique temp file then os.replace.
 
     A crash mid-write used to truncate the live config and lose all
     settings; the atomic-rename pattern keeps the previous good file
@@ -177,27 +177,48 @@ def save_config(cfg: dict) -> None:
     obfuscation otherwise). A local copy is used so the caller's dict
     (save_all passes the live self.cfg) is not mutated, and
     is_obfuscated() prevents double-wrapping on re-save.
+
+    REVIEW-2026-09-20 (three fixes to this one writer):
+      * Unique temp name. The previous code wrote a FIXED
+        ``CONFIG_PATH + ".tmp"`` — the SAME path the Tkinter GUI (gui.py)
+        uses. Both front-ends share this config file, so two instances (or a
+        Tk save racing a Fluent save) wrote into one temp file and the second
+        ``os.replace`` moved a half-written blob into place. mkstemp gives
+        every writer its own name in the destination directory.
+      * Errors are RAISED, not swallowed. The old bare ``except`` turned a
+        read-only home / full disk / locked file into "settings silently
+        reverted on the next launch"; the callers (save_all / _save_settings)
+        now surface the failure through an InfoBar / status bar.
+      * Merge-before-write. Callers pass a dict built from the widget state
+        only, so any key this build does not know about (added by a newer
+        version, by server.py, or a hand edit) used to vanish on the first
+        save. The on-disk config is loaded first and the caller's keys are
+        layered on top.
     """
     import json
-    to_write = cfg
-    key = (cfg.get("api_key") or "")
+    merged = load_config()
+    merged.update(cfg or {})
+    to_write = merged
+    key = (merged.get("api_key") or "")
     if key:
         try:
             from rca_core.secrets_store import encrypt, is_obfuscated
             if not is_obfuscated(key):
-                to_write = dict(cfg)
+                to_write = dict(merged)
                 to_write["api_key"] = encrypt(key)
         except Exception:
             # REVIEW-2026-09-10: fail CLOSED — an encrypt failure used to fall
             # through and persist the raw plaintext key. Drop it from the file
             # instead (the provider store keeps its own copy; the in-session
             # value is untouched) and leave a marker the settings page can show.
-            to_write = dict(cfg)
+            to_write = dict(merged)
             to_write["api_key"] = ""
             to_write["api_key_store_failed"] = True
-    tmp = CONFIG_PATH + ".tmp"
+    cfg_dir = os.path.dirname(CONFIG_PATH) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".range_chart_analyzer.", suffix=".tmp",
+                               dir=cfg_dir)
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(to_write, f, ensure_ascii=False, indent=2)
             f.flush()
             try:
@@ -211,6 +232,10 @@ def save_config(cfg: dict) -> None:
                 os.remove(tmp)
         except OSError:
             pass
+        # REVIEW-2026-09-20: re-raise so the caller can tell the user their
+        # settings were NOT persisted (the silent failure was the bug).
+        log.exception("save_config failed for %s", CONFIG_PATH)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -291,10 +316,20 @@ class ExtractWorker(QThread):
 
     NEVER touches widgets — only emits signals the UI thread listens to.
     """
-    finished_ok = Signal(object)   # ExtractResult
+    # REVIEW-2026-09-20: the signal carries (worker, result) — exactly the
+    # SettingsPage `_Worker.done = Signal(object, object)` pattern. Carrying
+    # the worker makes it possible to connect the page's BOUND METHOD
+    # (`self._on_worker_result`): a bound method of a QObject gives a queued
+    # (auto) connection, so the handler runs on the GUI thread. The old
+    # single-payload signal was connected through a lambda, and a plain
+    # function/lambda has no receiver QObject — Qt then uses a DIRECT
+    # connection, so `_on_result()` (InfoBar + labels + tables + history
+    # writes) executed inside this QThread. Touching widgets off the GUI
+    # thread is the crash class this module's header explicitly forbids.
+    finished_ok = Signal(object, object)  # (worker, ExtractResult)
     progress = Signal(str)         # status text
 
-    def __init__(self, params, mode, runs, auto_filename=""):
+    def __init__(self, params, mode, runs, auto_filename="", gen=None):
         super().__init__()
         self._params = params
         self._mode = mode
@@ -308,6 +343,21 @@ class ExtractWorker(QThread):
         # cooperatively exits so the thread is never forcibly terminated.
         self._auto_filename = auto_filename
         self._cancel_requested = False
+        # REVIEW-2026-09-20: the stale-result generation the page had when
+        # this worker was launched. The page's slot compares it against the
+        # live counter (see ExtractPage._on_worker_result) instead of the
+        # launch-time closure that used to carry it — the closure could only
+        # be wired through a lambda, and a lambda connection is direct.
+        self.gen = gen
+
+    def _emit_result(self, result) -> None:
+        """Emit (self, result) on ``finished_ok``.
+
+        Single emission point so every path (fast single run, merged
+        multi-run, cancel, unexpected exception) carries the worker the
+        receiving slot needs to resolve the queued connection.
+        """
+        self.finished_ok.emit(self, result)
 
     def request_cancel(self) -> None:
         """Ask the worker to stop at the next cancellation checkpoint.
@@ -380,12 +430,12 @@ class ExtractWorker(QThread):
                     result._mode = mode
                 except Exception:
                     pass
-                self.finished_ok.emit(result)
+                self._emit_result(result)
                 return
         except Exception as exc:  # BUG13: never let exceptions kill the worker
             # Bug-12 fix: log so an unexpected exception doesn't disappear.
             log.exception("ExtractWorker.run failed")
-            self.finished_ok.emit(ExtractResult(
+            self._emit_result(ExtractResult(
                 ok=False, error_key="err.http", raw=str(exc)))
             return
         ok_datas, last_fail, partial_fails, any_trunc, raws = [], None, 0, False, []
@@ -436,7 +486,7 @@ class ExtractWorker(QThread):
                 )
                 partial_fails += 1
             if not futures:
-                self.finished_ok.emit(ExtractResult(
+                self._emit_result(ExtractResult(
                     ok=False, error_key="err.cancelled",
                     error_body="user cancelled the extraction",
                 ))
@@ -460,7 +510,7 @@ class ExtractWorker(QThread):
                 # Phase K fix + Sprint B: honour user cancel between
                 # completion batches — bail out as soon as the flag is
                 # seen instead of waiting for every future.
-                self.finished_ok.emit(ExtractResult(
+                self._emit_result(ExtractResult(
                     ok=False, error_key="err.cancelled",
                     error_body="user cancelled the extraction",
                 ))
@@ -503,7 +553,7 @@ class ExtractWorker(QThread):
             executor.shutdown(wait=False)
         total_latency = int((time.perf_counter() - batch_t0) * 1000)
         if not ok_datas:
-            self.finished_ok.emit(last_fail or ExtractResult(ok=False, error_key="err.empty"))
+            self._emit_result(last_fail or ExtractResult(ok=False, error_key="err.empty"))
             return
         schema = SCHEMA_BY_MODE.get(mode, RANGE_CHART_SCHEMA)
         merged = merge_results(ok_datas, total_runs=runs, schema=schema)
@@ -544,7 +594,7 @@ class ExtractWorker(QThread):
             merged_res._mode = mode
         except Exception:
             pass
-        self.finished_ok.emit(merged_res)
+        self._emit_result(merged_res)
 
 
 # NOTE: ConnTestWorker was removed — it was dead code (ProvidersPage
@@ -743,6 +793,11 @@ class ExtractPage(ScrollArea):
         # its result, and _on_result drops results whose generation no longer
         # matches the live one (i.e. the user moved on).
         self._extract_gen = 0
+        # REVIEW-2026-09-20: mode the worker resolved for the CURRENT result
+        # ("auto" extractions are resolved inside the thread; a history load
+        # carries the stored mode). None → _current_mode() falls back to shape
+        # detection. Kept in sync by _on_result() and load_result().
+        self._resolved_mode = None
 
         self.setObjectName("extractPage")
         self.setWidgetResizable(True)
@@ -1221,21 +1276,43 @@ class ExtractPage(ScrollArea):
         self.busy = True
         self._set_busy(True)
         # FIX (stale-result guard): bump the generation so any result from a
-        # previously-launched worker is dropped. The closure captures the
-        # launch-time gen; on result, it bails unless the live gen still matches
-        # (i.e. the user didn't start a new extraction or reset meanwhile).
-        # Also bumped on reset/load — see _bump_extract_gen(). Audit fix:
-        # the prior code only bumped here, so the guard was effectively
-        # inert because busy serialised extractions; bump on every state
-        # change that should cancel an in-flight result.
+        # previously-launched worker is dropped. The launch-time gen rides on
+        # the worker (`ExtractWorker.gen`) and the receiving slot re-checks it
+        # against the live counter, so a result from a superseded worker is
+        # discarded (i.e. the user started a new extraction, reset, or loaded
+        # from history meanwhile). Also bumped on reset/load — see
+        # _bump_extract_gen(). Audit fix: the prior code only bumped here, so
+        # the guard was effectively inert because busy serialised extractions;
+        # bump on every state change that should cancel an in-flight result.
+        # REVIEW-2026-09-20: the guard used to live in a lambda connected to
+        # finished_ok. A lambda has no receiver QObject, so Qt used a DIRECT
+        # connection and _on_result() ran inside the worker thread — touching
+        # InfoBar / labels / tables / the history store off the GUI thread.
+        # The worker is now connected to a bound method (queued connection)
+        # and performs the same gen check on the GUI thread.
         launch_gen = self._bump_extract_gen()
         self._worker = ExtractWorker(params, mode, runs,
-                                     auto_filename=(self.image_path or ""))
+                                     auto_filename=(self.image_path or ""),
+                                     gen=launch_gen)
         self._worker.progress.connect(self._on_progress)
-        self._worker.finished_ok.connect(
-            lambda res, _g=launch_gen: (self._on_result(res)
-                                        if getattr(self, "_extract_gen", 0) == _g else None))
+        self._worker.finished_ok.connect(self._on_worker_result)
         self._worker.start()
+
+    def _on_worker_result(self, worker, result):
+        """GUI-thread slot for ``ExtractWorker.finished_ok``.
+
+        Bound method of this page → Qt's auto connection queues the call onto
+        the GUI thread (the worker emits from its own thread). Drops results
+        from a superseded worker before handing them to ``_on_result``.
+        """
+        gen = getattr(worker, "gen", None)
+        if gen is not None and getattr(self, "_extract_gen", 0) != gen:
+            # Stale: the user started a newer extraction / reset / loaded a
+            # history record after this worker was launched.
+            log.debug("dropping stale extract result (gen %s != %s)",
+                      gen, getattr(self, "_extract_gen", 0))
+            return
+        self._on_result(result)
 
     def _on_progress(self, text):
         # Granular stages: submitting → uploading → thinking → parsing
@@ -1257,9 +1334,15 @@ class ExtractPage(ScrollArea):
         self.busy = False
         self._set_busy(False)
         self.lbl_status.setText(self._t("status.parsing"))
-        # Stale-result guard lives in the worker connection closure in
-        # run_extraction() — it drops results whose generation no longer matches
-        # the live one. Nothing to check here; just render.
+        # Stale-result guard lives in _on_worker_result() — the queued slot
+        # connected to ExtractWorker.finished_ok — which drops results whose
+        # generation no longer matches the live one. Nothing to check here;
+        # just render.
+        # REVIEW-2026-09-20: remember the mode the worker actually resolved
+        # (it is attached as `_mode` by ExtractWorker.run) so _current_mode()
+        # reports what this result IS instead of re-deriving it from the
+        # dropdown / a stale cfg snapshot.
+        self._resolved_mode = getattr(result, "_mode", None) or None
         if not result.ok:
             msg = self._t(result.error_key or "err.http")
             if result.status:
@@ -1396,13 +1479,36 @@ class ExtractPage(ScrollArea):
         _Q.singleShot(50, _jump)
 
     def _current_mode(self) -> str:
-        """Return the mode string for the current extraction."""
+        """Return the mode string for the current extraction.
+
+        REVIEW-2026-09-20: read the LIVE chart-type selector
+        (``win.chart_type()`` — the very value ``_on_extract()`` handed to the
+        worker) instead of ``win.cfg["chart_type"]``. cfg is only refreshed when
+        the user presses "Save settings", so extracting with the combo set to
+        e.g. abundance_diagram while cfg still said "auto" rendered the result
+        with the wrong table set AND wrote the wrong ``mode`` into the history
+        / usage records (the two views disagreed with each other).
+        Resolution order:
+          1. the live selector value, when it is a concrete mode;
+          2. the mode the worker resolved for THIS result ("auto" path), or the
+             mode a loaded history record was stored under;
+          3. shape detection of the result payload (legacy / unknown).
+        """
+        ct = None
         try:
-            ct = self.win.cfg.get("chart_type", "auto")
+            ct = self.win.chart_type()
         except Exception:
-            ct = "auto"
-        if ct in ("range_chart", "columnar_section", "abundance_diagram",
-                  "phylogenetic_tree"):
+            ct = None
+        if ct not in ("range_chart", "columnar_section", "abundance_diagram",
+                      "phylogenetic_tree", "zonation_chart"):
+            # "auto" (or an accessor failure / a combo value this build does
+            # not know) → fall through to the resolved mode + shape detection.
+            resolved = getattr(self, "_resolved_mode", None)
+            if resolved in ("range_chart", "columnar_section",
+                            "abundance_diagram", "phylogenetic_tree",
+                            "zonation_chart"):
+                return resolved
+        else:
             return ct
         # Auto-detect by result shape. Phylogenetic-tree results carry a
         # ``nodes`` list (the primary list_key for PHYLOGENETIC_TREE_SCHEMA);
@@ -1977,6 +2083,11 @@ class ExtractPage(ScrollArea):
         # IS a state change that should cancel in-flight results.
         self._bump_extract_gen()
         self.result = result
+        # REVIEW-2026-09-20: the stored mode of the loaded record is the
+        # authoritative mode for this payload (an old record may carry the
+        # raw "auto" the pre-Sprint-B GUI used to persist → keep None so
+        # _current_mode() falls back to shape detection).
+        self._resolved_mode = mode if mode and mode != "auto" else None
         self._loaded_history_id = record_id
         self.raw_text = ""
         # Drop any pending edit snapshot / dirty badge — the result we
@@ -2854,7 +2965,20 @@ class RangeChartFluentWindow(FluentWindow):
         nxt = order[(order.index(cur) + 1) % len(order)]
         self.tr.set_lang(nxt)
         self.cfg["lang"] = nxt
-        save_config(self.cfg)
+        # REVIEW-2026-09-20: save_config now raises on a failed write instead
+        # of swallowing it. The language switch itself must still happen (the
+        # session is usable), but the user is told the choice will not survive
+        # the next launch.
+        try:
+            save_config(self.cfg)
+        except Exception as exc:
+            try:
+                InfoBar.error(
+                    "", self._t("err.exportFailed") + str(exc), parent=self,
+                    position=InfoBarPosition.TOP, duration=5000,
+                )
+            except Exception:
+                pass
         # Re-translate the nav sidebar labels.
         self._nav_extract.setText(self._nav_text("tab.extract", "Extract"))
         if getattr(self, "_nav_history", None) is not None:
@@ -2992,6 +3116,14 @@ class RangeChartFluentWindow(FluentWindow):
             log.warning("sync ipt_key to provider: %s", exc)
 
     def save_all(self):
+        """Persist the settings page into the shared config file.
+
+        REVIEW-2026-09-20: ``save_config`` no longer swallows write errors —
+        they propagate to the caller, and every caller of this method already
+        runs inside a try/except that shows an InfoBar.error
+        (``_save_key`` / ``_save_advanced``), so "Settings saved" is only
+        claimed when the file really was written.
+        """
         s = self.settings_page
         remember = s.sw_remember.isChecked()
         # endpoint / model live in the provider store, not in cfg.
@@ -3039,8 +3171,12 @@ class RangeChartFluentWindow(FluentWindow):
                 pass
             self.save_all()
             self.extract_page._cleanup_paste_tmp()
-        except Exception:
-            pass
+        except Exception as exc:
+            # REVIEW-2026-09-20: save_all() now propagates write failures
+            # (see save_config). The window is closing, so an InfoBar is
+            # pointless — but a silent teardown loses the only breadcrumb of
+            # "settings did not persist"; log it instead.
+            log.exception("close-time settings save failed: %s", exc)
         # Stop any in-flight worker so a late signal doesn't reach a
         # destroyed widget. Disconnect the worker's signals first (so the
         # finished_ok/progress/done callbacks can't fire on a teardown page),

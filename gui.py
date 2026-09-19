@@ -18,6 +18,7 @@ import os
 import concurrent.futures
 import queue
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
@@ -234,22 +235,38 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict) -> None:
-    # Atomic write: write to a sibling tmp file, fsync, then os.replace. Mirrors
-    # ProviderStore.save() so a crash mid-write can never truncate the config
-    # file (which used to lose the API key + settings together).
+    # Atomic write: write to a unique sibling tmp file, fsync, then
+    # os.replace. Mirrors ProviderStore.save() so a crash mid-write can never
+    # truncate the config file (which used to lose the API key + settings
+    # together).
     # H3 fix (REVIEW-2026-11-07): the legacy api_key field used to sit in
     # this JSON in PLAINTEXT. Encrypt it through rca_core.secrets_store
     # (Fernet when cryptography+keyring are installed, machine-fingerprint
     # obfuscation otherwise). A local copy is used so the caller's dict
     # (gui_fluent passes the live self.cfg) is not mutated, and
     # is_obfuscated() prevents double-wrapping on re-save.
-    to_write = cfg
-    key = (cfg.get("api_key") or "")
+    #
+    # REVIEW-2026-09-20 (Tk twin of gui_fluent.save_config — keep them in
+    # step):
+    #   * mkstemp instead of the FIXED ``CONFIG_PATH + ".tmp"`` name that the
+    #     Fluent GUI writes to as well: two front-ends (or two windows of the
+    #     same one) sharing one temp path can rename a half-written file into
+    #     place.
+    #   * the on-disk config is loaded and merged first, because every caller
+    #     here passes a dict rebuilt from the widgets (_collect_cfg) — keys
+    #     this screen does not own used to disappear on the first save.
+    #   * write errors are RAISED instead of `except Exception: pass`; the two
+    #     callers (_save_settings / on_close) report them, so "Settings saved"
+    #     is only claimed when the file really changed.
+    merged = load_config()
+    merged.update(cfg or {})
+    to_write = merged
+    key = (merged.get("api_key") or "")
     if key:
         try:
             from rca_core.secrets_store import encrypt, is_obfuscated
             if not is_obfuscated(key):
-                to_write = dict(cfg)
+                to_write = dict(merged)
                 to_write["api_key"] = encrypt(key)
         except Exception:
             # REVIEW-2026-09-10: fail CLOSED. Swallowing the failure here used
@@ -257,12 +274,14 @@ def save_config(cfg: dict) -> None:
             # fix exists to prevent) whenever encryption blew up. Drop the key
             # from the file instead - the provider store keeps its own copy,
             # and the in-session value is untouched.
-            to_write = dict(cfg)
+            to_write = dict(merged)
             to_write["api_key"] = ""
             to_write["api_key_store_failed"] = True
+    cfg_dir = os.path.dirname(CONFIG_PATH) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".range_chart_analyzer.", suffix=".tmp",
+                               dir=cfg_dir)
     try:
-        tmp = CONFIG_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(to_write, f, ensure_ascii=False, indent=2)
             f.flush()
             try:
@@ -271,7 +290,13 @@ def save_config(cfg: dict) -> None:
                 pass
         os.replace(tmp, CONFIG_PATH)
     except Exception:
-        pass
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        log.exception("save_config failed for %s", CONFIG_PATH)
+        raise
 
 
 class ScrollableFrame:
@@ -298,80 +323,99 @@ class ScrollableFrame:
 
         def _on_wheel(event, c=canvas):
             # Cross-platform wheel/trackpad scrolling.
+            #
+            # REVIEW-2026-09-20: this handler used to be installed with
+            # `canvas.bind_all(...)` UNCONDITIONALLY in __init__, so every
+            # ScrollableFrame that ever existed owned the global MouseWheel
+            # binding for the whole application: a wheel turn over the
+            # preview canvas, a Combobox dropdown or a Text widget scrolled
+            # whichever panel registered last (and each new panel silently
+            # replaced the previous one's handler). The binding is now added
+            # on <Enter> and removed on <Leave> (see below), and this guard
+            # covers the window where the pointer is still inside a sibling
+            # scroll container — events are rejected unless the pointer is
+            # really over THIS canvas.
+            if not _wheel_active[0]:
+                return None
+            try:
+                if not c.winfo_exists():
+                    return None
+            except Exception:
+                return None
+            try:
+                px, py = c.winfo_pointerxy()
+                x0, y0 = c.winfo_rootx(), c.winfo_rooty()
+                if not (x0 <= px < x0 + c.winfo_width()
+                        and y0 <= py < y0 + c.winfo_height()):
+                    return None
+            except Exception:
+                return None
             delta = 0
             if hasattr(event, "delta") and event.delta:
                 delta = -1 if event.delta > 0 else 1
-            elif event.num == 4:
+            elif getattr(event, "num", None) == 4:
                 delta = -1
-            elif event.num == 5:
+            elif getattr(event, "num", None) == 5:
                 delta = 1
             if delta:
                 c.yview_scroll(delta, "units")
+            return "break"
 
-        # MouseWheel is only on Windows/macOS; X11 uses Button-4/5.
-        canvas.bind_all("<MouseWheel>", _on_wheel)
-        canvas.bind_all("<Button-4>", _on_wheel)
-        canvas.bind_all("<Button-5>", _on_wheel)
+        # REVIEW-2026-09-20: the wheel handler is only wired to the global
+        # binding tag while the pointer is inside this canvas, so it can no
+        # longer hijack scrolling from the rest of the window. MouseWheel is
+        # only on Windows/macOS; X11 uses Button-4/5.
+        _wheel_active = [False]
+
+        def _activate_wheel(_e=None, c=canvas):
+            _wheel_active[0] = True
+            c.bind_all("<MouseWheel>", _on_wheel)
+            c.bind_all("<Button-4>", _on_wheel)
+            c.bind_all("<Button-5>", _on_wheel)
+
+        def _deactivate_wheel(_e=None, c=canvas):
+            _wheel_active[0] = False
+            for _seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                try:
+                    c.unbind_all(_seq)
+                except Exception:
+                    pass
+
+        canvas.bind("<Enter>", _activate_wheel)
+        canvas.bind("<Leave>", _deactivate_wheel)
+        # The wrapper frame is destroyed with the panel; drop the global
+        # binding then so a dead canvas can never keep stealing the wheel.
+        try:
+            parent.bind("<Destroy>", lambda _e: _deactivate_wheel(), add="+")
+        except Exception:
+            pass
 
         self.container = parent
         self.canvas = canvas
         self.vsb = vsb
         self.inner = inner
 
-
-class ToastNotification:
-    """A small, transient notification window that mimics cc-switch toasts.
-
-    Auto-dismisses after 5 s or on click. Non-modal, non-blocking.
-    """
-
-    ACTIVE = []
-
-    def __init__(self, parent, message, kind="info"):
-        self.win = tk.Toplevel(parent)
-        self.win.overrideredirect(True)
-        self.win.attributes("-topmost", True)
-        bg = {"success": "#d1fae5", "error": "#fee2e2"}.get(kind, "#e0e7ff")
-        fg = {"success": "#065f46", "error": "#991b1b"}.get(kind, "#3730a3")
-        frame = tk.Frame(self.win, bg=bg, bd=0, highlightthickness=0)
-        frame.pack(fill="both", expand=True)
-        self.lbl = tk.Label(frame, text=message, bg=bg, fg=fg,
-                            font=("Segoe UI", 10, "bold"),
-                            padx=14, pady=8, anchor="w", justify="left")
-        self.lbl.pack(side="left", fill="both", expand=True)
-        btn_x = tk.Label(frame, text="×", bg=bg, fg=fg,
-                          font=("Segoe UI", 10), padx=8, cursor="hand2")
-        btn_x.pack(side="right")
-        btn_x.bind("<Button-1>", lambda _e: self.dismiss())
-        self.lbl.bind("<Button-1>", lambda _e: self.dismiss())
-        self._reposition()
-        ToastNotification.ACTIVE.append(self)
-        self.win.after(5000, self.dismiss)
-
-    def _reposition(self):
-        self.win.update_idletasks()
-        sw = self.win.winfo_screenwidth()
-        sh = self.win.winfo_screenheight()
-        # Stack new toasts above existing ones; clamp to screen so a
-        # long stack of toasts never falls off the bottom of the screen.
-        y_offset = 24 + len(ToastNotification.ACTIVE) * 52
-        max_y = max(24, sh - self.win.winfo_reqheight() - 24)
-        y_offset = min(y_offset, max_y)
-        self.win.geometry(f"+{sw - self.win.winfo_reqwidth() - 24}+{y_offset}")
-
-    def dismiss(self):
-        if self in ToastNotification.ACTIVE:
-            ToastNotification.ACTIVE.remove(self)
+    def destroy(self):
+        """REVIEW-2026-09-20: release the global wheel binding (see __init__)."""
         try:
-            self.win.destroy()
+            self.canvas.unbind_all("<MouseWheel>")
+            self.canvas.unbind_all("<Button-4>")
+            self.canvas.unbind_all("<Button-5>")
         except Exception:
             pass
 
+
 class RangeChartApp:
     """Top-level Tkinter app. The class body is intentionally re-opened
-    below (after ToastNotification) so helpers + lifecycle methods all
-    belong to this single class — without that reopen, the AST lumps
-    everything into ToastNotification because the indents align."""
+    below (after the module-level helpers) so helpers + lifecycle methods all
+    belong to this single class.
+
+    REVIEW-2026-09-20: the dead ``ToastNotification`` class that used to sit
+    between the two halves of this definition was removed — nothing ever
+    instantiated it (extraction results are reported through the status bar
+    and message boxes), and its ``bind``/``after`` wiring plus the module-level
+    ``ACTIVE`` list kept every dismissed toast alive until the process ended.
+    """
 
     def _bind_entry_focus_animation(self, entry):
         """Bind focus-in / focus-out events to give a vscode-like focus ring
@@ -1241,7 +1285,22 @@ class RangeChartApp:
         }
 
     def _save_settings(self):
-        save_config(self._collect_cfg())
+        # REVIEW-2026-09-20: save_config no longer swallows write errors (a
+        # read-only home, a full disk or a file locked by an editor used to
+        # leave the user with a "Settings saved" status and a config that
+        # reverted on the next launch). Only clear the dirty marker + claim
+        # success once the file really changed.
+        try:
+            save_config(self._collect_cfg())
+        except Exception as exc:
+            msg = self._t("err.exportFailed") + str(exc)
+            self.var_status.set(msg)
+            log.exception("save settings failed")
+            try:
+                messagebox.showerror("Range Chart Analyzer", msg)
+            except Exception:
+                pass
+            return
         # H2: clear the Save-button • indicator after a successful save.
         self._clear_dirty()
         self.var_status.set(self._t("settings.saved"))
@@ -2115,10 +2174,20 @@ class RangeChartApp:
         # REVIEW-2026-09-10: report write failures instead of silently doing
         # nothing, and write via a temp file + replace so a mid-write failure
         # cannot truncate an existing export the user still wants.
+        # REVIEW-2026-09-20: encoding utf-8 -> utf-8-sig. Excel on Windows only
+        # decodes a .csv as UTF-8 when the file starts with a BOM; without one
+        # every CJK / Cyrillic species name renders as mojibake (the whole
+        # point of this export for the target users). rca_core.to_csv() happens
+        # to prepend U+FEFF itself, so that inline BOM is stripped first —
+        # writing both would land TWO BOMs and Excel shows the second one as a
+        # stray "" inside the first header cell.
+        text = to_csv(headers, rows)
+        if text.startswith("﻿"):
+            text = text[1:]
         try:
             tmp_path = path + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8", newline="") as f:
-                f.write(to_csv(headers, rows))
+            with open(tmp_path, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(text)
             os.replace(tmp_path, path)
             self.var_status.set(self._t("status.saved"))
         except OSError as exc:
@@ -2162,7 +2231,21 @@ class RangeChartApp:
 
     def on_close(self):
         # Persist settings (respecting the remember flag) on exit.
-        save_config(self._collect_cfg())
+        # REVIEW-2026-09-20: save_config used to swallow every write error
+        # (`except: pass`), so a read-only home directory or a full disk lost
+        # the session's settings silently. It now raises; report the failure
+        # here instead of letting the exception abort the shutdown path (which
+        # would leave the window half-destroyed and the process alive).
+        try:
+            save_config(self._collect_cfg())
+        except Exception as exc:
+            log.exception("close-time settings save failed: %s", exc)
+            try:
+                messagebox.showwarning(
+                    "Range Chart Analyzer",
+                    self._t("err.exportFailed") + str(exc))
+            except Exception:
+                pass
         # H1: drop any leftover paste tempfile on shutdown.
         try:
             self._cleanup_paste_tmp()

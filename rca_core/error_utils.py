@@ -30,6 +30,17 @@ RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
 # Maximum error body length to store.
 MAX_ERROR_BODY_CHARS = 2000
 
+# REVIEW-2026-09-20 #108: floor for every computed retry delay. A provider
+# legitimately answers a 429 with ``Retry-After: 0`` (or ``Retry-After-Ms: 0``,
+# or an HTTP-date that has already passed), which used to be honoured
+# literally: the retry loop then hammered the endpoint back-to-back with zero
+# spacing, which is exactly what turns a rate limit into a longer BAN. One
+# second is also the smallest delay that survives the ``Retry-After`` round
+# trip of most gateways, and a caller that genuinely wants no wait can still
+# pass ``max_delay=0`` (the clamp is applied BELOW the ceiling, so a ceiling
+# under the floor wins — tests rely on that).
+MIN_RETRY_DELAY_SECONDS = 1.0
+
 @dataclass
 class NormalizedError:
     """Structured error representation across different provider error formats.
@@ -117,11 +128,23 @@ def _decode_body(body_bytes: bytes | None) -> str:
 
 
 def _extract_error_code(body_bytes: bytes | None, body: str) -> str | None:
-    """Try to extract a machine-readable error code from the body."""
-    if not body_bytes:
+    """Try to extract a machine-readable error code from the body.
+
+    REVIEW-2026-09-20 #110: this used to re-decode ``body_bytes`` and parse
+    the FULL payload while ``_decode_body`` had already truncated the body it
+    stores/returns at ``MAX_ERROR_BODY_CHARS`` — so the ``[CODE]`` prefix the
+    user sees could come from text that is no longer displayed (and a huge
+    hostile body cost a second, unbounded parse). ``body`` is now the single
+    source of truth: what gets parsed is exactly what is stored, which is also
+    what makes the code consistent with the ``display_message`` the operator
+    can actually correlate against a provider status page. A body truncated
+    mid-JSON simply yields no code, like any other non-JSON error body.
+    ``body_bytes`` stays in the signature for the existing callers.
+    """
+    if not body:
         return None
     try:
-        data = json.loads(body_bytes.decode("utf-8", errors="replace"))
+        data = json.loads(body)
         if isinstance(data, dict):
             for key in ("error_code", "code", "type", "error.type"):
                 if key in data:
@@ -207,7 +230,13 @@ def get_retry_delay(
         jitter = 1.0 - random.random() * 0.25
         delay = base_delay * jitter
 
-    return min(delay, max_delay)
+    # REVIEW-2026-09-20 #108: cap first, then lift to the 1s floor. A
+    # ``Retry-After: 0`` (or an already-elapsed HTTP date) is honoured as
+    # "no information" rather than as "hammer me again immediately"; a caller
+    # that caps below the floor (``max_delay=0``, i.e. the tests that must not
+    # sleep) still gets its ceiling because the floor is clamped to it.
+    delay = min(delay, max_delay)
+    return max(delay, min(MIN_RETRY_DELAY_SECONDS, max_delay))
 
 
 def retry_with_backoff(
@@ -247,6 +276,15 @@ def retry_with_backoff(
     another attempt — the retryable parameter was dead logic. Now:
     ``retryable(result)`` False -> return the result immediately (final);
     True -> keep retrying until the attempts are exhausted.
+
+    REVIEW-2026-09-20 #109: the loop used to sleep after EVERY iteration that
+    did not return, including the LAST attempt when the failure came from the
+    ``retryable`` predicate rather than an exception (the exception path
+    already ``break``-ed out before the sleep). Callers therefore paid one
+    more back-off wait for a retry that was never going to happen — with the
+    defaults a 3-retry loop that kept answering "retryable" slept 4 times
+    instead of 3. The final attempt now breaks out before the delay is
+    computed, so ``on_retry`` and ``sleep`` run exactly once per ACTUAL retry.
     """
     last_exc: Exception | None = None
     last_result: T | None = None
@@ -264,6 +302,11 @@ def retry_with_backoff(
             last_exc = exc
             if attempt >= max_retries:
                 break
+
+        if attempt >= max_retries:
+            # Last attempt and the result was retryable: nothing follows, so
+            # do not sleep once more before returning it.
+            break
 
         # Calculate delay for next retry
         delay = initial_delay * (backoff_factor ** attempt)

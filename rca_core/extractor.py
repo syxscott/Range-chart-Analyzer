@@ -15,6 +15,7 @@ import base64
 import io
 import json
 import mimetypes
+import os
 import re
 import time
 import warnings
@@ -248,7 +249,19 @@ def _enhance_image_cv2(img: "Image.Image") -> "Image.Image":
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         lab[:, :, 0] = clahe.apply(lab[:, :, 0])
         arr = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+    # REVIEW-2026-09-20 #9: ``Image`` was only bound by the *fallback* import
+    # path above, so this line raised NameError whenever cv2 really was
+    # installed - the whole cv2 enhancement path was a dead end. Import
+    # Pillow here so every return of this function has the name available.
+    from PIL import Image  # type: ignore
     return Image.fromarray(arr)  # type: ignore
+
+
+# REVIEW-2026-09-20 #10: ceiling for a single source image. The old
+# ``f.read()`` had no limit, so pointing the extractor at a video / ISO made
+# the process allocate gigabytes before the API ever saw a request. Oversized
+# files are reported through the existing ``decode_error`` channel.
+MAX_IMAGE_BYTES = 50 * 1024 * 1024
 
 
 def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE,
@@ -272,8 +285,28 @@ def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE,
     indistinguishable. We now set ``decode_error=True`` when Pillow is
     present but cannot decode.
     """
+    # REVIEW-2026-09-20 #11: clamp_max_edge existed but was never wired into
+    # any entry point, so a caller-supplied junk / negative max_edge reached
+    # the resize maths unchecked (a negative edge produced a nonsense scale,
+    # a string raised TypeError). 0 still means "no resize"; the default
+    # (DEFAULT_MAX_EDGE) passes through unchanged, so no existing caller's
+    # semantics move.
+    max_edge = clamp_max_edge(max_edge)
+    # REVIEW-2026-09-20 #10: refuse to slurp an oversized file (see
+    # MAX_IMAGE_BYTES). Reported through decode_error, the channel callers
+    # already use for "this is not a usable image".
+    try:
+        size_on_disk = os.path.getsize(path)
+    except OSError:
+        size_on_disk = -1
+    if size_on_disk > MAX_IMAGE_BYTES:
+        return "", "image/jpeg", 0, 0, False, True
     with open(path, "rb") as f:
-        raw = f.read()
+        # The +1 lets the length check below catch files whose reported size
+        # was a lie (stream, symlink race) without reading them whole.
+        raw = f.read(MAX_IMAGE_BYTES + 1)
+    if len(raw) > MAX_IMAGE_BYTES:
+        return "", "image/jpeg", 0, 0, False, True
     mime, _ = mimetypes.guess_type(path)
     if mime is None:
         mime = "image/png"
@@ -296,25 +329,54 @@ def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE,
 
     # FIX (enhance): pre-process the image to boost VLM recognition of thin
     # lines and small text. Default off — the user opts in via the UI.
-    if enhance:
-        if enhance == "cv2":
-            img = _enhance_image_cv2(img)
-        else:
-            img = _enhance_image_pil(img)
-        w, h = img.size  # re-read size (cv2 path may have upsampled)
+    # REVIEW-2026-09-20 #12: everything from here touches PIXEL data, and PIL
+    # only raises OSError on a truncated file at that point (i.e. past the
+    # Image.open guard above), which used to escape this function entirely.
+    # Decode what exists, and report any hard failure through decode_error.
+    try:
+        from PIL import ImageFile  # type: ignore
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+    except Exception:
+        pass
 
-    long_edge = max(w, h)
-    if max_edge and long_edge > max_edge:
-        scale = max_edge / long_edge
-        nw, nh = int(round(w * scale)), int(round(h * scale))
-        img = img.resize((nw, nh), Image.LANCZOS)
+    def _raw_with_error():
+        return base64.b64encode(raw).decode("ascii"), mime, 0, 0, False, True
+
+    modified = False
+    try:
+        if enhance:
+            if enhance == "cv2":
+                img = _enhance_image_cv2(img)
+            else:
+                img = _enhance_image_pil(img)
+            w, h = img.size  # re-read size (cv2 path may have upsampled)
+            modified = True
+
+        long_edge = max(w, h)
+        resized = False
+        if max_edge and long_edge > max_edge:
+            scale = max_edge / long_edge
+            nw, nh = int(round(w * scale)), int(round(h * scale))
+            img = img.resize((nw, nh), Image.LANCZOS)
+            w, h = nw, nh
+            modified = True
+            resized = True
+        if not modified:
+            # Nothing touched the picture: upload the original bytes verbatim.
+            return base64.b64encode(raw).decode("ascii"), mime, w, h, False, False
         out = io.BytesIO()
         # Prefer lossless PNG for downscaled charts so the small italic
         # species names stay sharp. JPEG re-compression blurs dense text
         # and is a known cause of OCR misreads. Only keep JPEG when the
         # source is already JPEG AND the resized image is large enough
         # that a lossless PNG would be excessively big.
-        resized_is_large = (nw * nh) > (2500 * 2500)
+        #
+        # REVIEW-2026-09-20 #2: this re-encode used to live INSIDE the resize
+        # branch only, so an enhanced image that needed no downscale fell
+        # through to "return the original bytes" - the enhancement was
+        # computed and then thrown away. Anything modified is encoded here
+        # now; ``resized`` below still reports only whether a resize happened.
+        resized_is_large = (w * h) > (2500 * 2500)
         if mime == "image/jpeg" and resized_is_large:
             fmt = "JPEG"
             img = img.convert("RGB")
@@ -324,8 +386,9 @@ def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE,
             img.save(out, format=fmt)
         data = out.getvalue()
         out_mime = "image/png" if fmt == "PNG" else "image/jpeg"
-        return base64.b64encode(data).decode("ascii"), out_mime, nw, nh, True, False
-    return base64.b64encode(raw).decode("ascii"), mime, w, h, False, False
+        return base64.b64encode(data).decode("ascii"), out_mime, w, h, resized, False
+    except Exception:
+        return _raw_with_error()
 
 
 _KNOWN_RANGE_CHART_KEYS = (
@@ -497,6 +560,11 @@ def _iter_rows(raw: Any, kind: str, warnings: list[str] | None = None):
             warnings.append(tag)
 
     if isinstance(raw, dict):
+        # REVIEW-2026-09-20 #5: a dict-shaped named array is always a repair,
+        # even when every record carries its own identifier and no wrapper key
+        # had to be injected - the previous code only flagged the injection,
+        # so the shape change went unreported.
+        _flag("dict_shaped_array")
         for wrapper_key, inner in raw.items():
             if not isinstance(inner, dict):
                 continue
@@ -504,7 +572,6 @@ def _iter_rows(raw: Any, kind: str, warnings: list[str] | None = None):
             id_key = _PRIMARY_ID_KEYS.get(kind)
             if id_key and id_key not in row:
                 row[id_key] = str(wrapper_key)
-                _flag("dict_shaped_array")
             yield row
     elif isinstance(raw, list):
         for item in raw:
@@ -538,6 +605,11 @@ def _dict_rows(raw: Any):
 
 
 _PRIMARY_ID_KEYS = {
+    # REVIEW-2026-09-20 #5: with no entry for "abundances" a dict-shaped
+    # abundance field ({"Pinus": {"level": ..., "abundance": ...}}, which the
+    # abundance prompt explicitly asks for) lost its taxon to the wrapper key
+    # and normalised into an empty-taxon junk row.
+    "abundances": "taxon",
     "sections": "name",
     "biozones": "name",
     "species_ranges": "species",
@@ -548,6 +620,27 @@ _PRIMARY_ID_KEYS = {
     "nodes": "id",
     "data_points": "sample_id",
 }
+
+
+def _merge_other_fossils(existing: Any, raw: Any) -> list[str]:
+    """Combine already-collected labels with a parsed ``other_fossils`` field.
+
+    REVIEW-2026-09-20 #1: ``normalize_result`` collected bare strings from an
+    ``_array_root`` payload into ``out["other_fossils"]`` and then assigned
+    ``_other_fossils_from(parsed["other_fossils"])`` over the top of that
+    list, so the salvaged labels disappeared as soon as the payload also
+    carried an ``other_fossils`` field. Merge instead: order preserved, exact
+    duplicates skipped.
+    """
+    merged: list[str] = []
+    seen: set = set()
+    already = [x for x in (existing or []) if isinstance(x, str)]
+    for text in already + _other_fossils_from(raw):
+        t = (text or "").strip()
+        if t and t not in seen:
+            seen.add(t)
+            merged.append(t)
+    return merged
 
 
 def _other_fossils_from(raw: Any) -> list[str]:
@@ -623,6 +716,177 @@ def _pop_array_root_extras(extras: dict[str, Any]) -> dict[str, Any]:
     extras.pop("_array_root", None)
     extras.pop("_note", None)
     return extras
+
+
+def _extracted_any(out: dict[str, Any]) -> bool:
+    """True when a normalizer salvaged at least one record / non-empty field.
+
+    Used by the "unusable payload" guard (REVIEW-2026-09-20 #7): a rescued
+    fragment that still produced rows is worth keeping, one that produced
+    nothing but noise is not.
+    """
+    for value in out.values():
+        if isinstance(value, (list, dict)):
+            if len(value) > 0:
+                return True
+        elif value not in (None, "", 0, 0.0, False):
+            return True
+    return False
+
+
+def _unwrap_array_root_into(parsed: dict[str, Any], out: dict[str, Any],
+                            spec: tuple[tuple[str, tuple[str, ...], Any], ...],
+                            warnings: list[str] | None = None) -> None:
+    """Distribute a list-shaped root (``_array_root``) into the named arrays.
+
+    REVIEW-2026-09-20 #6: every normalizer but the chemical one unwrapped the
+    ``{"_array_root": [...]}`` shape that json_utils produces when the model
+    emits a bare array; the chemical mode threw the whole payload away
+    (``parsed.get("events")`` was empty), so a perfectly good set of isotope
+    points produced an empty table.
+
+    ``spec`` is ``(target_key, distinguishing_keys, target_list)``. The
+    distinguishing keys are matched FIRST: ``_classify_array_item`` is a
+    range-chart heuristic that maps any dict with a ``name`` onto "sections",
+    which would mislabel another mode's rows. Modes whose rows have no stable
+    signature pass an empty tuple and get the shared classifier.
+
+    REVIEW-2026-09-20 #7: json_utils only records a truncation flag inside
+    ``_extras["_json_recovery"]``, which no consumer reads, so a truncated
+    emission that rescued a single INNER row (one data point of a curve) came
+    back as ``ok=True`` with everything else empty. The truncation is mirrored
+    onto the normalized data and, when nothing could be salvaged, flagged.
+    """
+    items = parsed.get("_array_root")
+    if not isinstance(items, list):
+        return
+    extras = parsed.get("_extras")
+    if isinstance(extras, dict) and extras.get("_json_recovery"):
+        out["truncated"] = True
+    keys_in_spec = {key for key, _probe, _target in spec}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        kind = None
+        for key, probe, _target in spec:
+            if probe and all(k in item for k in probe):
+                kind = key
+                break
+        if kind is None:
+            classified = _classify_array_item(item)
+            if classified in keys_in_spec:
+                kind = classified
+        if kind is None:
+            # Nothing identifies the row for THIS mode: keep it under
+            # ``_unclassified`` rather than dropping it silently.
+            out.setdefault("_unclassified", []).append(item)
+            continue
+        for key, _probe, target in spec:
+            if key == kind:
+                target.append(item)
+                break
+    if warnings is not None and not _extracted_any(out):
+        _append_warning(warnings, "truncated_or_unrecognized_payload")
+
+
+def _append_warning(warnings: list[str], tag: str) -> None:
+    if tag not in warnings:
+        warnings.append(tag)
+
+
+def _payload_mismatch(data: dict[str, Any], result_truncated: bool) -> str:
+    """Non-empty reason when the normalized payload is unusable, else "".
+
+    Deliberately narrow (REVIEW-2026-09-20 #7): an empty result WITH an
+    explanatory note is an honest degradation the prompt asks for ("do not
+    invent data") and stays ``ok=True``; so is a truncated response that still
+    produced rows. Only "nothing was extracted AND the root keys do not match
+    this mode's contract" (or a truncation that rescued nothing) is an error.
+    """
+    if not isinstance(data, dict):
+        return ""
+    if _extracted_any(data):
+        return ""
+    warnings = data.get("_warnings")
+    tags = warnings if isinstance(warnings, list) else []
+    if "truncated_or_unrecognized_payload" in tags:
+        return "rescued inner object: unusable"
+    if result_truncated or "truncated" in tags or data.get("truncated"):
+        return "truncated output rescued no usable records"
+    note = data.get("note")
+    if isinstance(note, str) and note.strip():
+        return ""
+    return ""
+
+
+def _mode_root_keys(mode_key: str) -> tuple[str, ...]:
+    """The documented root keys of a mode, resolved lazily.
+
+    The ``_KNOWN_*_ROOT_KEYS`` tuples are declared next to their normalizer -
+    i.e. after this helper - so the lookup goes through ``globals()`` instead
+    of an import-time dict (REVIEW-2026-09-20 #7).
+    """
+    names = {
+        "range_chart": "_KNOWN_RANGE_CHART_KEYS",
+        "columnar_section": "_KNOWN_COLUMNAR_ROOT_KEYS",
+        "abundance_diagram": "_KNOWN_ABUNDANCE_ROOT_KEYS",
+        "chemical_stratigraphy": "_KNOWN_CHEMICAL_STRAT_ROOT_KEYS",
+        "paleomap": "_KNOWN_PALEOMAP_ROOT_KEYS",
+        "scatter_plot": "_KNOWN_SCATTER_PLOT_ROOT_KEYS",
+        "zonation_chart": "_KNOWN_ZONATION_ROOT_KEYS",
+    }
+    if mode_key == "phylogenetic_tree":
+        return ("metadata", "nodes", "root_ids", "legend", "confidence")
+    return tuple(globals().get(names.get(mode_key) or "", ()) or ())
+
+
+def _ok_result(*, p: LlmProvider, mode_key: str, data: dict[str, Any],
+               raw_text: str, truncated: bool, usage: dict[str, Any] | None,
+               latency_ms: int, image_sha256: str, max_tokens: int,
+               parsed: Any = None) -> ExtractResult:
+    """Build the success result shared by every ``extract_*`` mode.
+
+    REVIEW-2026-09-20 #7: the "unusable payload" guard existed only on the
+    range-chart path; the other seven modes reported a confident-looking empty
+    table with ``ok=True`` whenever the model returned an unrelated or
+    truncated object. Routing every mode's success return through here gives
+    all eight the same contract, and keeps the honest-empty-result degradation
+    (an explanatory note) working.
+    """
+    warning = ("Result may be truncated (model hit max_tokens). "
+               "Try raising the max_tokens setting and re-running.")
+    request_meta = _build_request_meta(
+        p, mode_key, max_tokens, image_sha256,
+        prompt_version_for_mode(mode_key))
+    # ``truncated`` is an internal marker set by _unwrap_array_root_into.
+    rescued_truncated = bool(data.get("truncated"))
+    data.pop("truncated", None)
+    known = _mode_root_keys(mode_key)
+    root_unrelated = bool(
+        isinstance(parsed, dict) and parsed and known
+        and not (set(known) & set(parsed.keys()))
+        and "_array_root" not in parsed
+        and not _extracted_any(data))
+    reason = _payload_mismatch(data, truncated or rescued_truncated)
+    if not reason and root_unrelated:
+        reason = "payload root keys match no field of this chart type"
+    if reason:
+        if root_unrelated:
+            _append_warning(
+                data.setdefault("_warnings", []),
+                "truncated_or_unrecognized_payload")
+        return ExtractResult(
+            ok=False, error_key="err.parse", raw=raw_text,
+            truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
+            warning=warning + " | " + reason, data=data,
+            image_sha256=image_sha256, request_meta=request_meta)
+    return ExtractResult(
+        ok=True, data=data, raw=raw_text,
+        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
+        warning=warning if truncated else "",
+        image_sha256=image_sha256,
+        request_meta=request_meta,
+    )
 
 
 def _normalize_section_into(sec: dict[str, Any],
@@ -987,7 +1251,10 @@ def normalize_result(parsed):
     # taxon/name - so a labelled fossil record appeared in the browser and
     # vanished from the server, CSV and XLSX. Both sides now accept both
     # shapes (see _other_fossils_from).
-    out["other_fossils"] = _other_fossils_from(of)
+    # REVIEW-2026-09-20 #1: merge, do not replace - the ``_array_root``
+    # unwrap above may already have salvaged bare-string labels into
+    # out["other_fossils"], and a plain assignment dropped them silently.
+    out["other_fossils"] = _merge_other_fossils(out["other_fossils"], of)
     try:
         conf = float(parsed.get("confidence", 0.0))
     except (TypeError, ValueError):
@@ -1062,7 +1329,8 @@ def extract_range_chart(
     # hand-edited providers.json would propagate out of extract_range_chart
     # and break the server's single-run path (server.py:606 has no try/except).
     try:
-        raw_text, truncated, status, err_body, usage = call_llm_api(
+        # REVIEW-2026-09-20 #26: _call_llm = call_llm_api + one transient retry.
+        raw_text, truncated, status, err_body, usage = _call_llm(
             provider=p,
             system_prompt=RANGE_CHART_SYSTEM_PROMPT,
             image_b64=image_b64,
@@ -1136,16 +1404,12 @@ def extract_range_chart(
             # too, same reason as the "normalize failed" path above.
             image_sha256=image_sha256,
         )
-    return ExtractResult(
-        ok=True, data=data, raw=raw_text,
-        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
-        warning=warning if truncated else "",
-        image_sha256=image_sha256,
-        request_meta=_build_request_meta(
-            p, "range_chart", max_tokens, image_sha256,
-            prompt_version_for_mode("range_chart"),
-        ),
-    )
+    # REVIEW-2026-09-20 #7: route the success return through the shared
+    # contract so an unusable / unrelated payload flips to ok=False.
+    return _ok_result(
+        p=p, mode_key="range_chart", data=data, raw_text=raw_text,
+        truncated=truncated, usage=usage, latency_ms=latency_ms,
+        image_sha256=image_sha256, max_tokens=max_tokens, parsed=parsed)
 
 
 def _error_from_status(status: int | None, err_body: str = "", latency_ms: int = 0,
@@ -1188,6 +1452,75 @@ def _error_from_status(status: int | None, err_body: str = "", latency_ms: int =
 # Backward-compat alias used in the success path. Today's code always calls
 # the _with_body variant; keeping this name avoids renaming in every caller.
 _error_from_status_with_body = _error_from_status
+
+
+# ---------------------------------------------------------------------------
+# Transport retry (REVIEW-2026-09-20 #26)
+# ---------------------------------------------------------------------------
+# The eight ``extract_*`` entry points used to issue EXACTLY ONE HTTP request,
+# so a single 429 / 502 / timeout - by far the most common failure in a batch
+# run - was surfaced to the user as a hard error even though the identical
+# request made through ``llm.call_llm_api_with_retry`` recovers. Behaviour
+# therefore depended on which code path the user happened to trigger.
+#
+# A local wrapper is used instead of calling ``call_llm_api_with_retry``
+# because (a) the modes need ``call_llm_api``'s plain 5-tuple without the
+# retry wrapper's re-wrapping, and (b) the test-suite patches
+# ``rca_core.extractor.call_llm_api`` - both keep working because the name is
+# resolved through this module's globals at CALL time.
+#
+# Exceptions are deliberately NOT caught here: the modes already guard the
+# call and report ``call_llm_api failed: <Type>`` in ``warning`` (see
+# tests/test_extraction.py::TestExtractRangeChartNeverRaises).
+TRANSPORT_ATTEMPTS = 2                  # 1 normal call + 1 retry
+TRANSPORT_BASE_BACKOFF_SEC = 0.8
+# Same transient set as llm._RETRYABLE_STATUS: 400/401/403 are client/auth
+# mistakes that a retry can only make worse (and that burn quota).
+_RETRYABLE_TRANSPORT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+def _call_llm(**kwargs):
+    """``call_llm_api`` with one bounded retry on transient transport errors.
+
+    Returns the same 5-tuple. The LAST attempt's status is what is returned,
+    so ``_error_from_status`` keeps mapping 429 -> ``err.429`` and
+    ``None`` -> ``err.network``: the error CONTRACT is unchanged, only
+    ``error_body`` gains the ``[transport retry ...]`` annotation that
+    ``call_llm_api_with_retry`` already uses. Non-transient answers (2xx, 4xx
+    other than the above) never cost an extra request.
+    """
+    attempts = TRANSPORT_ATTEMPTS
+    try:
+        attempts = max(1, int(attempts))
+    except (TypeError, ValueError):
+        attempts = 2
+    notes: list[str] = []
+    result = call_llm_api(**kwargs)
+    for attempt in range(attempts - 1):
+        text, _truncated, status, _err_body, _usage = result
+        if text is not None:
+            break
+        if status is not None and status not in _RETRYABLE_TRANSPORT_STATUS:
+            break
+        try:
+            from . import error_utils
+            delay = error_utils.get_retry_delay(
+                status=status, headers=None, attempt=attempt,
+                initial_delay=TRANSPORT_BASE_BACKOFF_SEC,
+            )
+        except Exception:
+            delay = TRANSPORT_BASE_BACKOFF_SEC
+        notes.append(f"[transport retry {attempt + 1}/{attempts - 1}"
+                     f" after {delay:.1f}s: HTTP {status if status is not None else 'network'}]")
+        time.sleep(delay)
+        result = call_llm_api(**kwargs)
+    if notes:
+        text, truncated, status, err_body, usage = result
+        annotated = err_body
+        for note in notes:
+            annotated = (annotated + "\n" + note) if annotated else note
+        result = (text, truncated, status, annotated, usage)
+    return result
 
 
 _KNOWN_COLUMNAR_SECTION_KEYS = (
@@ -1383,12 +1716,11 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
         if isinstance(items, str):
             warning = "legend_input_is_string"
             items = []
-        for x in items or []:
-            # Fix B-5: skip non-dict items (including strings) explicitly.
-            # Previously strings would be silently skipped; now we explicitly
-            # check and skip non-dict items without iterating over them.
-            if not isinstance(x, dict):
-                continue
+        # REVIEW-2026-09-20 #3: a dict-shaped legend - which is what the model
+        # emits when it keys the entries by marker ("legend": {"ammonite":
+        # {"meaning": ...}}) - used to fail ``isinstance(x, dict)`` for every
+        # value and vanish without a trace. Same tolerant path as norm_cross.
+        for x in _dict_rows(items):
             # fossil_legend uses marker+meaning; lithology_legend uses
             # pattern+meaning. Carry both so neither legend's primary
             # column is silently dropped into _extras (which the exporter
@@ -1524,7 +1856,8 @@ def extract_columnar_section(
     # LOW fix: never-raises contract - guard call_llm_api against malformed
     # provider config (extra_body / extra_headers may not be dicts).
     try:
-        raw_text, truncated, status, err_body, usage = call_llm_api(
+        # REVIEW-2026-09-20 #26: _call_llm = call_llm_api + one transient retry.
+        raw_text, truncated, status, err_body, usage = _call_llm(
             provider=p,
             system_prompt=COLUMNAR_SECTION_SYSTEM_PROMPT,
             image_b64=image_b64,
@@ -1568,16 +1901,12 @@ def extract_columnar_section(
             latency_ms=latency_ms, warning=f"normalize failed: {exc}",
             image_sha256=image_sha256,
         )
-    return ExtractResult(
-        ok=True, data=data, raw=raw_text,
-        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
-        warning=warning if truncated else "",
-        image_sha256=image_sha256,
-        request_meta=_build_request_meta(
-            p, "columnar_section", max_tokens, image_sha256,
-            prompt_version_for_mode("columnar_section"),
-        ),
-    )
+    # REVIEW-2026-09-20 #7: route the success return through the shared
+    # contract so an unusable / unrelated payload flips to ok=False.
+    return _ok_result(
+        p=p, mode_key="columnar_section", data=data, raw_text=raw_text,
+        truncated=truncated, usage=usage, latency_ms=latency_ms,
+        image_sha256=image_sha256, max_tokens=max_tokens, parsed=parsed)
 
 
 # Dispatch table — single entry point for both modes.
@@ -1723,7 +2052,8 @@ def extract_abundance_diagram(
     # LOW fix: never-raises contract - guard call_llm_api against malformed
     # provider config (extra_body / extra_headers may not be dicts).
     try:
-        raw_text, truncated, status, err_body, usage = call_llm_api(
+        # REVIEW-2026-09-20 #26: _call_llm = call_llm_api + one transient retry.
+        raw_text, truncated, status, err_body, usage = _call_llm(
             provider=p,
             system_prompt=ABUNDANCE_DIAGRAM_SYSTEM_PROMPT,
             image_b64=image_b64,
@@ -1767,16 +2097,12 @@ def extract_abundance_diagram(
             latency_ms=latency_ms, warning=f"normalize failed: {exc}",
             image_sha256=image_sha256,
         )
-    return ExtractResult(
-        ok=True, data=data, raw=raw_text,
-        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
-        warning=warning if truncated else "",
-        image_sha256=image_sha256,
-        request_meta=_build_request_meta(
-            p, "abundance_diagram", max_tokens, image_sha256,
-            prompt_version_for_mode("abundance_diagram"),
-        ),
-    )
+    # REVIEW-2026-09-20 #7: route the success return through the shared
+    # contract so an unusable / unrelated payload flips to ok=False.
+    return _ok_result(
+        p=p, mode_key="abundance_diagram", data=data, raw_text=raw_text,
+        truncated=truncated, usage=usage, latency_ms=latency_ms,
+        image_sha256=image_sha256, max_tokens=max_tokens, parsed=parsed)
 
 
 def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
@@ -2174,7 +2500,8 @@ def extract_phylogenetic_tree(
     # Never-raises contract: guard call_llm_api against malformed provider
     # config (extra_body / extra_headers may not be dicts).
     try:
-        raw_text, truncated, status, err_body, usage = call_llm_api(
+        # REVIEW-2026-09-20 #26: _call_llm = call_llm_api + one transient retry.
+        raw_text, truncated, status, err_body, usage = _call_llm(
             provider=p,
             system_prompt=PHYLOGENETIC_TREE_SYSTEM_PROMPT,
             image_b64=image_b64,
@@ -2228,16 +2555,12 @@ def extract_phylogenetic_tree(
             latency_ms=latency_ms, warning=f"normalize failed: {exc}",
             image_sha256=image_sha256,
         )
-    return ExtractResult(
-        ok=True, data=data, raw=raw_text,
-        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
-        warning=warning if truncated else "",
-        image_sha256=image_sha256,
-        request_meta=_build_request_meta(
-            p, "phylogenetic_tree", max_tokens, image_sha256,
-            prompt_version_for_mode("phylogenetic_tree"),
-        ),
-    )
+    # REVIEW-2026-09-20 #7: route the success return through the shared
+    # contract so an unusable / unrelated payload flips to ok=False.
+    return _ok_result(
+        p=p, mode_key="phylogenetic_tree", data=data, raw_text=raw_text,
+        truncated=truncated, usage=usage, latency_ms=latency_ms,
+        image_sha256=image_sha256, max_tokens=max_tokens, parsed=parsed)
 
 
 # ============================================================================
@@ -2284,6 +2607,17 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
         "intervals": [],
         "confidence": 0.0,
     }
+
+    # REVIEW-2026-09-20 #6: this was the only normalizer without the
+    # ``_array_root`` unwrap every other mode has - json_utils wraps a bare
+    # array emission (the model replying ``[{...}, {...}]`` to an object
+    # contract) into {"_array_root": [...]}, and the whole payload was thrown
+    # away below because parsed.get("data_points") was empty.
+    _unwrap_array_root_into(parsed, out, (
+        ("data_points", ("sample_id", "depth_m"), out["data_points"]),
+        ("events", ("type", "depth_m"), out["events"]),
+        ("intervals", ("name", "top_depth_m"), out["intervals"]),
+    ), _chem_warnings)
 
     # Normalize metadata
     meta = parsed.get("metadata") or {}
@@ -2343,9 +2677,11 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
         out["data_points"].append(row)
 
     # Normalize events
-    for ev in parsed.get("events") or []:
-        if not isinstance(ev, dict):
-            continue
+    # REVIEW-2026-09-20 #4: a dict-shaped ``events`` ({"AEZZ": {...}}) failed
+    # the isinstance check for every value and the whole emission vanished
+    # silently. Same tolerant path as data_points above (and norm_cross in
+    # the columnar mode).
+    for ev in _dict_rows(parsed.get("events")):
         row = {
             "type": s(ev.get("type")),
             "depth_m": s(ev.get("depth_m")),
@@ -2358,9 +2694,8 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
         out["events"].append(row)
 
     # Normalize intervals
-    for iv in parsed.get("intervals") or []:
-        if not isinstance(iv, dict):
-            continue
+    # REVIEW-2026-09-20 #4: same dict-shaped recovery as events.
+    for iv in _dict_rows(parsed.get("intervals")):
         row = {
             "name": s(iv.get("name")),
             "top_depth_m": s(iv.get("top_depth_m")),
@@ -2379,7 +2714,9 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
         conf = 0.0
     out["confidence"] = max(0.0, min(1.0, conf))
 
-    extras_src = {k: v for k, v in parsed.items() if k not in _KNOWN_CHEMICAL_STRAT_ROOT_KEYS}
+    extras_src = _pop_array_root_extras(
+        {k: v for k, v in parsed.items()
+         if k not in _KNOWN_CHEMICAL_STRAT_ROOT_KEYS})
     if extras_src:
         out["_extras"] = extras_src
     if _chem_warnings:
@@ -2426,7 +2763,8 @@ def extract_chemical_stratigraphy(
     )
     t0 = time.perf_counter()
     try:
-        raw_text, truncated, status, err_body, usage = call_llm_api(
+        # REVIEW-2026-09-20 #26: _call_llm = call_llm_api + one transient retry.
+        raw_text, truncated, status, err_body, usage = _call_llm(
             provider=p,
             system_prompt=CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT,
             image_b64=image_b64,
@@ -2469,16 +2807,12 @@ def extract_chemical_stratigraphy(
             latency_ms=latency_ms, warning=f"normalize failed: {exc}",
             image_sha256=image_sha256,
         )
-    return ExtractResult(
-        ok=True, data=data, raw=raw_text,
-        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
-        warning=warning if truncated else "",
-        image_sha256=image_sha256,
-        request_meta=_build_request_meta(
-            p, "chemical_stratigraphy", max_tokens, image_sha256,
-            prompt_version_for_mode("chemical_stratigraphy"),
-        ),
-    )
+    # REVIEW-2026-09-20 #7: route the success return through the shared
+    # contract so an unusable / unrelated payload flips to ok=False.
+    return _ok_result(
+        p=p, mode_key="chemical_stratigraphy", data=data, raw_text=raw_text,
+        truncated=truncated, usage=usage, latency_ms=latency_ms,
+        image_sha256=image_sha256, max_tokens=max_tokens, parsed=parsed)
 
 
 # ============================================================================
@@ -2548,25 +2882,64 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "source": s(meta.get("source", "")),
         }
 
-    def norm_coords(val):
-        """Normalize coordinates to list of [lat, lon] pairs."""
-        if isinstance(val, list):
-            result = []
+    def _one_point(item):
+        """A single coordinate -> [lat, lon], or None when it is not one."""
+        if isinstance(item, dict):
+            lat = first_non_empty(
+                (item.get("lat"), item.get("latitude"), item.get("y")))
+            lon = first_non_empty(
+                (item.get("lon"), item.get("lng"), item.get("longitude"),
+                 item.get("x")))
+            if lat is None and lon is None:
+                return None
+            item = [lat if lat is not None else "",
+                    lon if lon is not None else ""]
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            if any(isinstance(p, (list, tuple, dict)) for p in item[:2]):
+                return None          # a ring / nested collection, not a point
+            try:
+                return [float(item[0]), float(item[1])]
+            except (TypeError, ValueError):
+                return [s(item[0]), s(item[1])]
+        return None
+
+    def norm_coords(val, label="coordinates"):
+        """Normalize coordinates to a list of [lat, lon] pairs.
+
+        REVIEW-2026-09-20 #16: models emit at least four shapes for this one
+        field - ``[[lat, lon], ...]``, a bare ``[lat, lon]`` single point,
+        ``{"lat": .., "lon": ..}`` / ``{"latitude": .., "longitude": ..}``
+        objects, and dicts of named points. Only the first was accepted, so a
+        perfectly readable feature came back as "no coordinates at all"
+        without a word about it. Unparseable payloads now warn.
+        """
+        pts: list[Any] = []
+        if isinstance(val, dict):
+            direct = _one_point(val)
+            if direct is not None:
+                return [direct]
+            pts = [p for p in (_one_point(v) for v in val.values()) if p]
+        elif isinstance(val, (list, tuple)):
+            direct = _one_point(val)
+            if direct is not None and len(val) == 2:
+                return [direct]      # a single [lat, lon] point
             for item in val:
-                if isinstance(item, (list, tuple)) and len(item) >= 2:
-                    try:
-                        result.append([float(item[0]), float(item[1])])
-                    except (TypeError, ValueError):
-                        result.append([s(item[0]), s(item[1])])
-            return result
-        return []
+                p = _one_point(item)
+                if p is not None:
+                    pts.append(p)
+                elif isinstance(item, (list, tuple, dict)):
+                    pts.extend(norm_coords(item, label))
+        if pts or val in (None, "", [], {}):
+            return pts
+        _paleomap_warnings.append(f"coordinates_unparsed:{label}")
+        return pts
 
     # Normalize continents
     for cont in _dict_rows(parsed.get("continents")):
         row = {
             "name": s(cont.get("name")),
             "type": s(cont.get("type")),
-            "coordinates": norm_coords(cont.get("coordinates")),
+            "coordinates": norm_coords(cont.get("coordinates"), "continents"),
             "paleolatitude": s(cont.get("paleolatitude")),
             "note": s(cont.get("note")),
         }
@@ -2579,7 +2952,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         row = {
             "name": s(sea.get("name")),
             "type": s(sea.get("type")),
-            "coordinates": norm_coords(sea.get("coordinates")),
+            "coordinates": norm_coords(sea.get("coordinates"), "oceans_seas"),
             "note": s(sea.get("note")),
         }
         _carry_extras(sea, _KNOWN_PALEOMAP_SEA_KEYS, row)
@@ -2590,7 +2963,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         row = {
             "name": s(feat.get("name")),
             "type": s(feat.get("type")),
-            "coordinates": norm_coords(feat.get("coordinates")),
+            "coordinates": norm_coords(feat.get("coordinates"), "tectonic_features"),
             "direction": s(feat.get("direction")),
             "description": s(feat.get("description")),
         }
@@ -2602,7 +2975,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         row = {
             "name": s(realm.get("name")),
             "type": s(realm.get("type")),
-            "coordinates": norm_coords(realm.get("coordinates")),
+            "coordinates": norm_coords(realm.get("coordinates"), "biogeographic_realms"),
             "characteristic_fauna": s(realm.get("characteristic_fauna")),
         }
         _carry_extras(realm, _KNOWN_PALEOMAP_REALM_KEYS, row)
@@ -2624,7 +2997,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
     for ind in _dict_rows(parsed.get("paleolatitude_indicators")):
         row = {
             "type": s(ind.get("type")),
-            "coordinates": norm_coords(ind.get("coordinates")),
+            "coordinates": norm_coords(ind.get("coordinates"), "paleolatitude_indicators"),
         }
         _carry_extras(ind, _KNOWN_PALEOMAP_INDICATOR_KEYS, row)
         out["paleolatitude_indicators"].append(row)
@@ -2683,7 +3056,8 @@ def extract_paleomap(
     )
     t0 = time.perf_counter()
     try:
-        raw_text, truncated, status, err_body, usage = call_llm_api(
+        # REVIEW-2026-09-20 #26: _call_llm = call_llm_api + one transient retry.
+        raw_text, truncated, status, err_body, usage = _call_llm(
             provider=p,
             system_prompt=PALEOMAP_SYSTEM_PROMPT,
             image_b64=image_b64,
@@ -2726,16 +3100,12 @@ def extract_paleomap(
             latency_ms=latency_ms, warning=f"normalize failed: {exc}",
             image_sha256=image_sha256,
         )
-    return ExtractResult(
-        ok=True, data=data, raw=raw_text,
-        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
-        warning=warning if truncated else "",
-        image_sha256=image_sha256,
-        request_meta=_build_request_meta(
-            p, "paleomap", max_tokens, image_sha256,
-            prompt_version_for_mode("paleomap"),
-        ),
-    )
+    # REVIEW-2026-09-20 #7: route the success return through the shared
+    # contract so an unusable / unrelated payload flips to ok=False.
+    return _ok_result(
+        p=p, mode_key="paleomap", data=data, raw_text=raw_text,
+        truncated=truncated, usage=usage, latency_ms=latency_ms,
+        image_sha256=image_sha256, max_tokens=max_tokens, parsed=parsed)
 
 
 # ============================================================================
@@ -2906,7 +3276,8 @@ def extract_scatter_plot(
     )
     t0 = time.perf_counter()
     try:
-        raw_text, truncated, status, err_body, usage = call_llm_api(
+        # REVIEW-2026-09-20 #26: _call_llm = call_llm_api + one transient retry.
+        raw_text, truncated, status, err_body, usage = _call_llm(
             provider=p,
             system_prompt=SCATTER_PLOT_SYSTEM_PROMPT,
             image_b64=image_b64,
@@ -2949,16 +3320,12 @@ def extract_scatter_plot(
             latency_ms=latency_ms, warning=f"normalize failed: {exc}",
             image_sha256=image_sha256,
         )
-    return ExtractResult(
-        ok=True, data=data, raw=raw_text,
-        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
-        warning=warning if truncated else "",
-        image_sha256=image_sha256,
-        request_meta=_build_request_meta(
-            p, "scatter_plot", max_tokens, image_sha256,
-            prompt_version_for_mode("scatter_plot"),
-        ),
-    )
+    # REVIEW-2026-09-20 #7: route the success return through the shared
+    # contract so an unusable / unrelated payload flips to ok=False.
+    return _ok_result(
+        p=p, mode_key="scatter_plot", data=data, raw_text=raw_text,
+        truncated=truncated, usage=usage, latency_ms=latency_ms,
+        image_sha256=image_sha256, max_tokens=max_tokens, parsed=parsed)
 
 
 _MODE_DISPATCH["abundance_diagram"] = extract_abundance_diagram
@@ -3121,7 +3488,8 @@ def extract_zonation_chart(
     )
     t0 = time.perf_counter()
     try:
-        raw_text, truncated, status, err_body, usage = call_llm_api(
+        # REVIEW-2026-09-20 #26: _call_llm = call_llm_api + one transient retry.
+        raw_text, truncated, status, err_body, usage = _call_llm(
             provider=p,
             system_prompt=ZONATION_CHART_SYSTEM_PROMPT,
             image_b64=image_b64,
@@ -3164,16 +3532,12 @@ def extract_zonation_chart(
             latency_ms=latency_ms, warning=f"normalize failed: {exc}",
             image_sha256=image_sha256,
         )
-    return ExtractResult(
-        ok=True, data=data, raw=raw_text,
-        truncated=truncated, usage=usage or {}, latency_ms=latency_ms,
-        warning=warning if truncated else "",
-        image_sha256=image_sha256,
-        request_meta=_build_request_meta(
-            p, "zonation_chart", max_tokens, image_sha256,
-            prompt_version_for_mode("zonation_chart"),
-        ),
-    )
+    # REVIEW-2026-09-20 #7: route the success return through the shared
+    # contract so an unusable / unrelated payload flips to ok=False.
+    return _ok_result(
+        p=p, mode_key="zonation_chart", data=data, raw_text=raw_text,
+        truncated=truncated, usage=usage, latency_ms=latency_ms,
+        image_sha256=image_sha256, max_tokens=max_tokens, parsed=parsed)
 
 
 _MODE_DISPATCH["zonation_chart"] = extract_zonation_chart
@@ -3301,7 +3665,8 @@ def classify_chart_image(
 
     t0 = time.perf_counter()
     try:
-        raw_text, truncated, status, err_body, usage = call_llm_api(
+        # REVIEW-2026-09-20 #26: _call_llm = call_llm_api + one transient retry.
+        raw_text, truncated, status, err_body, usage = _call_llm(
             provider=p,
             system_prompt=CHART_CLASSIFY_SYSTEM_PROMPT,
             image_b64=image_b64,
@@ -3399,7 +3764,13 @@ def resolve_auto_mode(
         )
     if cls.ok and isinstance(cls.data, dict):
         chart_type = cls.data.get("chart_type") or "unknown"
-        conf = float(cls.data.get("confidence") or 0.0)
+        # REVIEW-2026-09-20 #15: the classifier JSON is model output - a
+        # ``"confidence": "high"`` used to raise ValueError out of a function
+        # documented as "never raises". Treat it as zero confidence.
+        try:
+            conf = float(cls.data.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            conf = 0.0
         if (chart_type in KNOWN_CHART_TYPES and chart_type != "unknown"
                 and conf >= _CLASSIFY_MIN_CONFIDENCE):
             return chart_type, cls
@@ -3433,6 +3804,28 @@ def _is_silent_miss(data: dict[str, Any]) -> bool:
     )
 
 
+def _merge_llm_cost(target: ExtractResult, usage: dict[str, Any] | None,
+                    latency_ms: int | float | None) -> ExtractResult:
+    """Fold an earlier LLM call's cost into ``target`` (REVIEW-2026-09-20 #8).
+
+    Every attempt is billed even when its result is thrown away, so a retry
+    or a vision-classify call that is not the returned one must still show up
+    in ``usage`` / ``latency_ms`` - otherwise the history and the cost ledger
+    under-report exactly on the runs that needed a second call."""
+    if isinstance(usage, dict):
+        for field in ("input", "output", "cached_input", "cached_output"):
+            add = int(usage.get(field) or 0)
+            if add:
+                target.usage[field] = int(target.usage.get(field) or 0) + add
+    try:
+        lat = int(latency_ms or 0)
+    except (TypeError, ValueError):
+        lat = 0
+    if lat:
+        target.latency_ms = int(target.latency_ms or 0) + lat
+    return target
+
+
 def extract(
     *,
     mode: str,
@@ -3450,6 +3843,10 @@ def extract(
     base_url: str = DEFAULT_ENDPOINT,
     model: str = DEFAULT_MODEL,
     progress_callback=None,
+    # REVIEW-2026-09-20 #14: ``extract`` only ever sees base64, so the auto
+    # resolver used to be called with an empty filename and no timeout.
+    # Optional so existing callers keep working.
+    filename: str = "",
 ) -> ExtractResult:
     """Unified entry point. mode ∈ {"range_chart", "columnar_section",
     "abundance_diagram", "phylogenetic_tree"}.
@@ -3472,22 +3869,39 @@ def extract(
     mode_source = ""
     classify_result = None
     if mode == "auto":
+        # REVIEW-2026-09-20 #14: the classifier call was made without the
+        # caller's ``timeout_sec`` (so a user-set 10 s deadline still waited
+        # for the classifier's own default) and with a hardcoded empty
+        # filename (so the keyword resolver never saw the file name).
         mode, classify_result = resolve_auto_mode(
             caption=caption,
-            filename="",
+            filename=filename,
             image_b64=image_b64,
             media_type=media_type,
             api_key=api_key,
             base_url=base_url,
             model=model,
             provider=provider,
+            timeout_sec=timeout_sec,
             progress_callback=progress_callback,
         )
         mode_source = "vision" if classify_result is not None else "text"
+    # REVIEW-2026-09-20 #8: the vision classify is a billed call whatever the
+    # extraction does afterwards - remember its cost so it can be folded into
+    # the returned result instead of vanishing from the usage ledger.
+    _classify_usage = dict(getattr(classify_result, "usage", None) or {}) if classify_result is not None else {}
+    _classify_latency = int(getattr(classify_result, "latency_ms", 0) or 0) if classify_result is not None else 0
 
     fn = _MODE_DISPATCH.get(mode)
     if fn is None:
-        return ExtractResult(ok=False, error_key="err.http", raw=f"unknown mode: {mode}")
+        # REVIEW-2026-09-20 #13: "err.http" meant an HTTP failure; an unknown
+        # mode is a caller/config error. "err.extract" is the closest key the
+        # i18n catalogue already ships (a dedicated "err.mode" would render
+        # untranslated) - the detail stays in ``raw``.
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw=f"unknown mode: {mode!r} (expected one of: "
+                + ", ".join(sorted(_MODE_DISPATCH)) + ")")
     result = fn(
         api_key=api_key,
         image_b64=image_b64,
@@ -3501,6 +3915,10 @@ def extract(
         provider=provider,
         progress_callback=progress_callback,
     )
+    if _classify_usage or _classify_latency:
+        # REVIEW-2026-09-20 #8: fold the vision-classify cost into the
+        # extraction result so the usage ledger matches the real spend.
+        _merge_llm_cost(result, _classify_usage, _classify_latency)
     # UI-REVIEW-2026-09-08 (E2E oa_004): silent misses recover on re-run.
     # When the model returns a payload whose every content array is empty
     # at ~zero confidence WITHOUT an explanatory note, that is a sampling
@@ -3526,7 +3944,14 @@ def extract(
         except Exception:
             retry = None
         if retry is not None and retry.ok and not _is_silent_miss(retry.data):
-            retry.warning = ((retry.warning + "; ") if retry.warning else "")                 + "empty first attempt retried once"
+            # REVIEW-2026-09-20 #8: the swap used to discard the first
+            # attempt's usage/latency/warning - it was billed all the same.
+            _merge_llm_cost(retry, result.usage, result.latency_ms)
+            _prev_warning = (result.warning or "").strip()
+            retry.warning = ((retry.warning + "; ") if retry.warning else "") \
+                + "empty first attempt retried once"
+            if _prev_warning and _prev_warning not in retry.warning:
+                retry.warning = _prev_warning + "; " + retry.warning
             result = retry
     # UI-REVIEW-2026-09-07: surface which chart type the auto resolver
     # picked so UIs / history records can show "detected: zonation_chart".

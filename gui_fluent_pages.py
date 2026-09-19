@@ -57,15 +57,23 @@ def _mpl():
 
 
 def _fig_to_pixmap(fig, dpi: int = 100) -> QPixmap | None:
-    """Render a matplotlib figure to a QPixmap at the requested dpi."""
+    """Render a matplotlib figure to a QPixmap at the requested dpi.
+
+    REVIEW-2026-09-20: takes ownership of *fig* and closes it on EVERY
+    path. The previous implementation only reached ``plt.close(fig)`` when
+    savefig + the QImage decode both succeeded, so a raise from savefig (no
+    renderer, non-writable Agg buffer, ...), a null image, or a missing
+    matplotlib import left the figure on matplotlib's module-level figure
+    manager list — one leaked figure per refresh of the Usage page, which
+    matplotlib then redrew on every subsequent savefig (quadratic slowdown
+    plus a monotonically growing heap).
+    """
     try:
         buf = io.BytesIO()
         # Do NOT use bbox_inches='tight' — it causes the figure to resize
         # unpredictably across Windows DPI scales, producing clipped or
         # very small output. We use explicit subplots_adjust() instead.
         fig.savefig(buf, format="png", dpi=dpi)
-        plt = _mpl()
-        plt.close(fig)
         buf.seek(0)
         img = QImage.fromData(buf.getvalue())
         if img.isNull():
@@ -74,6 +82,13 @@ def _fig_to_pixmap(fig, dpi: int = 100) -> QPixmap | None:
     except Exception as exc:
         logging.warning("Failed to render matplotlib figure: %s", exc)
         return None
+    finally:
+        try:
+            plt = _mpl()
+            if plt is not None:
+                plt.close(fig)
+        except Exception as exc:
+            logging.warning("plt.close(fig) failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +409,7 @@ class HistoryPage(ScrollArea):
         if _col == 7:  # actions column
             return
         rec = self._records[row]
+        dlg = None
         try:
             # Lazy import: HistoryDetailDialog lives in its own module so
             # the heavy WebEngine dep doesn't drag into the rest of the
@@ -411,6 +427,21 @@ class HistoryPage(ScrollArea):
                 "", str(exc), parent=self._win,
                 position=InfoBarPosition.TOP, duration=4000,
             )
+        finally:
+            # REVIEW-2026-09-20: exec() only HIDES a QDialog (QDialog::done()
+            # sends no QCloseEvent, so WA_DeleteOnClose never fires) and the
+            # local `dlg` reference dies at return — but the C++ dialog, its
+            # QWebEngineView page, its thumbnail pixmaps and its provider
+            # records stayed parented to the main window forever. Every
+            # double-click leaked a full WebEngine view. Schedule deletion on
+            # the way out (deleteLater, never deleteWhileBusy: the Qt object
+            # may still be referenced by a pending event).
+            if dlg is not None:
+                try:
+                    dlg.deleteLater()
+                except Exception:
+                    pass
+            dlg = None
 
     def _on_load(self, rec: HistoryRecord) -> None:
         """Push the historical result back into the Extract page."""
@@ -656,6 +687,12 @@ class UsagePage(ScrollArea):
             self.chart_label.setText("-" if (not summary or not summary.by_day)
                                       else self._t("usage.empty"))
             return
+        # REVIEW-2026-09-20: `fig` is hoisted so the finally clause below can
+        # close it. _fig_to_pixmap() owns the happy path, but an exception
+        # anywhere between subplots() and that call (a bad payload row, a
+        # destroyed chart_label, matplotlib refusing twinx()) used to skip
+        # every close and leave the figure registered in pyplot.
+        fig = None
         try:
             days = [time.strftime("%m-%d", time.localtime(d["day"])) for d in summary.by_day]
             toks = [d["tokens"] for d in summary.by_day]
@@ -695,6 +732,15 @@ class UsagePage(ScrollArea):
                 self.chart_label.setText(self._t("usage.empty"))
         except Exception as exc:
             self.chart_label.setText(str(exc))
+        finally:
+            # Belt-and-braces with _fig_to_pixmap()'s own close(): closing a
+            # figure twice is a no-op, so this only fires for the paths that
+            # raised before the pixmap helper took ownership.
+            if fig is not None:
+                try:
+                    plt.close(fig)
+                except Exception as exc:
+                    logging.warning("plt.close(fig) failed: %s", exc)
 
     def _render_table(self, rows: list[UsageRecord]) -> None:
         from PySide6.QtWidgets import QTableWidgetItem

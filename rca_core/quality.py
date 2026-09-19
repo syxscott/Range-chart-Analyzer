@@ -216,7 +216,9 @@ def _resolve_age_ma(value: Any, prefer: str = "older") -> Optional[float]:
          older ("259.51-254.14 Ma" -> 259.51) or younger end;
       2. Chinese stage aliases, series/epoch labels ("Late Permian"), and
          period names;
-      3. ICS stage names (returns the stage midpoint).
+      3. ICS stage names — ``prefer`` selects that stage's base (older) or
+         top (younger) bound, so a range whose two ends are labelled with the
+         SAME stage still spans the stage instead of collapsing to a point.
 
     Returns ``None`` when the ICS table is unavailable or the value can't be
     resolved, so callers can skip the age/stage branch gracefully.
@@ -299,17 +301,39 @@ def _score_completeness(data: dict[str, Any]) -> tuple[float, list[dict[str, str
     # for this mode.  Pure-extraction-miss already short-circuits the
     # score, so this only fires when SOME content exists but ALL of the
     # other "expected" keys are absent.
+    #
+    # REVIEW-2026-09-20: this loop used to do ``passed += 1`` on BOTH
+    # branches, so these checks were unfailable — completeness called an
+    # all-empty set of expected arrays "populated" (the docstring's "how many
+    # expected fields are populated" never held), and every extra unfailable
+    # check inflated ``checks`` and diluted the deductions of the checks that
+    # could actually fail. Present-but-empty is now a real failure; an ABSENT
+    # key stays forgiven, because a sparse result (a columnar section with
+    # only ``sections`` + ``cross_beds``) is scientifically valid and the
+    # extractor only writes keys it observed.
+    empty_relevant: list[str] = []
     for key in relevant_keys:
         checks += 1
         val = data.get(key)
-        if val is not None:
-            passed += 1  # present, even if empty — already flagged empty_primary_rows
-        else:
+        if val is None:
             # Key absent — only penalise when truly no signal at all.
             if not has_mode_signal:
                 issues.append({"severity": "info",
                                "msg_key": "quality.missing_top_level"})
             passed += 1  # don't drop the score for absent optional fields
+        elif isinstance(val, list):
+            if val:
+                passed += 1
+            elif key != primary:
+                empty_relevant.append(key)
+            # key == primary: the failed check above already reported
+            # quality.empty_primary_rows, so no second message here.
+        elif val:
+            passed += 1  # non-list payload with content (dict / str / number)
+        elif key != primary:
+            empty_relevant.append(key)
+    if empty_relevant:
+        issues.append({"severity": "info", "msg_key": "quality.missing_top_level"})
 
     # Confidence should be present in every mode.
     checks += 1
@@ -574,7 +598,8 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
 
     # P1-8: abundance sum-to-100 check.
     # Deduct 0.05 per violating level, capped at 0.3 total.
-    sum_violations = _score_abundance_sum(data)
+    level_sums, sum_skipped = _abundance_percentage_buckets(data)
+    sum_violations = _abundance_sum_violations(level_sums)
     if sum_violations:
         deduction = min(0.3, 0.05 * len(sum_violations))
         score = max(0.0, score - deduction)
@@ -588,6 +613,17 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
             "severity": "info",
             "msg_key": "quality.abundance_sum_violation_count",
             "params": {"count": str(len(sum_violations))},
+        })
+    elif sum_skipped["no_level"] or sum_skipped["unparsable"]:
+        # REVIEW-2026-09-20: "no violations" is not the same as "checked".
+        # Percentage rows without a level, or whose value was not a number,
+        # were dropped silently and the diagram scored as if the rule held.
+        # Surface them (info, no deduction: the sparse-diagram penalty itself
+        # is a prompt-level concern, see the ABUNDANCE prompt's sum-to-100
+        # instruction) so the operator knows the rule never ran on those rows.
+        issues.append({
+            "severity": "info",
+            "msg_key": "quality.null_fields",
         })
 
     return min(1.0, max(0.0, score)), issues
@@ -672,7 +708,14 @@ def _score_consistency(data: dict[str, Any]) -> tuple[float, list[dict[str, str]
         # (4) Every species row has a non-empty biozone label.
         missing_bz = sum(
             1 for sp in species
-            if isinstance(sp, dict) and not (sp.get("biozone") or "").strip()
+            # REVIEW-2026-09-20: ``or ""`` only guards None/falsy — a numeric
+            # biozone cell (0, or a bare int from a hand-crafted payload) made
+            # ``.strip()`` raise AttributeError. score_range_chart catches it
+            # per dimension, so one bad cell zeroed the WHOLE consistency
+            # dimension (0.20 of the composite) and replaced every real
+            # message with a generic quality.scoring_failed.
+            if isinstance(sp, dict)
+            and not str(sp.get("biozone") or "").strip()
         )
         if missing_bz:
             score -= min(0.2, 0.05 * missing_bz)
@@ -730,7 +773,14 @@ def _score_cross_era_accuracy(sections: list) -> list[dict[str, Any]]:
                 violations.append({
                     "section": sec_name,
                     "issue": f"Stage order reversed: {stages[i]} above {stages[i + 1]}",
-                    "severity": "high",
+                    # REVIEW-2026-09-20: "high" broke the module contract —
+                    # this file's docstring and every other emitter only use
+                    # "info" / "warning", and js/quality.js reports the same
+                    # detector with severity 'warning'. The value reaches the
+                    # UI as `issues[].severity`, so an unhandled level made the
+                    # server/GUI/i18n renderers fall through to their default
+                    # (or nothing) for the one violation class that matters.
+                    "severity": "warning",
                 })
 
     return violations
@@ -784,23 +834,41 @@ def _score_biozone_order(species: list, sections: list) -> tuple[int, list[dict[
     for sec_name, sp_list in by_section.items():
         if len(sp_list) < 2:
             continue
-        # Only records with an actual bed position can participate in a
-        # Steno-order comparison. Sorting raw parse results mixed ``int`` and
-        # ``None`` and crashed the entire quality scorer on labels such as
-        # "unclear". Excluding unpositioned rows is both stable and
-        # scientifically preferable to inventing their relative position.
-        positioned_sp = [
-            (_parse_bed_n(sp.get("range_top")), sp)
-            for sp in sp_list
-        ]
-        sorted_sp = [
-            sp for _, sp in sorted(
-                (item for item in positioned_sp if item[0] is not None),
-                key=lambda item: item[0],
-            )
-        ]
-        if len(sorted_sp) < 2:
+        # REVIEW-2026-09-20: position kind matters as much as position value.
+        # The rest of this function assumes "sorted first = youngest", which is
+        # only true for BED indices (larger index = higher in the section =
+        # younger). Ages run the other way — a larger Ma is OLDER — so a chart
+        # whose endpoints are "253 Ma" / "251 Ma" used to be sorted by the
+        # leading integer through _parse_bed_n and every correctly ordered
+        # pair was then reported as a Steno violation. Route through
+        # _looks_like_age exactly like _score_accuracy (and the FAD/LAD branch
+        # in _score_consistency) already do: ages sort by -Ma, beds by +index,
+        # and a section mixing both is skipped because the two scales cannot
+        # be compared at all.
+        positioned: list[tuple[float, dict]] = []
+        kinds: set[str] = set()
+        for sp in sp_list:
+            raw_top = sp.get("range_top")
+            if _looks_like_age(raw_top):
+                ma = _resolve_age_ma(raw_top, prefer="younger")
+                if ma is None:
+                    continue
+                kinds.add("age")
+                positioned.append((-ma, sp))
+                continue
+            bed_n = _parse_bed_n(raw_top)
+            if bed_n is None:
+                continue
+            kinds.add("bed")
+            positioned.append((float(bed_n), sp))
+        if len(positioned) < 2 or len(kinds) > 1:
+            # Unpositioned rows are excluded rather than invented; a mixed
+            # bed/age section has no single ordering scale.
             continue
+        # Stable tie-break by species label so equal positions do not depend
+        # on the input row order (the pair loop below compares neighbours).
+        positioned.sort(key=lambda item: (item[0], str(item[1].get("species") or "")))
+        sorted_sp = [sp for _, sp in positioned]
         for i in range(len(sorted_sp) - 1):
             younger = sorted_sp[i]
             older = sorted_sp[i + 1]
@@ -965,44 +1033,73 @@ def _score_structure(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]
     return min(1.0, max(0.0, score)), issues
 
 
+def _abundance_percentage_buckets(data: dict[str, Any]) -> tuple[dict[str, float], dict[str, int]]:
+    """Group percentage abundances per level.
+
+    Returns ``(level_sums, skipped)`` where ``skipped`` counts the rows the
+    check could not use, split into ``"no_level"`` (no level/sample to
+    attribute the value to) and ``"unparsable"`` (unit is ``%`` but the value
+    is not a number).
+
+    REVIEW-2026-09-20: two silent-degradation paths fixed.
+
+    * A row without ``level`` used to be bucketed under the key ``""``, which
+      merged EVERY unlabelled row of the whole diagram into one imaginary
+      level and then reported a violation pointing at nothing
+      (``sample=""`` → the badge read "the abundance percentages of '' sum to
+      100%"). Such rows are now skipped and counted, because their share of a
+      level that is unknown to us cannot be summed meaningfully.
+    * An unparsable ``abundance`` used to ``continue`` silently, so a diagram
+      whose cells are all "30 %" (unit baked into the value, comma decimal
+      separators, ellipsis) degenerated into "no buckets → no violations →
+      full marks". Counting them lets the caller say the check was not
+      evaluable instead of pretending it passed.
+    """
+    violations: dict[str, float] = {}
+    skipped = {"no_level": 0, "unparsable": 0}
+    for entry in data.get("samples") or data.get("abundances") or []:
+        if not isinstance(entry, dict):
+            continue
+        unit = str(entry.get("abundance_unit", "")).strip().lower()
+        # Only sum percentage values (unit == '%')
+        if unit != "%":
+            continue
+        level = str(entry.get("level") or "").strip()
+        if not level:
+            skipped["no_level"] += 1
+            continue
+        try:
+            pct = float(entry.get("abundance", ""))
+        except (TypeError, ValueError):
+            skipped["unparsable"] += 1
+            continue
+        violations[level] = violations.get(level, 0.0) + pct
+    return violations, skipped
+
+
+def _abundance_sum_violations(level_sums: dict[str, float]) -> list[dict[str, Any]]:
+    """Levels whose percentages miss 100 ± 5."""
+    return [
+        {"sample": level, "sum": total}
+        for level, total in level_sums.items()
+        if not (95 <= total <= 105)
+    ]
+
+
 def _score_abundance_sum(data: dict[str, Any]) -> list[dict[str, Any]]:
     """P1-8: For abundance diagrams, check that each level's percentages sum to 100±5.
 
     Returns a list of violation dicts, each with keys ``sample`` (level id) and ``sum``
-    (the computed total). An empty list means no violations.
+    (the computed total). An empty list means no violations — which, after
+    REVIEW-2026-09-20, no longer includes rows the check could not evaluate;
+    see :func:`_abundance_percentage_buckets` and the caller's
+    not-evaluable note.
     """
-    violations: list[dict[str, Any]] = []
     samples = data.get("samples") or data.get("abundances") or []
     if not isinstance(samples, list):
-        return violations
-    # Group by level/sample
-    level_sums: dict[str, float] = {}
-    level_ids: dict[str, str] = {}
-    for entry in samples:
-        if not isinstance(entry, dict):
-            continue
-        taxon = entry.get("taxon", "")
-        level = entry.get("level", "")
-        abundance_str = entry.get("abundance", "")
-        unit = str(entry.get("abundance_unit", "")).strip().lower()
-
-        # Only sum percentage values (unit == '%')
-        if unit != "%":
-            continue
-        try:
-            pct = float(abundance_str)
-        except (TypeError, ValueError):
-            continue
-
-        if level not in level_sums:
-            level_sums[level] = 0.0
-            level_ids[level] = level
-        level_sums[level] += pct
-
-    for level, total in level_sums.items():
-        if not (95 <= total <= 105):
-            violations.append({"sample": level_ids.get(level, level), "sum": total})
-    return violations
+        return []
+    level_sums, _skipped = _abundance_percentage_buckets(data)
+    return _abundance_sum_violations(level_sums)
 
 
 def score_range_chart(data: dict[str, Any]) -> dict[str, Any]:

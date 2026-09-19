@@ -220,6 +220,19 @@ globalThis.RCA_ICS_SERIES = {
   'upper carboniferous': {name: 'Pennsylvanian', stages: ['Bashkirian', 'Moscovian', 'Kasimovian', 'Gzhelian'], bounds: null},
   'lower carboniferous': {name: 'Mississippian', stages: ['Tournaisian', 'Visean', 'Serpukhovian'], bounds: null},
   'upper cambrian': {name: 'Furongian', stages: ['Paibian', 'Jiangshanian', 'Stage 10'], bounds: null},
+  // REVIEW-2026-09-20: the FORMAL series/epoch names must resolve too — the
+  // entries above EMIT them as the canonical interval name ("late permian" ->
+  // "Lopingian"), so a value that round-trips through an export, or a chart
+  // labelled with the formal name, used to come back unresolved (null,null) on
+  // both engines' export path. Mirrors rca_core/standards/ics.py
+  // _SERIES_STAGE_LISTS' trailing REVIEW-2026-09-10 block: each alias shares
+  // the informal key's stage list. Order matters — Python iterates the dict in
+  // insertion order and returns the first \b match, so these go last.
+  'lopingian': {name: 'Lopingian', stages: ['Wuchiapingian', 'Changhsingian'], bounds: null},
+  'guadalupian': {name: 'Guadalupian', stages: ['Roadian', 'Wordian', 'Capitanian'], bounds: null},
+  'cisuralian': {name: 'Cisuralian', stages: ['Asselian', 'Sakmarian', 'Artinskian', 'Kungurian'], bounds: null},
+  'miaolingian': {name: 'Miaolingian', stages: ['Wuliuan', 'Drumian', 'Guzhangian'], bounds: null},
+  'terreneuvian': {name: 'Terreneuvian', stages: ['Fortunian', 'Stage 2'], bounds: null},
 };
 
 globalThis.RCA_ICS_CN_SERIES = {
@@ -268,6 +281,28 @@ globalThis.RCA_ICS_CN_PERIODS = {
   '白垩纪': [143.1, 66.0], '古近纪': [66.0, 23.04], '新近纪': [23.04, 2.58],
   '第四纪': [2.58, 0.0], '石炭纪': [358.86, 298.9], '泥盆纪': [419.62, 358.86],
   '志留纪': [443.1, 419.62], '奥陶纪': [486.85, 443.1], '寒武纪': [538.8, 486.85],
+};
+
+// Canonical interval NAME a period label resolves to — mirrors
+// rca_core/standards/ics.py:_EN_PERIOD_ALIASES (label -> canonical period).
+// RCA_ICS_PERIODS above only carries the bounds, so a JS lookup used to return
+// the lower-case label ("permian") where the Python side returns the canonical
+// period name ("Permian"); the resolved name lands in exports and in the
+// _resolveAgeBound parity contract, so both halves of the Python map are
+// needed.
+globalThis.RCA_ICS_PERIOD_NAMES = {
+  permian: 'Permian', triassic: 'Triassic', jurassic: 'Jurassic',
+  cretaceous: 'Cretaceous', paleogene: 'Paleogene', neogene: 'Neogene',
+  quaternary: 'Quaternary', carboniferous: 'Carboniferous',
+  devonian: 'Devonian', silurian: 'Silurian', ordovician: 'Ordovician',
+  cambrian: 'Cambrian',
+};
+// Chinese period alias -> canonical period name (mirrors _CN_PERIOD_ALIASES).
+globalThis.RCA_ICS_CN_PERIOD_NAMES = {
+  '二叠纪': 'Permian', '三叠纪': 'Triassic', '侏罗纪': 'Jurassic',
+  '白垩纪': 'Cretaceous', '古近纪': 'Paleogene', '新近纪': 'Neogene',
+  '第四纪': 'Quaternary', '石炭纪': 'Carboniferous', '泥盆纪': 'Devonian',
+  '志留纪': 'Silurian', '奥陶纪': 'Ordovician', '寒武纪': 'Cambrian',
 };
 
 // M-1 fix: backward-compat — older callers may read from window.* etc.

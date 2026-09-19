@@ -189,6 +189,45 @@ def test_summary_time_range():
         import shutil; shutil.rmtree(td, ignore_errors=True)
 
 
+def test_summary_success_rate_ignores_unknown_status():
+    """REVIEW-2026-09-20 (finding 11): status_code IS NULL is "not rated".
+
+    Rows recorded by a path that never saw an HTTP response (gui_fluent
+    passes status_code=None) used to sit in the success-rate denominator, so
+    two clean 200s plus two unrated calls reported 50 % success.
+    """
+    s, td = fresh_store()
+    try:
+        s.record(UsageRecord(input_tokens=10, output_tokens=5, status_code=200))
+        s.record(UsageRecord(input_tokens=10, output_tokens=5, status_code=200))
+        s.record(UsageRecord(input_tokens=10, output_tokens=5))  # status NULL
+        s.record(UsageRecord(input_tokens=10, output_tokens=5))  # status NULL
+        sm = s.summary()
+        check("sum-rate-total", sm.total_requests == 4)
+        check("sum-rate-rated", sm.rated_requests == 2)
+        check("sum-rate-success", sm.success_count == 2)
+        check("sum-rate-value", abs(sm.success_rate - 1.0) < 1e-9)
+        # Failures are still counted against rated rows only.
+        s.record(UsageRecord(input_tokens=1, output_tokens=1, status_code=500))
+        sm2 = s.summary()
+        check("sum-rate-with-failure", abs(sm2.success_rate - (2 / 3)) < 1e-9)
+    finally:
+        import shutil; shutil.rmtree(td, ignore_errors=True)
+
+
+def test_summary_success_rate_when_nothing_is_rated():
+    """All rows unrated → rate 0.0 with rated_requests 0 (no ZeroDivision)."""
+    s, td = fresh_store()
+    try:
+        s.record(UsageRecord(input_tokens=10, output_tokens=5))
+        sm = s.summary()
+        check("sum-rate-empty-total", sm.total_requests == 1)
+        check("sum-rate-empty-rated", sm.rated_requests == 0)
+        check("sum-rate-empty-value", sm.success_rate == 0.0)
+    finally:
+        import shutil; shutil.rmtree(td, ignore_errors=True)
+
+
 def test_list_ordering():
     s, td = fresh_store()
     try:
@@ -216,6 +255,8 @@ test_summary_aggregates()
 test_summary_cache_hit_rate()
 test_summary_estimated_flag()
 test_summary_time_range()
+test_summary_success_rate_ignores_unknown_status()
+test_summary_success_rate_when_nothing_is_rated()
 test_list_ordering()
 if __name__ == "__main__":
     print("--- %d passed, %d failed ---" % (_pass, _fail))

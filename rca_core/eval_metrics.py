@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .bed_parser import parse_bed_int as _parse_bed_int
+from .bed_parser import parse_bed as _parse_bed_info
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -140,17 +140,114 @@ def species_precision_recall(
 # ---------------------------------------------------------------------------
 
 
-def _parse_bed(value: Any) -> int | None:
-    """Parse a bed indicator into an integer, or return None if unparseable.
+def _parse_bed(value: Any) -> dict[str, Any] | None:
+    """Parse a bed indicator into ``{bed_num, bed_sub, raw}`` or None.
 
     M-1 fix (REVIEW-2026-07-25): the previous inline implementation
     used ``re.search(r\"-?\\d+\")`` and dropped subscript qualifiers
     like \"Bed 23c\" → ``23``. This silently diverged from
     ``rca_core.exporter._parse_bed`` which kept both number and
-    subscript. Both now route through ``rca_core.bed_parser.parse_bed_int``
-    so the quality scorer and the exporter agree.
+    subscript. Both now route through ``rca_core.bed_parser``.
+
+    REVIEW-2026-09-20: this wrapper itself still returned the bare integer
+    (``parse_bed_int``), so the *scorer* dropped the subscript the shared
+    parser had kept. Predicted "Bed 23c" against ground truth "Bed 23d"
+    scored as an EXACT match and range-limit accuracy came back inflated —
+    precisely the divergence the M-1 fix was supposed to remove. The dict
+    form is what scoring compares now.
     """
-    return _parse_bed_int(value)
+    return _parse_bed_info(value)
+
+
+def _bed_sub(value: Any) -> str:
+    """Normalized subscript of a parsed bed ("" when the bed has none)."""
+    return str((value or {}).get("bed_sub") or "")
+
+
+def _score_bed_pair(pred: dict[str, Any], gt: dict[str, Any], tolerance: int) -> str:
+    """Classify one parsed bed pair as 'exact' / 'within_tolerance' / 'wrong'.
+
+    ``tolerance`` is a stratigraphic DISTANCE allowance and therefore applies
+    to ``bed_num`` only: two sub-beds of the same bed (23c vs 23d) are
+    different levels, and no tolerance can make them agree. A zero / negative
+    tolerance disables the window, matching the historical behaviour.
+    """
+    try:
+        diff = abs(int(pred["bed_num"]) - int(gt["bed_num"]))
+    except (TypeError, ValueError, KeyError):  # pragma: no cover - parse_bed guarantees int
+        return "wrong"
+    if diff == 0:
+        return "exact" if _bed_sub(pred) == _bed_sub(gt) else "wrong"
+    try:
+        window = float(tolerance or 0)
+    except (TypeError, ValueError):
+        window = 0.0
+    if diff <= window:
+        return "within_tolerance"
+    return "wrong"
+
+
+def _endpoint_accuracy(
+    predicted: list[dict[str, Any]],
+    ground_truth: list[dict[str, Any]],
+    field: str,
+    tolerance: int = 1,
+) -> dict[str, Any]:
+    """Shared scorer behind range_top_accuracy / range_base_accuracy.
+
+    Only species present in both sides are scored; a row whose bed (either
+    side) does not parse is skipped rather than guessed, exactly like before.
+    """
+    gt_lookup: dict[str, Any] = {}
+    for row in ground_truth:
+        sp_key = _normalize_taxon(row.get("species", ""))
+        if sp_key:
+            gt_lookup[sp_key] = _parse_bed(row.get(field))
+
+    if not gt_lookup:
+        return {"exact": 0, "within_tolerance": 0, "wrong": 0,
+                "subscript_mismatch": 0, "acc_exact": 0.0, "acc_tolerance": 0.0}
+
+    exact = 0
+    within_tol = 0
+    wrong = 0
+    sub_mismatch = 0
+    total = 0
+
+    for row in predicted:
+        sp_key = _normalize_taxon(row.get("species", ""))
+        if sp_key not in gt_lookup:
+            continue
+        gt_bed, pred_bed = gt_lookup[sp_key], _parse_bed(row.get(field))
+        if gt_bed is None or pred_bed is None:
+            continue
+        total += 1
+        verdict = _score_bed_pair(pred_bed, gt_bed, tolerance)
+        if verdict == "exact":
+            exact += 1
+            within_tol += 1
+        elif verdict == "within_tolerance":
+            within_tol += 1
+        else:
+            wrong += 1
+            # Same bed, different subscript: the failure the integer-only
+            # comparison used to hide. Reported separately so a report can
+            # tell "wrong bed" from "wrong sub-bed of the right bed".
+            if pred_bed["bed_num"] == gt_bed["bed_num"]:
+                sub_mismatch += 1
+
+    if total == 0:
+        return {"exact": 0, "within_tolerance": 0, "wrong": 0,
+                "subscript_mismatch": 0, "acc_exact": 0.0, "acc_tolerance": 0.0}
+
+    return {
+        "exact": exact,
+        "within_tolerance": within_tol,
+        "wrong": wrong,
+        "subscript_mismatch": sub_mismatch,
+        "acc_exact": round(exact / total, 4),
+        "acc_tolerance": round(within_tol / total, 4),
+    }
 
 
 def range_top_accuracy(
@@ -165,52 +262,12 @@ def range_top_accuracy(
             "exact": N,              # exact match count
             "within_tolerance": N,  # within ±tolerance
             "wrong": N,
+            "subscript_mismatch": N, # wrong = same bed_num, different bed_sub
             "acc_exact": 0.0-1.0,
             "acc_tolerance": 0.0-1.0,
         }
     """
-    # Build GT lookup: normalized species → (top, base)
-    gt_lookup: dict[str, tuple[int | None, int | None]] = {}
-    for row in ground_truth:
-        sp_key = _normalize_taxon(row.get("species", ""))
-        if sp_key:
-            gt_lookup[sp_key] = (_parse_bed(row.get("range_top")), _parse_bed(row.get("range_base")))
-
-    if not gt_lookup:
-        return {"exact": 0, "within_tolerance": 0, "wrong": 0, "acc_exact": 0.0, "acc_tolerance": 0.0}
-
-    exact = 0
-    within_tol = 0
-    wrong = 0
-    total = 0
-
-    for row in predicted:
-        sp_key = _normalize_taxon(row.get("species", ""))
-        if sp_key not in gt_lookup:
-            continue
-        gt_top, gt_base = gt_lookup[sp_key]
-        pred_top = _parse_bed(row.get("range_top"))
-        if gt_top is None or pred_top is None:
-            continue
-        total += 1
-        if pred_top == gt_top:
-            exact += 1
-            within_tol += 1
-        elif abs(pred_top - gt_top) <= tolerance:
-            within_tol += 1
-        else:
-            wrong += 1
-
-    if total == 0:
-        return {"exact": 0, "within_tolerance": 0, "wrong": 0, "acc_exact": 0.0, "acc_tolerance": 0.0}
-
-    return {
-        "exact": exact,
-        "within_tolerance": within_tol,
-        "wrong": wrong,
-        "acc_exact": round(exact / total, 4),
-        "acc_tolerance": round(within_tol / total, 4),
-    }
+    return _endpoint_accuracy(predicted, ground_truth, "range_top", tolerance)
 
 
 def range_base_accuracy(
@@ -226,47 +283,7 @@ def range_base_accuracy(
     important datum. This function validates ``range_base`` and
     reports the same shape so the JSON side can render both badges.
     """
-    gt_lookup: dict[str, tuple[int | None, int | None]] = {}
-    for row in ground_truth:
-        sp_key = _normalize_taxon(row.get("species", ""))
-        if sp_key:
-            gt_lookup[sp_key] = (_parse_bed(row.get("range_top")), _parse_bed(row.get("range_base")))
-
-    if not gt_lookup:
-        return {"exact": 0, "within_tolerance": 0, "wrong": 0, "acc_exact": 0.0, "acc_tolerance": 0.0}
-
-    exact = 0
-    within_tol = 0
-    wrong = 0
-    total = 0
-
-    for row in predicted:
-        sp_key = _normalize_taxon(row.get("species", ""))
-        if sp_key not in gt_lookup:
-            continue
-        _gt_top, gt_base = gt_lookup[sp_key]
-        pred_base = _parse_bed(row.get("range_base"))
-        if gt_base is None or pred_base is None:
-            continue
-        total += 1
-        if pred_base == gt_base:
-            exact += 1
-            within_tol += 1
-        elif abs(pred_base - gt_base) <= tolerance:
-            within_tol += 1
-        else:
-            wrong += 1
-
-    if total == 0:
-        return {"exact": 0, "within_tolerance": 0, "wrong": 0, "acc_exact": 0.0, "acc_tolerance": 0.0}
-
-    return {
-        "exact": exact,
-        "within_tolerance": within_tol,
-        "wrong": wrong,
-        "acc_exact": round(exact / total, 4),
-        "acc_tolerance": round(within_tol / total, 4),
-    }
+    return _endpoint_accuracy(predicted, ground_truth, "range_base", tolerance)
 
 
 # ---------------------------------------------------------------------------

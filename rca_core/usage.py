@@ -209,6 +209,15 @@ class UsageRecord:
 @dataclass
 class UsageSummary:
     total_requests: int = 0
+    # REVIEW-2026-09-20 (finding 11): requests whose status code is actually
+    # known. Rows written before status tracking existed (or by a path that
+    # never saw an HTTP response) carry status_code NULL: they are neither a
+    # success nor a failure, so counting them in the success-rate denominator
+    # silently dragged the rate down — a DB full of legacy rows reported 20 %
+    # "success" with zero failures. total_requests stays the true row count
+    # for the "requests" card; success_rate is now success_count /
+    # rated_requests.
+    rated_requests: int = 0
     success_count: int = 0
     success_rate: float = 0.0
     total_input_tokens: int = 0
@@ -331,6 +340,7 @@ class UsageStore:
             f"""SELECT
                 COUNT(*) AS n,
                 COALESCE(SUM(CASE WHEN status_code BETWEEN 200 AND 299 THEN 1 ELSE 0 END), 0) AS ok,
+                COALESCE(SUM(CASE WHEN status_code IS NULL THEN 0 ELSE 1 END), 0) AS rated,
                 COALESCE(SUM(input_tokens), 0) AS inp,
                 COALESCE(SUM(output_tokens), 0) AS outp,
                 COALESCE(SUM(cache_read_tokens), 0) AS cr,
@@ -343,7 +353,9 @@ class UsageStore:
         if row:
             s.total_requests = int(row["n"] or 0)
             s.success_count = int(row["ok"] or 0)
-            s.success_rate = (s.success_count / s.total_requests) if s.total_requests else 0.0
+            s.rated_requests = int(row["rated"] or 0)
+            # Finding 11: denominator = rows with a known status code only.
+            s.success_rate = (s.success_count / s.rated_requests) if s.rated_requests else 0.0
             s.total_input_tokens = int(row["inp"] or 0)
             s.total_output_tokens = int(row["outp"] or 0)
             s.total_cache_read_tokens = int(row["cr"] or 0)

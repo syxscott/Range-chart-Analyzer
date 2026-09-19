@@ -186,6 +186,62 @@ def test_history_record_edit_direct_helper():
     assert edits[0]["col_name"] == "species"
 
 
+def test_record_edit_keeps_numeric_audit_values():
+    """REVIEW-2026-09-20 (finding 8): non-string audit values must survive.
+
+    The reader used to call json.loads() on the column value unconditionally.
+    A JSON-affinity column hands SQLite's native scalar back (int 12, not
+    "12"), json.loads raised TypeError, and the except-branch silently
+    replaced the value with None — the audit trail lost exactly the numeric
+    edits (bed index, confidence, age) that reviewers look for.
+    """
+    from rca_core.history import HistoryStore, HistoryRecord
+    db = _tmp_db()
+    try:
+        store = HistoryStore(db=db)
+        rid = store.add(HistoryRecord(source_file="/tmp/x.png", result={}))
+        cases = [
+            ("int", 12, 13),
+            ("zero", 0, 1),
+            ("float", 0.5, 1.5),
+            ("bool", True, False),
+            ("dict", {"bed": "23a"}, {"bed": "23b"}),
+            ("str", "Bed 23a", "Bed 23b"),
+            ("null", None, 7),
+        ]
+        for name, before, after in cases:
+            store.record_edit(rid, editor="manual", edit_type="cell_update",
+                              row_idx=1, col_name=name, before=before, after=after)
+        edits = store.get_edits(rid)
+        assert len(edits) == len(cases)
+        got = {e["col_name"]: (e["before"], e["after"]) for e in edits}
+        for name, before, after in cases:
+            assert got[name] == (before, after), f"audit value lost for {name}"
+        # None stays None on the "before" side (no value existed).
+        assert got["null"][0] is None
+    finally:
+        db.close()
+
+
+def test_decode_audit_value_adopts_native_scalars():
+    """REVIEW-2026-09-20 (finding 8): reader contract, incl. legacy rows.
+
+    Databases created before the TEXT-affinity fix still have a JSON column,
+    so SQLite returns native scalars; those must be adopted verbatim instead
+    of being re-parsed.
+    """
+    from rca_core.history import _decode_audit_value
+    assert _decode_audit_value(None) is None
+    assert _decode_audit_value(12) == 12
+    assert _decode_audit_value(0.5) == 0.5
+    assert _decode_audit_value(True) is True
+    assert _decode_audit_value(b'{"a": 1}') == {"a": 1}
+    assert _decode_audit_value('{"a": 1}') == {"a": 1}
+    assert _decode_audit_value("12") == 12
+    # Non-JSON text (written by a foreign tool) is kept, not dropped.
+    assert _decode_audit_value("Bed 23c") == "Bed 23c"
+
+
 def test_extract_result_has_image_sha256_default():
     from rca_core.extractor import ExtractResult
     r = ExtractResult()

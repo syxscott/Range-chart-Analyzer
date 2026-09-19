@@ -134,18 +134,40 @@ class ResultCache:
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     def get(self, key: str) -> dict | None:
-        """Return the cached result dict, or None on miss."""
+        """Return the cached result dict, or None on miss.
+
+        REVIEW-2026-09-20 #107: the LRU touch at the end of a HIT used to run
+        an ``UPDATE`` + ``commit`` with no error handling, while ``put()`` wraps
+        its writes in ``_with_retry`` for exactly the reason that ``server.py``
+        and ``gui.py`` share this SQLite file. A concurrent writer from the
+        other process therefore made a plain cache READ raise
+        ``sqlite3.OperationalError: database is locked`` — a read that is only
+        ever an optimisation turned into a hard failure of the request.
+        The touch is now best-effort: a fresh ``ts`` only refines eviction
+        order, so losing it (to a lock, or to anything else) must never change
+        the value returned to the caller. The read itself stays OUTSIDE the
+        try, so a genuinely broken connection is still reported rather than
+        silently degrading every hit into a miss.
+        """
         with self._lock:
             cur = self._conn.execute(
                 "SELECT v FROM extract_cache WHERE k = ?", (key,))
             row = cur.fetchone()
             if row is None:
                 return None
-            # Update timestamp (LRU touch).
-            self._conn.execute(
-                "UPDATE extract_cache SET ts = ? WHERE k = ?",
-                (time.time(), key))
-            self._conn.commit()
+            # Update timestamp (LRU touch) — best-effort, never fatal.
+            try:
+                self._conn.execute(
+                    "UPDATE extract_cache SET ts = ? WHERE k = ?",
+                    (time.time(), key))
+                self._conn.commit()
+            except sqlite3.Error:
+                # Roll back so the failed statement cannot leave an open
+                # transaction that then blocks this connection's NEXT write.
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
             try:
                 return json.loads(row[0])
             except Exception:

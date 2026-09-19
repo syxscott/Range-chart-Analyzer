@@ -784,17 +784,30 @@ class ProviderStore:
                 "providers": [p.to_dict() for p in self.providers],
             }
             tmp = self.path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
-            # Bug-9 fix: tighten permissions on POSIX *before* the rename so
-            # the final file is never readable by other users. On Windows
-            # this is a no-op (the ACL model differs); the worst case is
-            # readable only to the current user via the inherited DACL.
-            _chmod_user_only(tmp)
-            os.replace(tmp, self.path)
-            _chmod_user_only(self.path)
+            # REVIEW-2026-09-20 #25: without the finally a failed write or a
+            # failed os.replace (locked target on Windows, disk full,
+            # permissions) left ``providers.json.tmp`` behind forever - a
+            # stale file holding every API key in cleartext next to the real
+            # store. Clean it up on every path; after a successful replace the
+            # name no longer exists so the removal is skipped.
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                # Bug-9 fix: tighten permissions on POSIX *before* the rename so
+                # the final file is never readable by other users. On Windows
+                # this is a no-op (the ACL model differs); the worst case is
+                # readable only to the current user via the inherited DACL.
+                _chmod_user_only(tmp)
+                os.replace(tmp, self.path)
+                _chmod_user_only(self.path)
+            finally:
+                if os.path.exists(tmp):
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
 
     # -- defaults --------------------------------------------------------
 
@@ -985,6 +998,19 @@ def _summarise_empty_payload(payload: Any) -> str:
             if stop:
                 return ("response contained no text blocks "
                         f"(stop_reason={stop})")
+            # REVIEW-2026-09-20 #21: Gemini reports a safety/PII refusal as a
+            # 200 with empty parts plus ``promptFeedback.blockReason`` - without
+            # this the user saw "no text" instead of "blocked: SAFETY".
+            feedback = payload.get("promptFeedback")
+            if isinstance(feedback, dict) and feedback.get("blockReason"):
+                return ("response blocked upstream "
+                        f"(blockReason={feedback['blockReason']})")
+            cands = payload.get("candidates")
+            if isinstance(cands, list) and cands and isinstance(cands[0], dict):
+                fr = cands[0].get("finishReason")
+                if fr:
+                    return ("response contained no text blocks "
+                            f"(finishReason={fr})")
         return "response contained no text blocks"
     except Exception:
         return "response contained no text blocks"
@@ -1007,6 +1033,33 @@ def _decode_err_body(err_body: bytes) -> str:
             return ""
 
 
+# REVIEW-2026-09-20 #24: ceiling for a single response body. A chart
+# extraction answers with a few tens of KB of JSON; anything beyond this is a
+# misconfigured endpoint (an HTML error page from a proxy, a streaming
+# download, a hostile host) and ``resp.read()`` would have buffered it all in
+# memory before the JSON parse even started.
+MAX_RESPONSE_BYTES = 32 * 1024 * 1024
+
+
+def _read_limited(resp, limit: int = MAX_RESPONSE_BYTES) -> bytes:
+    """Read at most ``limit`` bytes from a response / HTTPError object.
+
+    Returns the body when it fits; raises ValueError when it does not, so the
+    callers report a bounded diagnostic instead of an out-of-memory process.
+    """
+    try:
+        data = resp.read(limit + 1)
+    except TypeError:
+        # ``http.client`` always accepts a length, but lightweight response
+        # doubles (tests, local stubs) expose a bare ``read()``; degrade to it
+        # instead of failing the request outright.
+        data = resp.read()
+    data = data or b""
+    if len(data) > limit:
+        raise ValueError(f"response body exceeds {limit} bytes")
+    return data
+
+
 def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_sec: int,
                progress_callback=None):
     """Fire a POST and return (payload_bytes, status_code). Never raises.
@@ -1021,9 +1074,17 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
     ``"submitting"`` and ``"thinking"`` to allow the UI to show granular
     progress rather than a generic spinner.
     """
+    try:
+        # REVIEW-2026-09-20 #20: a provider whose ``extra_body`` holds a
+        # non-serialisable value (a datetime, an object pasted in by hand into
+        # providers.json) raised TypeError here - outside the try below - and
+        # escaped the documented never-raises contract.
+        data = json.dumps(body).encode("utf-8")
+    except Exception as e:
+        return None, None, f"[request] body not serialisable: {type(e).__name__}: {e}".encode("utf-8")
     req = urllib.request.Request(
         url,
-        data=json.dumps(body).encode("utf-8"),
+        data=data,
         headers=headers,
         method="POST",
     )
@@ -1033,7 +1094,11 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
             if progress_callback:
                 progress_callback("thinking")
-            return resp.read(), resp.status, b""
+            try:
+                # REVIEW-2026-09-20 #24: bounded read (see _read_limited).
+                return _read_limited(resp), resp.status, b""
+            except ValueError as e:
+                return None, resp.status, str(e).encode("utf-8")
     except urllib.error.HTTPError as e:
         # Best-effort read of the upstream error body. Don't fail if the
         # server closed the connection.
@@ -1044,9 +1109,20 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
             progress_callback("thinking")
         err_body = b""
         try:
-            err_body = e.read() or b""
+            try:
+                err_body = _read_limited(e) or b""
+            except ValueError as exc:
+                err_body = str(exc).encode("utf-8")
         except Exception:
             err_body = b""
+        finally:
+            # REVIEW-2026-09-20 #24: HTTPError IS a response object; close it
+            # explicitly so the (possibly chunked) connection is released
+            # instead of waiting for the GC on this hot failure path.
+            try:
+                e.close()
+            except Exception:
+                pass
         # REVIEW-2026-11-07 (low): every return path of this function yields
         # bytes for the body slot (b"" / e.read() / msg.encode above) —
         # keep it that way so _decode_err_body's double-decode stays simple.
@@ -1083,13 +1159,26 @@ def _get_json(url: str, headers: dict[str, str], timeout_sec: int):
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-            return resp.read(), resp.status, b""
+            try:
+                # REVIEW-2026-09-20 #24: bounded read, same as _post_json.
+                return _read_limited(resp), resp.status, b""
+            except ValueError as e:
+                return None, resp.status, str(e).encode("utf-8")
     except urllib.error.HTTPError as e:
         err_body = b""
         try:
-            err_body = e.read() or b""
+            try:
+                err_body = _read_limited(e) or b""
+            except ValueError as exc:
+                err_body = str(exc).encode("utf-8")
         except Exception:
             err_body = b""
+        finally:
+            # REVIEW-2026-09-20 #24: release the error response explicitly.
+            try:
+                e.close()
+            except Exception:
+                pass
         return None, e.code, err_body
     except TimeoutError as e:
         return None, None, f"[network] timeout: {e}".encode("utf-8")
@@ -1113,22 +1202,28 @@ def _get_json(url: str, headers: dict[str, str], timeout_sec: int):
 urllib.request.install_opener(make_pinning_opener())
 
 
-# Only ``/v1`` is stripped — never ``/v1beta`` (Google's Gemini endpoint is
-# /v1beta/... and the Gemini path appends ``:generateContent`` directly).
+# A trailing API-VERSION segment is stripped: ``/v1`` AND ``/v1beta``
+# (REVIEW-2026-09-20 #22). Every caller re-appends its own canonical version,
+# so keeping the suffix produced the double-path bug: the shipped Gemini
+# preset (``https://generativelanguage.googleapis.com/v1beta``) hit
+# ``/v1beta/v1beta/models/…:generateContent`` and 404'd out of the box, and an
+# OpenAI-compatible base ending in ``/v1beta`` got
+# ``/v1beta/v1/chat/completions``.
 # The OpenAI/Anthropic callers both add their own canonical ``/v1/...`` so
 # stripping a redundant ``/v1`` suffix avoids the ``/v1/v1`` double-path bug
 # that 404'd ~48 OpenAI presets. Non-version trailing segments
 # (``/anthropic``, ``/compatible-mode``, ``/openai``) are preserved.
-_V1_TAIL = re.compile(r"/v1/?$", re.IGNORECASE)
+_V1_TAIL = re.compile(r"/v1(?:beta|alpha)?/?$", re.IGNORECASE)
 
 
 def _api_base(endpoint: str) -> str:
-    """Normalize an endpoint by stripping a trailing ``/v1`` segment so
-    per-format callers can append their canonical ``/v1/...`` path without
-    producing a ``/v1/v1`` double-path.
+    """Normalize an endpoint by stripping a trailing ``/v1``/``/v1beta``
+    segment so per-format callers can append their canonical ``/v1/...`` (or
+    ``/v1beta/...``) path without producing a double version segment.
 
-    The Gemini endpoint ``/v1beta`` and any other ``/vN`` segment are
-    preserved — only ``/v1`` is treated as a duplicate suffix.
+    Provider-specific versions (``/v2`` .. ``/v4``) are NOT stripped — those
+    are the host's real API version and are handled by
+    :data:`_BASE_VERSION_TAIL` in :func:`_endpoint_path`.
     """
     return _V1_TAIL.sub("", (endpoint or "").rstrip("/"))
 
@@ -1140,7 +1235,7 @@ def _api_base(endpoint: str) -> str:
 # ("/chat/completions", "/messages"). Appending the full "/v1/..." produced
 # /api/paas/v4/v1/chat/completions, which those hosts do not serve - a valid
 # key then failed the provider Test and every extraction.
-_BASE_VERSION_TAIL = re.compile(r"/v\d+(?:\.\d+)?$", re.IGNORECASE)
+_BASE_VERSION_TAIL = re.compile(r"/v\d+(?:\.\d+)?(?:beta|alpha)?$", re.IGNORECASE)
 
 
 def _endpoint_path(base: str, resource: str) -> str:
@@ -1153,6 +1248,26 @@ def _endpoint_path(base: str, resource: str) -> str:
     """
     if _BASE_VERSION_TAIL.search(base):
         return base + resource[len("/v1"):]
+    return base + resource
+
+
+# Leading ``/v1beta`` of the canonical Gemini resource paths.
+_GEMINI_VERSION_PREFIX = re.compile(r"^/v1beta(?=/)", re.IGNORECASE)
+
+
+def _gemini_path(base: str, resource: str) -> str:
+    """Join a canonical ``/v1beta/...`` Gemini resource onto a provider base.
+
+    REVIEW-2026-09-20 #22: the Gemini callers used to concatenate
+    ``f"{base}/v1beta/..."`` unconditionally, so any host that publishes its
+    own version segment (``https://gemini-proxy.example.com/v2``) received the
+    double path ``/v2/v1beta/models/...``. ``_api_base`` already removes a
+    trailing ``/v1beta``, so this covers the remaining ``/vN`` bases; it is the
+    Gemini twin of :func:`_endpoint_path` (which only knows how to strip a
+    literal ``/v1`` prefix).
+    """
+    if _BASE_VERSION_TAIL.search(base):
+        return base + _GEMINI_VERSION_PREFIX.sub("", resource, count=1)
     return base + resource
 
 
@@ -1197,13 +1312,13 @@ def _call_anthropic(
             }
         ],
     }
-    body.update(provider.extra_body)
+    body.update(provider.extra_body or {})
     headers = {
         "x-api-key": provider.api_key,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
-    headers.update(provider.extra_headers)
+    headers.update(provider.extra_headers or {})
     if progress_callback:
         progress_callback("uploading")
     text, truncated, status, err_body, payload = _read_response(
@@ -1286,12 +1401,12 @@ def _call_openai(
         # prose-wrapped / truncated outputs that the fallback chain otherwise
         # has to clean up. Reasoning models reject this field — see above.
         body["response_format"] = {"type": "json_object"}
-    body.update(provider.extra_body)
+    body.update(provider.extra_body or {})
     headers = {
         "Authorization": f"Bearer {provider.api_key}",
         "content-type": "application/json",
     }
-    headers.update(provider.extra_headers)
+    headers.update(provider.extra_headers or {})
     if progress_callback:
         progress_callback("uploading")
     payload_bytes, status, err_body = _post_json(
@@ -1303,24 +1418,51 @@ def _call_openai(
     try:
         payload = json.loads(payload_bytes.decode("utf-8"))
     except Exception:
-        return None, False, status, err_str, None
-    choices = payload.get("choices") or []
+        # REVIEW-2026-09-10: a 2xx that is not JSON (a WAF page, an SSE
+        # stream) must hand its bytes back as the error body, not vanish.
+        return None, False, status, _decode_err_body(payload_bytes), None
     raw_text = ""
-    if choices and isinstance(choices[0], dict):
-        msg = choices[0].get("message") or {}
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if isinstance(choices, str):
+        # Relays that stringify the array instead of emitting it.
+        try:
+            choices = json.loads(choices)
+        except Exception:
+            choices = []
+    truncated = False
+    for ch in (choices or []) if isinstance(choices, list) else []:
+        # REVIEW-2026-09-20 #20: ``payload`` may be a list/str/None (a
+        # malformed 2xx), ``message`` may be a string, and ``content`` may be
+        # null or a number. Every one of those used to raise AttributeError /
+        # TypeError out of a function documented as never raising - the whole
+        # reply was lost instead of being reported as an empty response.
+        if not isinstance(ch, dict):
+            continue
+        msg = ch.get("message")
+        if not isinstance(msg, dict):
+            continue
         content = msg.get("content", "")
         # Some OpenAI-compatible endpoints return content as a list of parts
         # ({"type":"text","text":...}) rather than a plain string; collapse
         # it to text so downstream JSON parsing doesn't receive a list.
         if isinstance(content, list):
-            raw_text = "".join(
-                (p.get("text", "") if isinstance(p, dict) else (p if isinstance(p, str) else ""))
-                for p in content
-            )
+            for part in content:
+                if isinstance(part, dict):
+                    raw_text += _coerce_text(part.get("text"))
+                elif isinstance(part, str):
+                    raw_text += part
         else:
-            raw_text = content or ""
-    finish = choices[0].get("finish_reason") if choices and isinstance(choices[0], dict) else None
-    truncated = finish == "length"
+            raw_text += _coerce_text(content)
+        if raw_text.strip():
+            truncated = ch.get("finish_reason") == "length"
+            break
+    if not raw_text.strip():
+        # REVIEW-2026-09-20 #21: mirrors _read_response. Returning "" told the
+        # caller "the model answered, it was just empty", so the UI reported a
+        # parse error and the real reason (an error object inside a 2xx, e.g.
+        # "insufficient balance") was thrown away.
+        return (None, truncated, status, _summarise_empty_payload(payload),
+                payload if isinstance(payload, dict) else None)
     usage = None
     u = parse_usage(payload, "openai")
     if u:
@@ -1375,7 +1517,7 @@ def _call_gemini(
     # (and any future model id that contains a reserved char) don't break
     # the URL parser or accidentally introduce an extra path segment.
     safe_model = urllib.parse.quote(model, safe="")
-    target = f"{base}/v1beta/models/{safe_model}:generateContent"
+    target = _gemini_path(base, f"/v1beta/models/{safe_model}:generateContent")
     body: dict[str, Any] = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [
@@ -1397,7 +1539,23 @@ def _call_gemini(
             "response_mime_type": "application/json",
         },
     }
-    body.update(provider.extra_body)
+    body.update(provider.extra_body or {})
+    # REVIEW-2026-09-20 #27: ``call_llm_api`` folds temperature/seed into
+    # ``extra_body``, and the update above dropped them at the ROOT of this
+    # payload - but the Gemini REST schema keeps both inside
+    # ``generation_config``. Official Google answers an unknown root field with
+    # 400 ``Unknown name`` (or silently ignores it), so the reproducibility
+    # knobs were a no-op on this format. Move them in; a value the user set
+    # directly inside ``generation_config`` still wins.
+    # Copy before mutating: ``body["generation_config"]`` may be the very dict
+    # owned by ``provider.extra_body``, and editing it in place would leak the
+    # per-call sampling into the persisted provider.
+    gen_cfg = body.get("generation_config")
+    gen_cfg = dict(gen_cfg) if isinstance(gen_cfg, dict) else {}
+    for _key in ("temperature", "seed"):
+        if _key in body:
+            gen_cfg.setdefault(_key, body.pop(_key))
+    body["generation_config"] = gen_cfg
     headers = {
         "content-type": "application/json",
         # Google's official Generative Language API authenticates via
@@ -1407,7 +1565,7 @@ def _call_gemini(
         "x-goog-api-key": provider.api_key,
         "x-api-key": provider.api_key,
     }
-    headers.update(provider.extra_headers)
+    headers.update(provider.extra_headers or {})
     if progress_callback:
         progress_callback("uploading")
     payload_bytes, status, err_body = _post_json(
@@ -1419,29 +1577,50 @@ def _call_gemini(
     try:
         payload = json.loads(payload_bytes.decode("utf-8"))
     except Exception:
-        return None, False, status, err_str, None
-    candidates = payload.get("candidates") or []
+        # REVIEW-2026-09-20 #20: a 2xx that is not JSON (a WAF page, an SSE
+        # stream) used to be reported with the *stale* empty err_str, so the
+        # operator saw "HTTP 200" and nothing else. Mirror _read_response.
+        return None, False, status, _decode_err_body(payload_bytes), None
+    # REVIEW-2026-09-20 #20: a malformed 2xx whose root is a list/str/number
+    # (relays do this) raised AttributeError out of a documented never-raising
+    # function, so the whole reply vanished instead of reporting "no text".
+    payload_obj = payload if isinstance(payload, dict) else {}
+    candidates = payload_obj.get("candidates") or []
+    if isinstance(candidates, str):
+        try:
+            candidates = json.loads(candidates)
+        except Exception:
+            candidates = []
+    if not isinstance(candidates, list):
+        candidates = []
+    first = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
     raw_text = ""
-    if candidates and isinstance(candidates[0], dict):
-        content = candidates[0].get("content") or {}
-        parts = content.get("parts") or []
-        for part in parts:
-            if not isinstance(part, dict):
-                continue
-            # Gemini 2.5+ emits a separate ``thought`` part alongside the
-            # real output — chain-of-thought / planning that the model
-            # surfaces as text. Skip it: the JSON downstream parser would
-            # otherwise see e.g. ``internal reasoning...{"answer":42}``.
-            if part.get("thought"):
-                continue
-            if "text" in part:
-                raw_text += part["text"]
-    finish = candidates[0].get("finishReason") if candidates and isinstance(candidates[0], dict) else None
+    content = first.get("content")
+    parts = content.get("parts") if isinstance(content, dict) else None
+    for part in (parts or []) if isinstance(parts, list) else []:
+        if not isinstance(part, dict):
+            continue
+        # Gemini 2.5+ emits a separate ``thought`` part alongside the
+        # real output — chain-of-thought / planning that the model
+        # surfaces as text. Skip it: the JSON downstream parser would
+        # otherwise see e.g. ``internal reasoning...{"answer":42}``.
+        if part.get("thought"):
+            continue
+        if "text" in part:
+            # ``part["text"]`` may legitimately be null/numeric from a broken
+            # proxy; ``raw_text += None`` used to raise TypeError here.
+            raw_text += _coerce_text(part.get("text"))
+    finish = first.get("finishReason")
     truncated = finish in ("MAX_TOKENS", "LENGTH")
     usage = None
-    u = parse_usage(payload, "gemini")
+    u = parse_usage(payload_obj, "gemini")
     if u:
         usage = dict(u); usage["estimated"] = False
+    if not raw_text.strip():
+        # REVIEW-2026-09-20 #21: same contract as the Anthropic / OpenAI paths -
+        # an empty 200 is NOT "the model answered with nothing"; hand the
+        # upstream reason (blockReason, an in-body error) back as err_body.
+        return None, truncated, status, _summarise_empty_payload(payload_obj), None
     return raw_text, truncated, status, err_str, usage
 
 
@@ -1618,6 +1797,7 @@ def call_llm_api_with_retry(
     max_tokens: int,
     timeout_sec: int = 120,
     capture_error_body: bool = False,
+    progress_callback=None,
     retries: int = 3,
     backoff_factor: float = 1.6,
     initial_backoff_sec: float = 0.8,
@@ -1630,6 +1810,13 @@ def call_llm_api_with_retry(
     (the ``[retry N/M after Xs]`` suffix) are appended to ``err_body`` so
     the operator can see how many attempts were spent before giving up.
 
+    REVIEW-2026-09-20 #26: ``progress_callback`` is forwarded to every
+    attempt now. Before, the retry path dropped it, so GUI/server callers that
+    went through this wrapper lost the granular "submitting / uploading /
+    thinking" stages and the UI froze on one spinner for the whole retry chain.
+    A callback that raises is swallowed - the stage report is informational
+    only and must not abort the call.
+
     REVIEW-2026-11-07 (low): temperature/seed are forwarded now — before,
     the retry chain silently dropped sampling parameters, so callers had
     to pre-merge them into provider.extra_body to get reproducibility.
@@ -1638,6 +1825,16 @@ def call_llm_api_with_retry(
     path already covers this via the extra_body fields in make_key).
     """
     last: tuple[str | None, bool, int | None, str, dict | None] = (None, False, None, "", None)
+    if progress_callback is not None:
+        # A UI callback that raises (e.g. a widget already torn down) must not
+        # abort the extraction; drop the stage report, keep the call.
+        _user_cb = progress_callback
+
+        def progress_callback(stage, _cb=_user_cb):  # noqa: F811
+            try:
+                _cb(stage)
+            except Exception:
+                pass
     for attempt in range(retries):
         last = call_llm_api(
             provider=provider,
@@ -1648,6 +1845,7 @@ def call_llm_api_with_retry(
             max_tokens=max_tokens,
             timeout_sec=timeout_sec,
             capture_error_body=capture_error_body,
+            progress_callback=progress_callback,
             temperature=temperature,
             seed=seed,
         )
@@ -1765,7 +1963,7 @@ def _probe_openai_models(provider: LlmProvider, timeout_sec: int) -> ConnectionR
     headers = {
         "Authorization": f"Bearer {provider.api_key}",
     }
-    headers.update(provider.extra_headers)
+    headers.update(provider.extra_headers or {})
     t0 = _now_ms()
     payload_bytes, status, err_body = _get_json(target, headers, timeout_sec)
     res = ConnectionResult(ok=False, latency_ms=_now_ms() - t0, status=status)
@@ -1813,12 +2011,12 @@ def _probe_gemini_models(provider: LlmProvider, timeout_sec: int) -> ConnectionR
     # this function put it in the URL via ?key=... which leaked the key
     # into proxy/Referer logs. Users who need the URL form can override via
     # `extra_headers={"X-Use-Url-Key": "1"}` (gate detected via the body shape).
-    target = f"{base}/v1beta/models"
+    target = _gemini_path(base, "/v1beta/models")
     headers = {
         "x-goog-api-key": provider.api_key,
         "x-api-key": provider.api_key,
     }
-    headers.update(provider.extra_headers)
+    headers.update(provider.extra_headers or {})
     t0 = _now_ms()
     payload_bytes, status, err_body = _get_json(target, headers, timeout_sec)
     res = ConnectionResult(ok=False, latency_ms=_now_ms() - t0, status=status)
@@ -1880,7 +2078,12 @@ def _probe_minimal_generate(
                        "content-type": "application/json"}
         elif fmt == ApiFormat.GEMINI:
             base = _api_base(provider.endpoint)
-            target = f"{base}/v1beta/models/{model}:generateContent"
+            # REVIEW-2026-09-20 #22: same version-tail + quoting rules as
+            # _call_gemini, otherwise the connection test probes a URL the
+            # extraction path never uses (and a tuned model id broke it).
+            target = _gemini_path(
+                base,
+                f"/v1beta/models/{urllib.parse.quote(model, safe='')}:generateContent")
             body = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}],
                     "generation_config": {"max_output_tokens": PROBE_MAX_TOKENS}}
             headers = {"content-type": "application/json",
@@ -1893,7 +2096,7 @@ def _probe_minimal_generate(
             headers = {"x-api-key": provider.api_key,
                        "anthropic-version": "2023-06-01",
                        "content-type": "application/json"}
-        headers.update(provider.extra_headers)
+        headers.update(provider.extra_headers or {})
         body.update(provider.extra_body or {})
         payload_bytes, status, err_body = _post_json(target, body, headers, timeout_sec)
         return payload_bytes, status, err_body, _now_ms() - t0

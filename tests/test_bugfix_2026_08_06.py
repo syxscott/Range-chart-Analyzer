@@ -75,10 +75,17 @@ def test_write_history_uses_real_fingerprint(tmp_history_store):
     assert recs[0].request_meta.get("image_sha256") == sha
 
 
-def test_write_history_empty_fingerprint_uses_sentinel(tmp_history_store):
-    """Defensive contract: when no fingerprint is available (e.g. every slot
-    was a cache hit), the fallback remains the deterministic empty-bytes
-    hash rather than crashing or writing NULL."""
+def test_write_history_empty_fingerprint_is_not_sentinel(tmp_history_store):
+    """REVIEW-2026-09-20 (item 5) — this test previously pinned the OPPOSITE
+    contract ("the fallback remains the deterministic empty-bytes hash").
+
+    That sentinel was the bug: ``e3b0c442...`` is the SHA-256 of zero bytes, so
+    HistoryStore.get_by_sha256() answered "every record for this image" with
+    every unrelated fingerprint-less record, and the audit trail implied a
+    digest for an image that was never hashed. A missing fingerprint is now
+    stored as missing (NULL column + request_meta flag) instead of as a bogus
+    shared digest.
+    """
     import server
 
     res = ExtractResult(ok=True, data={"confidence": 0.5, "runs": 2}, raw="{}")
@@ -88,7 +95,9 @@ def test_write_history_empty_fingerprint_uses_sentinel(tmp_history_store):
     )
     recs = tmp_history_store.list(limit=10)
     assert recs
-    assert recs[0].image_sha256 == compute_image_sha256_from_b64("")
+    assert recs[0].image_sha256 == ""
+    assert recs[0].image_sha256 != compute_image_sha256_from_b64("")
+    assert recs[0].request_meta.get("image_sha256_missing") is True
 
 
 def test_extract_result_default_fingerprint_is_empty():

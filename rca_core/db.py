@@ -33,6 +33,23 @@ def default_db_path() -> str:
     return os.path.join(base, "rca.db")
 
 
+class DatabaseClosedError(sqlite3.ProgrammingError):
+    """Raised when a :class:`Database` is used after ``close()``.
+
+    REVIEW-2026-09-20 (finding 6): closing a Database sets ``_conn`` to
+    ``None``, so the next query surfaced as a bare
+    ``AttributeError: 'NoneType' object has no attribute 'execute'`` — no
+    hint that the handle was closed, and nothing in the app's
+    ``except sqlite3.Error`` handlers caught it (the History / Usage pages
+    therefore crashed instead of showing the storage error).
+
+    It subclasses ``sqlite3.ProgrammingError`` — the exact type SQLite itself
+    raises for "Cannot operate on a closed database" — so every existing
+    ``except sqlite3.DatabaseError`` / ``sqlite3.Error`` / ``Exception``
+    handler keeps working; only the message becomes explicit.
+    """
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,8 +103,20 @@ CREATE TABLE IF NOT EXISTS record_edits (
     edit_type TEXT NOT NULL,
     row_idx INTEGER,
     col_name TEXT,
-    before JSON,
-    after JSON,
+    -- REVIEW-2026-09-20 (finding 8): these two were declared ``JSON``.
+    -- JSON affinity keeps the value's own storage class, so a bound TEXT
+    -- that parses as a JSON scalar is stored AS that scalar (verified on
+    -- SQLite 3.45: ``typeof(before)`` returned ``integer`` for
+    -- ``json.dumps(12) == "12"`` and ``real`` for ``"12.5"``). The audit row
+    -- for an edit of a numeric bed / token / age value therefore came back
+    -- as an int/float, ``json.loads()`` raised TypeError on it and the
+    -- history detail dialog displayed "no previous value" — silently losing
+    -- the audited datum. TEXT stores exactly what was written. Old
+    -- databases keep their ``JSON`` columns (SQLite cannot retype a column);
+    -- ``history.HistoryStore.get_edits`` accepts both shapes, so no migration
+    -- is needed and the column names / order stay unchanged.
+    before TEXT,
+    after TEXT,
     FOREIGN KEY (record_id) REFERENCES history(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_record_edits_record ON record_edits(record_id, timestamp);
@@ -139,6 +168,15 @@ class Database:
         if _parent:
             os.makedirs(_parent, exist_ok=True)
         self._lock = threading.RLock()
+        # REVIEW-2026-09-20 (finding 6/7): explicit lifecycle + transaction
+        # nesting state. ``_closed`` turns the post-close AttributeError into
+        # a named sqlite3 error; ``_tx_depth`` / ``_tx_owner`` let
+        # ``transaction()`` be re-entered by the thread that already holds it
+        # instead of dying on "cannot start a transaction within a
+        # transaction".
+        self._closed = False
+        self._tx_depth = 0
+        self._tx_owner: int | None = None
         # check_same_thread=False so any thread may borrow the connection.
         # Combined with WAL, multiple readers don't block each other and
         # the GIL keeps single-statement executes atomic. Multi-statement
@@ -234,13 +272,38 @@ class Database:
 
     def close(self) -> None:
         """Close the underlying connection. Idempotent."""
-        with self._lock:
+        lock = getattr(self, "_lock", None)
+        if lock is None:
+            # __init__ failed before the lock existed (bad path, unreadable
+            # file): __del__ must still be able to call us quietly.
+            self._conn = None
+            self._closed = True
+            return
+        with lock:
+            self._closed = True
             if self._conn is not None:
                 try:
                     self._conn.close()
                 except Exception:
                     pass
                 self._conn = None
+
+    def _require_conn(self) -> sqlite3.Connection:
+        """Return the live connection or raise :class:`DatabaseClosedError`.
+
+        REVIEW-2026-09-20 (finding 6): a long-lived ``Database`` shared with a
+        HistoryStore/UsageStore can outlive its owner (window closed, worker
+        finishing late). Every access used to dereference ``self._conn``
+        unconditionally and raise
+        ``AttributeError: 'NoneType' object has no attribute 'execute'``.
+        """
+        conn = getattr(self, "_conn", None)
+        if conn is None or self._closed:
+            raise DatabaseClosedError(
+                f"Database handle for {getattr(self, 'path', '?')!r} is closed; "
+                "create a new Database() before running statements."
+            )
+        return conn
 
     def __del__(self) -> None:
         # Best-effort cleanup. Don't raise from __del__.
@@ -261,9 +324,11 @@ class Database:
         Use ``transaction()`` instead when you need a multi-statement
         write — this context manager does NOT start a transaction, so
         a writer racing with a reader here may interleave.
+
+        Raises ``DatabaseClosedError`` when the handle has been closed.
         """
         with self._lock:
-            yield self._conn
+            yield self._require_conn()
 
     # -- Schema migrations ------------------------------------------------
     # The on-disk schema is versioned in `_schema_version`. New columns
@@ -317,23 +382,66 @@ class Database:
         Multi-statement writes MUST go through here so the BEGIN/COMMIT
         pair is held under the lock; otherwise two writers can interleave
         their statements and corrupt the DB.
+
+        REVIEW-2026-09-20 (finding 7): nesting is now supported. A helper
+        that opens its own ``transaction()`` while an outer one is already
+        open used to die on ``sqlite3.OperationalError: cannot start a
+        transaction within a transaction`` — and, worse, its ``commit()``
+        flushed the OUTER block half way through. A depth counter tracks the
+        re-entry (the RLock guarantees only the owning thread can be inside),
+        so only the outermost frame issues BEGIN / COMMIT / ROLLBACK; inner
+        frames simply join the running transaction.
+
+        Note on ``execute()`` inside a transaction (finding 7, behaviour kept
+        on purpose): ``execute()`` / ``executemany()`` commit immediately
+        after their statement, which ENDS the enclosing ``BEGIN IMMEDIATE``
+        block. Callers that must stay atomic have to use ``run()`` /
+        ``query()`` (see the ``REVIEW-2026-07-31`` notes in history.py).
+        Converting ``execute()`` into a no-commit-inside-a-transaction today
+        would change the semantics of every existing call site, so it is
+        documented rather than changed.
         """
         with self._lock:
+            conn = self._require_conn()
+            outermost = self._tx_depth == 0
+            if outermost:
+                self._tx_owner = threading.get_ident()
+                conn.execute("BEGIN IMMEDIATE")
+            else:
+                # Same thread (the RLock is reentrant and held by it): join
+                # the outer transaction instead of starting a second one.
+                if self._tx_owner != threading.get_ident():  # pragma: no cover
+                    raise DatabaseClosedError(
+                        "transaction() held by another thread — unreachable "
+                        "while the write lock is exclusive; please report."
+                    )
+            self._tx_depth += 1
             try:
-                self._conn.execute("BEGIN IMMEDIATE")
-                yield self._conn
-                self._conn.commit()
+                yield conn
+                if outermost:
+                    conn.commit()
             except Exception:
-                try:
-                    self._conn.rollback()
-                except Exception:
-                    pass
+                if outermost:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
                 raise
+            finally:
+                self._tx_depth -= 1
+                if outermost:
+                    self._tx_owner = None
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
+        """Run one statement and COMMIT immediately.
+
+        WARNING (finding 7): inside ``transaction()`` this commits the outer
+        transaction after a single statement. Use ``run()`` there.
+        """
         with self._lock:
-            cur = self._conn.execute(sql, params)
-            self._conn.commit()
+            conn = self._require_conn()
+            cur = conn.execute(sql, params)
+            conn.commit()
             return cur
 
     def run(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
@@ -347,12 +455,13 @@ class Database:
         whole block.
         """
         with self._lock:
-            return self._conn.execute(sql, params)
+            return self._require_conn().execute(sql, params)
 
     def executemany(self, sql: str, params_list: list[Any]) -> sqlite3.Cursor:
         with self._lock:
-            cur = self._conn.executemany(sql, params_list)
-            self._conn.commit()
+            conn = self._require_conn()
+            cur = conn.executemany(sql, params_list)
+            conn.commit()
             return cur
 
     def query(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
@@ -364,12 +473,12 @@ class Database:
         # serialize. The RLock is reentrant so nesting under transaction() is
         # safe.
         with self._lock:
-            cur = self._conn.execute(sql, params)
+            cur = self._require_conn().execute(sql, params)
             return list(cur)
 
     def query_one(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
         with self._lock:
-            cur = self._conn.execute(sql, params)
+            cur = self._require_conn().execute(sql, params)
             return cur.fetchone()
 
 

@@ -72,7 +72,7 @@ class TestExporterBiozoneInvariantRemoved:
             "biozones": [],
             "sections": [{"name": "S1"}],
         }
-        ok, issues = exporter.validate_export_invariants(data)
+        ok, issues, _warnings = exporter.validate_export_invariants(data)
         assert ok, f"biozone-less rows must pass, got issues: {issues}"
         assert issues == []
 
@@ -106,7 +106,7 @@ class TestExporterBiozoneInvariantRemoved:
             "biozones": [],
             "sections": [{"name": "X"}],
         }
-        ok, issues = exporter.validate_export_invariants(data)
+        ok, issues, _warnings = exporter.validate_export_invariants(data)
         assert not ok
         assert any(i.get("constraint") == "range_base_le_range_top"
                    for i in issues)

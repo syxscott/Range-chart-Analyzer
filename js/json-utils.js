@@ -168,22 +168,39 @@ function extractBalancedJsonArray(text) {
 // Strip markdown code fences (```json ... ```) from a model response.
 // Handles: ```json ``` / ``` ``` / leading-only / multiple fences.
 // Returns the string unchanged if no fence is present.
+//
+// REVIEW-2026-09-20 #102 (mirror of rca_core/json_utils.strip_markdown_fence):
+// the two whole-text/single-block shortcuts that used to live here returned
+// blocks[0] BEFORE any ranking ran, so when a model echoed the contract in a
+// ```json block and put the real payload in the prose AFTER it, Level 3
+// accepted the restated example as "a dict" and the extraction was placeholders
+// (the browser silently rendered "<binomial>" rows). One block now goes through
+// the same ranking as many, and the chosen block is then compared against the
+// text OUTSIDE the fences on the same two signals (payload-key density, then
+// placeholder density); a strictly better prose makes the delimiters disappear
+// and the WHOLE text get returned so the later levels score every candidate.
+// Ties go to the block, so every historically-correct answer is reproduced.
 function stripMarkdownFence(text) {
   if (!text) return text;
-  let s = String(text).trim();
-  // If the whole text is one fenced block, extract its inner content.
-  let fenceBlock = s.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/i);
-  if (fenceBlock) return fenceBlock[1].trim();
-  // FIX (fenced+prose): also handle a fenced block surrounded by prose on
-  // either side, e.g. "Here:\n```json\n{...}\n```\nThanks". The stricter
-  // regex above requires the fence to span the whole string; this one
-  // locates the first fenced block anywhere in the text.
-  fenceBlock = s.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
-  if (fenceBlock) return fenceBlock[1].trim();
+  const s = String(text).trim();
+  const matches = _collectFenceMatches(s);
+  const blocks = matches.map((m) => m.block);
+  if (blocks.length > 0) {
+    const chosen = _chooseFenceBlock(blocks);
+    // PERF parity with Python: scan the prose first, and a (0, 0) rank (no
+    // parseable object outside the fences — the overwhelmingly common shape)
+    // skips the block scan entirely.
+    const parts = _splitAroundFences(s, matches);
+    const outsideRank = rcaBestPayloadRank(parts.outside);
+    if (!_rankIsZero(outsideRank) && _rankGreaterThan(outsideRank, rcaBestPayloadRank(chosen))) {
+      return parts.unfenced;
+    }
+    return chosen;
+  }
   // Otherwise strip leading/trailing fence lines defensively.
-  s = s.replace(/^```(?:json)?\s*/gmi, '');
-  s = s.replace(/\s*```$/gmi, '');
-  return s;
+  let out = s.replace(/^```(?:json)?\s*/gmi, '');
+  out = out.replace(/\s*```$/gm, '');
+  return out;
 }
 
 // Find the first JSON object or array inside prose (e.g. "Here is the
@@ -254,71 +271,154 @@ const RCA_KNOWN_ROOT_KEYS = new Set([
   'metadata', 'nodes', 'root_ids', 'legend',
 ]);
 
-// Collect the inner content of every complete markdown fence block, in
-// order. Mirrors the fence regex strip_markdown_fence already uses
-// (```json-tagged or bare); blocks that are never closed are ignored (the
-// caller falls back to the old strip path, which handles truncation).
-function _collectFenceBlocks(s) {
-  const blocks = [];
-  const re = /```(?:json)?[ \t]*\r?\n?([\s\S]*?)\r?\n?```/gi;
+// True when *parsed* is an object carrying at least one known root key.
+// Mirror of rca_core/json_utils._looks_like_payload_root.
+function rcaLooksLikePayloadRoot(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  for (const k of Object.keys(parsed)) {
+    if (RCA_KNOWN_ROOT_KEYS.has(k)) return true;
+  }
+  return false;
+}
+
+// Array counterpart, mirror of _looks_like_payload_list (REVIEW-2026-09-20
+// #101): a reply cut inside a TOP-LEVEL array repairs to a list, and the
+// dict-only guard of Level 3.5 threw that payload away so Level 4 rescued one
+// inner row. Accepted when (a) the MAJORITY of the elements are objects — a
+// [...] of bare scalars is far more likely a prose fragment than an extraction —
+// and (b) either one of those objects carries a known root key (an array of
+// wrapper objects) or at least one looks like a DATA ROW (>= 2 fields, which is
+// what a cut row array contains).
+function rcaLooksLikePayloadList(parsed) {
+  if (!Array.isArray(parsed) || parsed.length === 0) return false;
+  const dicts = parsed.filter(
+    (item) => item && typeof item === 'object' && !Array.isArray(item));
+  if (dicts.length === 0 || dicts.length * 2 < parsed.length) return false;
+  for (const d of dicts) {
+    if (rcaLooksLikePayloadRoot(d)) return true;
+  }
+  for (const d of dicts) {
+    if (Object.keys(d).length >= 2) return true;
+  }
+  return false;
+}
+
+// Mirror of _try_parse_object: strict parse; object/array or null.
+function rcaTryParseObject(s) {
+  try {
+    const parsed = JSON.parse(s);
+    if (parsed && typeof parsed === 'object') return parsed;
+    return null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+// Collect EVERY complete fenced block WITH ITS SPAN, in order. Mirrors Python's
+// `re.finditer(r"```(?:json)?\s*\n?(.*?)\n?```", s, DOTALL|I)`; the whitespace
+// class is kept identical (JS `\s` ≈ Python `\s` under UNICODE) so the offsets
+// the prose-vs-block comparison relies on agree.
+function _collectFenceMatches(s) {
+  const out = [];
+  const re = /```(?:json)?\s*\n?([\s\S]*?)\n?```/gi;
   let m;
   while ((m = re.exec(s)) !== null) {
-    blocks.push(m[1].trim());
+    out.push({ start: m.index, end: m.index + m[0].length, block: m[1].trim() });
     if (m.index === re.lastIndex) re.lastIndex += 1; // safety against zero-width loops
   }
-  return blocks;
+  return out;
+}
+
+// Inner content of every complete fence block, in order (blocks that are never
+// closed are ignored, like Python's finditer).
+function _collectFenceBlocks(s) {
+  return _collectFenceMatches(String(s == null ? '' : s)).map((m) => m.block);
+}
+
+// Python tuple ordering for the two-element payload ranks below.
+function _rankGreaterThan(a, b) {
+  if (a[0] !== b[0]) return a[0] > b[0];
+  return a[1] > b[1];
+}
+
+function _rankIsZero(r) { return r[0] === 0 && r[1] === 0; }
+
+// `(payload_score, -placeholder_count)` of the best object in *text* — mirror
+// of _best_payload_rank. The same two signals the multi-fence rule uses:
+// payload-key density first, then the angle-bracket placeholders that mark a
+// restated contract ("<binomial>"), so a fenced EXAMPLE and an unfenced payload
+// built from the same schema compare by their contents instead of tying.
+// (0, 0) when nothing parses, which never beats a real block.
+function rcaBestPayloadRank(text) {
+  let best = null;
+  for (const cand of extractAllBalancedJsonObjects(String(text == null ? '' : text))) {
+    const parsed = rcaTryParseObject(cand);
+    if (parsed === null) continue;
+    let score = _payloadScore(parsed);
+    if (rcaLooksLikePayloadRoot(parsed) && score <= 0) {
+      // A root-keyed object whose schema-ish keys cancelled the payload keys is
+      // still a payload candidate, not prose.
+      score += 100;
+    }
+    const rank = [score, -rcaFencePlaceholderCount(cand)];
+    if (best === null || _rankGreaterThan(rank, best)) best = rank;
+  }
+  return best === null ? [0, 0] : best;
+}
+
+// Mirror of _split_around_fences: `outside` is the text with every complete
+// fenced span REMOVED, `unfenced` the same text with only the ``` delimiters
+// dropped so the blocks stay readable in place.
+function _splitAroundFences(s, matches) {
+  const outside = [];
+  const unfenced = [];
+  let prev = 0;
+  for (const m of matches) {
+    outside.push(s.slice(prev, m.start));
+    unfenced.push(s.slice(prev, m.start));
+    unfenced.push(m.block);
+    prev = m.end;
+  }
+  outside.push(s.slice(prev));
+  unfenced.push(s.slice(prev));
+  return { outside: outside.join('\n'), unfenced: unfenced.join('').trim() };
+}
+
+// The block-choice half of strip_markdown_fence: prefer the block with the
+// FEWEST schema-placeholder tokens, then the earliest — a model that restates
+// the contract first writes the REAL root keys (so the example qualifies by key
+// name) plus "<binomial>" placeholders, and ranking on density is what keeps
+// the payload from being evicted. When no block carries a known root key the
+// historical first-block behaviour is kept.
+function _chooseFenceBlock(blocks) {
+  const qualifying = [];
+  for (let i = 0; i < blocks.length; i += 1) {
+    if (rcaLooksLikePayloadRoot(rcaTryParseObject(blocks[i]))) {
+      qualifying.push([i, blocks[i]]);
+    }
+  }
+  if (qualifying.length === 0) return blocks[0];
+  qualifying.sort((a, b) => {
+    const pa = rcaFencePlaceholderCount(a[1]);
+    const pb = rcaFencePlaceholderCount(b[1]);
+    if (pa !== pb) return pa - pb;
+    return a[0] - b[0];
+  });
+  return qualifying[0][1];
 }
 
 // Sprint B (REVIEW-2026-09-04): multi-fence payload selection. When a model
 // restates the JSON schema as one fenced example and then emits the real
 // payload in a SECOND fenced block, the old "strip first fence" behavior
 // fed the schema example to the parser and the real data was lost.
-// Rule (kept identical to the Python json_utils implementation being landed
-// in parallel): collect every fence block, strictly parse each, and return
-// the FIRST block that (a) parses as a JSON object (not an array) and
-// (b) contains at least one known root key. If no block qualifies, fall
-// back to the FIRST block — the pre-existing behavior. Returns null when
-// the text contains no complete fence block at all.
+// REVIEW-2026-09-20: this stays a thin wrapper around the block choice for
+// callers that only want it; the complete Python rule — including the "block vs
+// the prose around it" comparison — lives in stripMarkdownFence, which is what
+// safeJsonLoads calls. Returns null when there is no complete fence block.
 function selectPayloadFenceBlock(text) {
-  const s = String(text == null ? '' : text);
-  const blocks = _collectFenceBlocks(s);
+  const blocks = _collectFenceBlocks(String(text == null ? '' : text));
   if (blocks.length === 0) return null;
-  // REVIEW-2026-09-10: collect EVERY qualifying block and rank them, instead
-  // of returning the first one. A model that restates the JSON contract in a
-  // fence before emitting the payload writes the REAL root keys in that
-  // example (the contract lists them) plus angle-bracket placeholders like
-  // "<binomial>", so the example qualified and evicted the payload — and
-  // because the browser runs this selection BEFORE stripMarkdownFence while
-  // Python ran strip_markdown_fence first, the two engines returned different
-  // blocks for the same reply (the browser rendered placeholder rows as the
-  // extraction). Ranking on placeholder density, then on position, mirrors
-  // rca_core/json_utils.strip_markdown_fence exactly.
-  const qualifying = [];
-  for (let i = 0; i < blocks.length; i += 1) {
-    try {
-      const parsed = JSON.parse(blocks[i]);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        for (const k of Object.keys(parsed)) {
-          if (RCA_KNOWN_ROOT_KEYS.has(k)) {
-            qualifying.push([i, blocks[i]]);
-            break;
-          }
-        }
-      }
-    } catch (_e) {
-      // Not strict JSON — try the next block.
-    }
-  }
-  if (qualifying.length > 0) {
-    qualifying.sort((a, b) => {
-      const pa = rcaFencePlaceholderCount(a[1]);
-      const pb = rcaFencePlaceholderCount(b[1]);
-      if (pa !== pb) return pa - pb;
-      return a[0] - b[0];
-    });
-    return qualifying[0][1];
-  }
-  return blocks[0];
+  return _chooseFenceBlock(blocks);
 }
 
 // Angle-bracket placeholders mark "fill this in" in the prompt contract and in
@@ -419,15 +519,29 @@ function rcaEscapeControlCharsInStrings(text) {
 
 function safeJsonLoads(text) {
   if (!text) throw new Error('empty text');
-  // Sprint B (REVIEW-2026-09-04): multi-fence selection runs BEFORE the
-  // generic strip. With 0 fence blocks it returns null and the old
-  // stripMarkdownFence path (incl. truncated-fence handling) applies
-  // unchanged; with >=1 blocks it returns either the first qualifying
-  // payload block or the first block (old behavior).
-  const fenced = selectPayloadFenceBlock(String(text));
   // Level 1: strip markdown fences.
-  let s = stripMarkdownFence(fenced !== null ? fenced : String(text).trim());
+  // REVIEW-2026-09-20: this is now the SINGLE fence entry point, exactly like
+  // Python's safe_json_loads -> strip_markdown_fence. The separate
+  // selectPayloadFenceBlock() pre-pass the browser used to run first duplicated
+  // only half of the rule (the block choice) and dropped the "block vs the
+  // prose around it" comparison, so a reply whose real payload sat in the prose
+  // AFTER a restated-contract fence produced placeholders in the browser and
+  // rows in Python.
+  let s = stripMarkdownFence(String(text).trim());
   // Level 2: strip raw control chars that JSON.parse rejects.
+  //
+  // REVIEW-2026-09-20 #104 (parity note, mirrors the identical comment in
+  // rca_core/json_utils.py safe_json_loads Level 2): this is DELIBERATELY still
+  // a DELETE and not an escape. The class is the NON-whitespace control range
+  // (0x00-0x08, 0x0b, 0x0c, 0x0e-0x1f) — binary junk from a mojibake /
+  // clipboard round-trip, never meaningful text — and escaping it to "\u0000"
+  // would hand a literal control character to the downstream chain, where XML
+  // (openpyxl raises IllegalCharacterError) and CSV cannot carry it at all: a
+  // "recovered" character would turn into a crashed export instead of one
+  // dropped byte. The whitespace family (\t \r \n), which IS meaningful inside
+  // a caption, is exactly what this class excludes; those survive Level 2 and
+  // are escaped losslessly by Level 3.2 below. Both engines use the identical
+  // delete regex.
   s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
   // Level 3: strict parse.
   try {
@@ -468,17 +582,27 @@ function safeJsonLoads(text) {
   // rca_core/json_utils safe_json_loads Level 3.5 — close the brackets at
   // the last complete element instead of letting Level 4 pick one stray
   // row from inside the unbalanced outer payload. Only repairs yielding a
-  // recognizable payload root are accepted.
+  // recognizable payload are accepted.
+  //
+  // REVIEW-2026-09-20 #101 (parity): the guard used to be dict-only, so a
+  // reply cut inside a TOP-LEVEL array — whose repair parses to a list — was
+  // thrown away here and Level 4 then rescued one inner row. Both branches
+  // now mirror Python exactly: a repaired dict must satisfy
+  // _looks_like_payload_root(), a repaired list must satisfy
+  // _looks_like_payload_list() and is wrapped in the same `_array_root`
+  // envelope the other levels use (which the normalizers unwrap).
   if (s && (s[0] === '{' || s[0] === '[')) {
     const repaired = repairTruncatedJson(s);
     if (repaired !== null) {
-      try {
-        const parsed = JSON.parse(repaired);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-            && [...RCA_KNOWN_ROOT_KEYS].some((k) => k in parsed)) {
-          return promoteWrapper(parsed);
-        }
-      } catch (_e2) { /* fall through */ }
+      let parsed = null;
+      try { parsed = JSON.parse(repaired); } catch (_e2) { parsed = null; }
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          && rcaLooksLikePayloadRoot(parsed)) {
+        return promoteWrapper(parsed);
+      }
+      if (Array.isArray(parsed) && rcaLooksLikePayloadList(parsed)) {
+        return { _array_root: parsed, _note: 'model returned a top-level array; wrapping for diagnostics' };
+      }
     }
   }
   // Level 4: enumerate ALL balanced {...} objects, score each, pick best.

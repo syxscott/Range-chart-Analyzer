@@ -91,10 +91,19 @@ const _QUALIFIER_RE = [
   [/\bs\.?\s*str\.?\b/i, 's.str.'],
   [/\bsp\.?\b/i, 'sp.'],
   [/\bspp\.?\b/i, 'spp.'],
-  [/\bcf\.?\s+/i, 'cf.'],
-  [/\baff\.?\s+/i, 'aff.'],
+  // REVIEW-2026-09-20: cf./aff. used to require TRAILING WHITESPACE
+  // (`cf\.?\s+`), so the very common trailing-suffix forms "Genus cf." /
+  // "Genus aff." — nothing after the marker — never matched and the specimen
+  // was deduped together with the identified "Genus". `\b` after the optional
+  // dot also matches at the end of the string, and still rejects look-alikes
+  // ("coffee", "affinis"). Mirrors rca_core/aggregate.py:_QUALIFIER_PATTERNS.
+  [/\bcf\.?\b/i, 'cf.'],
+  [/\baff\.?\b/i, 'aff.'],
   [/\?\s*$/i, '?'],
-  [/\bnom\.?\s+(dub|nud|nov|cons|obl|rej|van)\b/i, 'nom. $1'],
+  // The label carries a Python-style `\1` backreference placeholder;
+  // rcaExtractQualifiers resolves it from match group 1 so "nom. dub" is
+  // emitted, not the literal "nom. $1" the old JS produced.
+  [/\bnom\.?\s+(dub|nud|nov|cons|obl|rej|van)\b/i, 'nom. \\1'],
   [/\bcomb\.?\s+nov\.?\b/i, 'comb. nov.'],
   [/\bstat\.?\s+nov\.?\b/i, 'stat. nov.'],
   [/\bsubsp\.?\b/i, 'subsp.'],
@@ -102,30 +111,80 @@ const _QUALIFIER_RE = [
 ];
 function rcaExtractQualifiers(s) {
   if (!s) return [];
+  // Mirrors Python _extract_qualifiers: at most one label per pattern, and the
+  // result behaves like a frozenset (duplicates folded out).
   const quals = [];
   for (const [re, name] of _QUALIFIER_RE) {
-    if (re.test(s)) quals.push(name);
+    const m = re.exec(String(s));
+    if (!m) continue;
+    const label = name.indexOf('\\1') !== -1
+      ? name.split('\\1').join(m[1] === undefined ? '' : m[1])
+      : name;
+    if (quals.indexOf(label) === -1) quals.push(label);
   }
   return quals;
 }
 
+// Mirror of rca_core/aggregate.py:_str_for_merge. JSON has no int/float
+// distinction, so JS ``String(1.0)`` already renders "1" exactly like the
+// Python side's integral-float branch; booleans keep the Python spelling so
+// "True"/"False" never collide with a real string in the vote pool.
+// KNOWN residual divergences (documented, not fixable in JS):
+//   * Python renders huge/small floats exponent-style (str(1e20) == "1e+20",
+//     str(1e-7) == "1e-07") while String() gives "100000000000000000000" /
+//     "1e-7"; such ages never occur in a chart payload.
+//   * Python renders float('nan')/"inf" as "nan"/"inf", JS as "NaN"/"Infinity".
+function rcaStrForMerge(v) {
+  if (typeof v === 'boolean') return v ? 'True' : 'False';
+  return String(v);
+}
+
+// Mirror of rca_core/aggregate.py:_mode.
+// REVIEW-2026-09-20 semantics, all three of them:
+//   1. container values (Python dict/list/set/tuple ↔ JS object/array) are
+//      skipped outright; they are not scalars and must not abort or pollute a
+//      vote;
+//   2. only None/null and blank-whitespace strings count as missing, so 0, 0.0
+//      and false are REAL observations again (the old `v && String(v).trim()`
+//      filter dropped them: votes [0, 0, 12] merged to 12);
+//   3. votes are bucketed on the SAME normalized string pool
+//      ``_merge_scalar_field`` uses (``rcaStrForMerge``), so 1 and 1.0 — and in
+//      JSON, the number 1 and the string "1" — are one candidate instead of two
+//      Map keys whose relative order depends on the input. Python folds True
+//      and 1 together only because ``True == 1`` is a dict-key collision; the
+//      string pool it votes on now separates them ("True" vs "1"), which this
+//      mirror reproduces for free by keying on the rendered string.
+// The representative keeps the field's ORIGINAL type/value (int 0 stays 0, not
+// "0"), which is what the Python side explicitly documents.
 function rcaAggMode(values) {
-  const nonEmpty = values.filter((v) => v && String(v).trim());
-  if (nonEmpty.length === 0) return '';
-  const counts = new Map();
-  for (const v of nonEmpty) counts.set(v, (counts.get(v) || 0) + 1);
+  const counts = new Map();        // string key -> votes
+  const representative = new Map();  // string key -> first original value
+  for (const v of values) {
+    if (v === null || v === undefined) continue;
+    if (typeof v === 'object') continue;  // dict / list mirror of the skip
+    if (!String(v).trim()) continue;      // blank == missing
+    const key = rcaStrForMerge(v);
+    counts.set(key, (counts.get(key) || 0) + 1);
+    if (!representative.has(key)) representative.set(key, v);
+  }
+  if (counts.size === 0) return '';
   let top = 0;
   for (const c of counts.values()) if (c > top) top = c;
   // H4 parity: break ANY tie at the top count deterministically by sorted
   // order — not just the all-unique case. This mirrors Python's _mode
   // (aggregate.py), where a partial tie (e.g. [B,B,A,A]) also sorts and
   // takes the first ('A'), instead of falling back to first-seen input
-  // order ('B'). Without this the browser (direct/proxy) path and the
-  // Python (GUI/backend) path disagree on merged strings across sessions.
-  const topVals = [];
-  for (const [v, c] of counts) if (c === top) topVals.push(v);
-  if (topVals.length === 1) return topVals[0];
-  return topVals.slice().sort((a, b) => String(a) < String(b) ? -1 : (String(a) > String(b) ? 1 : 0))[0];
+  // order. Ties are broken on the rendered KEY (Python sorts the same
+  // string pool), then the original value of that key is returned.
+  const topKeys = [];
+  for (const [k, c] of counts) if (c === top) topKeys.push(k);
+  if (topKeys.length === 1) return representative.get(topKeys[0]);
+  // Python sorted() orders by code point; Array#sort orders by UTF-16 code
+  // unit. The two agree on everything in the basic multilingual plane, which
+  // covers every payload string here (astral chars such as emoji would be the
+  // only divergence).
+  topKeys.sort();
+  return representative.get(topKeys[0]);
 }
 
 // Sentinel returned by mergeFieldAcrossRuns to signal the key carries
@@ -288,10 +347,15 @@ const RCA_DEFAULT_KEYMAP = {
 };
 
 // Keymap for columnar-section results.
+// REVIEW-2026-09-20: sortKeys was missing here, so the browser emitted columnar
+// sections in first-seen (merge) order while Python ordered them by `id`
+// ascending (rca_core/aggregate.py:COLUMNAR_SECTION_SCHEMA
+// sort_keys=[("id","asc")]) — a different section order in the same export.
 const RCA_COLUMNAR_KEYMAP = {
   primary: 'sections',
   idKeys: ['id', 'group'],
   strModeFields: ['id', 'group', 'coordinates_text', 'thickness_m'],
+  sortKeys: [['id', 'asc']],
   listKeys: ['fossil_legend', 'lithology_legend', 'cross_beds'],
   confidence: 'confidence',
   extraSections: null,
@@ -453,6 +517,90 @@ function rcaIsChimericRow(group, merged) {
   return true;
 }
 
+// Python `str(row.get(a) or row.get(b) or "")` — the `or` chain treats 0, "",
+// false and None as absent, which is NOT the same as a null check.
+function rcaOrChainStr(row, k) {
+  const v = row ? row[k] : null;
+  if (v === null || v === undefined || v === false || v === 0 || v === '') return '';
+  return String(v);
+}
+
+// Python `float(v)` semantics — deliberately NOT `Number(v)`:
+//   * Number("") / Number("  ") are 0, float("") raises ValueError;
+//   * Number("0x10") is 16, float("0x10") raises;
+//   * Python accepts "inf"/"infinity"/"nan" (case-insensitive) and the
+//     underscore digit separator ("1_000" -> 1000.0), which Number() rejects.
+// Returns null where Python would raise TypeError/ValueError.
+const _PY_FLOAT_RE = /^[+-]?(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d+)?$/;
+function rcaPyFloat(v) {
+  if (typeof v === 'number') return Number.isNaN(v) ? NaN : v;
+  if (typeof v === 'boolean') return v ? 1 : 0;   // float(True) == 1.0
+  if (typeof v !== 'string') return null;         // dict / list -> TypeError
+  const s = v.trim();
+  if (!s) return null;
+  const low = s.toLowerCase();
+  if (low === 'inf' || low === '+inf' || low === 'infinity' || low === '+infinity') return Infinity;
+  if (low === '-inf' || low === '-infinity') return -Infinity;
+  if (low === 'nan' || low === '+nan' || low === '-nan') return NaN;
+  if (!_PY_FLOAT_RE.test(s)) return null;
+  const n = Number(s.replace(/_/g, ''));
+  return Number.isFinite(n) || n === Infinity || n === -Infinity ? n : null;
+}
+
+// Mirror of Python _sort_tuple: (rank, number, lowered, raw) — rank 0 keeps
+// every numeric BEFORE every string, so a mixed column still has one order on
+// both engines; `lowered` then `raw` reproduce Python's
+// (str(v).lower(), str(v)) secondary/tertiary keys.
+function rcaSortTuple(row, field) {
+  const v = row ? row[field] : null;
+  const num = v === null || v === undefined ? null : rcaPyFloat(v);
+  if (num !== null && !(typeof v === 'object')) {
+    return [0, num, '', ''];
+  }
+  const s = v === null || v === undefined ? '' : String(v);
+  return [1, 0.0, s.toLowerCase(), s];
+}
+
+// Python tuple ordering: first differing element decides, `<` semantics.
+// NaN reproduces Python's behaviour exactly (nan != nan -> the pair
+// "differs", nan < nan -> false -> +1), which is what cmp_to_key gets there.
+function rcaCompareSortTuples(ta, tb) {
+  for (let i = 0; i < ta.length; i += 1) {
+    if (ta[i] !== tb[i]) return ta[i] < tb[i] ? -1 : 1;
+  }
+  return 0;
+}
+
+// Mirror of Python _compare: walk the effective keys, negate for "desc"
+// REGARDLESS of the value type (the old JS only negated the numeric branch, so
+// a declared string sort with direction "desc" silently sorted ascending).
+// REVIEW-2026-09-10 note retained: comparison stays code-point based (no
+// localeCompare), so host locale cannot reorder rows; `toLowerCase()` matches
+// Python's `str.lower()` for the ASCII names these fields carry.
+function rcaSortCompare(a, b, effectiveKeys) {
+  for (const [field, direction] of effectiveKeys) {
+    const ta = rcaSortTuple(a, field);
+    const tb = rcaSortTuple(b, field);
+    const c = rcaCompareSortTuples(ta, tb);
+    if (c !== 0) return direction === 'desc' ? -c : c;
+  }
+  return 0;
+}
+
+// Mirror of rca_core/aggregate.py:_add_row_warning — the extractor writes
+// row._warning as a STRING for one flag and a LIST for several; merged rows
+// must not invent a third shape.
+function rcaAddRowWarning(row, flag) {
+  const existing = row._warning;
+  if (existing === null || existing === undefined || existing === '') {
+    row._warning = flag;
+    return;
+  }
+  const flags = Array.isArray(existing) ? existing.slice() : [existing];
+  if (flags.indexOf(flag) === -1) flags.push(flag);
+  row._warning = flags.length === 1 ? flags[0] : flags;
+}
+
 function mergePrimaryList(runs, km, n) {
   const groups = new Map();
   const order = [];
@@ -570,6 +718,23 @@ function mergePrimaryList(runs, km, n) {
       if (merged_v === NO_MERGE) continue;  // drop empty key
       aggr[k] = merged_v;
     }
+    // REVIEW-2026-09-20 (mirror of aggregate.py:784-799): the two bed indices
+    // are voted INDEPENDENTLY, so a run-A base and a run-B top can recombine
+    // into an inverted pair even though every source row was sane. An inverted
+    // pair exports as a species that dies before it appears, and the string
+    // endpoints are what quality.js reads, so nothing else catches it. Repair
+    // the order and flag it with the same `index_order_swap` marker the
+    // extractor uses.
+    if (km.primary === 'species_ranges') {
+      const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+      const topIdx = aggr.range_top_idx;
+      const baseIdx = aggr.range_base_idx;
+      if (isNum(topIdx) && isNum(baseIdx) && baseIdx > topIdx) {
+        aggr.range_top_idx = baseIdx;
+        aggr.range_base_idx = topIdx;
+        rcaAddRowWarning(aggr, 'index_order_swap');
+      }
+    }
     // M-1 fix: chimera detection. If every contributing run produced a
     // DIFFERENT (range_base, range_top, biozone, section) tuple for this
     // species — i.e. no run ever observed the merged tuple — flag with
@@ -581,38 +746,35 @@ function mergePrimaryList(runs, km, n) {
     merged.push(aggr);
   }
   // Apply schema sortKeys if defined (e.g. agreement_count desc, species asc).
+  // REVIEW-2026-09-20: mirrors rca_core/aggregate.py:_merge_primary_list's
+  // sort block 1:1 — see rcaSortCompare for the two behaviours that were
+  // missing here (desc on a string key, and deterministic tiebreaking).
   const kmSortKeys = km.sortKeys;
-  merged.sort((a, b) => {
-    if (kmSortKeys && kmSortKeys.length) {
-      for (const [field, direction] of kmSortKeys) {
-        const av = a[field];
-        const bv = b[field];
-        let cmp;
-        const an = Number(av);
-        const bn = Number(bv);
-        if (av != null && bv != null && Number.isFinite(an) && Number.isFinite(bn)) {
-          cmp = an - bn;
-        } else {
-          const as = (av != null ? String(av) : '').toLowerCase();
-          const bs = (bv != null ? String(bv) : '').toLowerCase();
-          // REVIEW-2026-09-10: code-point comparison, not localeCompare.
-          // ICU collation is locale/environment dependent and folds
-          // accents (Kure < Küre), so the browser ordered rows
-          // differently from Python's `str(v).lower()` comparison - and
-          // a row order that changes with the host locale is not
-          // reproducible. Use < / > so both engines agree.
-          cmp = as < bs ? -1 : (as > bs ? 1 : 0);
-        }
-        if (cmp !== 0) return direction === 'desc' ? -cmp : cmp;
+  if (kmSortKeys && kmSortKeys.length) {
+    // Python appends the schema's primary id fields as ascending tiebreakers
+    // so rows that tie on every declared key no longer keep first-seen-run
+    // order (the same set of runs produced different row orders across
+    // sessions before).
+    const declared = {};
+    for (const [f] of kmSortKeys) declared[f] = true;
+    const effectiveKeys = kmSortKeys.slice();
+    for (const k of km.idKeys || []) {
+      if (!Object.prototype.hasOwnProperty.call(declared, k)) {
+        effectiveKeys.push([k, 'asc']);
       }
-      return 0;
     }
-    // Fall back to alphabetical on id/species.
-    const aKey = (a.id != null ? String(a.id) : (a.species || '')).toLowerCase();
-    const bKey = (b.id != null ? String(b.id) : (b.species || '')).toLowerCase();
-    // REVIEW-2026-09-10: code-point comparison (see above).
-    return aKey < bKey ? -1 : (aKey > bKey ? 1 : 0);
-  });
+    merged.sort((a, b) => rcaSortCompare(a, b, effectiveKeys));
+  } else {
+    // No schema order declared: Python sorts on
+    // ``str(row.get("id") or row.get("species") or "")`` — an `or` chain, so an
+    // id of 0 / "" / false falls through to species, and the comparison is
+    // CASE-SENSITIVE (no lowercasing on either side).
+    merged.sort((a, b) => {
+      const aKey = rcaOrChainStr(a, 'id') || rcaOrChainStr(a, 'species');
+      const bKey = rcaOrChainStr(b, 'id') || rcaOrChainStr(b, 'species');
+      return aKey < bKey ? -1 : (aKey > bKey ? 1 : 0);
+    });
+  }
   return merged;
 }
 

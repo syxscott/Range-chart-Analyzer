@@ -8,13 +8,20 @@
 // API key — the key stays in the request headers and is forwarded as-is.
 //
 // SECURITY (Bug-3 / Bug-17 fixes):
-//   - Origin allowlist: set ALLOWED_ORIGINS below. Default is permissive
-//     (matches your dev origin) but should be tightened in production.
+//   - Origin allowlist: set ALLOWED_ORIGINS below. The DEFAULT IS CLOSED
+//     (empty list = deny every origin, 403); add the origins you actually
+//     serve the app from, or use '*' only for local testing.
 //   - Shared secret: if PROXY_SHARED_SECRET is set, requests must include
-//     `X-Proxy-Key: <secret>` or they are rejected with 401. This stops
+//     `X-Proxy-Key: <secret>` or they are rejected with 403. This stops
 //     anyone who discovers the Worker URL from burning your quota.
-//   - Path allowlist: only /v1/messages is forwarded. Without this, an
-//     attacker could route arbitrary upstream paths through the Worker.
+//   - Path allowlist: only the exact path /v1/messages is forwarded. Without
+//     this, an attacker could route arbitrary upstream paths through the
+//     Worker. The match is EXACT and percent-encodings that could normalise
+//     to something else (%2e, %2f, %25, %5c, '..' after decoding) are
+//     rejected, so '/v1/messages/../admin' can never slip past.
+//   - Authorization (Origin allowlist + shared secret) and the method/path
+//     checks all run BEFORE the request body is read, so an unauthorised or
+//     off-allowlist caller cannot make us buffer up to 50 MB for it.
 //   - Response header filter: only content-type, content-length, and
 //     streaming-related headers are echoed back. Cookies, internal IPs
 //     (x-real-ip, cf-ray) and similar upstream diagnostic headers are
@@ -63,9 +70,18 @@ const ALLOWED_ORIGINS = [
 // Cloudflare and left `wrangler secret put` silently ineffective.
 const PROXY_SHARED_SECRET = '';
 
-// Path allowlist: exact-match only — only these paths are forwarded to upstream.
-// The MiniMax Anthropic-compatible endpoint lives at /v1/messages.
-const ALLOWED_PATH_PREFIXES = ['/v1/messages'];
+// Path allowlist: EXACT-match only — a request is forwarded only when its
+// pathname is byte-identical to one of these entries. (deno-proxy.js uses the
+// same rule; it used to match by prefix, which also admitted
+// /v1/messages/anything.) The MiniMax Anthropic-compatible endpoint lives at
+// /v1/messages.
+const ALLOWED_PATHS = ['/v1/messages'];
+
+// Percent-encodings that must never appear in a forwarded pathname: %2e = '.',
+// %2f = '/', %5c = '\', %25 = '%'. They are the classic ways to write a path
+// that the edge keeps literal but a downstream component normalises into
+// something else ('/v1/messages/%2e%2e/admin'). Legit callers never need them.
+const FORBIDDEN_PATH_ENCODINGS = ['%2e', '%2f', '%5c', '%25'];
 
 // Max request body size (50 MB) — rejects obviously abusive uploads
 // before opening an upstream connection.
@@ -97,9 +113,18 @@ const FORWARDED_RESPONSE_HEADERS = new Set([
 
 // --- Sliding-window rate limiter (30 requests / 60 seconds per IP) ---
 // Uses an in-memory Map; each entry is [timestamp, ...] sorted oldest→newest.
-// The Worker process lives for the duration of a request batch then is
-// destroyed by the runtime, so the memory naturally resets — this is the
-// intended behaviour for a serverless environment.
+//
+// REVIEW-2026-09-20 (honesty fix): the previous comment here claimed the
+// Worker "process lives for the duration of a request batch then is destroyed
+// by the runtime, so the memory naturally resets — intended behaviour for
+// serverless". That is wrong and over-sold the protection: Cloudflare reuses
+// a warm isolate across many requests (and across concurrent ones), so the
+// Map normally DOES persist — but for how long is not guaranteed, and every
+// Colo and every isolate replica keeps its OWN copy. Net effect: this limiter
+// is BEST EFFORT. It multiplies its budget by the number of live isolates/
+// edge locations and can reset early (isolate evicted) or run longer than one
+// window (isolate kept warm). It is an abuse speed bump, not a quota: for a
+// hard limit use the Rate Limiting binding / a Durable Object / KV.
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 30;
 // Bounded by MAX_RATE_MAP_SIZE so a flood of distinct keys cannot exhaust
@@ -169,31 +194,79 @@ function corsFor(origin) {
 // false when no secret is configured (an empty secret is treated as "off").
 // Comparison is constant-time to prevent timing-side-channel discovery of
 // the secret length / prefix by an attacker who can probe the Worker.
-function secretOk(request, env) {
+async function secretOk(request, env) {
   // The Worker binding wins (that is what `wrangler secret put` sets); the
   // source-level constant is only a fallback default.
   const secret = (env && env.PROXY_SHARED_SECRET) || PROXY_SHARED_SECRET;
   if (!secret) return false;
   const provided = request.headers.get('X-Proxy-Key') || '';
-  return timingSafeEqual(provided, secret);
+  return await timingSafeEqual(provided, secret);
 }
 
-// Constant-time string compare (length-mismatch is not constant but
-// length is itself public; this matches what the rest of the codebase
-// calls timingSafeEqual).
-function timingSafeEqual(a, b) {
+async function sha256Bytes(text) {
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return new Uint8Array(buf);
+  } catch (_e) {
+    // crypto.subtle is unavailable or refused: return null so the caller can
+    // fail CLOSED. (Workers and Deno both ship WebCrypto; the only way to get
+    // here is a stripped-down runtime, and "cannot verify" must not mean
+    // "accept".)
+    return null;
+  }
+}
+
+// Constant-time compare of two equal-length byte arrays. Never returns early:
+// the accumulator folds every byte in, so the work done does not depend on
+// where the first difference is.
+function constantTimeBytesEqual(a, b) {
+  if (!a || !b || a.length !== b.length || a.length === 0) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+// Constant-time string compare via SHA-256 digests.
+//
+// REVIEW-2026-09-20: the old implementation compared char codes directly and
+// short-circuited on `a.length !== b.length`, so the cost of a probe revealed
+// the secret's LENGTH (and, because the loop still walked the attacker's
+// string, how far the prefixes agreed up to the length cutoff). Hashing both
+// sides first makes the compared operands fixed-size (32 bytes) regardless of
+// the secret, so neither length nor prefix agreement is observable, and the
+// digest compare itself has no early return.
+async function timingSafeEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
-  if (a.length !== b.length) {
-    // Still consume the same time as a max-length compare.
-    let acc = 0;
-    for (let i = 0; i < a.length; i++) acc |= a.charCodeAt(i);
+  const [da, db] = await Promise.all([sha256Bytes(a), sha256Bytes(b)]);
+  if (!da || !db) return false;   // no WebCrypto -> reject (fail closed)
+  return constantTimeBytesEqual(da, db);
+}
+
+// Path authorization: EXACT match against ALLOWED_PATHS, with encoded-form
+// smuggling rejected first. REVIEW-2026-09-20 (#8, shared with deno-proxy.js):
+//   * raw %2e / %2f / %5c / %25 anywhere in the pathname -> refuse;
+//   * decodeURIComponent must be a no-op on an allowed path — if decoding
+//     changes it, the literal path was not on the allowlist (this also kills
+//     '../' and its %2e%2e form, and double-encoded %252e%252e);
+//   * malformed escapes (decodeURIComponent throws) -> refuse.
+// The target we build below re-uses url.pathname verbatim, so upstream sees
+// exactly what we matched — no normalisation gap between "matched path" and
+// "forwarded path".
+function pathIsAllowed(pathname) {
+  if (typeof pathname !== 'string' || pathname.length === 0) return false;
+  const lower = pathname.toLowerCase();
+  for (const enc of FORBIDDEN_PATH_ENCODINGS) {
+    if (lower.includes(enc)) return false;
+  }
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch (_e) {
     return false;
   }
-  let acc = 0;
-  for (let i = 0; i < a.length; i++) {
-    acc |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return acc === 0;
+  if (decoded !== pathname) return false;
+  if (decoded.includes('../') || decoded.includes('..\\')) return false;
+  return ALLOWED_PATHS.includes(pathname);
 }
 
 // Build the CORS headers we want to echo for an authorized caller.
@@ -277,7 +350,10 @@ export default {
     const allowlistEmpty = ALLOWED_ORIGINS.length === 0;
     let authorized;
     if (secretConfigured) {
-      authorized = secretOk(request, env) && (allowlistEmpty || cors !== null);
+      // timingSafeEqual() is now async (WebCrypto), so the secret check has
+      // to be awaited. It stays the FIRST thing we do with the request — no
+      // body byte is read for an unauthorised caller.
+      authorized = (await secretOk(request, env)) && (allowlistEmpty || cors !== null);
     } else {
       authorized = cors !== null;
     }
@@ -286,6 +362,13 @@ export default {
     // client-spoofable) and falls back to the rightmost X-Forwarded-For when
     // behind another trusted proxy (the leftmost is client-controlled and
     // trivially rotatable).
+    //
+    // REVIEW-2026-09-20: the trailing 'unknown' bucket is shared by every
+    // request that carried neither header. On Cloudflare that cannot happen
+    // for HTTP traffic (the platform overwrites CF-Connecting-IP), so this is
+    // a formality here — unlike deno-proxy.js, which has no such header and
+    // therefore keys the no-XFF case on the socket address / a time-sliced
+    // bucket instead (see that file).
     const fwd = request.headers.get('x-forwarded-for');
     const rightmostFwd = fwd ? fwd.split(',').slice(-1)[0].trim() : '';
     const clientIp = request.headers.get('CF-Connecting-IP') ||
@@ -322,18 +405,23 @@ export default {
       return new Response('Method Not Allowed', { status: 405, headers: corsEcho });
     }
 
+    // Path allowlist — REVIEW-2026-09-20 (#7): moved BEFORE the body read.
+    // The old order (read up to 50 MB, then decide) let any authorised caller
+    // — or anyone who just finds a matching Origin — make the Worker buffer a
+    // huge body for a request we were never going to forward. Method and path
+    // authorisation needs nothing from the body, so it runs first and the
+    // rejected request's body is dropped unconsumed.
+    const url = new URL(request.url);
+    if (!pathIsAllowed(url.pathname)) {
+      return new Response('Not Found', { status: 404, headers: corsEcho });
+    }
+
     // Body size cap — enforce by streaming the body, NOT by trusting
     // Content-Length. Clients can lie about Content-Length; they cannot
     // lie about the bytes they actually send.
     const bounded = await readBoundedBody(request, MAX_BODY_BYTES);
     if (bounded === null) {
       return new Response('Payload Too Large', { status: 413, headers: corsEcho });
-    }
-
-    // Path allowlist
-    const url = new URL(request.url);
-    if (!ALLOWED_PATH_PREFIXES.includes(url.pathname)) {
-      return new Response('Not Found', { status: 404, headers: corsEcho });
     }
 
     const target = UPSTREAM.replace(/\/+$/, '') + url.pathname + url.search;

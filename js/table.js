@@ -22,293 +22,350 @@ function rcaEscAttr(value) {
   return rcaEsc(value);
 }
 
+// ---- chart-shape predicates -------------------------------------------
+//
+// M4 (REVIEW-2026-09-20): one-to-one mirrors of the rca_core/exporter.py
+// predicates (`_looks_zonation_chart`, `_looks_abundance`, `_looks_columnar`,
+// `_looks_phylogenetic_tree`). They used to be inlined as ad-hoc `has*Shape`
+// booleans whose conditions drifted from Python — most visibly
+// `hasColumnarShape`, which accepted ANY `sections` array (so a plain
+// range-chart result whose first section was `{"name": "A"}` could be routed
+// to the columnar tables) while Python keys on "the first section is a dict
+// carrying an `id`". Keeping them as named functions also lets
+// tests_frontend.js assert the dispatch order against
+// `get_configs_for_result` instead of trusting a comment.
+function rcaLooksAbundance(data) {
+  // exporter.py:242-256 — an EMPTY `abundances: []` placeholder is every
+  // normalized result's default, so it must not route to abundance tables.
+  if (!data) return false;
+  return Array.isArray(data.abundances) && data.abundances.length > 0;
+}
+
+function rcaLooksColumnar(data) {
+  // exporter.py:222-239 — "id" (column label) is the definitive columnar
+  // marker; range-chart sections carry "name" and never "id".
+  if (!data) return false;
+  const sects = data.sections;
+  if (!Array.isArray(sects) || sects.length === 0) return false;
+  return rcaIsDict(sects[0]) && 'id' in sects[0];
+}
+
+function rcaLooksColumnarEmptySections(data) {
+  // exporter.py:664-669 (I7): the VLM produced NO columns but the payload
+  // still declares the columnar schema through its columnar-only keys.
+  if (!data) return false;
+  if (!Array.isArray(data.sections)) return false;
+  return ('fossil_legend' in data) || ('lithology_legend' in data)
+    || ('cross_beds' in data);
+}
+
+function rcaLooksPhylogeneticTree(data) {
+  // exporter.py:259-268 — nodes with parent/id structure.
+  if (!data) return false;
+  const nodes = data.nodes;
+  if (!Array.isArray(nodes) || nodes.length === 0) return false;
+  const first = nodes[0];
+  return rcaIsDict(first) && 'id' in first && 'parent' in first;
+}
+
+function rcaLooksZonationChart(data) {
+  // exporter.py:271-291 — correlations, zone-rank rows, or (I7-style)
+  // populated zonation descriptors with every zone row unreadable.
+  if (!data) return false;
+  if (Array.isArray(data.correlations) && data.correlations.length > 0) return true;
+  const zones = data.zones;
+  if (Array.isArray(zones) && zones.length > 0) {
+    const first = zones[0];
+    if (rcaIsDict(first)
+        && ('rank' in first || 'zonation' in first)) {
+      return true;
+    }
+  }
+  if (Array.isArray(data.zonations) && data.zonations.length > 0) return true;
+  return false;
+}
+
 // Table definitions: key on the result object, i18n title, columns, and a
 // row-extractor producing an array of cell values in column order.
 // `italic` marks the species column for styling. These configs are shared
 // with the export path so CSV/TSV columns match the rendered table exactly.
 // When `data.runs > 1` (multi-run merge), the species table gains an
 // "agreement" column showing how many runs produced each row.
+//
+// M4 (REVIEW-2026-09-20): the branch ORDER is the mirror of
+// rca_core/exporter.py get_configs_for_result — zonation → abundance →
+// columnar (incl. the empty-sections fallback) → phylogenetic tree →
+// range chart (default). The JS used to test abundance first and zonation
+// fourth, so a payload that carried both `abundances` rows and zonation
+// descriptors rendered as an abundance diagram in the browser and as a
+// zones table in the GUI/Excel export.
+//
+// LEFTOVER (documented, not mirrored): Python runs `detect_tableless_mode`
+// FIRST and returns NO configs for the assistant modes (chemical_stratigraphy
+// / paleomap / scatter_plot), so the GUI hides the table tab instead of
+// "exporting" four empty range-chart sheets. js/table.js has no equivalent
+// and keeps rendering empty tables; index.html also has no option to reach
+// those modes from the browser.
 function rcaTableConfigs(data) {
   const multi = data && Number(data.runs) > 1;
-  // Sprint B (REVIEW-2026-09-04): require at least one abundance row, not
-  // just `Array.isArray(data.abundances)`. Mirrors rca_core/exporter.py
-  // _looks_abundance (exporter.py:186-191): every freshly-normalized result
-  // carries an empty `abundances: []` placeholder, so accepting empty lists
-  // misroutes pure range-chart results to the abundance renderer/exporter.
-  const hasAbundanceShape = data && Array.isArray(data.abundances)
-    && data.abundances.length > 0;
-  const hasColumnarShape = data
-    && Array.isArray(data.sections)
-    && !Array.isArray(data.species_ranges)
-    && !hasAbundanceShape;
-
-  // -------- abundance-diagram (pollen / percentage) mode --------
-  if (hasAbundanceShape) {
-    const abCols = ['col.taxon', 'col.site', 'col.level', 'col.depth', 'col.abundance', 'col.abundanceUnit'];
-    const abRow = (r) => [r.taxon, r.site, r.level, r.depth, r.abundance, r.abundance_unit];
-    const abColsFinal = multi ? abCols.concat(['col.agreement']) : abCols;
-    const abRowFinal = multi ? (r) => abRow(r).concat([r.agreement || '']) : abRow;
-    return [
-      {
-        id: 'sites',
-        titleKey: 'sec.sites',
-        cols: ['col.name', 'col.location', 'col.ageRange', 'col.depthUnit'],
-        italicCol: -1,
-        row: (s) => [s.name, s.location, s.age_range, s.depth_unit],
-      },
-      {
-        id: 'abundances',
-        titleKey: 'sec.abundances',
-        cols: abColsFinal,
-        italicCol: 0,
-        row: abRowFinal,
-      },
-      {
-        id: 'zones',
-        titleKey: 'sec.zones',
-        cols: ['col.name', 'col.age', 'col.levelRange'],
-        italicCol: -1,
-        row: (z) => [z.name, z.age, z.level_range],
-      },
-    ];
+  if (rcaLooksZonationChart(data)) return rcaZonationChartConfigs(data, multi);
+  if (rcaLooksAbundance(data)) return rcaAbundanceDiagramConfigs(data, multi);
+  if (rcaLooksColumnar(data) || rcaLooksColumnarEmptySections(data)) {
+    return rcaColumnarSectionConfigs(data, multi);
   }
+  if (rcaLooksPhylogeneticTree(data)) return rcaPhylogeneticTreeConfigs(data, multi);
+  return rcaRangeChartConfigs(data, multi);
+}
 
-  // -------- columnar-section mode --------
-  if (hasColumnarShape) {
-    const secCols = [
-      'col.sectionId',
-      'col.sectionGroup',
-      'col.thickness',
-      'col.coordinates',
-    ];
-    const secColsFinal = multi ? secCols.concat(['col.agreement']) : secCols;
-    const cols4 = (sec) => [
-      sec.id || '',
-      sec.group || '',
-      sec.thickness_m || '',
-      sec.coordinates_text || '',
-    ];
-    const secRowFinal = multi
-      ? (sec) => cols4(sec).concat([sec.agreement || ''])
-      : cols4;
-    // Sprint B (REVIEW-2026-09-04): the three columnar sub-table rows now
-    // come from rcaColumnarSubTableRows (below), the SINGLE row source
-    // shared by rendering and export. The old code flattened them here and
-    // stashed `data._lithology_blocks_rows` / `_age_units_rows` /
-    // `_samples_rows` on the result — but rcaRenderResults read
-    // `data[cfg.id]` (always undefined for these nested keys), so all three
-    // tables rendered "no rows" and never showed copy/CSV buttons, while
-    // export read the stash. The stash also leaked underscore-prefixed
-    // internal keys into the "export all (JSON)" payload. Both problems are
-    // gone now that render and export read the same derived arrays.
-    return [
-      {
-        id: 'sections',
-        titleKey: 'sec.sections',
-        cols: secColsFinal,
-        italicCol: 0,
-        row: secRowFinal,
-      },
-      {
-        id: 'lithology_blocks',
-        titleKey: 'sec.lithologyBlocks',
-        cols: ['col.secId', 'col.pattern', 'col.topIdx', 'col.baseIdx'],
-        italicCol: -1,
-        row: (r) => [r.section_id, r.pattern,
-          r.top_idx == null ? '' : String(r.top_idx),
-          r.base_idx == null ? '' : String(r.base_idx)],
-      },
-      {
-        id: 'age_units',
-        titleKey: 'sec.ageUnits',
-        cols: ['col.secId', 'col.label', 'col.topIdx', 'col.baseIdx'],
-        italicCol: -1,
-        row: (r) => [r.section_id, r.label,
-          r.top_idx == null ? '' : String(r.top_idx),
-          r.base_idx == null ? '' : String(r.base_idx)],
-      },
-      {
-        id: 'samples',
-        titleKey: 'sec.samples',
-        cols: ['col.secId', 'col.bedIdx', 'col.fossilMarker', 'col.ref'],
-        italicCol: -1,
-        row: (r) => [r.section_id,
-          r.bed_idx == null ? '' : String(r.bed_idx),
-          r.fossil_marker || '', r.ref || ''],
-      },
-      {
-        id: 'fossil_legend',
-        titleKey: 'sec.fossils', // reuse fossils title to keep the keyset small
-        cols: ['col.fossilMarker', 'col.fossilMeaning'],
-        italicCol: -1,
-        row: (it) => [it.marker || '', it.meaning || ''],
-      },
-      {
-        id: 'lithology_legend',
-        titleKey: 'sec.columnarLithology',
-        cols: ['col.lithologyPattern', 'col.lithologyMeaning'],
-        italicCol: -1,
-        row: (it) => [it.pattern || it.marker || '', it.meaning || ''],
-      },
-      {
-        id: 'cross_beds',
-        titleKey: 'sec.crossBeds',
-        cols: ['col.crossFrom', 'col.crossFromBed', 'col.crossTo', 'col.crossToBed'],
-        italicCol: -1,
-        row: (it) => [
-          it.from_section || '',
-          it.from_bed_idx == null ? '' : String(it.from_bed_idx),
-          it.to_section || '',
-          it.to_bed_idx == null ? '' : String(it.to_bed_idx),
-        ],
-      },
-    ];
-  }
+// -------- abundance-diagram (pollen / percentage) mode --------
+function rcaAbundanceDiagramConfigs(data, multi) {
+  const abCols = ['col.taxon', 'col.site', 'col.level', 'col.depth', 'col.abundance', 'col.abundanceUnit'];
+  const abRow = (r) => [r.taxon, r.site, r.level, r.depth, r.abundance, r.abundance_unit];
+  const abColsFinal = multi ? abCols.concat(['col.agreement']) : abCols;
+  const abRowFinal = multi ? (r) => abRow(r).concat([r.agreement || '']) : abRow;
+  return [
+    {
+      id: 'sites',
+      titleKey: 'sec.sites',
+      cols: ['col.name', 'col.location', 'col.ageRange', 'col.depthUnit'],
+      italicCol: -1,
+      row: (s) => [s.name, s.location, s.age_range, s.depth_unit],
+    },
+    {
+      id: 'abundances',
+      titleKey: 'sec.abundances',
+      cols: abColsFinal,
+      italicCol: 0,
+      row: abRowFinal,
+    },
+    {
+      id: 'zones',
+      titleKey: 'sec.zones',
+      cols: ['col.name', 'col.age', 'col.levelRange'],
+      italicCol: -1,
+      row: (z) => [z.name, z.age, z.level_range],
+    },
+  ];
+}
 
-  // -------- phylogenetic-tree mode (UI-FIX 2026-08-07) --------
-  // Mirrors rca_core.exporter._looks_phylogenetic_tree + _phylogenetic_tree_tables.
-  // Without this the web frontend could select the mode but rendered four
-  // empty range-chart tables for a tree payload (no nodes table existed).
-  const hasPhyloShape = data
-    && Array.isArray(data.nodes)
-    && data.nodes.length > 0
-    && data.nodes[0]
-    && typeof data.nodes[0] === 'object'
-    && 'id' in data.nodes[0]
-    && 'parent' in data.nodes[0];
+// -------- columnar-section mode (exporter.py _columnar_section_tables) --------
+function rcaColumnarSectionConfigs(data, multi) {
+  const secCols = [
+    'col.sectionId',
+    'col.sectionGroup',
+    'col.thickness',
+    'col.coordinates',
+  ];
+  const secColsFinal = multi ? secCols.concat(['col.agreement']) : secCols;
+  const cols4 = (sec) => [
+    sec.id || '',
+    sec.group || '',
+    sec.thickness_m || '',
+    sec.coordinates_text || '',
+  ];
+  const secRowFinal = multi
+    ? (sec) => cols4(sec).concat([sec.agreement || ''])
+    : cols4;
+  // Sprint B (REVIEW-2026-09-04): the three columnar sub-table rows now
+  // come from rcaColumnarSubTableRows (below), the SINGLE row source
+  // shared by rendering and export. The old code flattened them here and
+  // stashed `data._lithology_blocks_rows` / `_age_units_rows` /
+  // `_samples_rows` on the result — but rcaRenderResults read
+  // `data[cfg.id]` (always undefined for these nested keys), so all three
+  // tables rendered "no rows" and never showed copy/CSV buttons, while
+  // export read the stash. The stash also leaked underscore-prefixed
+  // internal keys into the "export all (JSON)" payload. Both problems are
+  // gone now that render and export read the same derived arrays.
+  return [
+    {
+      id: 'sections',
+      titleKey: 'sec.sections',
+      cols: secColsFinal,
+      italicCol: 0,
+      row: secRowFinal,
+    },
+    {
+      id: 'lithology_blocks',
+      titleKey: 'sec.lithologyBlocks',
+      cols: ['col.secId', 'col.pattern', 'col.topIdx', 'col.baseIdx'],
+      italicCol: -1,
+      row: (r) => [r.section_id, r.pattern,
+        r.top_idx == null ? '' : String(r.top_idx),
+        r.base_idx == null ? '' : String(r.base_idx)],
+    },
+    {
+      id: 'age_units',
+      titleKey: 'sec.ageUnits',
+      cols: ['col.secId', 'col.label', 'col.topIdx', 'col.baseIdx'],
+      italicCol: -1,
+      row: (r) => [r.section_id, r.label,
+        r.top_idx == null ? '' : String(r.top_idx),
+        r.base_idx == null ? '' : String(r.base_idx)],
+    },
+    {
+      id: 'samples',
+      titleKey: 'sec.samples',
+      cols: ['col.secId', 'col.bedIdx', 'col.fossilMarker', 'col.ref'],
+      italicCol: -1,
+      row: (r) => [r.section_id,
+        r.bed_idx == null ? '' : String(r.bed_idx),
+        r.fossil_marker || '', r.ref || ''],
+    },
+    {
+      id: 'fossil_legend',
+      titleKey: 'sec.fossils', // reuse fossils title to keep the keyset small
+      cols: ['col.fossilMarker', 'col.fossilMeaning'],
+      italicCol: -1,
+      row: (it) => [it.marker || '', it.meaning || ''],
+    },
+    {
+      id: 'lithology_legend',
+      titleKey: 'sec.columnarLithology',
+      cols: ['col.lithologyPattern', 'col.lithologyMeaning'],
+      italicCol: -1,
+      row: (it) => [it.pattern || it.marker || '', it.meaning || ''],
+    },
+    {
+      id: 'cross_beds',
+      titleKey: 'sec.crossBeds',
+      cols: ['col.crossFrom', 'col.crossFromBed', 'col.crossTo', 'col.crossToBed'],
+      italicCol: -1,
+      row: (it) => [
+        it.from_section || '',
+        it.from_bed_idx == null ? '' : String(it.from_bed_idx),
+        it.to_section || '',
+        it.to_bed_idx == null ? '' : String(it.to_bed_idx),
+      ],
+    },
+  ];
+}
 
-  // -------- phylogenetic-tree mode --------
-  if (hasPhyloShape) {
-    return [
-      {
-        id: 'nodes',
-        titleKey: 'sec.nodes',
-        cols: ['col.nodeId', 'col.parent', 'col.name', 'col.isLeaf',
-               'col.branchLength', 'col.nodeAgeMa', 'col.support'],
-        italicCol: -1,
-        row: (n) => [
-          n.id,
-          n.parent == null ? '' : n.parent,
-          n.name,
-          n.is_leaf ? 'Y' : 'N',
-          n.branch_length == null ? '' : String(n.branch_length),
-          n.node_age_ma == null ? '' : String(n.node_age_ma),
-          n.support == null ? '' : String(n.support),
-        ],
-      },
-    ];
-  }
+// -------- phylogenetic-tree mode (UI-FIX 2026-08-07) --------
+// Mirror of rca_core.exporter._looks_phylogenetic_tree +
+// _phylogenetic_tree_tables: without this the web frontend could select the
+// mode but rendered four empty range-chart tables for a tree payload (no
+// nodes table existed).
+function rcaPhylogeneticTreeConfigs(data, multi) {
+  return [
+    {
+      id: 'nodes',
+      titleKey: 'sec.nodes',
+      cols: ['col.nodeId', 'col.parent', 'col.name', 'col.isLeaf',
+             'col.branchLength', 'col.nodeAgeMa', 'col.support'],
+      italicCol: -1,
+      row: (n) => [
+        n.id,
+        n.parent == null ? '' : n.parent,
+        n.name,
+        n.is_leaf ? 'Y' : 'N',
+        n.branch_length == null ? '' : String(n.branch_length),
+        n.node_age_ma == null ? '' : String(n.node_age_ma),
+        n.support == null ? '' : String(n.support),
+      ],
+    },
+  ];
+}
 
-  // -------- zonation / correlation chart mode (UI-REVIEW-2026-09-05) --------
-  // Mirrors rca_core.exporter._looks_zonation_chart + _zonation_chart_tables.
-  const hasZonationShape = data
-    && ((Array.isArray(data.correlations) && data.correlations.length > 0)
-        || (Array.isArray(data.zonations) && data.zonations.length > 0)
-        || (Array.isArray(data.zones) && data.zones.length > 0
-            && data.zones[0] && typeof data.zones[0] === 'object'
-            && ('rank' in data.zones[0] || 'zonation' in data.zones[0])));
+// -------- zonation / correlation chart mode (UI-REVIEW-2026-09-05) --------
+// Mirror of rca_core.exporter._looks_zonation_chart + _zonation_chart_tables
+// (get_configs_for_result checks it FIRST, before abundance/columnar).
+function rcaZonationChartConfigs(data, multi) {
+  return [
+    {
+      id: 'zonations',
+      titleKey: 'sec.zonations',
+      cols: ['col.name', 'col.region', 'col.framework', 'col.reference'],
+      italicCol: -1,
+      row: (z) => [
+        z.name || '',
+        z.region || '',
+        z.framework || '',
+        z.reference || '',
+      ],
+    },
+    {
+      id: 'zones',
+      titleKey: 'sec.zonesTable',
+      cols: ['col.name', 'col.zonation', 'col.rank', 'col.ageSpan',
+             'col.baseAge', 'col.topAge', 'col.stage', 'col.definedBy',
+             'col.note'],
+      italicCol: 0,
+      row: (r) => [
+        r.name || '',
+        r.zonation || '',
+        r.rank || '',
+        r.age_span || '',
+        r.base_age || '',
+        r.top_age || '',
+        r.stage || '',
+        r.defined_by || '',
+        r.note || '',
+      ],
+    },
+    {
+      id: 'correlations',
+      titleKey: 'sec.correlations',
+      cols: ['col.fromZone', 'col.fromZonation', 'col.toZone',
+             'col.toZonation', 'col.basis', 'col.note'],
+      italicCol: -1,
+      row: (c) => [
+        c.from_zone || '',
+        c.from_zonation || '',
+        c.to_zone || '',
+        c.to_zonation || '',
+        c.basis || '',
+        c.note || '',
+      ],
+    },
+  ];
+}
 
-  // -------- zonation-chart mode --------
-  if (hasZonationShape) {
-    return [
-      {
-        id: 'zonations',
-        titleKey: 'sec.zonations',
-        cols: ['col.name', 'col.region', 'col.framework', 'col.reference'],
-        italicCol: -1,
-        row: (z) => [
-          z.name || '',
-          z.region || '',
-          z.framework || '',
-          z.reference || '',
-        ],
-      },
-      {
-        id: 'zones',
-        titleKey: 'sec.zonesTable',
-        cols: ['col.name', 'col.zonation', 'col.rank', 'col.ageSpan',
-               'col.baseAge', 'col.topAge', 'col.stage', 'col.definedBy',
-               'col.note'],
-        italicCol: 0,
-        row: (r) => [
-          r.name || '',
-          r.zonation || '',
-          r.rank || '',
-          r.age_span || '',
-          r.base_age || '',
-          r.top_age || '',
-          r.stage || '',
-          r.defined_by || '',
-          r.note || '',
-        ],
-      },
-      {
-        id: 'correlations',
-        titleKey: 'sec.correlations',
-        cols: ['col.fromZone', 'col.fromZonation', 'col.toZone',
-               'col.toZonation', 'col.basis', 'col.note'],
-        italicCol: -1,
-        row: (c) => [
-          c.from_zone || '',
-          c.from_zonation || '',
-          c.to_zone || '',
-          c.to_zonation || '',
-          c.basis || '',
-          c.note || '',
-        ],
-      },
-    ];
-  }
-
-  // -------- range-chart mode (default) --------
-  // H3 (REVIEW-2026-08-19): dynamically expand the species_ranges CSV
-  // columns based on which optional fields are populated. Mirrors the
-  // conditional-column logic in rca_core/exporter.py so a researcher
-  // gets `author_year` / `note` / `confidence` columns in their CSV
-  // only when the model actually emitted them — not blank CSV columns
-  // for every result.
+// -------- range-chart mode (default) --------
+// H3 (REVIEW-2026-08-19): dynamically expand the species_ranges CSV
+// columns based on which optional fields are populated. PARITY
+// (rca_core/exporter.py _range_chart_tables, REVIEW-2026-09-10): the Python
+// exporter grew the same conditional columns, so a researcher gets
+// `author_year` / `note` / `confidence` in their CSV only when the model
+// actually emitted them — on both transports, with the same column order.
+function rcaRangeChartConfigs(data, multi) {
   const speciesBaseCols = ['col.species', 'col.section', 'col.rangeBase', 'col.rangeTop', 'col.biozone'];
   const speciesBaseRow = (r) => [r.species, r.section, r.range_base, r.range_top, r.biozone];
-  // (label, predicate) — predicate returns truthy iff AT LEAST ONE row
-  // has a meaningful value for this column.
-  const speciesOptLabels = ['col.authorYear', 'col.rangeTopBed', 'col.rangeTopIdx',
-                            'col.endpointKind', 'col.occurrenceMode',
-                            'col.colConfidence', 'col.note'];
-  // Same non-null-object filter rcaRowsForTable applies: the predicates
-  // below dereference each row, so a malformed (null / primitive) entry
-  // would throw here — before rendering even starts.
+  // exporter.py:319 `_opt_text` — "is this value present?" is a NONE test,
+  // NOT `v || ''`: a legitimate 0 (range_top_idx, confidence) or an empty
+  // author string must still count as "populated" and be written out.
+  const optText = (v) => (v === null || v === undefined ? '' : String(v));
+  // [column label, getter] — the getter doubles as the "does ANY row
+  // populate this column?" predicate, exactly like the Python tuple list.
+  const speciesOpt = [
+    ['col.authorYear', (r) => optText(r.author_year)],
+    ['col.rangeTopBed', (r) => optText(r.range_top_bed)],
+    ['col.rangeTopIdx', (r) => optText(r.range_top_idx)],
+    ['col.endpointKind', (r) => (r.endpoint_kind === null || r.endpoint_kind === undefined
+      || r.endpoint_kind === 'unknown' ? '' : String(r.endpoint_kind))],
+    ['col.occurrenceMode', (r) => (r.occurrence_mode === null || r.occurrence_mode === undefined
+      || r.occurrence_mode === 'unknown' ? '' : String(r.occurrence_mode))],
+    ['col.colConfidence', (r) => optText(r.confidence)],
+    ['col.note', (r) => optText(r.note)],
+  ];
+  // Non-dict rows are skipped for the predicates only (exporter.py:325
+  // `if isinstance(r, dict)`) — the row renderers still show them.
   const speciesRowsForPred = (Array.isArray(data.species_ranges)
     ? data.species_ranges
-    : []).filter((r) => r !== null && typeof r === 'object');
-  const speciesOptPreds = [
-    (r) => r.author_year,
-    (r) => r.range_top_bed,
-    (r) => r.range_top_idx != null,
-    (r) => r.endpoint_kind && r.endpoint_kind !== 'unknown',
-    (r) => r.occurrence_mode && r.occurrence_mode !== 'unknown',
-    (r) => r.confidence != null,
-    (r) => r.note,
-  ];
+    : []).filter((r) => r !== null && typeof r === 'object' && !Array.isArray(r));
   const speciesOptCols = [];
-  for (let i = 0; i < speciesOptLabels.length; i += 1) {
-    const pred = speciesOptPreds[i];
-    if (speciesRowsForPred.some(pred)) speciesOptCols.push(speciesOptLabels[i]);
+  const speciesOptGetters = [];
+  for (const [label, getter] of speciesOpt) {
+    if (speciesRowsForPred.some((r) => getter(r))) {
+      speciesOptCols.push(label);
+      speciesOptGetters.push(getter);
+    }
   }
-  const speciesOptGetters = {
-    'col.authorYear':     (r) => r.author_year || '',
-    'col.rangeTopBed':    (r) => r.range_top_bed || '',
-    'col.rangeTopIdx':    (r) => r.range_top_idx == null ? '' : String(r.range_top_idx),
-    'col.endpointKind':   (r) => r.endpoint_kind || '',
-    'col.occurrenceMode': (r) => r.occurrence_mode || '',
-    'col.colConfidence':  (r) => r.confidence == null ? '' : String(r.confidence),
-    'col.note':           (r) => r.note || '',
-  };
   const speciesColsFinal = multi
     ? speciesBaseCols.concat(speciesOptCols, ['col.agreement'])
     : speciesBaseCols.concat(speciesOptCols);
   const speciesRowFinal = (r) => {
     const row = speciesBaseRow(r);
-    for (const c of speciesOptCols) row.push(speciesOptGetters[c](r));
+    for (const g of speciesOptGetters) row.push(g(r));
     if (multi) row.push(r.agreement || '');
     return row;
   };
@@ -352,12 +409,25 @@ function rcaTableConfigs(data) {
       titleKey: 'sec.fossils',
       cols: ['col.fossil'],
       italicCol: -1,
-      // M1 (REVIEW-2026-08-19): other_fossils rows may be a string or
-      // a dict (label/species/taxon/name). Normalize to a string before
-      // export so CSV / JSON don't carry dict-shaped objects.
-      row: (f) => [typeof f === 'object' && f
-        ? String(f.label || f.species || f.taxon || f.name || '')
-        : String(f || '')],
+      // M1 (REVIEW-2026-08-19): rows may be a plain string or a dict.
+      // M4 (REVIEW-2026-09-20): the dict keys are now the Python ones —
+      // exporter.py:395 reads `f.get("fossil", f.get("text", ""))`, i.e.
+      // PRESENCE of "fossil" wins (even an empty/None value), else "text",
+      // else "". The old JS chain (`label || species || taxon || name`)
+      // invented keys neither transport writes, so a normalised
+      // `{"text": "Ammonite sp."}` row exported as an empty CSV cell in the
+      // browser while the GUI showed the text — and a row carrying
+      // `{"fossil": ""}` fell through to a name that Python never reads.
+      // `String(...)` keeps the "never emit [object Object]" property; a
+      // None-valued key renders '' exactly like Python's str(None)→"" path
+      // through _export_cell_text.
+      row: (f) => {
+        if (rcaIsDict(f)) {
+          const v = 'fossil' in f ? f.fossil : ('text' in f ? f.text : '');
+          return [v === null || v === undefined ? '' : String(v)];
+        }
+        return [f === null || f === undefined ? '' : String(f)];
+      },
     },
   ];
 }
@@ -410,21 +480,103 @@ function rcaColumnarSubTableRows(data) {
 // from the flattened per-section arrays; every other table reads
 // `data[tableId]` directly.
 //
-// Malformed rows are dropped here rather than at each call site: a model
-// payload can contain a null / primitive entry inside an array
-// (rca_core/exporter.py reports those as a not_a_dict invariant issue), and
-// every row extractor dereferences its row — a single null would throw out
-// of rcaRenderResults and blank the whole results panel. other_fossils is
-// exempt because its extractor explicitly accepts plain strings (see the
-// M1 note above); everything else must be a non-null object.
+// M4 (REVIEW-2026-09-20): malformed rows are no longer dropped here.
+// rca_core/exporter.py never filters them — `_table_items` hands every entry
+// of the list to `_row_values`, which renders a non-dict row as a single
+// padded cell (exporter.py:901-906). Silently dropping them made the
+// browser's row count and CSV disagree with the GUI / XLSX export of the
+// SAME payload (the quality report still flags the row as a `not_a_dict`
+// invariant issue, so the user saw "3 rows" in the browser and "4 rows" in
+// Excel). Tolerance is provided by rcaRowCellsFor (the `_row_values`
+// mirror), which is what the renderer and the export path call instead of
+// `cfg.row` directly — a single null can still never throw out of
+// rcaRenderResults and blank the whole results panel.
 function rcaRowsForTable(data, tableId) {
   if (tableId === 'lithology_blocks' || tableId === 'age_units'
       || tableId === 'samples') {
     return rcaColumnarSubTableRows(data)[tableId];
   }
-  const rows = Array.isArray(data && data[tableId]) ? data[tableId] : [];
-  if (tableId === 'other_fossils') return rows;
-  return rows.filter((r) => r !== null && typeof r === 'object');
+  return Array.isArray(data && data[tableId]) ? data[tableId] : [];
+}
+
+// Python `isinstance(x, dict)` as close as JS gets: a non-null,
+// non-array object. Used to decide whether a row may be dereferenced.
+function rcaIsDict(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+// Mirror of rca_core/exporter.py:_row_values — the ONE cell builder behind
+// both the rendered table and the CSV/TSV export, so a malformed row can
+// never make the two transports disagree on the column count either.
+// `cfg.row` is only handed non-null objects (plus every other_fossils row,
+// whose extractor explicitly accepts strings); anything else becomes a
+// single cell padded/truncated to the header width, exactly like Python's
+// `vals = [item]` branch.
+function rcaRowCellsFor(cfg, item) {
+  let vals;
+  if (rcaIsDict(item) || cfg.id === 'other_fossils') {
+    vals = cfg.row(item);
+  } else {
+    vals = [item];
+  }
+  const nCols = (cfg.cols || []).length;
+  const out = vals.slice(0, nCols);
+  while (out.length < nCols) out.push('');
+  return out;
+}
+
+// Mirror of rca_core/exporter.py:_export_cell_text (exporter.py:852) — the
+// point where a cell value becomes TEXT, so it is also the LAST place a
+// non-finite number can be caught. A producer that already str()-ed its
+// value puts the literal "nan"/"inf" into the CSV/XLSX as something that
+// looks like data, so those spellings are blanked here as well (Python's
+// `_NONFINITE_TEXT`, exporter.py:849).
+//
+// Both consumers call it: the Python GUI's result grid renders through
+// `build_table_export` (gui.py:2148), i.e. through `_export_cell_text`, so
+// the browser panel and the CSV have to run the SAME step or the three
+// surfaces disagree on a cell that reads NaN/Infinity.
+const RCA_NONFINITE_TEXT = ['nan', 'inf', '-inf', '+inf', '-nan',
+  'infinity', '-infinity'];
+
+function rcaExportCellText(value) {
+  if (value === null || value === undefined) return '';
+  // Python's `str(True)` is 'True', not JS's 'true' — a boolean that reaches
+  // a cell (an un-normalized model field) must read the same in the browser
+  // panel, the browser CSV and the GUI grid / workbook.
+  if (typeof value === 'boolean') return value ? 'True' : 'False';
+  const s = String(value);
+  return RCA_NONFINITE_TEXT.indexOf(s.trim().toLowerCase()) !== -1 ? '' : s;
+}
+
+// L2 (REVIEW-2026-09-20): the agreement band, computed in ONE place.
+// Thresholds are the pill's integer tri-colour bands (see the cell renderer
+// below): good k*3 >= 2n, mid k*3 > n, low k*3 <= n. Previously the row
+// background used `ac <= runs/2` while the pill used `k*3 <= n`, so a 1/2 or
+// 2/4 row showed a "mid" pill on a red "needs review" band — two
+// contradictory review signals for the same number.
+function rcaAgreementBand(k, n) {
+  if (!Number.isFinite(k) || !Number.isFinite(n) || n <= 0) return 'low';
+  if (k * 3 >= n * 2) return 'good';
+  if (k * 3 > n) return 'mid';
+  return 'low';
+}
+
+// Band of one row: `agreement_count` first (the merge writes it), then the
+// "k/n" string (UI-REVIEW-2026-09-05 fallback for hand-edited / history
+// rows). Returns null when the row cannot carry agreement at all (a
+// malformed non-dict row) so the renderer skips the banding instead of
+// reading properties off a string.
+function rcaRowAgreementBand(item, runsRaw) {
+  if (!rcaIsDict(item)) return null;
+  const n = Number(runsRaw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  let k = Number(item.agreement_count);
+  if (!Number.isFinite(k)) {
+    const m = String(item.agreement || '').trim().match(/^(\d+)\s*\/\s*(\d+)$/);
+    k = m ? Number(m[1]) : 0;
+  }
+  return rcaAgreementBand(k, n);
 }
 
 // Render the whole result. `data` is the normalized result object.
@@ -573,40 +725,40 @@ function rcaRenderResults(data, rawText) {
     rows.forEach((item, idx) => {
       // Flag low-agreement species rows (seen in a minority of runs) so the
       // operator knows to double-check them.
+      //
+      // L2 (REVIEW-2026-09-20): the band comes from rcaRowAgreementBand, the
+      // SAME integer tri-colour rule the agreement pill uses below, so a row
+      // can never show a red "needs review" background under a green/amber
+      // pill. It also returns null for a malformed (non-dict) row, which is
+      // what used to throw out of this loop.
       let rowCls = '';
       if ((cfg.id === 'species_ranges' || cfg.id === 'sections') && data && Number(data.runs) > 1) {
-        // UI-REVIEW-2026-09-05: fall back to parsing the "n/m" agreement
-        // string when agreement_count is absent. Previously a row carrying
-        // agreement "3/3" without agreement_count was treated as count 0
-        // and flagged low — a cream warning row right next to a green 3/3
-        // pill (contradictory review signals).
-        let ac = Number(item.agreement_count);
-        if (!Number.isFinite(ac)) {
-          const m = String(item.agreement || '').trim().match(/^(\d+)\s*\/\s*(\d+)$/);
-          ac = m ? Number(m[1]) : 0;
+        if (rcaRowAgreementBand(item, data.runs) === 'low') {
+          rowCls = ' class="row-low-agreement"';
         }
-        const half = Number(data.runs) / 2;
-        if (ac <= half) rowCls = ' class="row-low-agreement"';
       }
       parts.push('<tr' + rowCls + '>');
       parts.push('<th class="cell-empty" scope="row">' + (idx + 1) + '</th>');
-      const cells = cfg.row(item);
+      // M4 (REVIEW-2026-09-20): rcaRowCellsFor is the `_row_values` mirror —
+      // the one cell builder behind BOTH this render loop and
+      // rcaBuildTableExport, so a null / primitive row can never blank the
+      // results panel here nor make the browser's table and its CSV
+      // disagree on the column count.
+      const cells = rcaRowCellsFor(cfg, item);
       cells.forEach((cell, ci) => {
-        const val = cell === null || cell === undefined ? '' : String(cell);
+        const val = rcaExportCellText(cell);
         const colKey = cfg.cols[ci];
         // Phase C: agreement cell -> colored pill (good/mid/low).
         if (colKey === 'col.agreement' && val.trim()) {
           const m = val.trim().match(/^(\d+)\s*\/\s*(\d+)$/);
+          // L2: rcaAgreementBand is the single threshold source (a missing
+          // or unparsable "k/n" text stays the conservative low band, as
+          // before).
           let pillClass = 'pill-low';
           if (m) {
             const k = parseInt(m[1], 10);
             const n = parseInt(m[2], 10);
-            // Integer math avoids float rounding: 2/3 = 0.666... < 0.667.
-            // good: k >= 2n/3  (k*3 >= n*2)
-            // mid:  k >  n/3  (k*3 >  n)   && k < 2n/3
-            // low:  k <= n/3  (k*3 <= n)
-            if (k * 3 >= n * 2) pillClass = 'pill-good';
-            else if (k * 3 > n) pillClass = 'pill-mid';
+            pillClass = 'pill-' + rcaAgreementBand(k, n);
           }
           parts.push('<td><span class="pill ' + pillClass + '">' + rcaEsc(val) + '</span></td>');
           return;
@@ -647,46 +799,37 @@ function rcaRenderResults(data, rawText) {
 }
 
 // Build { headers, rows } for a table id, using current-language column labels.
+//
+// PARITY (M4, REVIEW-2026-09-20): this is the mirror of
+// rca_core/exporter.py:_export_grid — same items (_table_items →
+// rcaRowsForTable), same cell builder (_row_values → rcaRowCellsFor, which
+// renders a non-dict row as one padded cell instead of raising or dropping
+// it), same text step (_export_cell_text → rcaExportCellText). The row COUNT
+// therefore matches the GUI / workbook export for a payload that contains
+// null or primitive entries.
 function rcaBuildTableExport(data, tableId) {
   const cfg = rcaTableConfigs(data).find((c) => c.id === tableId);
   if (!cfg) return { headers: [], rows: [] };
   const headers = [t('col.index')].concat(cfg.cols.map((c) => t(c)));
-  const nCols = cfg.cols.length;
   // Sprint B (REVIEW-2026-09-04): same row source as the renderer
   // (rcaRowsForTable). The old stash-based lookup
   // (data._lithology_blocks_rows / ...) only worked when rcaTableConfigs
   // had mutated `data` beforehand and leaked internal keys into JSON export.
   const items = rcaRowsForTable(data, tableId);
-  // M11: pad/truncate each row to cfg.cols.length so a future custom row
-  // extractor can't silently misalign columns between headers and rows on
-  // a CSV / Excel paste.
-  const rows = items.map((item, idx) => {
-    const raw = cfg.row(item).map((v) => (v === null || v === undefined ? '' : String(v)));
-    const padded = raw.slice(0, nCols);
-    while (padded.length < nCols) padded.push('');
-    return [String(idx + 1)].concat(padded);
-  });
+  const rows = items.map((item, idx) => [String(idx + 1)].concat(
+    rcaRowCellsFor(cfg, item).map(rcaExportCellText)
+  ));
   return { headers, rows };
 }
 
 
-// UI-Polish Phase 5: viz mount-point hook. Currently a no-op.
-// Reserved for a future horizontal-Gantt visualization of species ranges
-// (each species_ranges row -> { name, value: [sectionIdx, range_base, range_top], biozone };
-//  data.sections becomes the Y-axis categories).
-// When implementing, export this function on globalThis and call from
-// rcaRenderResults() after the table HTML is built. The host element
-// already exists in index.html but is `hidden` until first invocation.
-function rcaRenderViz(data) {
-  if (!data) return;
-  var host = (typeof document !== "undefined")
-    ? document.getElementById("viz-host")
-    : null;
-  if (!host) return;
-  // No-op: future ECharts/Plotly init goes here.
-  host.textContent = "";
-}
-if (typeof globalThis !== "undefined") globalThis.rcaRenderViz = rcaRenderViz;
+// UI-Polish Phase 5 `rcaRenderViz` (a no-op that only cleared #viz-host) was
+// DEAD CODE and is gone (REVIEW-2026-09-20): nothing ever called it, so the
+// "reserved for a future Gantt" hook only created the impression that the
+// mount point was wired. #viz-host itself still exists in index.html and is
+// still preserved across renders by app.js (renderCurrentResult /
+// resetUpload) — see the report: keeping a hidden, never-populated div in the
+// document is the leftover, not this function.
 
 // UI-REVIEW-2026-09-08 (gnfinder/GBIF borrow, UI wiring): render the
 // scientific-name check results as an info block under the results
