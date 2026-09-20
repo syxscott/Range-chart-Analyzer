@@ -15,8 +15,11 @@ Run:  python tests/test_prompt_fixes.py
 
 from __future__ import annotations
 
+import difflib
 import os
 import re
+import shutil
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -24,8 +27,11 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 from rca_core.prompt import (
     PROMPT_VERSION,
+    POS_FIELDS,
     RANGE_CHART_SYSTEM_PROMPT,
     ABUNDANCE_DIAGRAM_SYSTEM_PROMPT,
+    CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT,
+    SCATTER_PLOT_SYSTEM_PROMPT,
     COLUMNAR_SECTION_SYSTEM_PROMPT,
     CHART_LANG_HINT,
 )
@@ -120,6 +126,73 @@ def _js_prompt_versions() -> dict:
     for k, v in re.findall(r"(\w+)\s*:\s*'([^']*)'", m.group(1)):
         out[k] = v
     return out
+
+
+_EVAL_JS = (
+    "var fs=require('fs'), vm=require('vm');"
+    "var src=fs.readFileSync(process.argv[1],'utf8');"
+    "var ctx=vm.createContext({});"
+    "vm.runInContext(src,ctx,{filename:'prompt.js'});"
+    "var out=@@NAMES@@.map(function(n){"
+    "var v=vm.runInContext(n,ctx);"
+    "if(typeof v!=='string')throw new Error(n+' is not a string');"
+    "return v;});"
+    "process.stdout.write(out.join(String.fromCharCode(31)));"
+)
+
+_JS_TEXT_CACHE: dict[tuple, tuple] = {}
+
+
+def _eval_js_prompt_consts(const_names):
+    """Return the EVALUATED text of the given js/prompt.js constants.
+
+    BORROW-2026-09-20: the coverage-contract and 0-999 axis clauses are
+    generated at runtime inside js/prompt.js (exactly like the Python side
+    generates them from rca_core.reason_codes), so the raw-source scraper
+    ``_extract_js_prompt_const`` can not see them — only a real JS evaluator
+    can. Mirrors how tests_frontend.js loads prompt.js through vm.runInContext.
+    Raises AssertionError when node is unavailable or the eval fails, so a
+    missing JS toolchain can never hide prompt drift.
+    """
+    key = tuple(const_names)
+    if key in _JS_TEXT_CACHE:
+        return _JS_TEXT_CACHE[key]
+    node = shutil.which(os.environ.get("NODE_EXE", "node"))
+    assert node, "node executable not found — can not evaluate js/prompt.js"
+    names_js = "[" + ",".join("'" + n + "'" for n in const_names) + "]"
+    script = _EVAL_JS.replace("@@NAMES@@", names_js)
+    proc = subprocess.run([node, "-e", script, _JS_PROMPT_PATH],
+                          capture_output=True, text=True, encoding="utf-8")
+    assert proc.returncode == 0, (
+        f"node failed to evaluate js/prompt.js: {proc.stderr[:2000]}")
+    texts = proc.stdout.split("\x1f")
+    assert len(texts) == len(const_names), (
+        f"node returned {len(texts)} texts for {len(const_names)} constants")
+    _JS_TEXT_CACHE[key] = texts
+    return texts
+
+
+def _contract_block(prompt_text: str) -> str:
+    """The generated (A)+(B) clause block of a contract-carrying prompt.
+
+    Everything from the ANSWER EVERY REQUESTED CELL bullet through the end of
+    the AXIS CALIBRATION bullet. Both sides build it from their own constants
+    (Python: rca_core/reason_codes.py; JS: the slug array in js/prompt.js),
+    so this block MUST be byte-identical across the two implementations —
+    that is the mirroring contract of BORROW-2026-09-20.
+    """
+    start_marker = "- ANSWER EVERY REQUESTED CELL"
+    end_marker = "it is simply not converted."
+    start = prompt_text.index(start_marker)
+    end = prompt_text.index(end_marker) + len(end_marker)
+    return prompt_text[start:end]
+
+
+def _diff_report(py_text: str, js_text: str, max_lines: int = 40) -> str:
+    lines = difflib.unified_diff(py_text.split("\n"), js_text.split("\n"),
+                                 fromfile="python", tofile="js/prompt.js",
+                                 lineterm="", n=0)
+    return "\n".join(list(lines)[:max_lines])
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +417,8 @@ def test_prompt_version_both_sides():
           isinstance(PROMPT_VERSION, dict) and len(PROMPT_VERSION) >= 5,
           evidence=f"py={PROMPT_VERSION!r}")
     for mode in ("range_chart", "columnar_section", "abundance_diagram",
-                 "phylogenetic_tree"):
+                 "phylogenetic_tree", "chemical_stratigraphy",
+                 "scatter_plot"):
         check(f"py-prompt-version-{mode}", bool(PROMPT_VERSION.get(mode)),
               evidence=f"mode={mode} py={PROMPT_VERSION!r}")
     check("py-abundance-alias-consistent",
@@ -352,10 +426,79 @@ def test_prompt_version_both_sides():
           evidence=f"py={PROMPT_VERSION!r}")
     js_versions = _js_prompt_versions()
     for mode in ("range_chart", "columnar_section", "abundance_diagram",
-                 "phylogenetic_tree", "abundance"):
+                 "phylogenetic_tree", "abundance", "chemical_stratigraphy",
+                 "scatter_plot"):
         check(f"js-prompt-version-{mode}",
               js_versions.get(mode) == PROMPT_VERSION.get(mode),
               evidence=f"mode={mode} js={js_versions.get(mode)!r} py={PROMPT_VERSION.get(mode)!r}")
+
+
+def test_contract_modes_python_vs_js():
+    """HIGH: the four BORROW-2026-09-20 contract modes must mirror Python.
+
+    Added when the extraction contract (three-state ``response_kind``, the
+    closed ``reason_codes`` list, the ``*_pos_0_999`` fields and the root
+    ``axis_calibration`` block) landed in rca_core/prompt.py. Two layers:
+
+    * CHEMICAL_STRATIGRAPHY / SCATTER_PLOT — hard asserts on the per-mode
+      PROMPT_VERSION AND on the full evaluated prompt text being byte
+      identical. These two modes had no prompt-parity coverage at all before
+      (the loops above are check()-style and print-only under pytest), so
+      drift here was silent; from now on it fails the run.
+    * RANGE_CHART / ABUNDANCE_DIAGRAM — hard assert ONLY on the generated
+      (A)+(B) clause block (the new contract text, which must be identical
+      by definition), plus a print-only byte-identical report for the rest
+      of the prompt so the legacy drift stays visible without breaking.
+
+    The comparison runs js/prompt.js through ``node`` + vm (same loading as
+    tests_frontend.js) because the clause block is generated at runtime on
+    both sides and the raw-source scraper above can not see it.
+    """
+    # 1) Versions of the two newly covered modes: real assert.
+    js_versions = _js_prompt_versions()
+    for mode in ("chemical_stratigraphy", "scatter_plot"):
+        assert js_versions.get(mode) == PROMPT_VERSION.get(mode), (
+            f"PROMPT_VERSION drift for {mode}: "
+            f"js={js_versions.get(mode)!r} py={PROMPT_VERSION.get(mode)!r}")
+
+    # 2) Prompt text. (js const, python text, byte-identical hard?)
+    specs = [
+        ("RANGE_CHART_SYSTEM_PROMPT", "range_chart",
+         RANGE_CHART_SYSTEM_PROMPT, False),
+        ("ABUNDANCE_DIAGRAM_SYSTEM_PROMPT", "abundance_diagram",
+         ABUNDANCE_DIAGRAM_SYSTEM_PROMPT, False),
+        ("CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT", "chemical_stratigraphy",
+         CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT, True),
+        ("SCATTER_PLOT_SYSTEM_PROMPT", "scatter_plot",
+         SCATTER_PLOT_SYSTEM_PROMPT, True),
+    ]
+    js_texts = _eval_js_prompt_consts([s[0] for s in specs])
+    for (const_name, mode, py_text, hard), js_text in zip(specs, js_texts):
+        # The generated contract block must be byte-identical in EVERY
+        # contract mode (minimum mirroring requirement) — hard assert.
+        block = _contract_block(py_text)
+        if block not in js_text:
+            js_block = (_contract_block(js_text)
+                        if "ANSWER EVERY REQUESTED CELL" in js_text else "")
+            print(_diff_report(block, js_block))
+        assert block in js_text, (
+            f"{const_name}: the generated (A)+(B) contract clause block "
+            f"drifted from rca_core/prompt.py (see diff above)")
+        # The *pos_0_999 field names the contract asks for must be present.
+        for field, _what in POS_FIELDS[mode]:
+            assert f'"{field}"' in js_text, (
+                f"{const_name}: schema field {field!r} missing in JS prompt")
+        if hard:
+            if py_text != js_text:
+                print(_diff_report(py_text, js_text))
+            assert py_text == js_text, (
+                f"{const_name} drift: py len={len(py_text)} "
+                f"js len={len(js_text)}")
+        else:
+            # Legacy modes: report evaluated drift without breaking.
+            check(f"py-vs-js-{const_name}-evaluated-byte-identical",
+                  py_text == js_text,
+                  evidence=f"py len={len(py_text)} js len={len(js_text)}")
 
 
 if __name__ == "__main__":
@@ -368,5 +511,6 @@ if __name__ == "__main__":
     test_author_year_requested()
     test_byte_identical_python_vs_js()
     test_prompt_version_both_sides()
+    test_contract_modes_python_vs_js()
     print(f"\n--- {_pass} passed, {_fail} failed ---")
     sys.exit(1 if _fail else 0)

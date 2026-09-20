@@ -26,6 +26,13 @@ Input (results.json):
     "overall_f1": 0.91
   }
 }
+
+BORROW-2026-09-20: ``metrics`` may additionally carry the additive blocks
+emitted by ``rca_core.eval_metrics.tiered_eval_report`` — ``boundary_tiers``
+(four-tier proportions + weighted score), ``error_typology`` (per-label error
+counts), ``tracks`` (descriptive vs reasoning, deliberately not blended) and
+``refusals`` (refusal / uncertainty rate beside precision). They render as
+extra lines per case; a results file without them renders exactly as before.
 """
 from __future__ import annotations
 
@@ -41,6 +48,50 @@ def main(results_path: Path, output_path: Path, title: str = "VLM Accuracy Repor
     html = generate_html(results, title)
     output_path.write_text(html, encoding="utf-8")
     print(f"Report written to: {output_path}")
+
+
+def _borrow_metric_lines(metrics: dict) -> list[str]:
+    """BORROW-2026-09-20: one HTML line per new eval_metrics layer.
+
+    Reads the additive blocks ``rca_core.eval_metrics.tiered_eval_report``
+    emits (tiered boundaries, error typology, split tracks, refusal rate) and
+    returns nothing at all for a legacy results file, so old and new reports
+    share this renderer.
+    """
+    lines: list[str] = []
+    tiers = (metrics.get("boundary_tiers") or {}).get("row") or {}
+    if tiers:
+        rates = tiers.get("rates") or {}
+        rendered = " ".join(f"{tier}={rates[tier]:.2f}" for tier in
+                            ("strict", "adjacent", "coarse", "wrong") if tier in rates)
+        lines.append(f"tiers {rendered} weighted={tiers.get('weighted_score', 0):.2f}")
+    typology = metrics.get("error_typology") or {}
+    counts = typology.get("counts") or {}
+    if counts:
+        errors = {k: v for k, v in counts.items() if v and k != "correct"}
+        rendered = " ".join(f"{k}={v}" for k, v in sorted(errors.items())) or "none"
+        lines.append(f"errors {rendered}")
+    tracks = metrics.get("tracks") or {}
+    if tracks.get("descriptive") or tracks.get("reasoning"):
+        lines.append(
+            f"descriptive={(tracks['descriptive'] or {}).get('score', 0):.2f}"
+            f" reasoning={(tracks['reasoning'] or {}).get('score', 0):.2f}"
+        )
+    refusals = metrics.get("refusals") or {}
+    if refusals:
+        if refusals.get("refusal_field_present"):
+            lines.append(
+                f"refusal={refusals.get('refusal_rate', 0):.2f}"
+                f" (not_drawn={refusals.get('not_drawn_rate', 0):.2f}"
+                f" uncertain={refusals.get('uncertain_rate', 0):.2f})"
+                f" P_answered={refusals.get('precision_on_answered', 0):.2f}"
+                f" R_answered={refusals.get('recall_on_answered', 0):.2f}"
+            )
+        else:
+            # BORROW-2026-09-20: be explicit that the refusal rate is UNKNOWN
+            # here rather than silently 0 — the run predates response_kind.
+            lines.append("refusal=n/a (no response_kind; unanswered cells count as omission)")
+    return lines
 
 
 def generate_html(results: dict[str, Any], title: str = "VLM Accuracy Report") -> str:
@@ -107,6 +158,9 @@ def generate_html(results: dict[str, Any], title: str = "VLM Accuracy Report") -
             metrics_parts.append(f"sum_err={abe.get('max_error',0):.1f}%")
         if phd is not None:
             metrics_parts.append(f"RF_dist={phd}")
+        # BORROW-2026-09-20: the new eval_metrics layers are optional siblings,
+        # so a results file produced before them still renders unchanged.
+        metrics_parts.extend(_borrow_metric_lines(m))
 
         metrics_cell = "<br>".join(metrics_parts) if metrics_parts else "—"
 

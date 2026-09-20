@@ -1,0 +1,132 @@
+PREFIX dcterms: <http://purl.org/dc/terms/>
+PREFIX gts: <http://resource.geosciml.org/ontology/timescale/gts#>
+PREFIX gtsd: <https://data.stratigraphy.org/data/gts/>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+PREFIX rank: <http://resource.geosciml.org/ontology/timescale/rank/>
+PREFIX sh: <http://www.w3.org/ns/shacl#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX time: <http://www.w3.org/2006/time#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+<https://data.stratigraphy.org/def/chart>
+    a skos:ConceptScheme ;
+    dcterms:modified "2026-06-20"^^xsd:date ;
+    owl:versionIRI gtsd:2026-06 ;
+.
+
+gtsd:Permian
+    a skos:Concept ;
+    gts:rank rank:Period ;
+    time:hasBeginning [ gtsd:inMYA 298.9 ; ] ;
+    time:hasEnd [ gtsd:inMYA 251.902 ; ] ;
+    skos:prefLabel "Permian"@en ;
+.
+
+gtsd:Lopingian
+    a skos:Concept ;
+    gts:rank rank:Epoch ;
+    skos:broader gtsd:Permian ;
+    time:hasBeginning [ gtsd:inMYA 259.857 ; ] ;
+    time:hasEnd [ gtsd:inMYA 251.902 ; ] ;
+    skos:prefLabel "Lopingian"@en ;
+.
+
+gtsd:Wuchiapingian
+    a skos:Concept ;
+    gts:rank rank:Age ;
+    gts:ratifiedGSSP true ;
+    skos:broader gtsd:Lopingian ;
+    skos:changeNote "2026-06: hasBeginning 259.51 -> 259.857" ;
+    time:hasBeginning
+        [
+            skos:note "uncertain" ;
+            gtsd:inMYA 259.857 ;
+        ] ;
+    time:hasEnd [ gtsd:inMYA 254.14 ; ] ;
+    skos:prefLabel "吴家坪阶"@zh , "Wuchiapingian"@en ;
+    sh:order 81 ;
+.
+
+gtsd:Changhsingian
+    a skos:Concept ;
+    gts:rank rank:Age ;
+    gts:ratifiedGSSP true ;
+    skos:broader gtsd:Lopingian ;
+    time:hasBeginning [ gtsd:inMYA 254.14 ; ] ;
+    time:hasEnd [ gtsd:inMYA 251.902 ; ] ;
+    skos:prefLabel "Changhsingian"@en ;
+.
+
+gtsd:Quaternary
+    a skos:Concept ;
+    gts:rank rank:Period ;
+    time:hasBeginning [ gtsd:inMYA 2.58 ; ] ;
+    time:hasEnd [ gtsd:inMYA 0 ; ] ;
+    skos:prefLabel "Quaternary"@en ;
+.
+
+gtsd:Holocene
+    a skos:Concept ;
+    gts:rank rank:Epoch ;
+    gts:ratifiedGSSA true ;
+    skos:broader gtsd:Quaternary ;
+    time:hasBeginning [ gtsd:inMYA 0.0117 ; ] ;
+    time:hasEnd [ gtsd:inMYA 0 ; ] ;
+    skos:prefLabel "Holocene"@en ;
+.
+
+gtsd:Meghalayan
+    a skos:Concept ;
+    gts:rank rank:Age ;
+    gts:ratifiedGSSP true ;
+    skos:broader gtsd:Holocene ;
+    time:hasBeginning [ gtsd:inMYA 0.0042 ; ] ;
+    time:hasEnd [ gtsd:inMYA 0 ; ] ;
+    skos:prefLabel "Meghalayan"@en ;
+.
+
+gtsd:Cambrian
+    a skos:Concept ;
+    gts:rank rank:Period ;
+    time:hasBeginning [ gtsd:inMYA 538.8 ; ] ;
+    time:hasEnd [ gtsd:inMYA 486.85 ; ] ;
+    skos:prefLabel "Cambrian"@en ;
+.
+
+gtsd:Terreneuvian
+    a skos:Concept ;
+    gts:rank rank:Epoch ;
+    skos:broader gtsd:Cambrian ;
+    time:hasBeginning [ gtsd:inMYA 538.8 ; ] ;
+    time:hasEnd [ gtsd:inMYA 521 ; ] ;
+    skos:prefLabel "Terreneuvian"@en ;
+.
+
+gtsd:Fortunian
+    a skos:Concept ;
+    gts:rank rank:Age ;
+    gts:ratifiedGSSP true ;
+    skos:broader gtsd:Terreneuvian ;
+    time:hasBeginning [ gtsd:inMYA 538.8 ; ] ;
+    time:hasEnd [ gtsd:inMYA 529 ; ] ;
+    skos:prefLabel "Fortunian"@en ;
+.
+
+gtsd:CambrianStage2
+    a skos:Concept ;
+    gts:rank rank:Age ;
+    gts:ratifiedGSSP false ;
+    skos:broader gtsd:Terreneuvian ;
+    time:hasBeginning [ gtsd:inMYA 529 ; ] ;
+    time:hasEnd [ gtsd:inMYA 521 ; ] ;
+    skos:prefLabel "Stage 2"@en ;
+.
+
+gtsd:Siderian
+    a skos:Concept ;
+    gts:rank rank:Age ;
+    skos:broader gtsd:Paleoproterozoic ;
+    time:hasBeginning [ gtsd:inMYA 2500 ; ] ;
+    time:hasEnd [ gtsd:inMYA 2300 ; ] ;
+    skos:prefLabel "Siderian"@en ;
+.

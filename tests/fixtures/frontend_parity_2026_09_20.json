@@ -3515,6 +3515,3492 @@
     "name": "Guadalupian",
     "ma": 259.51
    }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_valid_strip",
+   "payload": {
+    "op": "is_valid_code",
+    "args": [
+     "  NOT_DRAWN "
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_valid_bool",
+   "payload": {
+    "op": "is_valid_code",
+    "args": [
+     true
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_norm_alias",
+   "payload": {
+    "op": "normalize_code",
+    "args": [
+     " Undrawn"
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "not_drawn"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_norm_unknown",
+   "payload": {
+    "op": "normalize_code",
+    "args": [
+     "constructor"
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_norm_proto",
+   "payload": {
+    "op": "normalize_code",
+    "args": [
+     "toString"
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_norm_int",
+   "payload": {
+    "op": "normalize_code",
+    "args": [
+     7
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_norm_dict",
+   "payload": {
+    "op": "normalize_code",
+    "args": [
+     {
+      "slug": "not_drawn",
+      "summary": "x",
+      "family": "coverage"
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_norm_caps",
+   "payload": {
+    "op": "normalize_code",
+    "args": [
+     "Out_Of_Scope"
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "out_of_scope"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_codes_list",
+   "payload": {
+    "op": "normalize_codes",
+    "args": [
+     [
+      "dash",
+      "dash",
+      "bogus",
+      "unclear",
+      null,
+      5
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": [
+    "not_drawn",
+    "uncertain"
+   ]
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_codes_string",
+   "payload": {
+    "op": "normalize_codes",
+    "args": [
+     " not_drawn ; obscured , , bogus "
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": [
+    "not_drawn",
+    "obscured"
+   ]
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_codes_dict",
+   "payload": {
+    "op": "normalize_codes",
+    "args": [
+     {
+      "legend_only": true,
+      "bogus": false,
+      "abbr": 1
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": [
+    "legend_only",
+    "abbreviated"
+   ]
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_codes_scalar",
+   "payload": {
+    "op": "normalize_codes",
+    "args": [
+     3
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_codes_none",
+   "payload": {
+    "op": "normalize_codes",
+    "args": [
+     null
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_codes_empty",
+   "payload": {
+    "op": "normalize_codes",
+    "args": [
+     ""
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_kind_alias",
+   "payload": {
+    "op": "normalize_response_kind",
+    "args": [
+     " DRAWN "
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "extracted"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_kind_unknown",
+   "payload": {
+    "op": "normalize_response_kind",
+    "args": [
+     "silent"
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_kind_nonstr",
+   "payload": {
+    "op": "normalize_response_kind",
+    "args": [
+     42
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_mk_diverge",
+   "payload": {
+    "op": "merge_response_kinds",
+    "args": [
+     [
+      "extracted",
+      "not_drawn"
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": {
+    "kind": "extracted",
+    "divergent": true
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_mk_fold",
+   "payload": {
+    "op": "merge_response_kinds",
+    "args": [
+     [
+      "dash",
+      null,
+      "",
+      "undrawn"
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": {
+    "kind": "not_drawn",
+    "divergent": false
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_mk_garbage",
+   "payload": {
+    "op": "merge_response_kinds",
+    "args": [
+     [
+      null,
+      "bogus"
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": {
+    "kind": null,
+    "divergent": false
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_mk_empty",
+   "payload": {
+    "op": "merge_response_kinds",
+    "args": [
+     []
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": {
+    "kind": null,
+    "divergent": false
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_mk_ranks",
+   "payload": {
+    "op": "merge_response_kinds",
+    "args": [
+     [
+      "not_drawn",
+      "uncertain",
+      "extracted",
+      "uncertain"
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": {
+    "kind": "extracted",
+    "divergent": true
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_codes_union",
+   "payload": {
+    "op": "merge_reason_codes",
+    "args": [
+     [
+      [
+       "obscured"
+      ],
+      "inferred",
+      null,
+      [
+       "obscured"
+      ],
+      {
+       "dash": 1
+      }
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": [
+    "obscured",
+    "inferred",
+    "not_drawn"
+   ]
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_summary_known",
+   "payload": {
+    "op": "code_summary",
+    "args": [
+     "Low_Confidence"
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "Best-effort value emitted at reduced confidence; see the row note."
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_summary_unknown",
+   "payload": {
+    "op": "code_summary",
+    "args": [
+     "bogus"
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "bogus"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_summary_empty",
+   "payload": {
+    "op": "code_summary",
+    "args": [
+     ""
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": ""
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_render",
+   "payload": {
+    "op": "render_codes",
+    "args": [
+     [
+      "dash",
+      "dash",
+      "no_label"
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "not_drawn, no_label"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_has_blank",
+   "payload": {
+    "op": "has_value",
+    "args": [
+     {
+      "abundance": "  "
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_has_zero",
+   "payload": {
+    "op": "has_value",
+    "args": [
+     {
+      "value": 0
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_has_false",
+   "payload": {
+    "op": "has_value",
+    "args": [
+     {
+      "x": false
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_has_emptylist",
+   "payload": {
+    "op": "has_value",
+    "args": [
+     {
+      "values": [],
+      "depth": {}
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_state_explicit",
+   "payload": {
+    "op": "coverage_state",
+    "args": [
+     {
+      "response_kind": "uncertain",
+      "range_top": "3"
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "uncertain"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_state_legacy",
+   "payload": {
+    "op": "coverage_state",
+    "args": [
+     {
+      "range_base_idx": 0
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "extracted"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_state_gap",
+   "payload": {
+    "op": "coverage_state",
+    "args": [
+     {
+      "species": "A"
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "silent_missing"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_state_nonrow",
+   "payload": {
+    "op": "coverage_state",
+    "args": [
+     "nope"
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "silent_missing"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_state_bogus_kind",
+   "payload": {
+    "op": "coverage_state",
+    "args": [
+     {
+      "response_kind": "bogus",
+      "level_range": [
+       1,
+       2
+      ]
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "extracted"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_answered_nd",
+   "payload": {
+    "op": "is_answered",
+    "args": [
+     {
+      "response_kind": "blank"
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_answered_gap",
+   "payload": {
+    "op": "is_answered",
+    "args": [
+     {
+      "species": "A"
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_column_trim",
+   "payload": {
+    "op": "row_column",
+    "args": [
+     {
+      "species": " Sp a ",
+      "section": "S1"
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "Sp a"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_column_none",
+   "payload": {
+    "op": "row_column",
+    "args": [
+     {
+      "section": "S1"
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": ""
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_stratum_keys",
+   "payload": {
+    "op": "row_stratum",
+    "args": [
+     {
+      "level": 7,
+      "site": ""
+     },
+     [
+      "zz",
+      "level",
+      "site"
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "7"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_label_fallback",
+   "payload": {
+    "op": "row_label",
+    "args": [
+     {
+      "section": "S2"
+     },
+     [
+      "missing"
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "S2"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_label_default",
+   "payload": {
+    "op": "row_label",
+    "args": [
+     {
+      "species": "A",
+      "section": "S"
+     }
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": "A"
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_ledger_grid",
+   "payload": {
+    "op": "coverage_ledger",
+    "args": [
+     [
+      {
+       "species": "A",
+       "section": "S1",
+       "range_top": "9",
+       "range_base": "7",
+       "response_kind": "extracted",
+       "reason_codes": [
+        "crosses_top"
+       ]
+      },
+      {
+       "species": "A",
+       "section": "S2",
+       "response_kind": "not_drawn",
+       "reason_codes": [
+        "not_drawn"
+       ]
+      },
+      {
+       "species": "B",
+       "section": "S1",
+       "response_kind": "uncertain",
+       "reason_codes": [
+        "unclear",
+        "obscured"
+       ]
+      },
+      {
+       "species": "C"
+      },
+      "junk-row",
+      {
+       "section": "S1",
+       "response_kind": "blank"
+      },
+      null
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": {
+    "columns": [
+     {
+      "column": "A",
+      "cells": 3,
+      "extracted": 1,
+      "not_drawn": 1,
+      "uncertain": 0,
+      "silent_missing": 1,
+      "answered": 2,
+      "honest_coverage": 0.6667,
+      "strict_coverage": 0.3333
+     },
+     {
+      "column": "B",
+      "cells": 3,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 1,
+      "silent_missing": 2,
+      "answered": 1,
+      "honest_coverage": 0.3333,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "C",
+      "cells": 3,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 3,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     }
+    ],
+    "strata": [
+     {
+      "stratum": "S1",
+      "cells": 3,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 1,
+      "silent_missing": 1,
+      "answered": 2,
+      "honest_coverage": 0.6667,
+      "strict_coverage": 0.3333
+     },
+     {
+      "stratum": "S2",
+      "cells": 3,
+      "extracted": 0,
+      "not_drawn": 1,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 1,
+      "honest_coverage": 0.3333,
+      "strict_coverage": 0.0
+     },
+     {
+      "stratum": "",
+      "cells": 3,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 3,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     }
+    ],
+    "totals": {
+     "cells": 9,
+     "extracted": 1,
+     "not_drawn": 1,
+     "uncertain": 1,
+     "silent_missing": 6,
+     "answered": 3,
+     "honest_coverage": 0.3333,
+     "strict_coverage": 0.1111,
+     "explicit_responses": 4,
+     "row_count": 5,
+     "unattributed_rows": 1
+    },
+    "reason_code_counts": {
+     "crosses_top": 1,
+     "not_drawn": 1,
+     "obscured": 1,
+     "uncertain": 1
+    },
+    "explicit_responses": 4,
+    "row_count": 5,
+    "unattributed_rows": 1,
+    "grid_used": true
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_ledger_nocross",
+   "payload": {
+    "op": "coverage_ledger",
+    "args": [
+     [
+      {
+       "species": "A",
+       "section": "S1",
+       "range_top": "9",
+       "range_base": "7",
+       "response_kind": "extracted",
+       "reason_codes": [
+        "crosses_top"
+       ]
+      },
+      {
+       "species": "A",
+       "section": "S2",
+       "response_kind": "not_drawn",
+       "reason_codes": [
+        "not_drawn"
+       ]
+      },
+      {
+       "species": "B",
+       "section": "S1",
+       "response_kind": "uncertain",
+       "reason_codes": [
+        "unclear",
+        "obscured"
+       ]
+      },
+      {
+       "species": "C"
+      },
+      "junk-row",
+      {
+       "section": "S1",
+       "response_kind": "blank"
+      },
+      null
+     ]
+    ],
+    "kwargs": {
+     "cross_product": false
+    }
+   },
+   "extra": null,
+   "python": {
+    "columns": [
+     {
+      "column": "A",
+      "cells": 2,
+      "extracted": 1,
+      "not_drawn": 1,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 2,
+      "honest_coverage": 1.0,
+      "strict_coverage": 0.5
+     },
+     {
+      "column": "B",
+      "cells": 1,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 1,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "C",
+      "cells": 1,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 1,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     }
+    ],
+    "strata": [
+     {
+      "stratum": "S1",
+      "cells": 2,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 1,
+      "silent_missing": 0,
+      "answered": 2,
+      "honest_coverage": 1.0,
+      "strict_coverage": 0.5
+     },
+     {
+      "stratum": "S2",
+      "cells": 1,
+      "extracted": 0,
+      "not_drawn": 1,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "stratum": "",
+      "cells": 1,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 1,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     }
+    ],
+    "totals": {
+     "cells": 4,
+     "extracted": 1,
+     "not_drawn": 1,
+     "uncertain": 1,
+     "silent_missing": 1,
+     "answered": 3,
+     "honest_coverage": 0.75,
+     "strict_coverage": 0.25,
+     "explicit_responses": 4,
+     "row_count": 5,
+     "unattributed_rows": 1
+    },
+    "reason_code_counts": {
+     "crosses_top": 1,
+     "not_drawn": 1,
+     "obscured": 1,
+     "uncertain": 1
+    },
+    "explicit_responses": 4,
+    "row_count": 5,
+    "unattributed_rows": 1,
+    "grid_used": false
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_ledger_dup",
+   "payload": {
+    "op": "coverage_ledger",
+    "args": [
+     [
+      {
+       "species": "A",
+       "section": "S1",
+       "response_kind": "not_drawn"
+      },
+      {
+       "species": "A",
+       "section": "S1",
+       "range_top": "9",
+       "response_kind": "extracted"
+      },
+      {
+       "species": "A",
+       "section": "S1",
+       "response_kind": "undrawn"
+      },
+      {
+       "species": "B",
+       "section": "S1",
+       "response_kind": "nope",
+       "depth": "12"
+      }
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": {
+    "columns": [
+     {
+      "column": "A",
+      "cells": 1,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0
+     },
+     {
+      "column": "B",
+      "cells": 1,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0
+     }
+    ],
+    "strata": [
+     {
+      "stratum": "S1",
+      "cells": 2,
+      "extracted": 2,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 2,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0
+     }
+    ],
+    "totals": {
+     "cells": 2,
+     "extracted": 2,
+     "not_drawn": 0,
+     "uncertain": 0,
+     "silent_missing": 0,
+     "answered": 2,
+     "honest_coverage": 1.0,
+     "strict_coverage": 1.0,
+     "explicit_responses": 3,
+     "row_count": 4,
+     "unattributed_rows": 0
+    },
+    "reason_code_counts": {},
+    "explicit_responses": 3,
+    "row_count": 4,
+    "unattributed_rows": 0,
+    "grid_used": true
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_ledger_unattributed",
+   "payload": {
+    "op": "coverage_ledger",
+    "args": [
+     [
+      {
+       "species": "",
+       "response_kind": "extracted"
+      },
+      {
+       "response_kind": "blank"
+      },
+      "junk",
+      null
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": {
+    "columns": [],
+    "strata": [],
+    "totals": {
+     "cells": 0,
+     "extracted": 0,
+     "not_drawn": 0,
+     "uncertain": 0,
+     "silent_missing": 0,
+     "answered": 0,
+     "honest_coverage": 0.0,
+     "strict_coverage": 0.0,
+     "explicit_responses": 2,
+     "row_count": 2,
+     "unattributed_rows": 2
+    },
+    "reason_code_counts": {},
+    "explicit_responses": 2,
+    "row_count": 2,
+    "unattributed_rows": 2,
+    "grid_used": false
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_ledger_custom",
+   "payload": {
+    "op": "coverage_ledger",
+    "args": [
+     [
+      {
+       "label": "Spirocolapthus",
+       "bed": 3,
+       "response_kind": "not_drawn",
+       "reason_codes": [
+        "dash"
+       ]
+      },
+      {
+       "label": "S2",
+       "bed": 3,
+       "range_top": "5",
+       "reason_codes": [
+        "low_confidence"
+       ]
+      },
+      {
+       "label": "S2",
+       "bed": 9
+      }
+     ]
+    ],
+    "kwargs": {
+     "column_keys": [
+      "label"
+     ],
+     "stratum_keys": [
+      "bed"
+     ]
+    }
+   },
+   "extra": null,
+   "python": {
+    "columns": [
+     {
+      "column": "Spirocolapthus",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 1,
+      "uncertain": 0,
+      "silent_missing": 1,
+      "answered": 1,
+      "honest_coverage": 0.5,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "S2",
+      "cells": 2,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 1,
+      "answered": 1,
+      "honest_coverage": 0.5,
+      "strict_coverage": 0.5
+     }
+    ],
+    "strata": [
+     {
+      "stratum": "3",
+      "cells": 2,
+      "extracted": 1,
+      "not_drawn": 1,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 2,
+      "honest_coverage": 1.0,
+      "strict_coverage": 0.5
+     },
+     {
+      "stratum": "9",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     }
+    ],
+    "totals": {
+     "cells": 4,
+     "extracted": 1,
+     "not_drawn": 1,
+     "uncertain": 0,
+     "silent_missing": 2,
+     "answered": 2,
+     "honest_coverage": 0.5,
+     "strict_coverage": 0.25,
+     "explicit_responses": 1,
+     "row_count": 3,
+     "unattributed_rows": 0
+    },
+    "reason_code_counts": {
+     "low_confidence": 1,
+     "not_drawn": 1
+    },
+    "explicit_responses": 1,
+    "row_count": 3,
+    "unattributed_rows": 0,
+    "grid_used": true
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_ledger_empty",
+   "payload": {
+    "op": "coverage_ledger",
+    "args": [
+     null
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": {
+    "columns": [],
+    "strata": [],
+    "totals": {
+     "cells": 0,
+     "extracted": 0,
+     "not_drawn": 0,
+     "uncertain": 0,
+     "silent_missing": 0,
+     "answered": 0,
+     "honest_coverage": 0.0,
+     "strict_coverage": 0.0,
+     "explicit_responses": 0,
+     "row_count": 0,
+     "unattributed_rows": 0
+    },
+    "reason_code_counts": {},
+    "explicit_responses": 0,
+    "row_count": 0,
+    "unattributed_rows": 0,
+    "grid_used": false
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_ledger_tie32",
+   "payload": {
+    "op": "coverage_ledger",
+    "args": [
+     [
+      {
+       "species": "T00",
+       "section": "S0",
+       "range_top": "1"
+      },
+      {
+       "species": "T01",
+       "section": "S1"
+      },
+      {
+       "species": "T02",
+       "section": "S0"
+      },
+      {
+       "species": "T03",
+       "section": "S0"
+      },
+      {
+       "species": "T04",
+       "section": "S0"
+      },
+      {
+       "species": "T05",
+       "section": "S0"
+      },
+      {
+       "species": "T06",
+       "section": "S0"
+      },
+      {
+       "species": "T07",
+       "section": "S0"
+      },
+      {
+       "species": "T08",
+       "section": "S0"
+      },
+      {
+       "species": "T09",
+       "section": "S0"
+      },
+      {
+       "species": "T10",
+       "section": "S0"
+      },
+      {
+       "species": "T11",
+       "section": "S0"
+      },
+      {
+       "species": "T12",
+       "section": "S0"
+      },
+      {
+       "species": "T13",
+       "section": "S0"
+      },
+      {
+       "species": "T14",
+       "section": "S0"
+      },
+      {
+       "species": "T15",
+       "section": "S0"
+      }
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": {
+    "columns": [
+     {
+      "column": "T00",
+      "cells": 2,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 1,
+      "answered": 1,
+      "honest_coverage": 0.5,
+      "strict_coverage": 0.5
+     },
+     {
+      "column": "T01",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T02",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T03",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T04",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T05",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T06",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T07",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T08",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T09",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T10",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T11",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T12",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T13",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T14",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     },
+     {
+      "column": "T15",
+      "cells": 2,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 2,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     }
+    ],
+    "strata": [
+     {
+      "stratum": "S0",
+      "cells": 16,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 15,
+      "answered": 1,
+      "honest_coverage": 0.0625,
+      "strict_coverage": 0.0625
+     },
+     {
+      "stratum": "S1",
+      "cells": 16,
+      "extracted": 0,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 16,
+      "answered": 0,
+      "honest_coverage": 0.0,
+      "strict_coverage": 0.0
+     }
+    ],
+    "totals": {
+     "cells": 32,
+     "extracted": 1,
+     "not_drawn": 0,
+     "uncertain": 0,
+     "silent_missing": 31,
+     "answered": 1,
+     "honest_coverage": 0.0312,
+     "strict_coverage": 0.0312,
+     "explicit_responses": 0,
+     "row_count": 16,
+     "unattributed_rows": 0
+    },
+    "reason_code_counts": {},
+    "explicit_responses": 0,
+    "row_count": 16,
+    "unattributed_rows": 0,
+    "grid_used": true
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_rollup_basic",
+   "payload": {
+    "op": "reason_code_rollup",
+    "args": [
+     [
+      {
+       "species": "A",
+       "response_kind": "not_drawn",
+       "reason_codes": [
+        "not_drawn"
+       ],
+       "geometry": {
+        "version": 1,
+        "scale": "pos_0_999",
+        "calibrated": true,
+        "points": {
+         "range_base_pos_0_999": {
+          "pos": 210,
+          "axis": "vertical",
+          "value": 7
+         }
+        }
+       }
+      },
+      {
+       "species": "B",
+       "reason_code": "unclear"
+      },
+      {
+       "species": "C",
+       "response_kind": "nope"
+      },
+      {
+       "species": "D"
+      },
+      5,
+      {
+       "response_kind": "extracted",
+       "reason_codes": []
+      }
+     ]
+    ],
+    "kwargs": {
+     "limit": 2
+    }
+   },
+   "extra": null,
+   "python": {
+    "contracted_rows": 3,
+    "by_code": {
+     "not_drawn": 1,
+     "uncertain": 1
+    },
+    "by_kind": {
+     "extracted": 1,
+     "not_drawn": 1
+    },
+    "entries": [
+     {
+      "row": "A",
+      "response_kind": "not_drawn",
+      "reason_codes": [
+       "not_drawn"
+      ],
+      "code_summaries": [
+       "The column/level exists in the chart but this taxon is deliberately not drawn there (blank cell, dash or em-dash in place of a range)."
+      ],
+      "geometry": {
+       "points": 1,
+       "calibrated": true
+      }
+     },
+     {
+      "row": "B",
+      "reason_codes": [
+       "uncertain"
+      ],
+      "code_summaries": [
+       "Something is drawn for this cell but its boundary or value could not be read confidently."
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_rollup_all",
+   "payload": {
+    "op": "reason_code_rollup",
+    "args": [
+     [
+      {
+       "species": "A",
+       "response_kind": "not_drawn",
+       "reason_codes": [
+        "not_drawn"
+       ],
+       "geometry": {
+        "version": 1,
+        "scale": "pos_0_999",
+        "calibrated": true,
+        "points": {
+         "range_base_pos_0_999": {
+          "pos": 210,
+          "axis": "vertical",
+          "value": 7
+         }
+        }
+       }
+      },
+      {
+       "species": "B",
+       "reason_code": "unclear"
+      },
+      {
+       "species": "C",
+       "response_kind": "nope"
+      },
+      {
+       "species": "D"
+      },
+      5,
+      {
+       "response_kind": "extracted",
+       "reason_codes": []
+      }
+     ]
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": {
+    "contracted_rows": 3,
+    "by_code": {
+     "not_drawn": 1,
+     "uncertain": 1
+    },
+    "by_kind": {
+     "extracted": 1,
+     "not_drawn": 1
+    },
+    "entries": [
+     {
+      "row": "A",
+      "response_kind": "not_drawn",
+      "reason_codes": [
+       "not_drawn"
+      ],
+      "code_summaries": [
+       "The column/level exists in the chart but this taxon is deliberately not drawn there (blank cell, dash or em-dash in place of a range)."
+      ],
+      "geometry": {
+       "points": 1,
+       "calibrated": true
+      }
+     },
+     {
+      "row": "B",
+      "reason_codes": [
+       "uncertain"
+      ],
+      "code_summaries": [
+       "Something is drawn for this cell but its boundary or value could not be read confidently."
+      ]
+     },
+     {
+      "row": "",
+      "response_kind": "extracted"
+     }
+    ]
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_rollup_zero",
+   "payload": {
+    "op": "reason_code_rollup",
+    "args": [
+     [
+      {
+       "species": "A",
+       "response_kind": "not_drawn",
+       "reason_codes": [
+        "not_drawn"
+       ],
+       "geometry": {
+        "version": 1,
+        "scale": "pos_0_999",
+        "calibrated": true,
+        "points": {
+         "range_base_pos_0_999": {
+          "pos": 210,
+          "axis": "vertical",
+          "value": 7
+         }
+        }
+       }
+      },
+      {
+       "species": "B",
+       "reason_code": "unclear"
+      },
+      {
+       "species": "C",
+       "response_kind": "nope"
+      },
+      {
+       "species": "D"
+      },
+      5,
+      {
+       "response_kind": "extracted",
+       "reason_codes": []
+      }
+     ]
+    ],
+    "kwargs": {
+     "limit": 0
+    }
+   },
+   "extra": null,
+   "python": {
+    "contracted_rows": 3,
+    "by_code": {
+     "not_drawn": 1,
+     "uncertain": 1
+    },
+    "by_kind": {
+     "extracted": 1,
+     "not_drawn": 1
+    },
+    "entries": []
+   }
+  },
+  {
+   "group": "reason_codes",
+   "id": "rzn_rollup_empty",
+   "payload": {
+    "op": "reason_code_rollup",
+    "args": [
+     []
+    ],
+    "kwargs": {}
+   },
+   "extra": null,
+   "python": {
+    "contracted_rows": 0,
+    "by_code": {},
+    "by_kind": {},
+    "entries": []
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_divergent_vote",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9",
+        "range_base": "7",
+        "response_kind": "extracted",
+        "reason_codes": [
+         "crosses_top"
+        ]
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "response_kind": "not_drawn",
+        "reason_codes": [
+         "not_drawn"
+        ]
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "range_base": "7",
+      "response_kind": "extracted",
+      "_warning": "response_kind_divergent",
+      "response_kind_votes": [
+       "extracted",
+       "not_drawn"
+      ],
+      "reason_codes": [
+       "crosses_top",
+       "not_drawn"
+      ],
+      "biozone": ""
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 2,
+      "agreement": "2/2"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_geometry_first",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9",
+        "geometry": {
+         "version": 1,
+         "scale": "pos_0_999",
+         "calibrated": true,
+         "points": {
+          "range_top_pos_0_999": {
+           "pos": 347,
+           "axis": "vertical",
+           "value": 9
+          }
+         }
+        }
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9",
+        "geometry": {
+         "version": 1,
+         "scale": "pos_0_999",
+         "calibrated": true,
+         "points": {
+          "range_top_pos_0_999": {
+           "pos": 400,
+           "axis": "vertical",
+           "value": 10.2
+          }
+         }
+        }
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "geometry": {
+       "version": 1,
+       "scale": "pos_0_999",
+       "calibrated": true,
+       "points": {
+        "range_top_pos_0_999": {
+         "pos": 347,
+         "axis": "vertical",
+         "value": 9
+        }
+       }
+      },
+      "range_base": "",
+      "biozone": ""
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 2,
+      "agreement": "2/2"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_geometry_skips_empty",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9",
+        "geometry": {
+         "version": 1,
+         "scale": "pos_0_999",
+         "points": {}
+        }
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9",
+        "geometry": {
+         "version": 1,
+         "scale": "pos_0_999",
+         "calibrated": false,
+         "points": {
+          "range_base_pos_0_999": {
+           "pos": 88,
+           "axis": "vertical",
+           "value": 7
+          }
+         }
+        }
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "geometry": {
+       "version": 1,
+       "scale": "pos_0_999",
+       "calibrated": false,
+       "points": {
+        "range_base_pos_0_999": {
+         "pos": 88,
+         "axis": "vertical",
+         "value": 7
+        }
+       }
+      },
+      "range_base": "",
+      "biozone": ""
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 2,
+      "agreement": "2/2"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_codes_union",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "response_kind": "extracted",
+        "reason_codes": [
+         "crosses_top",
+         "bogus"
+        ]
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "response_kind": "extracted",
+        "reason_codes": "unclear"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "species": "A",
+      "section": "S1",
+      "response_kind": "extracted",
+      "reason_codes": [
+       "crosses_top",
+       "uncertain"
+      ],
+      "range_base": "",
+      "range_top": "",
+      "biozone": ""
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 2,
+      "agreement": "2/2"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_kind_all_garbage",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9",
+        "response_kind": "nope"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9",
+        "response_kind": null
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "range_base": "",
+      "biozone": ""
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 2,
+      "agreement": "2/2"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_votes_falsy_dropped",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9",
+        "response_kind": null
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "response_kind": "dash"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9",
+        "response_kind": "extracted"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 3,
+      "agreement": "3/2",
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "response_kind": "extracted",
+      "_warning": "response_kind_divergent",
+      "response_kind_votes": [
+       "dash",
+       "extracted"
+      ],
+      "range_base": "",
+      "biozone": ""
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 3,
+      "agreement": "3/2"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_single_run_passthrough",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "response_kind": "not_drawn",
+        "reason_codes": [
+         "not_drawn"
+        ]
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": null,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "response_kind": "not_drawn",
+      "reason_codes": [
+       "not_drawn"
+      ],
+      "agreement_count": 1,
+      "agreement": "1/1"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8,
+    "runs": 1
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_single_run_total2",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "response_kind": "not_drawn",
+        "reason_codes": [
+         "not_drawn"
+        ]
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 1,
+      "agreement": "1/2",
+      "species": "A",
+      "section": "S1",
+      "response_kind": "not_drawn",
+      "reason_codes": [
+       "not_drawn"
+      ],
+      "range_base": "",
+      "range_top": "",
+      "biozone": ""
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 1,
+      "agreement": "1/2"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_named_list_biozones",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1"
+       }
+      ],
+      "biozones": [
+       {
+        "name": "X Zone",
+        "response_kind": "not_drawn",
+        "reason_codes": [
+         "not_drawn"
+        ]
+       }
+      ],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1"
+       }
+      ],
+      "biozones": [
+       {
+        "name": "X Zone",
+        "response_kind": "extracted",
+        "reason_codes": [
+         "legend_only"
+        ]
+       }
+      ],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "species": "A",
+      "section": "S1",
+      "range_base": "",
+      "range_top": "",
+      "biozone": ""
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 2,
+      "agreement": "2/2"
+     }
+    ],
+    "biozones": [
+     {
+      "name": "X Zone",
+      "response_kind": "extracted",
+      "_warning": "response_kind_divergent",
+      "response_kind_votes": [
+       "not_drawn",
+       "extracted"
+      ],
+      "reason_codes": [
+       "not_drawn",
+       "legend_only"
+      ]
+     }
+    ],
+    "other_fossils": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_abundance_contract",
+   "payload": {
+    "results": [
+     {
+      "abundances": [
+       {
+        "taxon": "Pinus",
+        "site": "S1",
+        "level": "3",
+        "abundance": "12",
+        "response_kind": "extracted",
+        "reason_codes": [
+         "inferred"
+        ],
+        "geometry": {
+         "version": 1,
+         "scale": "pos_0_999",
+         "calibrated": false,
+         "points": {
+          "abundance_pos_0_999": {
+           "pos": 120,
+           "axis": "horizontal",
+           "value": 12
+          }
+         }
+        }
+       }
+      ],
+      "sites": [],
+      "zones": [],
+      "confidence": 0.9
+     },
+     {
+      "abundances": [
+       {
+        "taxon": "Pinus",
+        "site": "S1",
+        "level": "3",
+        "response_kind": "not_drawn",
+        "reason_codes": [
+         "not_drawn"
+        ]
+       }
+      ],
+      "sites": [],
+      "zones": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "abundance_diagram"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "abundances": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "taxon": "Pinus",
+      "site": "S1",
+      "level": "3",
+      "abundance": "12",
+      "response_kind": "extracted",
+      "_warning": "response_kind_divergent",
+      "response_kind_votes": [
+       "extracted",
+       "not_drawn"
+      ],
+      "reason_codes": [
+       "inferred",
+       "not_drawn"
+      ],
+      "geometry": {
+       "version": 1,
+       "scale": "pos_0_999",
+       "calibrated": false,
+       "points": {
+        "abundance_pos_0_999": {
+         "pos": 120,
+         "axis": "horizontal",
+         "value": 12
+        }
+       }
+      },
+      "depth": "",
+      "abundance_unit": ""
+     }
+    ],
+    "sites": [],
+    "zones": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_legacy_no_contract",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9",
+        "range_base": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 1,
+      "agreement": "1/2",
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "range_base": "7",
+      "biozone": ""
+     },
+     {
+      "agreement_count": 1,
+      "agreement": "1/2",
+      "species": "B",
+      "section": "S1",
+      "range_top": "8",
+      "range_base": "",
+      "biozone": ""
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 2,
+      "agreement": "2/2"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_notdrawn",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "response_kind": "not_drawn",
+      "reason_codes": [
+       "not_drawn"
+      ]
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.88,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "1",
+       "cells": "1",
+       "not_drawn": "1",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 1,
+       "extracted": 0,
+       "not_drawn": 1,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 0.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 1,
+       "extracted": 0,
+       "not_drawn": 1,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 0.0
+      }
+     ],
+     "totals": {
+      "cells": 1,
+      "extracted": 0,
+      "not_drawn": 1,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 0.0,
+      "explicit_responses": 1,
+      "row_count": 1,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {
+      "not_drawn": 1
+     },
+     "explicit_responses": 1,
+     "row_count": 1,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_legacy",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "9"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.87,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_codes_only",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "reason_codes": [
+       "obscured"
+      ]
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.87,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "totals": {
+      "cells": 1,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0,
+      "explicit_responses": 0,
+      "row_count": 1,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {
+      "obscured": 1
+     },
+     "explicit_responses": 0,
+     "row_count": 1,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_grid4",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     },
+     {
+      "name": "S2"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "range_base": "7",
+      "response_kind": "extracted"
+     },
+     {
+      "species": "A",
+      "section": "S2",
+      "response_kind": "blank",
+      "reason_codes": [
+       "dash"
+      ]
+     },
+     {
+      "species": "B",
+      "section": "S1",
+      "response_kind": "unclear"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.86,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "2"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "3",
+       "cells": "4",
+       "not_drawn": "1",
+       "gaps": "1"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 2,
+       "extracted": 1,
+       "not_drawn": 1,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 2,
+       "honest_coverage": 1.0,
+       "strict_coverage": 0.5
+      },
+      {
+       "column": "B",
+       "cells": 2,
+       "extracted": 0,
+       "not_drawn": 0,
+       "uncertain": 1,
+       "silent_missing": 1,
+       "answered": 1,
+       "honest_coverage": 0.5,
+       "strict_coverage": 0.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 2,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 1,
+       "silent_missing": 0,
+       "answered": 2,
+       "honest_coverage": 1.0,
+       "strict_coverage": 0.5
+      },
+      {
+       "stratum": "S2",
+       "cells": 2,
+       "extracted": 0,
+       "not_drawn": 1,
+       "uncertain": 0,
+       "silent_missing": 1,
+       "answered": 1,
+       "honest_coverage": 0.5,
+       "strict_coverage": 0.0
+      }
+     ],
+     "totals": {
+      "cells": 4,
+      "extracted": 1,
+      "not_drawn": 1,
+      "uncertain": 1,
+      "silent_missing": 1,
+      "answered": 3,
+      "honest_coverage": 0.75,
+      "strict_coverage": 0.25,
+      "explicit_responses": 3,
+      "row_count": 3,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {
+      "not_drawn": 1
+     },
+     "explicit_responses": 3,
+     "row_count": 3,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_table_choice",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "response_kind": "extracted"
+     }
+    ],
+    "abundances": [
+     {
+      "taxon": "Pinus",
+      "site": "S1",
+      "level": "3",
+      "abundance": "12",
+      "response_kind": "extracted"
+     },
+     {
+      "taxon": "Quercus",
+      "site": "S1",
+      "level": "3",
+      "response_kind": "not_drawn"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.87,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "2",
+       "cells": "2",
+       "not_drawn": "1",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "Pinus",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      },
+      {
+       "column": "Quercus",
+       "cells": 1,
+       "extracted": 0,
+       "not_drawn": 1,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 0.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 2,
+       "extracted": 1,
+       "not_drawn": 1,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 2,
+       "honest_coverage": 1.0,
+       "strict_coverage": 0.5
+      }
+     ],
+     "totals": {
+      "cells": 2,
+      "extracted": 1,
+      "not_drawn": 1,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 2,
+      "honest_coverage": 1.0,
+      "strict_coverage": 0.5,
+      "explicit_responses": 2,
+      "row_count": 2,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 2,
+     "row_count": 2,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_tie_first_wins",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "response_kind": "extracted",
+      "range_top": "9"
+     },
+     {
+      "species": "B",
+      "section": "S1",
+      "response_kind": "not_drawn"
+     }
+    ],
+    "points": [
+     {
+      "label": "P1",
+      "x": 3,
+      "y": 4,
+      "response_kind": "extracted"
+     },
+     {
+      "label": "P2",
+      "response_kind": "uncertain"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.87,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "2",
+       "cells": "2",
+       "not_drawn": "1",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      },
+      {
+       "column": "B",
+       "cells": 1,
+       "extracted": 0,
+       "not_drawn": 1,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 0.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 2,
+       "extracted": 1,
+       "not_drawn": 1,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 2,
+       "honest_coverage": 1.0,
+       "strict_coverage": 0.5
+      }
+     ],
+     "totals": {
+      "cells": 2,
+      "extracted": 1,
+      "not_drawn": 1,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 2,
+      "honest_coverage": 1.0,
+      "strict_coverage": 0.5,
+      "explicit_responses": 2,
+      "row_count": 2,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 2,
+     "row_count": 2,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_datapoints",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "data_points": [
+     {
+      "sample_id": "DP1",
+      "value": 3.2,
+      "depth": 12,
+      "response_kind": "extracted"
+     },
+     {
+      "sample_id": "DP2",
+      "response_kind": "not_drawn"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.85,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "2",
+       "cells": "2",
+       "not_drawn": "1",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "DP1",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      },
+      {
+       "column": "DP2",
+       "cells": 1,
+       "extracted": 0,
+       "not_drawn": 1,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 0.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "",
+       "cells": 2,
+       "extracted": 1,
+       "not_drawn": 1,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 2,
+       "honest_coverage": 1.0,
+       "strict_coverage": 0.5
+      }
+     ],
+     "totals": {
+      "cells": 2,
+      "extracted": 1,
+      "not_drawn": 1,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 2,
+      "honest_coverage": 1.0,
+      "strict_coverage": 0.5,
+      "explicit_responses": 2,
+      "row_count": 2,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 2,
+     "row_count": 2,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_empty",
+   "payload": {},
+   "extra": null,
+   "python": {
+    "score": 0.0,
+    "grade": "F",
+    "issues": [
+     {
+      "severity": "warning",
+      "msg_key": "quality.invalid_result"
+     }
+    ]
+   }
   }
  ]
 }

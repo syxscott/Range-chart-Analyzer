@@ -1,0 +1,17 @@
+{"success": {"v": 2, "license": "CC-BY 4.0", "data": [
+  {"int_id": 1038, "name": "Meghalayan", "int_type": "age", "t_age": 0, "b_age": 0.0042},
+  {"int_id": 1037, "name": "Late Pleistocene", "int_type": "epoch", "t_age": 0.0117, "b_age": 0.129},
+  {"int_id": 149, "name": "Chibanian", "int_type": "age", "t_age": 0.129, "b_age": 0.774},
+  {"int_id": 148, "name": "Calabrian", "int_type": "age", "t_age": 0.774, "b_age": 1.8},
+  {"int_id": 147, "name": "Gelasian", "int_type": "age", "t_age": 1.8, "b_age": 2.58},
+  {"int_id": 111, "name": "Danian", "int_type": "age", "t_age": 61.66, "b_age": 66},
+  {"int_id": 100, "name": "Maastrichtian", "int_type": "age", "t_age": 66, "b_age": 72.1},
+  {"int_id": 21, "name": "Rhuddanian", "int_type": "age", "t_age": 438.6, "b_age": 443.1},
+  {"int_id": 3, "name": "Stage 2", "int_type": "age", "t_age": 521, "b_age": 529},
+  {"int_id": 2, "name": "Fortunian", "int_type": "age", "t_age": 529, "b_age": 538.8},
+  {"int_id": 60, "name": "Olenekian", "int_type": "age", "t_age": 246.7, "b_age": 250.8},
+  {"int_id": 61, "name": "Induan", "int_type": "age", "t_age": 250.8, "b_age": 251.902},
+  {"int_id": 63, "name": "Changhsingian", "int_type": "age", "t_age": 251.902, "b_age": 254.14},
+  {"int_id": 64, "name": "Wuchiapingian", "int_type": "age", "t_age": 254.14, "b_age": 259.857},
+  {"int_id": 65, "name": "Capitanian", "int_type": "age", "t_age": 259.857, "b_age": 264.28}
+]}}

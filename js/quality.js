@@ -25,6 +25,11 @@
  *   }
  *
  * msg_key entries map to i18n tables in js/i18n.js (quality.* keys).
+ *
+ * BORROW-2026-09-20 (A): the output may ALSO carry an additive, informational
+ * `coverage` ledger (rca_core/quality.py:coverage_for) plus a
+ * `quality.coverage_ledger` info issue. Both live in js/reason-codes.js, which
+ * therefore has to be loaded before this file (index.html).
  */
 
 'use strict';
@@ -63,6 +68,30 @@ const _COLUMNAR_MARKERS = [
 ];
 
 // ---------------------------------------------------------------------------
+// Coverage-contract consultation (BORROW-2026-09-20)
+// ---------------------------------------------------------------------------
+// The scored dimensions consult js/reason-codes.js (loaded BEFORE this file
+// in index.html and by the parity harness). Every use is typeof-guarded:
+// when reason-codes.js is missing the scorer degrades to its pre-contract
+// behaviour (native JS truthiness, no not_drawn exemption) instead of
+// breaking scoring — rca_core/quality.py's own promise, "scoring must never
+// block extraction", kept in the browser too.
+
+/** Python truthiness (bool(x)); falls back to JS truthiness when
+ *  js/reason-codes.js has not been loaded. */
+function qContractTruthy(value) {
+  return (typeof rcaContractTruthy === 'function')
+    ? rcaContractTruthy(value) : !!value;
+}
+
+/** Mirror of rca_core/quality.py:is_not_drawn — True only for the explicit
+ *  contract state, never for a legacy value-less row (silent_missing). */
+function qIsNotDrawn(row) {
+  if (typeof rcaCoverageState !== 'function') return false;
+  return rcaCoverageState(row) === 'not_drawn';
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -96,6 +125,15 @@ function _detectMode(data) {
     if (typeof v === 'string' && v.trim()) return 'columnar';
   }
   if ('abundances' in data && !('species_ranges' in data)) return 'abundance';
+  // Zonation mode (UI-REVIEW-2026-09-05): correlations is the unique marker
+  // no other mode emits; zones alone is ambiguous (abundance results also
+  // carry a zones list) so require the pair or a non-empty correlations
+  // list. Mirrors rca_core/quality.py:_detect_mode's final branch (the JS
+  // mirror used to stop at 'range_chart', so a zonation result was scored
+  // with range-chart expectations).
+  if ('correlations' in data || ('zones' in data && 'zonations' in data)) {
+    if (!('species_ranges' in data) && !('abundances' in data)) return 'zonation';
+  }
   return 'range_chart';
 }
 
@@ -411,6 +449,13 @@ function sectionNames(data) {
  * completeness: how many expected fields are populated vs. empty.
  * Mode-aware: columnar / abundance / range-chart each have their own set
  * of expected fields.
+ *
+ * REVIEW-2026-09-20 rework mirrored: a PRESENT-BUT-EMPTY relevant list is a
+ * real failure (the old loop did `passed += 1` on both branches, so every
+ * relevant-keys check was unfailable and diluted the deductions of the ones
+ * that could fail), while an ABSENT key stays forgiven — a sparse result is
+ * scientifically valid and the extractor only writes keys it observed. One
+ * aggregated `quality.missing_top_level` info issue reports the empty ones.
  */
 function scoreCompleteness(data) {
   const issues = [];
@@ -424,6 +469,8 @@ function scoreCompleteness(data) {
     primary = 'abundances';
   } else if (mode === 'columnar') {
     primary = null;
+  } else if (mode === 'zonation') {
+    primary = ('zones' in data) ? 'zones' : null;
   } else {
     primary = ('species_ranges' in data) ? 'species_ranges' : null;
   }
@@ -444,6 +491,8 @@ function scoreCompleteness(data) {
     relevant = ['sections', 'cross_beds', 'lithology_legend', 'fossil_legend'];
   } else if (mode === 'abundance') {
     relevant = ['abundances', 'sections'];
+  } else if (mode === 'zonation') {
+    relevant = ['zones', 'correlations', 'zonations'];
   } else {
     relevant = ['sections', 'biozones', 'other_fossils'];
   }
@@ -454,23 +503,40 @@ function scoreCompleteness(data) {
     return Array.isArray(v) && v.length > 0;
   });
 
+  const emptyRelevant = [];
   for (const key of relevant) {
     checks += 1;
     const val = data ? data[key] : undefined;
-    if (val !== undefined && val !== null) {
-      passed += 1;
-    } else {
+    if (val === undefined || val === null) {
+      // Key absent — only penalise when truly no signal at all.
       if (!hasModeSignal) {
         issues.push({severity: 'info', msg_key: 'quality.missing_top_level'});
       }
       passed += 1;  // don't drop score for absent optional fields
+    } else if (Array.isArray(val)) {
+      if (val.length > 0) {
+        passed += 1;
+      } else if (key !== primary) {
+        emptyRelevant.push(key);
+      }
+      // key === primary: the failed check above already reported
+      // quality.empty_primary_rows, so no second message here.
+    } else if (qContractTruthy(val)) {
+      passed += 1;  // non-list payload with content (dict / str / number)
+    } else if (key !== primary) {
+      emptyRelevant.push(key);
     }
   }
+  if (emptyRelevant.length > 0) {
+    issues.push({severity: 'info', msg_key: 'quality.missing_top_level'});
+  }
 
-  // Confidence field presence.
+  // Confidence field presence. Python: isinstance(conf, (int, float)) —
+  // bool IS an int subclass there, so a boolean counts as "present" too.
   checks += 1;
   const conf = data ? data.confidence : undefined;
-  if (conf !== undefined && conf !== null && typeof conf === 'number') {
+  if (conf !== undefined && conf !== null
+      && (typeof conf === 'number' || typeof conf === 'boolean')) {
     passed += 1;
   } else {
     issues.push({severity: 'info', msg_key: 'quality.missing_confidence'});
@@ -861,11 +927,19 @@ function scoreConsistency(data) {
     }
 
     // (4) Every species row has a non-empty biozone label.
+    // REVIEW-2026-09-20 + BORROW-2026-09-20 (A) mirror
+    // (rca_core/quality.py:_score_consistency): the emptiness test is
+    // ``not str(sp.get("biozone") or "").strip()`` — Python truthiness, so a
+    // present-but-empty LIST/DICT counts as missing too — and rows the chart
+    // explicitly did NOT draw (is_not_drawn) are EXEMPT: the dash is the
+    // answer, penalising it would punish exactly the honest reporting the
+    // coverage contract asks for.
     let missingBiozone = 0;
     for (const sp of species) {
-      if (!sp || typeof sp !== 'object') continue;
+      if (!sp || typeof sp !== 'object' || Array.isArray(sp)) continue;
+      if (qIsNotDrawn(sp)) continue;
       const bz = sp.biozone;
-      if (!bz || (typeof bz === 'string' && !bz.trim())) {
+      if (!qContractTruthy(bz) || (typeof bz === 'string' && !bz.trim())) {
         missingBiozone += 1;
       }
     }
@@ -1105,11 +1179,102 @@ function scoreRangeChart(data) {
   const clamped = _clamp01(composite);
 
   const allIssues = [...cIssues, ...aIssues, ...kIssues, ...sIssues];
-  return {
-    score: Math.round(clamped * 10000) / 10000,
+  // Python's round(composite, 4) is correct-decimal ties-to-even, not
+  // round-half-away-from-zero; rcaPyRound (js/reason-codes.js) reproduces it.
+  // Degrades to the historical Math.round when that file is not loaded.
+  const rounded = (typeof rcaPyRound === 'function')
+    ? rcaPyRound(clamped, 4) : Math.round(clamped * 10000) / 10000;
+  const out = {
+    score: rounded,
     grade: gradeFor(clamped),
     issues: allIssues,
   };
+
+  // BORROW-2026-09-20 (A): the honest-coverage ledger. ADDITIVE and purely
+  // informational — it never moves the composite score, because the four
+  // weighted dimensions already carry the penalties and a model that has not
+  // adopted the tri-state contract yet must not score worse than one that has.
+  // Only when runs actually answered with response_kind / reason_codes does it
+  // also raise an `info` issue, so legacy results keep their exact old issue
+  // list. Mirrors rca_core/quality.py:score_range_chart's tail 1:1, including
+  // the "the ledger must never break scoring" guard.
+  let ledger = null;
+  try {
+    ledger = rcaCoverageFor(data);
+  } catch (_e) {
+    ledger = null;
+  }
+  if (ledger !== null && ledger !== undefined) {
+    out.coverage = ledger;
+    const totals = ledger.totals || {};
+    if (totals.explicit_responses) {
+      allIssues.push({
+        severity: 'info',
+        msg_key: 'quality.coverage_ledger',
+        params: {
+          answered: String(totals.answered === undefined ? 0 : totals.answered),
+          cells: String(totals.cells === undefined ? 0 : totals.cells),
+          not_drawn: String(totals.not_drawn === undefined ? 0 : totals.not_drawn),
+          gaps: String(totals.silent_missing === undefined ? 0 : totals.silent_missing),
+        },
+      });
+    }
+  }
+  return out;
+}
+
+// Primary per-mode row tables the coverage ledger can be computed over.
+// Mirrors rca_core/quality.py:_COVERAGE_TABLES, ORDER INCLUDED (a tie on row
+// count keeps the first table, so the two engines must scan in the same order).
+const _COVERAGE_TABLES = [
+  ['species_ranges', 'species'],
+  ['abundances', 'taxon'],
+  ['data_points', 'sample_id'],
+  ['points', 'label'],
+];
+
+/**
+ * Ledger for the largest contracted row table of a result, or null.
+ *
+ * Mirror of rca_core/quality.py:coverage_for. Returns null when no row
+ * anywhere carries a ``response_kind`` / ``reason_codes`` field: a pre-contract
+ * result has nothing to account for, and inventing a grid of "silent gaps" for
+ * it would be noise.
+ *
+ * Needs js/reason-codes.js (rcaCoverageLedger); when that file has not been
+ * loaded the ReferenceError is swallowed by the caller's guard, i.e. the
+ * scorer degrades to its pre-contract output instead of failing.
+ */
+function rcaCoverageFor(data) {
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+    return null;
+  }
+  let best = null;  // [row_count, table_key] — strict `>` keeps the FIRST max
+  for (const [key] of _COVERAGE_TABLES) {
+    const rows = data[key];
+    if (!Array.isArray(rows) || rows.length === 0) continue;
+    let contracted = 0;
+    for (const r of rows) {
+      if (r && typeof r === 'object' && !Array.isArray(r)
+          && (rcaContractTruthy(r.response_kind)
+              || rcaContractTruthy(r.reason_codes))) {
+        contracted += 1;
+      }
+    }
+    if (!contracted) continue;
+    if (best === null || rows.length > best[0]) best = [rows.length, key];
+  }
+  if (best === null) return null;
+  const tableKey = best[1];
+  let primaryColumn = '';
+  for (const [key, columnKey] of _COVERAGE_TABLES) {
+    if (key === tableKey) { primaryColumn = columnKey; break; }
+  }
+  const rows = data[tableKey].filter(
+    (r) => r && typeof r === 'object' && !Array.isArray(r));
+  return rcaCoverageLedger(rows, {
+    columnKeys: [primaryColumn, 'taxon', 'species', 'sample_id', 'label', 'name'],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1125,6 +1290,7 @@ if (typeof module !== 'undefined' && module.exports) {
     scoreConsistency,
     scoreStructure,
     gradeFor,
+    coverageFor: rcaCoverageFor,
   };
 }
 // Also expose as a global for plain <script> inclusion.
@@ -1135,4 +1301,7 @@ if (typeof window !== 'undefined') {
   window.scoreConsistency = scoreConsistency;
   window.scoreStructure   = scoreStructure;
   window.gradeFor         = gradeFor;
+  // BORROW-2026-09-20 (A): the ledger entry point, named exactly like the
+  // Python function it mirrors (rca_core/quality.py:coverage_for).
+  window.coverageFor = rcaCoverageFor;
 }

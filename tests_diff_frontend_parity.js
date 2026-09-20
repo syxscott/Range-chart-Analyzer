@@ -30,6 +30,10 @@ const SCRIPTS = [
   'js/config.js',
   'js/json-utils.js',
   'js/ics_table.js',
+  // BORROW-2026-09-20: mirror of rca_core/reason_codes.py; quality.js and
+  // aggregate.js consult it at CALL time (typeof-guarded), so loading it here
+  // is what activates the contract groups below.
+  'js/reason-codes.js',
   'js/quality.js',
   'js/aggregate.js',
   'js/minimax.js',
@@ -82,6 +86,13 @@ function buildContext() {
       normalizeClassification: typeof rcaNormalizeChartClassification !== 'undefined' ? rcaNormalizeChartClassification : null,
       toNewick: typeof rcaToNewick !== 'undefined' ? rcaToNewick : null,
       resolveAgeBound: typeof _resolveAgeBound !== 'undefined' ? _resolveAgeBound : null,
+      // BORROW-2026-09-20 contract groups: RCAReasonCodes / RCA_KEYMAP_BY_MODE
+      // / scoreRangeChart are const-declarations (they never attach to the
+      // context object), so they must be handed out from inside a script.
+      RC: typeof RCAReasonCodes !== 'undefined' ? RCAReasonCodes : null,
+      mergeResults: typeof rcaMergeResults !== 'undefined' ? rcaMergeResults : null,
+      keymaps: typeof RCA_KEYMAP_BY_MODE !== 'undefined' ? RCA_KEYMAP_BY_MODE : null,
+      scoreRangeChart: typeof scoreRangeChart !== 'undefined' ? scoreRangeChart : null,
     };
   `, ctx);
   return ctx.__exp;
@@ -100,6 +111,47 @@ const RUNNERS = {
     const r = f.resolveAgeBound(c.payload, c.extra);
     return r === null || r === undefined ? null : { name: r.name === undefined ? null : r.name, ma: r.ma === undefined ? null : r.ma };
   },
+  // BORROW-2026-09-20 (js-data-layer mirror). The reason_codes payloads carry
+  // {"op", "args", "kwargs"}; the generator dispatches the same-named public
+  // function of rca_core/reason_codes.py, so the replay dispatches the same
+  // name on RCAReasonCodes. merge_response_kinds is wrapped into
+  // {"kind","divergent"} on BOTH sides (Python returns a tuple); coverage_
+  // ledger / reason_code_rollup take keyword-only options, whose JSON keys
+  // (snake_case) map onto the JS option object's camelCase fields.
+  reason_codes: (f, c) => {
+    const RC = f.RC;
+    const op = c.payload.op;
+    const args = c.payload.args || [];
+    const kw = c.payload.kwargs || {};
+    if (!(op in RC) || typeof RC[op] !== 'function') {
+      throw new Error('RCAReasonCodes has no op ' + op);
+    }
+    if (op === 'merge_response_kinds') {
+      const r = RC.merge_response_kinds(args[0]);
+      return { kind: r.kind === undefined ? null : r.kind, divergent: r.divergent };
+    }
+    if (op === 'coverage_ledger') {
+      return RC.coverage_ledger(args[0], {
+        columnKeys: kw.column_keys === undefined ? undefined : kw.column_keys,
+        stratumKeys: kw.stratum_keys === undefined ? undefined : kw.stratum_keys,
+        crossProduct: kw.cross_product,
+      });
+    }
+    if (op === 'reason_code_rollup') {
+      return RC.reason_code_rollup(args[0], {
+        columnKeys: kw.column_keys === undefined ? undefined : kw.column_keys,
+        limit: kw.limit,
+      });
+    }
+    return RC[op].apply(null, args);
+  },
+  // Explicit mode -> explicit keymap: the generator calls merge_results with
+  // an explicit schema=, so the replay must not auto-detect either.
+  merge: (f, c) => f.mergeResults(
+    c.payload.results,
+    c.payload.total_runs === null ? undefined : c.payload.total_runs,
+    f.keymaps[c.payload.mode || 'range_chart']),
+  quality_coverage: (f, c) => f.scoreRangeChart(c.payload),
 };
 
 // Numbers: Python 1.0 vs JS 1 (and float noise) are the same value.

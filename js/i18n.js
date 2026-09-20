@@ -293,6 +293,31 @@ const RCA_I18N = {
     'quality.bed_index_order_swapped': '已自动交换上/下 bed_index 以修正顺序',
     'quality.missing_section_ref': '物种的剖面引用未知',
     'quality.biozone_order_violation': 'Steno 定律违反：{species} 的生物带 {younger_biozone}（较新）出现在更老的 {older_biozone} 之下',
+    // BORROW-2026-09-20 (A) — 提取契约文案，镜像 rca_core/i18n.py。
+    // 覆盖台账：把"图上画了破折号"记为已回答，把"模型什么都没写"记为缺口。
+    // 仅作信息提示（severity: info），不参与加权评分。
+    // zh-ONLY ON PURPOSE: rca_core/i18n.py defines this key for zh only today,
+    // and tests_frontend.js `i18n-shared-parity:<lang>` locks the quality.*
+    // namespace key-for-key per locale — an en/ja entry here would fail that
+    // parity check. Add the en/ja glosses in the same commit that adds them on
+    // the Python side (single source of truth), not before.
+    'quality.coverage_ledger': '覆盖台账：{cells} 个请求单元中 {answered} 个已作答（其中 {not_drawn} 个为图上明确未画），{gaps} 个静默缺失',
+    // BORROW-2026-09-20 (A): 12 个理由码（slug 稳定，供 UI 与导出使用）。Same
+    // zh-only rule as above: the reason_code.* catalog is authored in
+    // rca_core/i18n.py, which currently carries zh only. The slugs themselves —
+    // and their English glosses — live in js/reason-codes.js (RCA_REASON_CODES).
+    'reason_code.not_drawn': '图上该列存在但此分类单元未画出（破折号/空格）：明确的缺失记录，不是漏抽',
+    'reason_code.uncertain': '读数不确定：边界、标签或图例无法可靠判读',
+    'reason_code.obscured': '标记或其标签被其他要素、题注、褶皱或印刷溢墨遮挡',
+    'reason_code.inferred': '由图例、文字描述或延限带推断，图上并无该标记',
+    'reason_code.legend_only': '名称只出现在图例/索引中，图内并无延限标记',
+    'reason_code.crosses_top': '延限向上超出图框顶边，末现无法确定',
+    'reason_code.crosses_base': '延限向下超出图框底边，首现无法确定',
+    'reason_code.truncated': '标记、标签或整列被图框边缘、分栏或翻页截断',
+    'reason_code.no_label': '标记可读，但其纵轴/层位标签缺失',
+    'reason_code.abbreviated': '标签为缩写或截断名，无法唯一还原',
+    'reason_code.low_confidence': '该行存在被丢弃或相互矛盾的证据，可信度低',
+    'reason_code.out_of_scope': '该单元超出本次请求的范围（岩性、年代或非生物要素）',
   },
 };
 

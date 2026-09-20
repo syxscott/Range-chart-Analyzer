@@ -43,6 +43,20 @@ try:
 except ImportError:
     _HAS_ICS = False
 
+# BORROW-2026-09-20 (A): the coverage ledger turns "the chart drew a dash" into
+# an ANSWERED cell and a silent omission into a measurable gap. Only imported
+# for the ledger view — the four scored dimensions keep their old behaviour.
+from .reason_codes import (  # noqa: E402
+    RESPONSE_NOT_DRAWN,
+    coverage_ledger,
+    coverage_state,
+)
+
+
+def is_not_drawn(row: Any) -> bool:
+    """True when a row is an explicit "the chart did not draw this range"."""
+    return isinstance(row, dict) and coverage_state(row) == RESPONSE_NOT_DRAWN
+
 # Weights for the 4 quality dimensions. Must sum to 1.0.
 W_COMPLETENESS = 0.30
 W_ACCURACY = 0.40
@@ -715,6 +729,11 @@ def _score_consistency(data: dict[str, Any]) -> tuple[float, list[dict[str, str]
             # dimension (0.20 of the composite) and replaced every real
             # message with a generic quality.scoring_failed.
             if isinstance(sp, dict)
+            # BORROW-2026-09-20 (A): a row the chart explicitly did NOT draw
+            # has no biozone to label — the dash is the answer. Penalising it
+            # would punish exactly the honest reporting the new contract asks
+            # for, so those rows are exempt from this check.
+            and not is_not_drawn(sp)
             and not str(sp.get("biozone") or "").strip()
         )
         if missing_bz:
@@ -1154,8 +1173,77 @@ def score_range_chart(data: dict[str, Any]) -> dict[str, Any]:
     composite = sum(weighted_scores)
     composite = min(1.0, max(0.0, composite))
 
-    return {
+    out: dict[str, Any] = {
         "score": round(composite, 4),
         "grade": _grade_for(composite),
         "issues": all_issues,
     }
+
+    # BORROW-2026-09-20 (A): the honest-coverage ledger. ADDITIVE and purely
+    # informational — it never moves the composite score, because the four
+    # weighted dimensions already carry the penalties and a model that has not
+    # adopted the tri-state contract yet must not score worse than one that
+    # has. Only when runs actually answered with response_kind / reason_codes
+    # does it also raise an ``info`` issue, so legacy results keep their exact
+    # old issue list.
+    try:
+        ledger = coverage_for(data)
+    except Exception:  # the ledger must never break scoring
+        ledger = None
+    if ledger is not None:
+        out["coverage"] = ledger
+        totals = ledger.get("totals") or {}
+        if totals.get("explicit_responses"):
+            all_issues.append({
+                "severity": "info",
+                "msg_key": "quality.coverage_ledger",
+                "params": {
+                    "answered": str(totals.get("answered", 0)),
+                    "cells": str(totals.get("cells", 0)),
+                    "not_drawn": str(totals.get("not_drawn", 0)),
+                    "gaps": str(totals.get("silent_missing", 0)),
+                },
+            })
+    return out
+
+
+#: Primary per-mode row tables the coverage ledger can be computed over.
+_COVERAGE_TABLES: tuple[tuple[str, str], ...] = (
+    ("species_ranges", "species"),
+    ("abundances", "taxon"),
+    ("data_points", "sample_id"),
+    ("points", "label"),
+)
+
+
+def coverage_for(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Ledger for the largest contracted row table of a result, or None.
+
+    Returns None when no row anywhere carries a ``response_kind`` /
+    ``reason_codes`` field: a pre-contract result has nothing to account for,
+    and inventing a grid of "silent gaps" for it would be noise.
+    """
+    if not isinstance(data, dict):
+        return None
+    best: tuple[int, str] | None = None
+    for key, column_key in _COVERAGE_TABLES:
+        rows = data.get(key)
+        if not isinstance(rows, list) or not rows:
+            continue
+        contracted = sum(1 for r in rows
+                         if isinstance(r, dict)
+                         and (r.get("response_kind") or r.get("reason_codes")))
+        if not contracted:
+            continue
+        if best is None or len(rows) > best[0]:
+            best = (len(rows), key)
+    if best is None:
+        return None
+    row_count, table_key = best
+    rows = data.get(table_key)
+    primary_column = dict(_COVERAGE_TABLES)[table_key]
+    return coverage_ledger(
+        [r for r in rows if isinstance(r, dict)],
+        column_keys=(primary_column, "taxon", "species", "sample_id",
+                     "label", "name"),
+    )

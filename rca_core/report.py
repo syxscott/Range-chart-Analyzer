@@ -18,9 +18,16 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+# BORROW-2026-09-20 (A): the coverage contract belongs in the evidence chain —
+# an audit of one extraction should say which cells the chart answered, which
+# it explicitly left blank, and which nobody ever asked about.
+from .reason_codes import coverage_ledger, reason_code_rollup
+
 __all__ = ["build_extraction_report", "REPORT_SCHEMA_VERSION"]
 
-REPORT_SCHEMA_VERSION = 1
+# v2 adds the ``coverage`` block (ledger + reason-code rollup + the rows that
+# carry a contract field). Consumers must read it as an optional key.
+REPORT_SCHEMA_VERSION = 2
 
 # Top-level list keys we track row counts for, by mode family. Every other
 # public (non-underscore) list/dict key is folded into the single aggregate
@@ -37,6 +44,52 @@ _TRACKED_LIST_KEYS = (
     "biogeographic_realms", "fossil_sites", "paleolatitude_indicators",
     "nodes", "root_ids", "legend",
 )
+
+
+#: Tables the coverage ledger can be built over, with the key that names the
+#: "column" (the taxon / sample the range belongs to) in that table.
+_COVERAGE_TABLES: tuple[tuple[str, str], ...] = (
+    ("species_ranges", "species"),
+    ("abundances", "taxon"),
+    ("data_points", "sample_id"),
+    ("points", "label"),
+    ("cross_beds", "name"),
+    ("samples", "name"),
+)
+
+
+def _is_contracted(row: Any) -> bool:
+    """True when a row carries any part of the coverage contract."""
+    return bool(isinstance(row, dict)
+                and (row.get("response_kind") or row.get("reason_codes")
+                     or row.get("geometry")))
+
+
+def _coverage_source(data: dict[str, Any]
+                     ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    """Locate the table to audit: the LARGEST one carrying contract fields.
+
+    Returns ``("", [], empty_rollup)`` when nothing answered under the
+    contract, so the caller can skip the block instead of reporting a ledger
+    full of invented gaps for a pre-contract result.
+    """
+    empty = reason_code_rollup([])
+    best: tuple[int, str] | None = None
+    for key, _column in _COVERAGE_TABLES:
+        rows = data.get(key)
+        if not isinstance(rows, list):
+            continue
+        contracted = sum(1 for r in rows if _is_contracted(r))
+        if not contracted:
+            continue
+        if best is None or len(rows) > best[0]:
+            best = (len(rows), key)
+    if best is None:
+        return "", [], empty
+    _count, key = best
+    rows = [r for r in data.get(key) if isinstance(r, dict)]
+    column_key = dict(_COVERAGE_TABLES)[key]
+    return key, rows, reason_code_rollup(rows, column_keys=(column_key,))
 
 
 def _ics_version() -> str:
@@ -153,6 +206,26 @@ def build_extraction_report(
 
     auto_mode = data.get("_auto_mode") if isinstance(data.get("_auto_mode"), dict) else None
 
+    # BORROW-2026-09-20 (A+B): the coverage evidence chain. Picked over the
+    # largest table that actually answered under the contract, so a
+    # pre-contract result reports `contracted_rows: 0` and an empty ledger
+    # instead of pretending every omission was a gap.
+    coverage: dict[str, Any] = {}
+    try:
+        primary_key, primary_rows, rollup = _coverage_source(data)
+        if primary_key:
+            coverage = {
+                "table": primary_key,
+                "row_count": len(primary_rows),
+                "contracted_rows": rollup["contracted_rows"],
+                "by_response_kind": rollup["by_kind"],
+                "by_reason_code": rollup["by_code"],
+                "decisions": rollup["entries"],
+                "ledger": coverage_ledger(primary_rows),
+            }
+    except Exception:  # the report is total: never fail on a new field shape
+        coverage = {}
+
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "mode": {
@@ -180,6 +253,10 @@ def build_extraction_report(
         # were none), so the aggregate count stays auditable.
         "other_keys": other_keys,
         "empty_tables": empty_tables,
+        # BORROW-2026-09-20 (A): {} when the result never answered under the
+        # coverage contract — an absent audit, honestly reported, beats a grid
+        # of gaps nothing asked about.
+        "coverage": coverage,
         "warnings": warnings,
         "timescale": {
             "ics_version": _ics_version(),

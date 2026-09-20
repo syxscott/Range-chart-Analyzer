@@ -68,7 +68,7 @@
 |---|---|
 | **提取** | 8 种图表模式（见下表）；`auto` 模式两级识别（图注启发式 → 视觉分类）；中/英/日/俄四语图表 |
 | **科研可信度** | 证据链报告（模式决策/截断/空表原因/ICS 版本戳）；多轮众数合并与一致性标注；嵌合行检测与丢弃；学名模糊验证（GBIF）；延限图重绘校验 |
-| **结果交付** | 在线可编辑表格；JSON / CSV / TSV / XLSX 导出；Darwin Core 与 PBDB 标准字段；WebPlotDigitizer 友好的纯表格形态 |
+| **结果交付** | 在线可编辑表格；JSON / CSV / TSV / XLSX 导出；Darwin Core 与 PBDB 标准字段（含 PBDB 上传扩展列，见「提取字段」）；`to_wpd` 导出 WebPlotDigitizer 交换包（每数据集一份 x,y CSV + `wpd_axes.json` 轴标定，见「提取字段」） |
 | **工程** | 100+ LLM 提供商预设；本地后端（免 CORS、CSRF/SSRF/限流加固）；SQLite 历史（含 PROV-O 溯源导出）；Token 用量统计 |
 | **界面** | Fluent 桌面（PySide6）/ Tkinter 回退 / Web + 本地后端 / 纯前端静态站；中/英/日三语 UI |
 
@@ -285,9 +285,28 @@ runs — the agreement column flags rows needing review on dense italic names.*
 | Species Ranges 种属延限 | species, section, range_base（老）, range_top（新）, biozone, (+author_year / occurrence_mode / note 等可选列) |
 | Biozones 生物带 | name, section, age, thickness_m |
 | Other Fossils 其他化石 | free-text 记录 |
+| PBDB 上传扩展列（`to_pbdb_csv`，追加在历史列之后） | 三名法拆分 genus / species / subspecies（含 cf./aff. 等开放命名限定词原样保留）；年代分辨率限定符 early_interval_reso / late_interval_reso / max_ma_reso / min_ma_reso（stage/series/system/era/measured/zone/informal）；丰度列 abund_value / abund_unit |
 
 整体附带 `confidence`（0–1）。任何语言的图表统一输出**标准拉丁学名**与英文地质字段；
 模型附加的未知字段按 H8 契约保留于行级 `_extras`，不丢弃。
+
+### WebPlotDigitizer 交换导出（`to_wpd`，格式 `rca-wpd/1`）
+
+`rca_core/exporter.py` 的 `to_wpd(result, source_file=…, output_dir=…, y_axis="auto")`
+为一张提取结果产出可直接喂给 WebPlotDigitizer 的交换包（当前为 Python API，GUI/前端
+尚未接导出按钮）：
+
+- **数据集 CSV**：一个数据集一份纯两列 `x,y` 文件（LF、无 BOM、表头 `x,y`），命名
+  `wpd_<图版>__<剖面>__<种名>.csv`——延限图每个种属延限一份、丰度图每条曲线一份、
+  带对比图每个生物带一份；端点数值先经共享 bed 解析器与 ICS 标尺（`y_axis` 取
+  `level` 层位索引或 `age` 年代，`auto` 按多数行可解析者选定）；
+- **`wpd_axes.json`**：两轴的 name/unit/min/max、两个标定点（scale point）的值、
+  数据集清单与使用说明，并附一份按 WPD 自身 JSON 交换书写的兼容块。
+
+导入 WPD：Add Image → 按 `wpd_axes.json` 的 min/max 定义两轴并把标定点锚到图面上
+对应位置 → Data → Import Data (CSV) 逐个选择清单列出的数据集文件。诚实边界：交换包
+工作在**数据空间**（标签/索引/ICS 年龄）——提取结果只有标签、没有像素几何，因此像素
+标定仍由用户在 WPD 中点取；解析不出数字的端点（如 "common"）记入 `warnings`，绝不编造。
 
 ---
 

@@ -30,6 +30,7 @@ from .exporter import (
     to_tsv,
     to_xlsx,
     to_newick_file,
+    to_wpd,
 )
 from .aggregate import merge_results
 from .extractor import (

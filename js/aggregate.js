@@ -2,6 +2,10 @@
 // Mirrors rca_core/aggregate.py so the browser (direct/proxy) path and the
 // Python (GUI/backend) path produce the same merged structure.
 //
+// BORROW-2026-09-20 (A+B): the coverage contract (response_kind /
+// reason_codes) and the geometry sidecar are merged by their own rules, which
+// live in js/reason-codes.js — load that file BEFORE this one (index.html).
+//
 // Pass a keymap that describes which top-level key holds the primary
 // rows and which fields form the dedup key. Defaults to the range-chart
 // keymap (backward compatible).
@@ -601,6 +605,69 @@ function rcaAddRowWarning(row, flag) {
   row._warning = flags.length === 1 ? flags[0] : flags;
 }
 
+/**
+ * BORROW-2026-09-20 (A+B) — mirror of rca_core/aggregate.py:_merge_contract_field.
+ *
+ * Merge one coverage/geometry field across runs into ``target``. Returns true
+ * when ``key`` belongs to the contract and was handled here — the callers then
+ * skip their generic field merger, which would otherwise drop a list of
+ * strings (NO_MERGE) or stringify the integers inside ``geometry``.
+ *
+ * Contract semantics, shared by every merge path so the two can't drift
+ * (rules live in js/reason-codes.js, i.e. in ONE place, exactly like the
+ * Python side importing them from reason_codes.py):
+ *
+ *   * ``reason_codes`` — UNION, in first-seen order. Two runs each spotting a
+ *     different defect means both defects are true.
+ *   * ``response_kind`` — precedence vote, extracted > uncertain > not_drawn:
+ *     one run that saw the range drawn outranks a run that called it a dash.
+ *     Divergence is recorded as a warning plus the raw ballot, never hidden.
+ *   * ``geometry`` — first well-formed block wins, deep-copied. Averaging two
+ *     runs' pixel reads would invent a position neither run observed.
+ *
+ * When js/reason-codes.js has not been loaded the merger reports "not a
+ * contract key", which reproduces the pre-contract generic path instead of
+ * throwing — the same degradation the Python module documents for results
+ * that never adopted the contract.
+ */
+function rcaMergeContractField(key, values, target) {
+  if (typeof rcaMergeReasonCodes !== 'function'
+      || typeof rcaMergeResponseKinds !== 'function'
+      || typeof rcaContractTruthy !== 'function') {
+    return false;
+  }
+  const list = Array.isArray(values) ? values : [];
+  if (key === 'reason_codes') {
+    const union = rcaMergeReasonCodes(list);
+    if (union.length) target[key] = union;
+    return true;
+  }
+  if (key === 'response_kind') {
+    const vote = rcaMergeResponseKinds(list);
+    if (vote.kind) target[key] = vote.kind;
+    if (vote.divergent) {
+      rcaAddRowWarning(target, 'response_kind_divergent');
+      // The RAW ballot, Python's `[v for v in values if v]` — unknown spellings
+      // are kept so an auditor can see what the runs actually said.
+      target.response_kind_votes = list.filter((v) => rcaContractTruthy(v));
+    }
+    return true;
+  }
+  if (key === 'geometry') {
+    let block = null;
+    for (const v of list) {
+      if (v && typeof v === 'object' && !Array.isArray(v)
+          && rcaContractTruthy(v.points)) {
+        block = v;
+        break;
+      }
+    }
+    if (block !== null) target[key] = deepClone(block);
+    return true;
+  }
+  return false;
+}
+
 function mergePrimaryList(runs, km, n) {
   const groups = new Map();
   const order = [];
@@ -707,6 +774,9 @@ function mergePrimaryList(runs, km, n) {
     for (const [k, _vals] of fieldsToMerge) {
       if (aggr[k] !== undefined) continue;  // already filled by strModeFields
       const perRun = group.map((x) => x ? x[k] : null);
+      // BORROW-2026-09-20 (A+B): coverage contract + geometry sidecar are
+      // merged by their own rules, never by the generic field merger.
+      if (rcaMergeContractField(k, perRun, aggr)) continue;
       let merged_v;
       if (km.primary === 'species_ranges' && (k === 'range_top_idx' || k === 'range_base_idx')) {
         merged_v = mergeTypedInteger(perRun);
@@ -868,6 +938,9 @@ function mergeNamedLists(runs, km) {
       }
       for (const [k, _vals] of fieldsToMerge) {
         const perRun = group.map((x) => x ? x[k] : null);
+        // BORROW-2026-09-20 (A+B): same contract rules as the primary path, so
+        // a biozone / site / point row merges identically.
+        if (rcaMergeContractField(k, perRun, rep)) continue;
         const merged_v = mergeFieldAcrossRuns(perRun);
         if (merged_v === NO_MERGE) continue;
         rep[k] = merged_v;

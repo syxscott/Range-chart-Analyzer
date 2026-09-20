@@ -328,7 +328,10 @@ class TestNamesHardening:
         assert set(v) == {"Clarkina first", "Clarkina second", "Clarkina third"}
         assert v["Clarkina second"]["status"] == "unavailable"
         assert v["Clarkina third"]["status"] == "ok"
-        assert len(calls) == 3
+        # BORROW-2026-09-20: each unique cleaned name costs TWO round-trips
+        # now (parser pre-resolution + backbone match); the poisoned parser
+        # call is fail-open and the match call still runs.
+        assert len(calls) == 6
 
     def test_batch_budget_stops_issuing_requests(self):
         calls = []
@@ -338,21 +341,28 @@ class TestNamesHardening:
             time.sleep(0.02)
             return _gbif_body()
 
-        names = [f"Genus species {i}" for i in range(40)]
+        # BORROW-2026-09-20: letter-only binomens - the new local malformed
+        # gate (digits -> no network at all) would short-circuit "species 1"
+        # style names and defeat the point of THIS test.
+        names = [f"Genus {chr(97 + i // 26)}{chr(97 + i % 26)}"
+                 for i in range(40)]
         v = verify_names(names, fetch=fetch, budget=0.05)
         assert len(v) == len(names)
-        assert len(calls) < len(names), "budget must stop further round-trips"
+        assert len(calls) < 2 * len(names), "budget must stop further round-trips"
         stopped = [n for n, r in v.items() if r.get("error") == "batch_budget_exceeded"]
         assert stopped and v[stopped[0]]["status"] == "unavailable"
         # Everything after the first budget breach is reported, none missing.
-        assert len(stopped) + len(calls) == len(names)
+        # BORROW-2026-09-20: a processed name spends parser + match = 2 calls.
+        processed = len(names) - len(stopped)
+        assert len(calls) == 2 * processed
 
     def test_budget_can_be_disabled(self):
         assert DEFAULT_BATCH_BUDGET_SECONDS > 0
         calls = []
         v = verify_names(["A a", "B b"], fetch=lambda url: calls.append(url) or _gbif_body(),
                          budget=None)
-        assert len(calls) == 2 and all(r["status"] == "ok" for r in v.values())
+        # 2 names x (parser + backbone match) — BORROW-2026-09-20.
+        assert len(calls) == 4 and all(r["status"] == "ok" for r in v.values())
 
     def test_name_issues_tolerates_non_dict_entries(self):
         issues = name_issues({"A a": "not a dict", "B b": None,

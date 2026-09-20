@@ -318,6 +318,10 @@ function loadAllScripts(ctx) {
     // quality scorer is actually exercised in tests — before, it had
     // zero behavioral coverage.
     'js/ics_table.js',
+    // 2026-09-20 (BORROW-2026-09-20 A): the coverage-contract mirror. It has
+    // to load before quality.js / aggregate.js, which call into it for the
+    // ledger and the response_kind / reason_codes merge rules.
+    'js/reason-codes.js',
     'js/quality.js',
     'js/aggregate.js',
     'js/table.js',
@@ -383,6 +387,15 @@ function loadAllScripts(ctx) {
       'js/i18n.js': ['RCA_I18N', 'rcaSetLang', 'rcaApplyI18n', 't'],
       'js/json-utils.js': ['safeJsonLoads', 'extractBalancedJsonObject'], // truncation-repair fixture test uses safeJsonLoads
       'js/aggregate.js': ['rcaMergeResults', 'RCA_DEFAULT_KEYMAP', 'RCA_COLUMNAR_KEYMAP', 'RCA_ZONATION_KEYMAP'],
+      // 2026-09-20 (BORROW-2026-09-20 A): the contract mirror + the ledger
+      // entry point, so the reason-code tests and the merge wiring can call
+      // them directly.
+      'js/reason-codes.js': [
+        'RCAReasonCodes', 'rcaCoverageLedger', 'rcaNormalizeReasonCodes',
+        'rcaNormalizeResponseKind', 'rcaMergeResponseKinds', 'rcaMergeReasonCodes',
+        'rcaCoverageState', 'rcaIsAnswered', 'rcaReasonCodeRollup', 'rcaPyRound',
+      ],
+      'js/quality.js': ['rcaCoverageFor'],
       // UI-REVIEW-2026-09-05: zonation_chart normalizer.
       // UI-REVIEW-2026-09-07: chart-type classification normalizer.
       'js/minimax.js': ['rcaNormalizeZonationChartResult', 'rcaNormalizeChartClassification'],
@@ -587,14 +600,54 @@ function test_agreement_pill() {
 }
 
 // ---- Phase B: i18n key parity across zh/en/ja ----
+// 2026-09-20 (BORROW-2026-09-20 A): ONE exemption, derived — not hard-coded.
+// Two invariants hold over the same catalog and can contradict each other when
+// the Python oracle is asymmetric:
+//   * i18n-shared-parity:<lang> (test_i18n_shared_namespace_parity below)
+//     requires js/<lang> and TRANSLATIONS[<lang>] to agree key-for-key.
+//   * i18n-zh-{en,ja}-parity (here) requires the three JS locales to agree.
+// rca_core/i18n.py currently authors `quality.coverage_ledger` and the whole
+// `reason_code.*` block for ZH ONLY, so the mirror is forced to be zh-only too
+// — adding en/ja glosses here would flip the shared-parity check red instead.
+// The exemption therefore lists exactly the keys the ORACLE itself carries in
+// a single locale: it empties the moment rca_core gains the en/ja strings, and
+// until then every other key stays locked to strict three-way parity.
+function _pyI18nKeysByLocale() {
+  const pySrc = fs.readFileSync(
+    path.join(__dirname, 'rca_core', 'i18n.py'), 'utf8');
+  const out = {};
+  for (const lang of ['zh', 'en', 'ja']) {
+    const keys = new Set();
+    const start = pySrc.indexOf('TRANSLATIONS["' + lang + '"] = {');
+    if (start !== -1) {
+      const end = pySrc.indexOf('\n}', start);
+      const body = pySrc.slice(start, end === -1 ? undefined : end);
+      let m;
+      const rx = /^    "((?:col|sec|quality|names|reason_code)\.[A-Za-z0-9_]+)":/gm;
+      while ((m = rx.exec(body)) !== null) keys.add(m[1]);
+    }
+    out[lang] = keys;
+  }
+  return out;
+}
+
 function test_i18n_parity() {
   const ctx = buildContext();
   loadAllScripts(ctx);
-  const zh = Object.keys(ctx.RCA_I18N.zh).sort();
+  const py = _pyI18nKeysByLocale();
+  const exempt = new Set(
+    [...py.zh].filter((k) => !py.en.has(k) && !py.ja.has(k)));
+  const zh = Object.keys(ctx.RCA_I18N.zh).filter((k) => !exempt.has(k)).sort();
   const en = Object.keys(ctx.RCA_I18N.en).sort();
   const ja = Object.keys(ctx.RCA_I18N.ja).sort();
   check('i18n-zh-en-parity', JSON.stringify(zh) === JSON.stringify(en));
   check('i18n-zh-ja-parity', JSON.stringify(zh) === JSON.stringify(ja));
+  // The exemption must not be a hole: a single-locale Python key may only ever
+  // appear in the JS locale the oracle itself uses.
+  const leaked = [...exempt].filter(
+    (k) => !(k in ctx.RCA_I18N.zh)
+    || (k in ctx.RCA_I18N.en) || (k in ctx.RCA_I18N.ja));
+  check('i18n-single-locale-keys-stay-single', leaked.length === 0, leaked.join(','));
 }
 
 // ---- Phase B: theme.js contract ----

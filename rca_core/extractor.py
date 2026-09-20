@@ -20,7 +20,7 @@ import re
 import time
 import warnings
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 
 from .image_hash import compute_image_sha256_from_b64
 from .json_utils import safe_json_loads
@@ -32,6 +32,15 @@ from .prompt import (
     PHYLOGENETIC_TREE_SYSTEM_PROMPT,
     RANGE_CHART_SYSTEM_PROMPT,
     prompt_version_for_mode,
+)
+# BORROW-2026-09-20 (A): the coverage contract (response_kind + reason_codes).
+from .reason_codes import (
+    LOW_CONFIDENCE_CODE,
+    RESPONSE_EXTRACTED,
+    RESPONSE_NOT_DRAWN,
+    has_value,
+    normalize_codes,
+    normalize_response_kind,
 )
 
 DEFAULT_ENDPOINT = "https://api.minimaxi.com/anthropic"
@@ -265,7 +274,7 @@ MAX_IMAGE_BYTES = 50 * 1024 * 1024
 
 
 def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE,
-                   enhance: bool = False):
+                   enhance: bool = False, deskew: bool = False):
     """Read an image, optionally downscale so its long edge <= max_edge.
 
     Returns ``(base64, media_type, width, height, resized, decode_error)``.
@@ -279,6 +288,13 @@ def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE,
     names. Uses the Pillow-only path by default; the stronger cv2 path
     (3× upsample + NLMeans + CLAHE) is used when ``enhance='cv2'`` and
     cv2 is installed.
+
+    BORROW-2026-09-20: ``deskew=True`` first straightens the whole image
+    (scanned / photographed plates are routinely a fraction of a degree
+    off, which systematically breaks any grid-aligned reading) via
+    ``rca_core.deskew``. Like enhancement it happens before downscale,
+    and any failure keeps the original picture — it is an opt-in
+    refinement, never a hard dependency.
 
     Bug-15 fix: the previous version returned ``width=0, height=0`` for
     both "Pillow missing" and "decode failed", making the two cases
@@ -344,6 +360,14 @@ def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE,
 
     modified = False
     try:
+        if deskew:
+            try:
+                from .deskew import deskew_image
+                img, _angle = deskew_image(img)
+                w, h = img.size
+                modified = True
+            except Exception:
+                pass
         if enhance:
             if enhance == "cv2":
                 img = _enhance_image_cv2(img)
@@ -393,6 +417,9 @@ def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE,
 
 _KNOWN_RANGE_CHART_KEYS = (
     "sections", "species_ranges", "biozones", "other_fossils", "confidence",
+    # BORROW-2026-09-20 (B): the optional figure-level axis calibration is a
+    # hoisted root key, not an _extras leftover.
+    "axis_calibration",
 )
 _KNOWN_SECTION_KEYS = (
     "name", "age_range", "formations", "formation_thickness_m", "coordinates",
@@ -979,8 +1006,399 @@ def _normalize_confidence(value: Any) -> float | None:
     return max(0.0, min(1.0, parsed))
 
 
+# ---------------------------------------------------------------------------
+# BORROW-2026-09-20 (A) — coverage contract (``response_kind`` + ``reason_codes``)
+# BORROW-2026-09-20 (B) — PlotLift 0-999 normalised positions -> ``geometry``
+#
+# Both are strictly ADDITIVE: the keys below only appear on rows whose model
+# emission actually carried them, so every existing consumer (exporter,
+# editable, history, the JS tables) sees the shapes it saw before.
+#
+# (A) ``response_kind`` is the three-state answer the prompts now demand —
+# ``extracted`` / ``not_drawn`` / ``uncertain`` — and ``reason_codes`` the
+# machine-readable why.  The distinction that matters scientifically is
+# ``not_drawn`` ("the author drew a dash: this taxon is absent here", a
+# POSITIVE observation) versus a silent omission (the model skipped the cell),
+# which is a gap.  See rca_core/reason_codes.py.
+#
+# (B) ``pos_0_999`` fields are the model's independent pixel read of the SAME
+# boundary it also transcribed as text ("Bed 9").  Converting them needs an
+# axis calibration, which is optional; without one the raw 0-999 integer is
+# kept as evidence only.  It NEVER overwrites the semantic value — that is the
+# self-echo guard: derived numbers stay in the sidecar ``geometry`` block, and
+# a block that contradicts the transcribed value is thrown away instead of
+# being averaged into it.
+# ---------------------------------------------------------------------------
+
+#: Bare field name for a row's single vertical position.
+POS_SCALE_KEY = "pos_0_999"
+#: Suffix for a per-boundary position (``range_top_pos_0_999``, ``x_pos_0_999``…).
+POS_SUFFIX = "_pos_0_999"
+POS_MIN = 0
+POS_MAX = 999
+#: Version + scale tag written into every ``geometry`` block so a future
+#: consumer (rca_core/geometry.py) can tell what the numbers mean.
+GEOMETRY_VERSION = 1
+GEOMETRY_SCALE = "pos_0_999"
+#: How far outside the calibrated axis domain a converted position may sit
+#: (fraction of the axis span) before the whole geometry block is discarded.
+GEOMETRY_TOLERANCE = 0.15
+#: Axis names the calibration block may carry.
+GEOMETRY_AXIS_NAMES = ("vertical", "x", "y")
+
+#: Row-level source keys the coverage contract consumes. They are added to
+#: every ``_carry_extras`` known-key tuple so a model-emitted ``response_kind``
+#: lands on the row as ``response_kind`` and never as a duplicate under
+#: ``_extras`` (BORROW-2026-09-20 A).
+_CONTRACT_SOURCE_KEYS = ("response_kind", "reason_codes", "reason_code")
+
+#: geometry field -> axis name. Deliberately NOT a catch-all: an unknown
+#: ``<prefix>_pos_0_999`` field maps to the axis named ``<prefix>`` only when
+#: the result actually calibrates that axis, so a bar-length read can never
+#: silently borrow the vertical (stratigraphic) axis and produce a plausible
+#: but wrong engineering value.
+_GEOMETRY_AXIS_BY_FIELD = {"x_pos_0_999": "x", "y_pos_0_999": "y"}
+#: Fields that ARE the vertical axis by contract (per the prompt wording).
+_GEOMETRY_VERTICAL_FIELDS = frozenset({
+    "pos_0_999", "depth_pos_0_999", "level_pos_0_999", "age_pos_0_999",
+    "range_top_pos_0_999", "range_base_pos_0_999",
+    "top_pos_0_999", "base_pos_0_999",
+})
+
+
+def _geometry_axis_for(field: str,
+                       axes: dict[str, dict[str, Any]] | None
+                       ) -> str | None:
+    """Which calibrated axis a ``*pos_0_999`` field belongs to (or None)."""
+    if field in _GEOMETRY_AXIS_BY_FIELD:
+        return _GEOMETRY_AXIS_BY_FIELD[field]
+    if field in _GEOMETRY_VERTICAL_FIELDS or field == POS_SCALE_KEY:
+        return "vertical"
+    if field.endswith(POS_SUFFIX):
+        prefix = field[: -len(POS_SUFFIX)]
+        if prefix and (axes or {}).get(prefix) is not None:
+            return prefix
+    return None
+
+
+#: geometry field -> row fields holding the same boundary as a readable value.
+#: Used ONLY as a contradiction test, never as a source for the geometry.
+_GEOMETRY_SEMANTIC_KEYS = {
+    "pos_0_999": ("depth", "depth_m", "age_ma", "y", "level"),
+    "y_pos_0_999": ("y",),
+    "x_pos_0_999": ("x",),
+    "range_top_pos_0_999": ("range_top_idx", "range_top"),
+    "range_base_pos_0_999": ("range_base_idx", "range_base"),
+    "depth_pos_0_999": ("depth", "depth_m"),
+    "age_pos_0_999": ("age_ma", "age"),
+    "level_pos_0_999": ("level", "depth", "depth_m"),
+}
+
+
+def _add_row_flag(row: dict[str, Any], tag: str) -> None:
+    """Attach a ``_warning`` to a row using the extractor's own convention.
+
+    Single flag -> string, several -> list (same shape
+    ``aggregate._add_row_warning`` writes, so every consumer reads one format).
+    """
+    existing = row.get("_warning")
+    if existing in (None, ""):
+        row["_warning"] = tag
+        return
+    flags = list(existing) if isinstance(existing, list) else [existing]
+    if tag not in flags:
+        flags.append(tag)
+    row["_warning"] = flags[0] if len(flags) == 1 else flags
+
+
+def _to_float_opt(value: Any) -> float | None:
+    """Best-effort float for a scientific value; non-numeric text -> ``None``."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    text = value.strip().replace(",", ".")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        # "Bed 9" / "120 cm" / "4.2-6.8": not a single number, not our business.
+        m = re.fullmatch(r"\s*([+-]?\d+(?:\.\d+)?)\s*", text)
+        return float(m.group(1)) if m else None
+
+
+def normalize_pos_0_999(value: Any) -> int | None:
+    """Strictly parse a PlotLift position: an INTEGER in [0, 999], else None.
+
+    Deliberately unforgiving — ``"712"`` is fine, ``712.5`` / ``1000`` /
+    ``-1`` / ``True`` are not. A rejected value must not be silently clamped
+    into a plausible-looking position.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    parsed: float | None = None
+    if isinstance(value, int):
+        parsed = float(value)
+    elif isinstance(value, float):
+        parsed = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = float(text)
+        except ValueError:
+            return None
+    if parsed is None or not float(parsed).is_integer():
+        return None
+    pos = int(parsed)
+    if pos < POS_MIN or pos > POS_MAX:
+        return None
+    return pos
+
+
+def _axis_domain(raw: Any) -> dict[str, Any] | None:
+    """Normalise one axis calibration entry to ``{at_0, at_999, unit}``.
+
+    Accepted shapes (all optional, model-emitted)::
+
+        {"vertical": {"at_0": 1, "at_999": 24, "unit": "bed"}}
+        {"vertical": {"bottom": 1, "top": 24}}
+        {"vertical": [1, 24]}
+
+    ``at_0`` is the value at the BOTTOM (oldest) edge of the plot frame and
+    ``at_999`` the value at the TOP (youngest) edge, i.e. exactly the ends the
+    0-999 scale is defined against.  Returns None unless both ends are numeric.
+    """
+    if isinstance(raw, (list, tuple)) and len(raw) == 2:
+        low, high = (_to_float_opt(raw[0]), _to_float_opt(raw[1]))
+        return {"at_0": low, "at_999": high, "unit": ""} if (
+            low is not None and high is not None) else None
+    if not isinstance(raw, dict):
+        return None
+    low = high = None
+    for key in ("at_0", "bottom", "base", "oldest", "min", "start", "0"):
+        if key in raw:
+            low = _to_float_opt(raw.get(key))
+            if low is not None:
+                break
+    for key in ("at_999", "top", "ceiling", "youngest", "max", "end", "999"):
+        if key in raw:
+            high = _to_float_opt(raw.get(key))
+            if high is not None:
+                break
+    if low is None or high is None:
+        return None
+    unit = raw.get("unit")
+    return {"at_0": low, "at_999": high,
+            "unit": str(unit).strip() if isinstance(unit, (str, int, float)) else ""}
+
+
+def axis_domains_from(payload: Any) -> dict[str, dict[str, Any]]:
+    """Collect the optional ``axis_calibration`` block from a parsed result.
+
+    Looks at the root, ``metadata`` and ``_extras`` — models put figure-level
+    blocks in whichever of the three they prefer.  Unknown axis names are kept
+    verbatim so a future axis (``"thickness"``) needs no code change here.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    if not isinstance(payload, dict):
+        return out
+    candidates = [payload.get("axis_calibration")]
+    for container_key in ("metadata", "_extras"):
+        container = payload.get(container_key)
+        if isinstance(container, dict):
+            candidates.append(container.get("axis_calibration"))
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        for name, raw in candidate.items():
+            domain = _axis_domain(raw)
+            if domain and str(name) not in out:
+                out[str(name)] = domain
+    return out
+
+
+def pos_to_axis_value(pos: int, domain: dict[str, Any] | None) -> float | None:
+    """Linearly map a 0-999 frame position onto a calibrated axis."""
+    if not domain or pos is None:
+        return None
+    low, high = domain.get("at_0"), domain.get("at_999")
+    if not isinstance(low, (int, float)) or not isinstance(high, (int, float)):
+        return None
+    return low + (float(pos) / float(POS_MAX)) * (float(high) - float(low))
+
+
+def _geometry_point(field: str,
+                    raw: Any,
+                    src_row: dict[str, Any],
+                    axes: dict[str, dict[str, Any]] | None
+                    ) -> tuple[dict[str, Any] | None, bool, str | None]:
+    """One ``*pos_0_999`` field -> ``(entry | None, rejected, axis name)``.
+
+    ``rejected`` is True only for a value that CANNOT be trusted: a non-integer
+    or out-of-scale position, or a converted value that contradicts the row's
+    own transcribed boundary by more than :data:`GEOMETRY_TOLERANCE` of the
+    axis span.  The check against the transcribed value is skipped when the two
+    numbers are demonstrably on different scales (the semantic value lies
+    outside the calibrated domain — e.g. bed indices against a metre axis), so
+    a unit mismatch can never trigger a false rejection.
+    """
+    pos = normalize_pos_0_999(raw)
+    if pos is None:
+        return None, True, None
+    axis = _geometry_axis_for(field, axes)
+    domain = (axes or {}).get(axis) if axis else None
+    if domain is None:
+        domain = (axes or {}).get(field)
+    entry: dict[str, Any] = {"pos": pos, "axis": axis or "uncalibrated"}
+    if domain is None:
+        # No calibration: the 0-999 integer survives as evidence, nothing more.
+        return entry, False, None
+    value = pos_to_axis_value(pos, domain)
+    if value is None:
+        return None, True, None
+    lo = min(float(domain["at_0"]), float(domain["at_999"]))
+    hi = max(float(domain["at_0"]), float(domain["at_999"]))
+    span = hi - lo
+    tol = GEOMETRY_TOLERANCE * span
+    if span > 0 and not (lo - tol <= value <= hi + tol):
+        return None, True, None
+    for sem_key in _GEOMETRY_SEMANTIC_KEYS.get(field, ()):
+        sem = _to_float_opt(src_row.get(sem_key))
+        if sem is None or not (lo <= sem <= hi):
+            continue
+        if span > 0 and abs(value - sem) > tol:
+            return None, True, None
+        break
+    entry["value"] = round(value, 6)
+    if domain.get("unit"):
+        entry["unit"] = domain["unit"]
+    return entry, False, axis
+
+
+def geometry_from_row(src: dict[str, Any],
+                      axes: dict[str, dict[str, Any]] | None = None,
+                      *,
+                      row: dict[str, Any] | None = None
+                      ) -> tuple[dict[str, Any] | None, bool, list[str]]:
+    """Build the optional ``geometry`` sidecar for one row.
+
+    Returns ``(geometry | None, rejected, consumed_keys)``:
+
+    * ``geometry`` — ``{"version", "scale", "calibrated", "points", "axes"}``
+      with one entry per ``*pos_0_999`` field: ``{"pos": int, "axis": str,
+      "value": float?}``.  ``value`` is the engineering value derived from the
+      axis calibration; it is absent when the result carries no calibration for
+      that axis, in which case the raw 0-999 integer survives as evidence only.
+    * ``rejected`` — True when at least one position was unusable, so the
+      caller can add a ``low_confidence`` reason code.
+    * ``consumed_keys`` — the ``*pos_0_999`` keys folded into the block, so the
+      caller keeps them out of ``_extras`` instead of duplicating them.
+
+    A bad point is dropped, the good ones in the same row survive; if nothing
+    survives there is no ``geometry`` key at all.  The guard rails are
+    one-directional on purpose: geometry can be dropped, it can never change a
+    semantic value (the anti-self-echo rule).
+    """
+    src_row = row if isinstance(row, dict) else (src if isinstance(src, dict) else {})
+    points: dict[str, Any] = {}
+    used_axes: dict[str, Any] = {}
+    consumed: list[str] = []
+    rejected = False
+    if not isinstance(src, dict):
+        return None, False, consumed
+    for field, raw in src.items():
+        if not isinstance(field, str):
+            continue
+        if not (field == POS_SCALE_KEY or field.endswith(POS_SUFFIX)):
+            continue
+        consumed.append(field)
+        entry, bad, axis = _geometry_point(field, raw, src_row, axes)
+        if bad:
+            rejected = True
+        if entry is None:
+            continue
+        if axis and entry.get("value") is not None and axis not in used_axes:
+            domain = (axes or {}).get(axis) or (axes or {}).get(field)
+            if domain is not None:
+                used_axes[axis] = domain
+        points[field] = entry
+    if not points:
+        return None, rejected, consumed
+    geometry: dict[str, Any] = {
+        "version": GEOMETRY_VERSION,
+        "scale": GEOMETRY_SCALE,
+        "calibrated": bool(used_axes),
+        "points": points,
+    }
+    if used_axes:
+        geometry["axes"] = used_axes
+    return geometry, rejected, consumed
+
+
+def apply_coverage_contract(src: dict[str, Any],
+                            row: dict[str, Any],
+                            *,
+                            extra_codes: Iterable[str] = ()) -> None:
+    """Write the optional coverage fields onto a normalized row.
+
+    Tolerant of every shape the model emits (list / comma string / dict) and
+    silent when it emitted nothing at all, so legacy results keep their exact
+    old key set.  A ``not_drawn`` claim that comes with a readable value is a
+    contradiction the merge layer already resolves in favour of "drawn" — so
+    the parser does too, and flags it instead of storing both.
+    """
+    if not isinstance(src, dict) or not isinstance(row, dict):
+        return
+    kind = normalize_response_kind(src.get("response_kind"))
+    codes = normalize_codes(src.get("reason_codes") or src.get("reason_code"))
+    for code in extra_codes:
+        slug = normalize_codes([code])[0] if normalize_codes([code]) else None
+        if slug and slug not in codes:
+            codes.append(slug)
+    if kind == RESPONSE_NOT_DRAWN and has_value(row):
+        # "not drawn" plus a value = it WAS drawn (or the value is a real 0,
+        # which is an answer, not an absence). extracted wins; flag the lie.
+        kind = RESPONSE_EXTRACTED
+        _add_row_flag(row, "response_kind_conflict")
+    if kind:
+        row["response_kind"] = kind
+    if codes:
+        row["reason_codes"] = codes
+
+
+def attach_row_contract(src: dict[str, Any],
+                        row: dict[str, Any],
+                        *,
+                        axes: dict[str, dict[str, Any]] | None = None,
+                        ) -> tuple[str, ...]:
+    """One call site per row normalizer: geometry + coverage, additively.
+
+    Folds every ``*pos_0_999`` field of ``src`` into ``row["geometry"]`` (only
+    when at least one position survives), writes the coverage contract, and
+    returns the extra known-key tuple the caller must hand to
+    ``_carry_extras`` so nothing is duplicated under ``_extras``.
+
+    Used by all four continuous/table modes so the contract is defined once
+    (BORROW-2026-09-20 A+B).
+    """
+    geometry, rejected, consumed = geometry_from_row(src, axes, row=row)
+    if geometry is not None:
+        row["geometry"] = geometry
+    apply_coverage_contract(
+        src, row, extra_codes=[LOW_CONFIDENCE_CODE] if rejected else ())
+    return tuple(consumed)
+
+
 def _normalize_species_into(sp: dict[str, Any],
-                            target: list[dict[str, Any]]) -> None:
+                            target: list[dict[str, Any]],
+                            *,
+                            axes: dict[str, dict[str, Any]] | None = None,
+                            ) -> None:
     """Build a species_ranges row from a raw dict and append it."""
     def s(v):
         return "" if v is None else str(v)
@@ -1028,7 +1446,9 @@ def _normalize_species_into(sp: dict[str, Any],
         # determinations; it was never written to the output row.
         "note": s(sp.get("note", "")),
     }
-    _carry_extras(sp, _KNOWN_SPECIES_KEYS, row)
+    # BORROW-2026-09-20 (A+B): geometry + coverage contract, additively.
+    consumed = attach_row_contract(sp, row, axes=axes)
+    _carry_extras(sp, _KNOWN_SPECIES_KEYS + _CONTRACT_SOURCE_KEYS + consumed, row)
     # P0-4: defensive — if species name looks like a zone, flag & strip.
     sp_name = row["species"]
     if sp_name and _IRON_RULE_ZONE_RE.search(sp_name):
@@ -1116,6 +1536,11 @@ def normalize_result(parsed):
     }
     root_warnings = []
 
+    # BORROW-2026-09-20 (B): one figure-level axis calibration per result. The
+    # rows' *pos_0_999 reads are converted against it; absent it they stay raw
+    # evidence. Read once here so every normalizer shares the same domains.
+    axes = axis_domains_from(parsed)
+
     # MEDIUM fix (truncated rescue): if the JSON parser rescued a partial
     # / inner object that does not match any of the documented range-chart
     # root keys, surface a warning so the operator is not silently given
@@ -1148,7 +1573,7 @@ def normalize_result(parsed):
                 if key == "sections":
                     _normalize_section_into(item, out["sections"])
                 elif key == "species_ranges":
-                    _normalize_species_into(item, out["species_ranges"])
+                    _normalize_species_into(item, out["species_ranges"], axes=axes)
                 elif key == "biozones":
                     _normalize_biozone_into(item, out["biozones"])
                 else:
@@ -1189,7 +1614,7 @@ def normalize_result(parsed):
                 if kind == "sections":
                     _normalize_section_into(inner2, out["sections"])
                 elif kind == "species_ranges":
-                    _normalize_species_into(inner2, out["species_ranges"])
+                    _normalize_species_into(inner2, out["species_ranges"], axes=axes)
                 elif kind == "biozones":
                     _normalize_biozone_into(inner2, out["biozones"])
                 # After normalization, attach wrapper_key to the LAST
@@ -1216,7 +1641,7 @@ def normalize_result(parsed):
                             if kind == "sections":
                                 _normalize_section_into(row, out["sections"])
                             elif kind == "species_ranges":
-                                _normalize_species_into(row, out["species_ranges"])
+                                _normalize_species_into(row, out["species_ranges"], axes=axes)
                             elif kind == "biozones":
                                 _normalize_biozone_into(row, out["biozones"])
                             if "string_row_coerced" not in root_warnings:
@@ -1225,7 +1650,7 @@ def normalize_result(parsed):
                 if kind == "sections":
                     _normalize_section_into(item, out["sections"])
                 elif kind == "species_ranges":
-                    _normalize_species_into(item, out["species_ranges"])
+                    _normalize_species_into(item, out["species_ranges"], axes=axes)
                 elif kind == "biozones":
                     _normalize_biozone_into(item, out["biozones"])
 
@@ -1260,6 +1685,11 @@ def normalize_result(parsed):
     except (TypeError, ValueError):
         conf = 0.0
     out["confidence"] = max(0.0, min(1.0, conf))
+    # BORROW-2026-09-20 (B): hoist the optional calibration to a root key so
+    # the geometry sidecars' numbers are re-derivable downstream. Absent when
+    # the model emitted none — legacy results keep their exact old key set.
+    if axes:
+        out["axis_calibration"] = axes
     # LOW fix: drop _array_root (and its _note companion) from top-level
     # extras - the per-item rows are already distributed, so the raw
     # payload would be a duplicate.
@@ -1918,7 +2348,9 @@ _MODE_DISPATCH = {
 }
 
 
-_KNOWN_ABUNDANCE_ROOT_KEYS = ("sites", "abundances", "zones", "confidence")
+_KNOWN_ABUNDANCE_ROOT_KEYS = ("sites", "abundances", "zones", "confidence",
+                              # BORROW-2026-09-20 (B)
+                              "axis_calibration")
 _KNOWN_SITE_KEYS = ("name", "location", "age_range", "depth_unit")
 _KNOWN_ABUNDANCE_KEYS = (
     "taxon", "site", "level", "depth", "abundance", "abundance_unit",
@@ -1966,6 +2398,9 @@ def normalize_abundance_result(parsed: dict[str, Any]) -> dict[str, Any]:
         "zones": [],
         "confidence": 0.0,
     }
+    # BORROW-2026-09-20 (B): optional figure-level calibration for the
+    # continuous axis (depth / abundance value) of the diagram.
+    axes = axis_domains_from(parsed)
     # REVIEW-2026-09-10: _iter_rows tolerates a dict-shaped field
     # ({"sites": {"Suigetsu": {...}}}), which previously produced [] and
     # silently discarded every record for this mode.
@@ -1987,7 +2422,9 @@ def normalize_abundance_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "abundance": s(ab.get("abundance")),
             "abundance_unit": s(ab.get("abundance_unit")),
         }
-        _carry_extras(ab, _KNOWN_ABUNDANCE_KEYS, row)
+        # BORROW-2026-09-20 (A+B): coverage contract + geometry sidecar.
+        consumed = attach_row_contract(ab, row, axes=axes)
+        _carry_extras(ab, _KNOWN_ABUNDANCE_KEYS + _CONTRACT_SOURCE_KEYS + consumed, row)
         out["abundances"].append(row)
     for z in _iter_rows(parsed.get("zones"), "zones", warnings):
         row = {
@@ -2002,6 +2439,9 @@ def normalize_abundance_result(parsed: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         conf = 0.0
     out["confidence"] = max(0.0, min(1.0, conf))
+    # BORROW-2026-09-20 (B): hoist the calibration; absent -> no new key.
+    if axes:
+        out["axis_calibration"] = axes
     top_extras = _pop_array_root_extras(
         {k: v for k, v in parsed.items() if k not in _KNOWN_ABUNDANCE_ROOT_KEYS})
     if top_extras:
@@ -2567,7 +3007,10 @@ def extract_phylogenetic_tree(
 # NEW CHART TYPES: Chemical Stratigraphy
 # ============================================================================
 
-_KNOWN_CHEMICAL_STRAT_ROOT_KEYS = ("metadata", "data_points", "events", "intervals", "confidence")
+_KNOWN_CHEMICAL_STRAT_ROOT_KEYS = ("metadata", "data_points", "events", "intervals",
+                                   "confidence",
+                                   # BORROW-2026-09-20 (B)
+                                   "axis_calibration")
 _KNOWN_CHEMICAL_STRAT_DATA_POINT_KEYS = (
     "sample_id", "depth_m", "age_ma", "stage", "values", "lithology", "fossil_horizon", "note"
 )
@@ -2613,6 +3056,9 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
     # array emission (the model replying ``[{...}, {...}]`` to an object
     # contract) into {"_array_root": [...]}, and the whole payload was thrown
     # away below because parsed.get("data_points") was empty.
+    # BORROW-2026-09-20 (B): depth/age are a continuous axis here, so read the
+    # optional calibration once for all rows.
+    _chem_axes = axis_domains_from(parsed)
     _unwrap_array_root_into(parsed, out, (
         ("data_points", ("sample_id", "depth_m"), out["data_points"]),
         ("events", ("type", "depth_m"), out["events"]),
@@ -2663,7 +3109,10 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
             "fossil_horizon": s(pt.get("fossil_horizon")),
             "note": s(pt.get("note")),
         }
-        _carry_extras(pt, _KNOWN_CHEMICAL_STRAT_DATA_POINT_KEYS, row)
+        _carry_extras(pt,
+                      _KNOWN_CHEMICAL_STRAT_DATA_POINT_KEYS
+                      + _CONTRACT_SOURCE_KEYS
+                      + attach_row_contract(pt, row, axes=_chem_axes), row)
         if values_raw and not values:
             # Nothing could be lifted out of a non-dict `values`. Keep the raw
             # payload on the row so the measurements are not silently lost.
@@ -2690,7 +3139,10 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
             "magnitude": s(ev.get("magnitude")),
             "description": s(ev.get("description")),
         }
-        _carry_extras(ev, _KNOWN_CHEMICAL_STRAT_EVENT_KEYS, row)
+        _carry_extras(ev,
+                      _KNOWN_CHEMICAL_STRAT_EVENT_KEYS
+                      + _CONTRACT_SOURCE_KEYS
+                      + attach_row_contract(ev, row, axes=_chem_axes), row)
         out["events"].append(row)
 
     # Normalize intervals
@@ -2705,7 +3157,10 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
             "characteristic_values": s(iv.get("characteristic_values")),
             "lithology": s(iv.get("lithology")),
         }
-        _carry_extras(iv, _KNOWN_CHEMICAL_STRAT_INTERVAL_KEYS, row)
+        _carry_extras(iv,
+                      _KNOWN_CHEMICAL_STRAT_INTERVAL_KEYS
+                      + _CONTRACT_SOURCE_KEYS
+                      + attach_row_contract(iv, row, axes=_chem_axes), row)
         out["intervals"].append(row)
 
     try:
@@ -2713,6 +3168,9 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
     except (TypeError, ValueError):
         conf = 0.0
     out["confidence"] = max(0.0, min(1.0, conf))
+    # BORROW-2026-09-20 (B): hoist the calibration; absent -> no new key.
+    if _chem_axes:
+        out["axis_calibration"] = _chem_axes
 
     extras_src = _pop_array_root_extras(
         {k: v for k, v in parsed.items()
@@ -3113,7 +3571,9 @@ def extract_paleomap(
 # ============================================================================
 
 _KNOWN_SCATTER_PLOT_ROOT_KEYS = (
-    "metadata", "groups", "points", "outliers", "statistics", "confidence"
+    "metadata", "groups", "points", "outliers", "statistics", "confidence",
+    # BORROW-2026-09-20 (B)
+    "axis_calibration",
 )
 
 # Sprint B (REVIEW-2026-09-04): per-row known keys for the H8 ``_carry_extras``
@@ -3154,6 +3614,8 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
     # Normalize metadata
     # REVIEW-2026-09-10: repairs to surface on the result.
     scatter_warnings: list[str] = []
+    # BORROW-2026-09-20 (B): a scatter plot is two continuous axes (x, y).
+    _scatter_axes = axis_domains_from(parsed)
 
     meta = parsed.get("metadata") or {}
     if isinstance(meta, dict):
@@ -3198,7 +3660,9 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "label": s(pt.get("label")),
             "note": s(pt.get("note")),
         }
-        _carry_extras(pt, _KNOWN_SCATTER_POINT_KEYS, row)
+        _carry_extras(pt,
+                      _KNOWN_SCATTER_POINT_KEYS + _CONTRACT_SOURCE_KEYS
+                      + attach_row_contract(pt, row, axes=_scatter_axes), row)
         out["points"].append(row)
 
     # Normalize outliers
@@ -3209,7 +3673,9 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "group": s(ot.get("group")),
             "reason": s(ot.get("reason")),
         }
-        _carry_extras(ot, _KNOWN_SCATTER_OUTLIER_KEYS, row)
+        _carry_extras(ot,
+                      _KNOWN_SCATTER_OUTLIER_KEYS + _CONTRACT_SOURCE_KEYS
+                      + attach_row_contract(ot, row, axes=_scatter_axes), row)
         out["outliers"].append(row)
 
     # Normalize statistics
@@ -3227,6 +3693,9 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         conf = 0.0
     out["confidence"] = max(0.0, min(1.0, conf))
+    # BORROW-2026-09-20 (B): hoist the calibration; absent -> no new key.
+    if _scatter_axes:
+        out["axis_calibration"] = _scatter_axes
 
     extras_src = _pop_array_root_extras(
         {k: v for k, v in parsed.items() if k not in _KNOWN_SCATTER_PLOT_ROOT_KEYS})

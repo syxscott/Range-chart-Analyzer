@@ -1,4 +1,4 @@
-"""Table configuration + CSV / TSV / JSON / XLSX export helpers.
+"""Table configuration + CSV / TSV / JSON / XLSX / WebPlotDigitizer export helpers.
 
 The table configs are the single source of truth for both the GUI tables
 and the export columns, so exported columns always match what is shown.
@@ -1752,3 +1752,711 @@ def to_newick_file(tree: dict[str, Any], path: str) -> None:
     text = to_newick(tree)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text)
+
+
+# ---------------------------------------------------------------------------
+# WebPlotDigitizer exchange  (BORROW-2026-09-20)
+# ---------------------------------------------------------------------------
+# Why: README.md advertised a "WebPlotDigitizer-friendly export" that grep
+# showed was never implemented (0 hits outside the claim itself). WPD
+# (automeris-io/WebPlotDigitizer) is the tool users reach for to REFINE what
+# we extracted, and it accepts two things: plain two-column ``x,y`` CSV files
+# (one file per dataset, importable via "Data import"), and a dataset JSON
+# that carries the axis definition next to the point arrays. So
+# ``to_wpd`` produces exactly that:
+#
+#   (a) one ``x,y`` CSV per taxon range / per abundance curve / per zone,
+#       named so the plate and the taxon are readable in a file listing, and
+#   (b) one axis-calibration JSON — axis name / unit / min / max + the two
+#       scale-point values + the dataset manifest — so the numeric space the
+#       CSVs live in can be recreated on the WPD side.
+#
+# Honest scope: a result carries LABELS and INDICES ("Bed 23c", "260 Ma",
+# ``range_base_idx``), never image pixels — the extractor does not produce
+# geometry. The CSVs are therefore in DATA space, and the axis JSON hands the
+# user the min/max values to anchor as WPD's two scale points. Pretending we
+# ship pixel calibration is the overclaim this section replaces.
+#
+# Determinism: no clock, no randomness, no locale formatting. The browser
+# mirror ``rcaToWpd`` in js/export.js must byte-for-byte reproduce ``files``,
+# so every number goes through ``_wpd_num`` (integral floats collapse to int
+# — JSON.stringify has no ``2.0`` spelling) and every text cell through
+# ``_wpd_num_text`` (no trailing ".0", mirrors the ``_str_for_merge`` rule in
+# aggregate.py).
+# ---------------------------------------------------------------------------
+
+WPD_EXPORT_FORMAT = "rca-wpd/1"
+WPD_AXIS_JSON_FILENAME = "wpd_axes.json"
+
+# Bed subscripts (23a, 23b, …) are ORDERED but not measured. Spreading them
+# over the unit interval keeps "23a < 23b < 24" true on a numeric axis without
+# pretending the subscript is a depth. Documented in the axis JSON.
+_WPD_SUBSCRIPT_SPAN = 26.0
+
+# WPD's own default dataset palette (it renders one colour per dataset, so
+# giving each range its own colour makes the imported bundle look like the
+# original plate instead of one big red smear).
+_WPD_COLORS = (
+    "#f74646", "#109618", "#ff9900", "#3f4c6b", "#0099c6", "#990099",
+    "#dd4477", "#66aa00", "#b80000", "#f8cab6", "#005d60", "#8775dc",
+)
+
+# What "one dataset" means per mode — the ``usage`` block of the manifest has
+# to name the right thing (BORROW-2026-09-20).
+_WPD_DATASET_NOUN = {
+    "range_chart": "taxon range",
+    "abundance_diagram": "abundance curve",
+    "zonation_chart": "biozone",
+}
+
+
+def _wpd_num(value: Any) -> int | float | None:
+    """Numeric value for the exchange, or ``None`` when it is not a number.
+
+    Integral floats collapse to ``int`` so the Python and the JS engine write
+    the same JSON text (``2`` vs ``2.0`` used to be enough to break a parity
+    assertion). Non-integral floats are rounded to 6 decimals — the same text
+    ``toFixed(6)`` + trailing-zero strip produces in the browser.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f) or math.isinf(f):
+        return None
+    if f.is_integer():
+        return int(f)
+    return round(f, 6)
+
+
+_WPD_PERCENT_RE = re.compile(r"^([+]?\d+(?:\.\d+)?)\s*%\s*$")
+
+
+def _wpd_abscissa(value: Any) -> tuple[int | float | None, str]:
+    """``(number, implied_unit)`` for an abundance cell.
+
+    A percentage diagram writes ``"35%"`` in the cell while its unit column
+    says ``%`` — the SAME measurement, and WPD can only use the number. This
+    is the only coercion the exchange performs: ``"common"`` stays
+    non-numeric and is reported as an unresolved point, never guessed at.
+    """
+    text = str(value if value is not None else "").strip()
+    m = _WPD_PERCENT_RE.match(text)
+    if m:
+        return _wpd_num(m.group(1)), "%"
+    return _wpd_num(value), ""
+
+
+def _wpd_num_text(value: Any) -> str:
+    """CSV text for one numeric point — never ``2.0``, never ``nan``."""
+    n = _wpd_num(value)
+    if n is None:
+        return ""
+    if isinstance(n, int):
+        return str(n)
+    return ("%f" % n).rstrip("0").rstrip(".")
+
+
+def _wpd_bed_value(text: Any) -> float | None:
+    """Stratigraphic level of a bed label, via the SHARED bed parser.
+
+    ``rca_core/bed_parser.parse_bed`` is the one implementation the exporter,
+    the GUI invariants and eval_metrics agree on (the M-1 fix); parsing ages
+    or thicknesses here would reintroduce the "253 Ma is bed 253" bug it
+    closed, so anything it rejects we reject.
+    """
+    info = _parse_bed(text)
+    if info is None:
+        return None
+    value = float(info["bed_num"])
+    sub = str(info.get("bed_sub") or "")
+    if sub:
+        value += (ord(sub[0].lower()) - 96) / _WPD_SUBSCRIPT_SPAN
+    return value
+
+
+def _wpd_level_value(text: Any, idx: Any) -> int | float | None:
+    """Level of one range endpoint: the model's own index first, then the bed.
+
+    Both paths END in ``_wpd_num``: the manifest and the CSV text have to
+    agree on the number, and a raw ``23.038461538461547`` would print as
+    ``23.038462`` in the file while the JSON said something else.
+    """
+    n = _wpd_num(idx)
+    if n is not None:
+        return n
+    return _wpd_num(_wpd_bed_value(text))
+
+
+def _wpd_age_value(text: Any, prefer: str, *, bare_numeric: bool = False) -> int | float | None:
+    """Age (Ma) of one endpoint through the SHARED ICS resolver.
+
+    ``bare_numeric`` lets the zonation tables feed an unqualified ``251.9``
+    (a printed axis value) as well; a range-chart endpoint must NOT, because
+    a bare number there is a bed / sample identifier, not an age.
+    """
+    if bare_numeric:
+        n = _wpd_num(text)
+        if n is not None:
+            return n
+    try:
+        # Lazy: keeps exporter.py importable (and the CSV/XLSX path alive)
+        # when the standards package or its bundled ICS table is missing —
+        # same guard pattern quality.py uses.
+        from .standards.ics import ics_resolve_age_bound
+    except Exception:  # pragma: no cover - optional package fallback
+        return None
+    try:
+        _name, ma = ics_resolve_age_bound(text, prefer=prefer)
+    except Exception:  # pragma: no cover - defensive
+        return None
+    # no float() coercion: 260 Ma must serialise as 260 in BOTH engines
+    return _wpd_num(ma)
+
+
+def _wpd_slug(text: Any, fallback: str = "dataset") -> str:
+    """Filename/dataset token: letters, digits, dot, dash, underscore."""
+    s = re.sub(r"[^A-Za-z0-9._\-]+", "_", str(text or "").strip())
+    s = s.strip("._-")
+    return s or fallback
+
+
+def _rca_version() -> str:
+    """Package version stamp for the exchange header ("" when unknown).
+
+    Imported lazily: ``rca_core/__init__.py`` imports this module, so a
+    top-level ``from . import __version__`` would be a circular import.
+    """
+    try:
+        from . import __version__ as version  # type: ignore
+        return str(version)
+    except Exception:  # pragma: no cover - defensive
+        return ""
+
+
+def _wpd_axis(
+    name: str,
+    unit: str,
+    values: list[Any],
+    *,
+    orientation: str,
+    ends: tuple[str, str],
+    note: str = "",
+    n_ticks: int = 5,
+) -> dict[str, Any]:
+    """One axis descriptor: ``name`` / ``unit`` / ``min`` / ``max`` + scale points."""
+    nums = [v for v in (_wpd_num(v) for v in values) if v is not None]
+    lo = min(nums) if nums else None
+    hi = max(nums) if nums else None
+    ticks: list[Any] = []
+    if lo is not None and hi is not None:
+        if hi == lo:
+            ticks = [lo]
+        else:
+            # Identical IEEE double expression in js/export.js.
+            step = (hi - lo) / (n_ticks - 1)
+            ticks = [_wpd_num(lo + step * i) for i in range(n_ticks)]
+    axis: dict[str, Any] = {
+        "name": name,
+        "unit": unit,
+        "min": lo,
+        "max": hi,
+        "orientation": orientation,
+        "type": "linear",
+        "ticks": ticks,
+        "scale_points": [
+            {"end": ends[0], "value": lo},
+            {"end": ends[1], "value": hi},
+        ],
+    }
+    if note:
+        axis["note"] = note
+    return axis
+
+
+def _wpd_compat_axis(axis: dict[str, Any]) -> dict[str, Any]:
+    """The same axis spelled in WPD's own key names (camelCase, ``type`` int).
+
+    WPD's numeric axes are ``type: "int"`` (linear) / ``"log"`` / ``"date"``
+    and its scale points are ``{x, y}`` pixel/value pairs. Pixels are the
+    user's click in WPD, so ``scalePoints`` carries the VALUE only plus the
+    end it belongs to.
+    """
+    return {
+        "name": axis["name"],
+        "orientation": axis["orientation"],
+        "type": "int",
+        "scalePoints": [
+            {"position": sp["end"], "value": sp["value"]}
+            for sp in axis["scale_points"]
+        ],
+        "ticks": [{"value": t} for t in axis["ticks"]],
+        "unit": axis["unit"],
+    }
+
+
+def _wpd_csv_text(points: list[list[Any]]) -> str:
+    """A WPD-importable two-column ``x,y`` CSV (LF, no BOM, header ``x,y``).
+
+    Deliberately NOT ``to_csv``: that one adds a UTF-8 BOM and the OWASP
+    formula guard. WPD's parser keys on the literal first header token, and a
+    leading BOM makes it read the column name as ``\\ufeffx``; and every cell
+    here is an exporter-generated NUMBER, where a ``'`` prefix (the formula
+    guard for model-authored text) would drop the whole row as non-numeric.
+    No free text ever reaches this file, so there is nothing to inject.
+    """
+    lines = ["x,y"]
+    for x, y in points:
+        lines.append(_wpd_num_text(x) + "," + _wpd_num_text(y))
+    return "\n".join(lines) + "\n"
+
+
+def _wpd_range_chart_datasets(
+    data: dict[str, Any], y_axis: str
+) -> tuple[list[dict[str, Any]], str, list[str]]:
+    """One dataset per species range: a 2-point vertical segment.
+
+    Returns ``(rows, y_kind, warnings)`` where each row is
+    ``{taxon, panel, x, points, base_label, top_label}``. ``y_kind`` is the
+    axis actually chosen (``"level"`` / ``"age"``) so the caller can label it.
+    """
+    species_rows = [
+        r for r in (data.get("species_ranges") or [])
+        if isinstance(r, dict) and str(r.get("species") or "").strip()
+    ]
+    prepared: list[tuple[dict[str, Any], int | float | None, int | float | None,
+                         int | float | None, int | float | None]] = []
+    n_level = n_age = 0
+    for row in species_rows:
+        lb = _wpd_level_value(row.get("range_base"), row.get("range_base_idx"))
+        lt = _wpd_level_value(row.get("range_top"), row.get("range_top_idx"))
+        ab = _wpd_age_value(row.get("range_base"), "older")
+        at = _wpd_age_value(row.get("range_top"), "younger")
+        if lb is not None or lt is not None:
+            n_level += 1
+        if ab is not None or at is not None:
+            n_age += 1
+        prepared.append((row, lb, lt, ab, at))
+
+    kind = str(y_axis or "auto").strip().lower()
+    if kind not in ("auto", "level", "bed", "age"):
+        kind = "auto"
+    # Bed / sample labels are the overwhelmingly common annotation, so
+    # "auto" only switches to Ma when MORE rows resolve as ages than as
+    # levels — a tie stays on levels.
+    use_age = kind == "age" or (kind == "auto" and n_age > n_level)
+    y_kind = "age" if use_age else "level"
+
+    warnings: list[str] = []
+    slots: dict[str, int] = {}
+    out: list[dict[str, Any]] = []
+    skipped = 0
+    for row, lb, lt, ab, at in prepared:
+        panel = str(row.get("section") or "").strip()
+        base_y, top_y = (ab, at) if use_age else (lb, lt)
+        if base_y is None and top_y is None:
+            skipped += 1
+            continue
+        slots[panel] = slots.get(panel, 0) + 1
+        x = slots[panel]
+        points: list[list[Any]] = []
+        if base_y is not None:
+            points.append([x, base_y])
+        if top_y is not None and top_y != base_y:
+            points.append([x, top_y])
+        points.sort(key=lambda p: p[1])
+        out.append({
+            "taxon": str(row.get("species") or "").strip(),
+            "panel": panel,
+            "x": x,
+            "points": points,
+            "base_label": str(row.get("range_base") or ""),
+            "top_label": str(row.get("range_top") or ""),
+        })
+    if skipped:
+        warnings.append(
+            f"range_endpoints_unresolved:{skipped} (row(s) carry no numeric "
+            f"{y_kind} level on either endpoint)"
+        )
+    if not out and not warnings:
+        warnings.append("no_species_ranges")
+    return out, y_kind, warnings
+
+
+def _wpd_abundance_datasets(data: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    """One dataset per abundance CURVE (taxon x site), x = value, y = level.
+
+    An abundance diagram is the mode WPD was built for: depth on the vertical
+    axis and one curve per taxon. Each sampled level becomes a point.
+    """
+    rows = [
+        r for r in (data.get("abundances") or [])
+        if isinstance(r, dict) and str(r.get("taxon") or "").strip()
+    ]
+    depth_units = {
+        str(s.get("name") or "").strip(): str(s.get("depth_unit") or "").strip()
+        for s in (data.get("sites") or []) if isinstance(s, dict)
+    }
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str]] = []
+    skipped = 0
+    for row in rows:
+        taxon = str(row.get("taxon") or "").strip()
+        site = str(row.get("site") or "").strip()
+        depth = _wpd_num(row.get("depth"))
+        level = _wpd_level_value(row.get("level"), row.get("level_idx"))
+        # A numeric depth IS the vertical coordinate of the diagram; the bed
+        # label / level index is the fallback when the diagram is indexed.
+        # No float() coercion — the value is already ``_wpd_num``-normalised
+        # and ``2.0`` vs ``2`` is a JSON parity difference, not a rounding one.
+        if depth is not None:
+            y, level_kind = depth, "depth"
+        elif level is not None:
+            y, level_kind = level, "level"
+        else:
+            y, level_kind = None, ""
+        x, implied_unit = _wpd_abscissa(row.get("abundance"))
+        if x is None or y is None:
+            # "common"/"present" style categorical abundances and bed-only
+            # levels without an index are not point data; say so, don't
+            # invent a number.
+            skipped += 1
+            continue
+        key = (taxon, site)
+        if key not in grouped:
+            grouped[key] = {
+                "taxon": taxon, "panel": site, "points": [],
+                "unit": str(row.get("abundance_unit") or "").strip() or implied_unit,
+                "level_kind": level_kind,
+            }
+            order.append(key)
+        grouped[key]["points"].append([x, y])
+    warnings: list[str] = []
+    if skipped:
+        warnings.append(
+            f"abundance_points_unresolved:{skipped} (non-numeric abundance or "
+            "no sampled level on that row)")
+    out: list[dict[str, Any]] = []
+    for key in order:
+        g = grouped[key]
+        g["points"].sort(key=lambda p: (p[1], p[0]))
+        # A site's ``depth_unit`` names the axis ONLY for a depth coordinate;
+        # a bed index has no unit, and stamping "m" on it would mislabel the
+        # vertical axis of every other curve sharing the plot.
+        if g["level_kind"] == "depth":
+            g["level_unit"] = depth_units.get(key[1], "") or "m"
+        else:
+            g["level_unit"] = "index"
+        g["base_label"] = ""
+        g["top_label"] = ""
+        out.append(g)
+    level_units = sorted({g["level_unit"] for g in out if g["level_unit"]})
+    if len(level_units) > 1:
+        # Depths in metres and levels in bed indices on one plate: the curves
+        # cannot share an axis, so the bundle says so instead of hiding it.
+        warnings.append("vertical_units_mixed:" + "/".join(level_units))
+    if not out and not warnings:
+        warnings.append("no_abundances")
+    return out, warnings
+
+
+def _wpd_zonation_datasets(
+    data: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """One dataset per biozone: base_age / top_age as a vertical segment."""
+    zones = [
+        z for z in (data.get("zones") or [])
+        if isinstance(z, dict) and str(z.get("name") or "").strip()
+    ]
+    slots: dict[str, int] = {}
+    out: list[dict[str, Any]] = []
+    skipped = 0
+    for z in zones:
+        scheme = str(z.get("zonation") or "").strip()
+        base = _wpd_age_value(z.get("base_age"), "older", bare_numeric=True)
+        top = _wpd_age_value(z.get("top_age"), "younger", bare_numeric=True)
+        if base is None and top is None:
+            skipped += 1
+            continue
+        slots[scheme] = slots.get(scheme, 0) + 1
+        x = slots[scheme]
+        points: list[list[Any]] = []
+        if base is not None:
+            points.append([x, base])
+        if top is not None and top != base:
+            points.append([x, top])
+        points.sort(key=lambda p: p[1])
+        out.append({
+            "taxon": str(z.get("name") or "").strip(),
+            "panel": scheme,
+            "x": x,
+            "points": points,
+            "base_label": str(z.get("base_age") or ""),
+            "top_label": str(z.get("top_age") or ""),
+        })
+    warnings: list[str] = []
+    if skipped:
+        warnings.append(f"zone_ages_unresolved:{skipped}")
+    if not out and not warnings:
+        warnings.append("no_zones")
+    return out, warnings
+
+
+def to_wpd(
+    data: dict[str, Any],
+    *,
+    source_file: str | None = None,
+    output_dir: str | None = None,
+    y_axis: str = "auto",
+    exported_at: str | None = None,
+) -> dict[str, Any]:
+    """Build the WebPlotDigitizer bundle for one extraction result.
+
+    Parameters
+    ----------
+    data:
+        A normalized result dict (any mode with tabular data; the shape is
+        detected the same way ``get_configs_for_result`` detects it).
+    source_file:
+        Original image name — its stem becomes the PLATE token of every file
+        name, which is what makes a folder of WPD CSVs traceable back to a
+        figure without opening it.
+    output_dir:
+        When set, every file in ``files`` is written under it (UTF-8, LF
+        preserved) and the absolute paths land in ``written``.
+    y_axis:
+        ``"auto"`` (default) / ``"level"`` (bed & sample indices) / ``"age"``
+        (Ma, ICS-resolved). Only meaningful for range charts.
+    exported_at:
+        Timestamp string supplied by the caller. Left out of the function on
+        purpose: an internal ``datetime.now()`` would make the bundle — and
+        therefore the JS parity test — non-deterministic.
+
+    Returns
+    -------
+    dict with ``format``, ``mode``, ``plate``, ``axes`` (``x`` / ``y``
+    descriptors), ``datasets`` (the manifest), ``files``
+    ``{relative name: text}`` (CSVs + :data:`WPD_AXIS_JSON_FILENAME`),
+    ``json`` (that manifest as text) and ``warnings``.
+
+    Raises
+    ------
+    OSError: only when ``output_dir`` is given and a file cannot be written.
+    """
+    import json
+    from pathlib import Path
+
+    data = data if isinstance(data, dict) else {}
+
+    # ---- which geometry does this result carry? -------------------------
+    if _looks_abundance(data):
+        mode = "abundance_diagram"
+    elif _looks_zonation_chart(data):
+        mode = "zonation_chart"
+    elif data.get("species_ranges"):
+        mode = "range_chart"
+    elif _looks_columnar(data):
+        mode = "columnar_section"
+    else:
+        mode = "unsupported"
+
+    warnings: list[str] = []
+    plate = _wpd_slug(Path(str(source_file or "")).stem if source_file else "", "plate")
+    y_kind = ""
+    entries: list[dict[str, Any]] = []
+
+    if mode == "range_chart":
+        rows, y_kind, w = _wpd_range_chart_datasets(data, y_axis)
+        warnings.extend(w)
+        if y_kind == "age":
+            y_axis_desc = _wpd_axis(
+                "age", "Ma", [p[1] for r in rows for p in r["points"]],
+                orientation="inverted",
+                ends=("top of the plate (youngest)", "base of the plate (oldest)"),
+                note="Older is downward; anchor the two scale points on a "
+                     "formation boundary whose age the plate prints.",
+            )
+        else:
+            y_axis_desc = _wpd_axis(
+                "stratigraphic level", "bed/sample index",
+                [p[1] for r in rows for p in r["points"]],
+                orientation="inverted",
+                ends=("top of the plate (youngest bed)", "base of the plate (oldest bed)"),
+                note="Bed subscripts (23a, 23b) are spread over the unit "
+                     "interval as bed_num + letter/26 so their ORDER survives; "
+                     "the fraction is not a measured depth.",
+            )
+        x_axis_desc = _wpd_axis(
+            "taxon slot", "index", [r["x"] for r in rows],
+            orientation="normal",
+            ends=("left of the plate", "right of the plate"),
+            note="Ordinate of each range WITHIN its own section panel — the "
+                 "taxon names are in the manifest and in the file names.",
+        )
+    elif mode == "abundance_diagram":
+        rows, w = _wpd_abundance_datasets(data)
+        warnings.extend(w)
+        units = [r["unit"] for r in rows if r.get("unit")]
+        level_units = sorted({r["level_unit"] for r in rows if r.get("level_unit")})
+        mixed_levels = len(level_units) > 1
+        y_kind = "abundance"
+        # The CSV columns decide which descriptor is which axis: an abundance
+        # point is written [abundance, level], so ABUNDANCE is x (even though
+        # the diagram draws it horizontally) and the sampled level is y.
+        x_axis_desc = _wpd_axis(
+            "abundance", units[0] if units else "",
+            [p[0] for r in rows for p in r["points"]],
+            orientation="normal",
+            ends=("left of the plot", "right of the plot"),
+        )
+        y_axis_desc = _wpd_axis(
+            "sampled level",
+            level_units[0] if not mixed_levels else "mixed",
+            [p[1] for r in rows for p in r["points"]],
+            orientation="inverted",
+            ends=("top of the diagram (shallowest)", "base of the diagram (deepest)"),
+            note=("Curves on this plate mix %s on one vertical axis; the "
+                  "vertical_units_mixed warning lists them. Anchor the axis on "
+                  "the subset you intend to digitise." % "/".join(level_units)
+                  if mixed_levels else ""),
+        )
+    elif mode == "zonation_chart":
+        rows, w = _wpd_zonation_datasets(data)
+        warnings.extend(w)
+        y_kind = "age"
+        y_axis_desc = _wpd_axis(
+            "age", "Ma", [p[1] for r in rows for p in r["points"]],
+            orientation="inverted",
+            ends=("top of the chart (youngest)", "base of the chart (oldest)"),
+        )
+        x_axis_desc = _wpd_axis(
+            "zone slot", "index", [r["x"] for r in rows],
+            orientation="normal",
+            ends=("left of the chart", "right of the chart"),
+            note="Zone index WITHIN its own zonation scheme; the vertical "
+                 "axis is the zone's age span.",
+        )
+    else:
+        rows = []
+        y_axis_desc = _wpd_axis("y", "", [], orientation="normal", ends=("min", "max"))
+        x_axis_desc = _wpd_axis("x", "", [], orientation="normal", ends=("min", "max"))
+        if mode == "columnar_section":
+            warnings.append(
+                "mode_unsupported:columnar_section (a columnar section carries "
+                "no per-taxon point geometry; use to_csv/to_xlsx for its "
+                "lithology, age-unit and sample tables)")
+        else:
+            warnings.append("mode_unsupported (no point geometry in this result)")
+
+    # ---- file names: plate + panel + taxon, collision-free --------------
+    files: dict[str, str] = {}
+    used: set[str] = set()
+    for row in rows:
+        base = "wpd_%s__%s__%s" % (
+            plate,
+            _wpd_slug(row.get("panel") or "", "nopanel"),
+            _wpd_slug(row.get("taxon") or "", "taxon"),
+        )
+        stem, n = base, 1
+        while True:
+            name = stem if n == 1 else "%s_%d" % (stem, n)
+            candidate = name + ".csv"
+            if candidate not in used:
+                break
+            n += 1
+        used.add(candidate)
+        files[candidate] = _wpd_csv_text(row["points"])
+        entries.append({
+            "name": "%s (%s)" % (row["taxon"], row["panel"]) if row["panel"] else row["taxon"],
+            "taxon": row["taxon"],
+            "panel": row.get("panel") or "",
+            "plate": plate,
+            "file": candidate,
+            "x": [p[0] for p in row["points"]],
+            "y": [p[1] for p in row["points"]],
+            "n_points": len(row["points"]),
+            "base_label": row.get("base_label") or "",
+            "top_label": row.get("top_label") or "",
+            "abundance_unit": row.get("unit") or "",
+        })
+
+    axes = {"x": x_axis_desc, "y": y_axis_desc}
+    # What one dataset IS, per mode: instructions that name the wrong unit
+    # ("one dataset per taxon range" on a pollen diagram) teach the user a
+    # falsehood, so the wording follows the detected mode.
+    noun = _WPD_DATASET_NOUN.get(mode, "dataset")
+    document: dict[str, Any] = {
+        "format": WPD_EXPORT_FORMAT,
+        "tool": "Range Chart Analyzer",
+        "tool_version": _rca_version(),
+        "exported_at": exported_at,
+        "source_image": source_file or "",
+        "plate": plate,
+        "mode": mode,
+        "y_axis": y_kind,
+        "axes": axes,
+        # How to use it, in the file itself: a bundle without its own
+        # instructions becomes a folder of meaningless CSVs.
+        "usage": [
+            "In WebPlotDigitizer: Add Image, then define the axes; set the two "
+            "scale points on each axis to the min/max values in axes.x / axes.y.",
+            "Data -> Import Data (CSV) and pick the files listed in datasets: "
+            "each is a plain two-column x,y file, one dataset per %s." % noun,
+            "The pixel calibration (axesbox / scale point positions) is NOT in "
+            "here: an extraction result holds labels and indices, not image "
+            "geometry, so those two clicks stay with the user.",
+        ],
+        "datasets": entries,
+        "n_datasets": len(entries),
+        "files": [WPD_AXIS_JSON_FILENAME] + sorted(files),
+        "warnings": warnings,
+        # WPD's own exchange shape, so the file is at least glance-compatible
+        # with what WPD writes on "Export data -> JSON".
+        "wpd": {
+            "tool": "WebPlotDigitizer",
+            "axes": {
+                "xaxis": _wpd_compat_axis(x_axis_desc),
+                "yaxis": _wpd_compat_axis(y_axis_desc),
+            },
+            "datasets": [
+                {
+                    "name": e["name"],
+                    "color": _WPD_COLORS[i % len(_WPD_COLORS)],
+                    "data": {"1": {"x": e["x"], "y": e["y"]}},
+                }
+                for i, e in enumerate(entries)
+            ],
+        },
+    }
+    text = json.dumps(_strip_nonfinite(document), ensure_ascii=False, indent=2,
+                      allow_nan=False)
+    files[WPD_AXIS_JSON_FILENAME] = text + "\n"
+
+    written: list[str] = []
+    if output_dir:
+        root = Path(str(output_dir))
+        root.mkdir(parents=True, exist_ok=True)
+        for name, body in files.items():
+            path = root / name
+            # newline="" keeps the LF terminators that _wpd_csv_text chose;
+            # on Windows the default text mode would rewrite them to CRLF and
+            # the file would no longer match the ``files`` dict.
+            with open(path, "w", encoding="utf-8", newline="") as fh:
+                fh.write(body)
+            written.append(str(path))
+
+    return {
+        "format": WPD_EXPORT_FORMAT,
+        "mode": mode,
+        "plate": plate,
+        "y_axis": y_kind,
+        "axes": axes,
+        "datasets": entries,
+        "n_datasets": len(entries),
+        "files": files,
+        "json": text,
+        "warnings": warnings,
+        "written": written,
+    }

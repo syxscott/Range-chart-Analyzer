@@ -19,6 +19,11 @@ from dataclasses import dataclass, field
 from functools import cmp_to_key
 from typing import Any, Optional
 
+# BORROW-2026-09-20 (A): the coverage contract has its own merge semantics —
+# codes union, response kind resolves by precedence — so the merge layer reads
+# them from the single source of truth instead of reimplementing them.
+from .reason_codes import merge_reason_codes, merge_response_kinds
+
 
 # ICZN open-nomenclature markers (P0-6).
 # Long-pattern forms must appear before shorter sub-patterns (e.g. ex gr.
@@ -277,6 +282,46 @@ def _add_row_warning(row: dict, flag: str) -> None:
     if flag not in flags:
         flags.append(flag)
     row["_warning"] = flags[0] if len(flags) == 1 else flags
+
+
+def _merge_contract_field(key: str, values: list, target: dict) -> bool:
+    """Merge one coverage/geometry field across runs into ``target``.
+
+    Returns True when ``key`` belongs to the BORROW-2026-09-20 contract and was
+    handled here — the callers then skip their generic field merger, which
+    would otherwise drop a list of strings (``_NO_MERGE``) or stringify the
+    integers inside ``geometry``.
+
+    Contract semantics, shared by every merge path so the two can't drift:
+
+    * ``reason_codes`` — UNION, in first-seen order. Two runs each spotting a
+      different defect means both defects are true.
+    * ``response_kind`` — precedence vote, extracted > uncertain > not_drawn:
+      one run that saw the range drawn outranks a run that called it a dash.
+      Divergence is recorded as a warning plus the raw ballot, never hidden.
+    * ``geometry`` — first well-formed block wins, deep-copied. Averaging two
+      runs' pixel reads would invent a position neither run observed.
+    """
+    if key == "reason_codes":
+        union = merge_reason_codes(values)
+        if union:
+            target[key] = union
+        return True
+    if key == "response_kind":
+        kind, divergent = merge_response_kinds(values)
+        if kind:
+            target[key] = kind
+        if divergent:
+            _add_row_warning(target, "response_kind_divergent")
+            target["response_kind_votes"] = [v for v in values if v]
+        return True
+    if key == "geometry":
+        block = next((v for v in values
+                      if isinstance(v, dict) and v.get("points")), None)
+        if block is not None:
+            target[key] = copy.deepcopy(block)
+        return True
+    return False
 
 
 def _merge_confidence(values):
@@ -738,6 +783,10 @@ def _merge_primary_list(runs, schema, n):
                 fields_to_merge.setdefault(k, []).append(v)
         for k, vals in fields_to_merge.items():
             per_run_values = [gi.get(k) for gi in group]
+            # BORROW-2026-09-20 (A+B): coverage contract + geometry sidecar are
+            # merged by their own rules, never by the generic field merger.
+            if _merge_contract_field(k, per_run_values, aggr):
+                continue
             if schema.primary_list_key == "species_ranges" and k in {
                 "range_top_idx", "range_base_idx",
             }:
@@ -957,6 +1006,10 @@ def _merge_named_lists(runs, schema):
                     fields_to_merge.setdefault(k, []).append(v)
             for k in fields_to_merge:
                 per_run_values = [gi.get(k) for gi in group]
+                # BORROW-2026-09-20 (A+B): same contract rules as the primary
+                # path, so a biozone / site / point row merges identically.
+                if _merge_contract_field(k, per_run_values, rep):
+                    continue
                 merged_v = _merge_field_across_runs(per_run_values)
                 if merged_v is _NO_MERGE:
                     continue

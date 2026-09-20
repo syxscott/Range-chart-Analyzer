@@ -90,7 +90,9 @@ def test_verify_names_dedupes_and_keys_by_original():
 
     v = verify_names(["Clarkina yini", "Clarkina  yini."], fetch=fetch)
     assert set(v) == {"Clarkina yini", "Clarkina  yini."}
-    assert len(calls) == 1  # same cleaned name queried once
+    # BORROW-2026-09-20: same cleaned name queried once, and one query is
+    # now parser pre-resolution + backbone match = 2 round-trips.
+    assert len(calls) == 2
 
 
 # ---------------------------------------------------------------------------

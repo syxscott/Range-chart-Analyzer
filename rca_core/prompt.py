@@ -7,6 +7,25 @@ names.
 
 from __future__ import annotations
 
+from typing import Sequence, Tuple
+
+# BORROW-2026-09-20 (A): the two contract clauses below are GENERATED from the
+# single sources of truth, never transcribed:
+#   * the three-state answer words and the reason-code vocabulary come from
+#     rca_core/reason_codes.py (the same module the parser imports), so a
+#     prompt can not advertise a code the ledger would drop;
+#   * the ``*pos_0_999`` field names are passed in by each prompt below and are
+#     asserted in tests against the parse side
+#     (``extractor.POS_SCALE_KEY`` / ``POS_SUFFIX`` /
+#     ``_GEOMETRY_VERTICAL_FIELDS`` / ``_GEOMETRY_AXIS_BY_FIELD``).
+# Importing reason_codes here is cycle-free: it imports nothing from rca_core.
+from .reason_codes import (
+    REASON_CODES,
+    RESPONSE_EXTRACTED,
+    RESPONSE_NOT_DRAWN,
+    RESPONSE_UNCERTAIN,
+)
+
 # PROMPT_VERSION: dict of per-mode version strings.
 # The cache layer (rca_core/cache.py) includes this in its cache key so that
 # old cached results produced by a previous prompt version are not served
@@ -17,16 +36,26 @@ from __future__ import annotations
 # The old key "abundance" never matched those callers, so the version always
 # fell back to "v3" and a prompt upgrade of the abundance mode never
 # invalidated the cache. "abundance" is kept as a legacy alias.
+#
+# BORROW-2026-09-20 (A+B): the four modes that now carry the coverage
+# contract (``response_kind`` / ``reason_codes``) and the 0-999 axis positions
+# were bumped, because a cached pre-contract answer can never be re-used as if
+# the model had accounted for its negative answers: range_chart v4->v5,
+# abundance_diagram v3->v4 (legacy alias "abundance" with it),
+# chemical_stratigraphy v1->v2, scatter_plot v1->v2. The modes without a
+# parser-side contract consumer keep their versions.
+# NOTE: js/prompt.js still carries the old versions and the old prompt text -
+# see the parity note at the bottom of this file.
 PROMPT_VERSION = {
-    "range_chart": "v4",
+    "range_chart": "v5",
     "columnar_section": "v3",
-    "abundance_diagram": "v3",
-    "abundance": "v3",  # legacy alias — the canonical key is above
+    "abundance_diagram": "v4",
+    "abundance": "v4",  # legacy alias — the canonical key is above
     "phylogenetic_tree": "v1",
     # NEW chart types
-    "chemical_stratigraphy": "v1",
+    "chemical_stratigraphy": "v2",
     "paleomap": "v2",
-    "scatter_plot": "v1",
+    "scatter_plot": "v2",
     "zonation_chart": "v1",
     # UI-REVIEW-2026-09-07: vision-based chart-type classification for the
     # upgraded "auto" mode (text heuristic first, vision fallback).
@@ -41,6 +70,180 @@ def prompt_version_for_mode(mode: str) -> str:
     prompt doesn't invalidate the cache for other modes.
     """
     return PROMPT_VERSION.get(mode, "v3")
+
+
+# ---------------------------------------------------------------------------
+# BORROW-2026-09-20 (A) — the three-state answer contract, and (B) the
+# PlotLift-style 0-999 normalised axis positions.
+#
+# Both clauses are GENERATED (see the import above) so the shipped prompt text
+# and rca_core/reason_codes.py can never disagree about what the model is
+# allowed to say.  Which modes carry them is decided by one rule: the parse
+# side has to be able to DIGEST what the prompt asks for —
+# ``extractor._CONTRACT_SOURCE_KEYS`` for (A) and the ``*pos_0_999`` field
+# sets for (B), which are only folded into a row's ``geometry`` sidecar by the
+# four table-like normalizers (range chart species rows, abundance rows,
+# chemical rows, scatter points).  Asking a mode whose rows have no consumer
+# would push the fields into ``_extras`` and buy nothing.
+# ---------------------------------------------------------------------------
+
+#: The closed reason-code vocabulary, rendered in catalogue order (A).
+REASON_CODE_SLUG_LIST: str = ", ".join(c.slug for c in REASON_CODES)
+
+#: The three-state answer, rendered in the order the prompts introduce it (A).
+RESPONSE_KIND_LIST: str = " | ".join(
+    (RESPONSE_EXTRACTED, RESPONSE_NOT_DRAWN, RESPONSE_UNCERTAIN))
+
+
+def _coverage_contract_clause(row_table: str,
+                              unit: str,
+                              negative_examples: str,
+                              ) -> str:
+    """The three-state answer contract (BORROW-2026-09-20 A).
+
+    ``row_table`` is the JSON array the instruction binds to, ``unit`` the
+    singular name of one entry, ``negative_examples`` what a "the author drew
+    nothing here" mark looks like in that figure genre.
+
+    The whole point is that ``not_drawn`` is an ANSWER and a silent omission
+    is a gap, so the wording has to make emitting the row the cheapest option
+    available to the model.
+    """
+    return (
+        f"- ANSWER EVERY REQUESTED CELL, INCLUDING THE NEGATIVE ANSWERS. Every "
+        f"`{row_table}` entry must state `response_kind`, exactly one of "
+        f"\"{RESPONSE_EXTRACTED}\" | \"{RESPONSE_NOT_DRAWN}\" | "
+        f"\"{RESPONSE_UNCERTAIN}\": "
+        f"\"{RESPONSE_EXTRACTED}\" = something is drawn for this {unit} and you "
+        f"read it; "
+        f"\"{RESPONSE_NOT_DRAWN}\" = the column and the level both exist in the "
+        f"figure but the author drew NOTHING at their intersection — "
+        f"{negative_examples}. That is a POSITIVE observation ('absent here'), so "
+        f"still emit the row with its value fields left empty and "
+        f"`response_kind: \"{RESPONSE_NOT_DRAWN}\"`; NEVER delete the row instead, "
+        f"and NEVER write \"-\" / \"none\" / \"absent\" into a value field to say "
+        f"the same thing; "
+        f"\"{RESPONSE_UNCERTAIN}\" = something is drawn but you cannot settle its "
+        f"value or its level. Omitting a cell you were asked about is the one "
+        f"answer nobody can audit: a run that honestly reports the dashes scores "
+        f"BETTER on coverage than a run that quietly skips those rows, so being "
+        f"complete beats being silent."
+    )
+
+
+def _reason_code_clause() -> str:
+    """The optional machine-readable ``reason_codes`` array (A).
+
+    Deliberately a CLOSED list generated from :data:`REASON_CODES`: the parser
+    drops unknown slugs instead of guessing, so a hallucinated code costs the
+    annotation and nothing else.
+    """
+    return (
+        "- REASON CODES (optional, alongside `response_kind`). `reason_codes` is "
+        "a JSON array of lowercase slugs copied VERBATIM from this closed list: "
+        + REASON_CODE_SLUG_LIST + ". Spelling counts — an unrecognised slug is "
+        "dropped, not guessed at. Say WHY: `crosses_top` / `crosses_base` when "
+        "the mark runs off the frame so the true limit is unknown, `truncated` "
+        "when a panel edge or a page break cut it, `obscured` / `no_label` / "
+        "`abbreviated` when the read was blocked, `legend_only` when the name "
+        "appears only in the legend or caption and is not plotted, `inferred` "
+        "when you interpolated from adjacent evidence instead of reading, "
+        "`out_of_scope` when the cell belongs to another figure. Codes explain "
+        "the answer, they do not replace it: a `not_drawn` row that still "
+        "carries a readable value is read back as `extracted` and flagged, so "
+        "keep the two consistent."
+    )
+
+
+def _axis_position_clause(row_table: str,
+                          fields: Sequence[Tuple[str, str]],
+                          axis_label: str,
+                          zero_end: str,
+                          nine_nine_nine_end: str,
+                          calibration_shape: str,
+                          calibration_when: str,
+                          ) -> str:
+    """The 0-999 normalised position instruction (BORROW-2026-09-20 B).
+
+    ``fields`` are ``(field_name, what_it_locates)`` pairs and MUST be names
+    the parse side recognises (``extractor.POS_SCALE_KEY`` /
+    ``_GEOMETRY_VERTICAL_FIELDS`` / ``_GEOMETRY_AXIS_BY_FIELD``); the test
+    suite locks that set, so a new field here has to be taught to the parser
+    first.  ``calibration_shape`` is the ``axis_calibration`` example whose
+    axis names ``extractor._geometry_axis_for`` resolves.
+
+    The self-echo guard is spelled out on purpose: the position must be an
+    independent pixel read, because the parser throws away (and degrades)
+    geometry that contradicts the transcribed value.
+    """
+    field_text = "; ".join(f"`{name}` = {what}" for name, what in fields)
+    return (
+        f"- NORMALISED AXIS POSITIONS (`pos_0_999`). For each `{row_table}` row, "
+        f"also record WHERE the boundary actually sits on {axis_label} as an "
+        f"INTEGER measured off the picture, on a fixed scale where 0 = "
+        f"{zero_end} and 999 = {nine_nine_nine_end}. Use exactly these field "
+        f"names and invent no others: {field_text}. Whole integers 0-999 only — "
+        f"never a decimal, never a percentage, never 1000, never a position "
+        f"written into a value field — and omit the field entirely when the "
+        f"position cannot be judged. This is an INDEPENDENT second read of the "
+        f"same boundary: the parser cross-checks it against the value you "
+        f"transcribed and discards (with a confidence penalty) any position that "
+        f"misses it by more than 15% of the axis span, so read the pixels and do "
+        f"not back-derive the number from the label.\n"
+        f"- AXIS CALIBRATION (figure level, optional). {calibration_when} Emit "
+        f"ONE root-level block, e.g. `\"axis_calibration\": "
+        f"{calibration_shape}`, where `at_0` is the value sitting at 0 "
+        f"({zero_end}) and `at_999` the value at 999 ({nine_nine_nine_end}) — "
+        f"the same two ends the positions above are measured against. Omit the "
+        f"block when an end is not legible; an uncalibrated position is still "
+        f"kept as evidence, it is simply not converted."
+    )
+
+
+def _contract_clauses(row_table: str,
+                      unit: str,
+                      negative_examples: str,
+                      ) -> str:
+    """(A) only: the two coverage-contract bullets joined."""
+    return (_coverage_contract_clause(row_table, unit, negative_examples)
+            + "\n" + _reason_code_clause())
+
+
+#: (B) The ``*pos_0_999`` fields each mode is told to emit, keyed by mode.
+#: This is the one place those names are written down, so the parse side and
+#: the prompt side can be compared field-by-field
+#: (tests/test_reason_codes_2026_09_20.py locks both directions: no field here
+#: that ``extractor`` cannot digest, and no digestible vertical field asked of
+#: a mode whose rows do not carry that boundary).
+POS_FIELDS: dict[str, Tuple[Tuple[str, str], ...]] = {
+    # species_ranges rows: one position per transcribed boundary.
+    "range_chart": (
+        ("range_top_pos_0_999",
+         "the position of `range_top` (the young limit) on the axis"),
+        ("range_base_pos_0_999",
+         "the position of `range_base` (the old limit) on the same axis"),
+    ),
+    # abundance rows: the sample level is the row's single vertical position.
+    "abundance_diagram": (
+        ("pos_0_999",
+         "the position of this level / sample point on the depth axis"),
+    ),
+    # chemical rows: one position per boundary, whichever of depth / age the
+    # figure draws vertically.
+    "chemical_stratigraphy": (
+        ("pos_0_999",
+         "the position of this data point / event on the vertical axis"),
+        ("top_pos_0_999",
+         "on an `intervals` row: the position of its `top_depth_m` / `top_age_ma`"),
+        ("base_pos_0_999",
+         "on an `intervals` row: the position of its `base_depth_m` / `base_age_ma`"),
+    ),
+    # scatter points / outliers: two independent continuous axes.
+    "scatter_plot": (
+        ("x_pos_0_999", "the position of the point along the X axis"),
+        ("y_pos_0_999", "the position of the point along the Y axis"),
+    ),
+}
 
 
 def _degradation_clause() -> str:
@@ -97,11 +300,19 @@ RANGE_CHART_SYSTEM_PROMPT = "\n".join([
     "      \"range_base_bed\": \"Bed 7\" (string, the OLD/lower bed label exactly as printed; empty if no bed label),",
     "      \"range_top_idx\": 9 (int, the bed index of the young limit, 1-indexed from base; empty if the bed label is not numeric),",
     "      \"range_base_idx\": 7 (int, the bed index of the old limit, 1-indexed from base; empty if not numeric),",
+    # BORROW-2026-09-20 (B): the same two boundaries as an independent 0-999
+    # pixel read, digested into the row's optional ``geometry`` sidecar.
+    "      \"range_top_pos_0_999\": 347 (int, 0-999 position of the young limit on the vertical axis: 0 = bottom/oldest edge of the frame, 999 = top/youngest edge; empty when not judgeable),",
+    "      \"range_base_pos_0_999\": 261 (int, the same scale for the old limit),",
     "      \"endpoint_kind\": \"observed\" (string, one of \"unknown\", \"observed\", \"projected\", \"truncated\" — use \"unknown\" when the endpoint type cannot be determined),",
     "      \"occurrence_mode\": \"in_situ\" (string, one of \"unknown\", \"in_situ\", \"reworked\", \"transported\", \"cavity_fill\", \"bioturbated\", \"derived\", \"lag_deposit\" — use \"unknown\" when the occurrence mode cannot be determined),",
     "      \"biozone\": \"N. optima Zone (latest Changhsingian)\" (string, optional),",
     "      \"confidence\": 0.0-1.0 (float, per-row certainty; lower when the row is ambiguous),",
-    "      \"note\": \"\" (string, short provenance / uncertainty remark such as \"unclear\" or \"partially obscured\"; NEVER embedded in `species` or other structured fields)",
+    "      \"note\": \"\" (string, short provenance / uncertainty remark such as \"unclear\" or \"partially obscured\"; NEVER embedded in `species` or other structured fields),",
+    # BORROW-2026-09-20 (A): the three-state answer is REQUIRED on every row;
+    # the codes are the optional machine-readable WHY.
+    "      \"response_kind\": \"extracted\" (string, REQUIRED: one of \"extracted\", \"not_drawn\", \"uncertain\" — see the ANSWER EVERY REQUESTED CELL rule below),",
+    "      \"reason_codes\": [\"crosses_top\"] (array of strings, optional; lowercase slugs from the closed list in the REASON CODES rule; empty when nothing applies)",
     "    }",
     "  ],",
     "  \"biozones\": [",
@@ -115,6 +326,9 @@ RANGE_CHART_SYSTEM_PROMPT = "\n".join([
     "  \"other_fossils\": [",
     "    \"Ammonoid: Pleuronodoceras sp. (Pingdingshan, bed 9, Yinkeng Fm)\" (free text entries)",
     "  ],",
+    # BORROW-2026-09-20 (B): optional figure-level calibration that turns the
+    # rows' 0-999 positions into axis values (extractor.axis_domains_from).
+    "  \"axis_calibration\": {\"vertical\": {\"at_0\": 1, \"at_999\": 24, \"unit\": \"bed\"}} (optional object, ONLY when the vertical axis is numeric and both its printed ends are legible; omit otherwise — the positions stay uncalibrated evidence)",
     "  \"confidence\": 0.0-1.0 reflecting your certainty in the extraction overall",
     "}",
     "",
@@ -140,6 +354,26 @@ RANGE_CHART_SYSTEM_PROMPT = "\n".join([
     "- Preserve bed/level numbers exactly as printed (e.g. 'Bed 23c', 'Bed 27a').",
     "- If the chart is NOT a stratigraphic range/distribution chart, return all arrays empty and confidence 0.0.",
     "- Return JSON only, no markdown fences, no commentary.",
+    # BORROW-2026-09-20 (A+B): the coverage contract + the 0-999 axis positions.
+    _contract_clauses(
+        "species_ranges", "species range line",
+        "a dash or em-dash in the cell, a tick with no bar, a column that stops "
+        "and leaves the level plainly empty"),
+    "\n" + _axis_position_clause(
+        "species_ranges",
+        POS_FIELDS["range_chart"],
+        "the vertical stratigraphic axis of that section's column",
+        "the bottom (oldest) edge of the plotted frame",
+        "the top (youngest) edge of the plotted frame",
+        "{\"vertical\": {\"at_0\": 1, \"at_999\": 24, \"unit\": \"bed\"}}",
+        "Calibrate the vertical axis only when it carries readable numbers at "
+        "both ends (bed indices count as numbers: 1, 2, 3 ...).",
+    ),
+    "- A `not_drawn` ROW IS STILL A ROW: keep its `species` and `section` filled "
+    "(the taxon is named in the column header and the section is the column it "
+    "sits in — that is what identifies the cell), and leave only the range / "
+    "biozone fields empty. A `not_drawn` row with no `species` cannot be "
+    "attributed and reads as a gap, which is exactly what you are asked to avoid.",
     _degradation_clause(),
 ])
 
@@ -181,7 +415,13 @@ ABUNDANCE_DIAGRAM_SYSTEM_PROMPT = "\n".join([
     "      \"level\": \"120 cm\" or \"Sample 5\" (string, the stratigraphic level / sample label as printed),",
     "      \"depth\": \"120\" (string, the numeric depth if legible, else empty),",
     "      \"abundance\": \"35\" (string, the value read at that level — a percentage, a count, or a relative level like \"present\"/\"common\"/\"abundant\"),",
-    "      \"abundance_unit\": \"%\" or \"count\" or \"relative\" (string, how the abundance is expressed)",
+    "      \"abundance_unit\": \"%\" or \"count\" or \"relative\" (string, how the abundance is expressed),",
+    # BORROW-2026-09-20 (B): the row's level as an independent 0-999 read of the
+    # vertical axis (extractor.geometry_from_row).
+    "      \"pos_0_999\": 768 (int, 0-999 position of this level on the depth/level axis: 0 = bottom/oldest edge of the frame, 999 = top/youngest/shallowest edge; empty when not judgeable),",
+    # BORROW-2026-09-20 (A): the three-state answer + optional reason codes.
+    "      \"response_kind\": \"extracted\" (string, REQUIRED: one of \"extracted\", \"not_drawn\", \"uncertain\" — see the ANSWER EVERY REQUESTED CELL rule below),",
+    "      \"reason_codes\": [] (array of strings, optional; lowercase slugs from the closed list in the REASON CODES rule — e.g. [\"not_drawn\"] on a row the diagram leaves blank at this level; empty when nothing applies)",
     "    }",
     "  ],",
     "  \"zones\": [",
@@ -191,6 +431,8 @@ ABUNDANCE_DIAGRAM_SYSTEM_PROMPT = "\n".join([
     "      \"level_range\": \"80-140 cm\" (string, the depth / level span of the zone)",
     "    }",
     "  ],",
+    # BORROW-2026-09-20 (B): optional figure-level calibration of the depth axis.
+    "  \"axis_calibration\": {\"vertical\": {\"at_0\": 520, \"at_999\": 0, \"unit\": \"cm\"}} (optional object, ONLY when the depth/level axis carries a readable number at both ends of the plotted frame; omit otherwise — the rows' positions stay uncalibrated evidence)",
     "  \"confidence\": 0.0-1.0 reflecting your certainty in the extraction overall",
     "}",
     "",
@@ -205,6 +447,29 @@ ABUNDANCE_DIAGRAM_SYSTEM_PROMPT = "\n".join([
     "- Return JSON only, no markdown fences, no commentary.",
     # P1-8 (REVIEW-2026-07-25): SUM-TO-100 constraint for percentage diagrams.
     "- SUM-TO-100. For each level (sample), the sum of all taxon percentages should equal 100 ± 5%. If your reading differs significantly, lower the row confidence and note the discrepancy in the row note field.",
+    # BORROW-2026-09-20 (A+B): the coverage contract + the 0-999 axis positions.
+    _contract_clauses(
+        "abundances", "taxon / level cell",
+        "a dash in that column at a level the diagram does sample, a column "
+        "that is simply blank there while its neighbours carry a curve"),
+    "\n" + _axis_position_clause(
+        "abundances",
+        POS_FIELDS["abundance_diagram"],
+        "the vertical depth / level axis",
+        "the bottom (deepest / oldest) edge of the plotted frame",
+        "the top (shallowest / youngest) edge of the plotted frame",
+        "{\"vertical\": {\"at_0\": 520, \"at_999\": 0, \"unit\": \"cm\"}}",
+        "Calibrate the depth axis only when a number is legible at both ends; on "
+        "a depth-below-surface axis the bottom end is the LARGER number, which is "
+        "expected (at_0 = 520, at_999 = 0).",
+    ),
+    "- ZERO IS NOT A GAP, AND A GAP IS NOT ZERO. If the column shows this taxon "
+    "at that level with no bar / no curve, that is `\"not_drawn\"` with an empty "
+    "`abundance` — unless the diagram actually plots 0 %, which is a reading and "
+    "stays `\"extracted\"` with `abundance: \"0\"`. If the level was never "
+    "analysed for this taxon (a different counting scheme, a gap in the core), "
+    "emit the row as `\"not_drawn\"` and add the `out_of_scope` code plus a short "
+    "`note`, so the two cases stay separable downstream.",
     _degradation_clause(),
 ])
 
@@ -359,7 +624,12 @@ CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT = "\n".join([
     "      },",
     "      \"lithology\": \"chalk\" (string, the lithology at this level if shown, else empty),",
     "      \"fossil_horizon\": \"CF2 nannofossil zone\" (string, any biostratigraphic marker at this level, else empty),",
-    "      \"note\": \"slight weathering\" (string, any anomaly or observation, else empty)",
+    "      \"note\": \"slight weathering\" (string, any anomaly or observation, else empty),",
+    # BORROW-2026-09-20 (A+B): the three-state answer, the reason codes, and the
+    # independent 0-999 read of the vertical axis.
+    "      \"response_kind\": \"extracted\" (string, REQUIRED: one of \"extracted\", \"not_drawn\", \"uncertain\" — see the ANSWER EVERY REQUESTED CELL rule below),",
+    "      \"reason_codes\": [\"inferred\"] (array of strings, optional; lowercase slugs from the closed list in the REASON CODES rule; empty when nothing applies),",
+    "      \"pos_0_999\": 583 (int, 0-999 position of this sample on the vertical axis: 0 = bottom/oldest edge of the frame, 999 = top/youngest edge; empty when not judgeable)",
     "    }",
     "  ],",
     "  \"events\": [",
@@ -369,7 +639,9 @@ CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT = "\n".join([
     "      \"age_ma\": \"66.0\" (string, age if known, else empty),",
     "      \"name\": \"CIE - Carbon Isotope Excursion\" (string, the event name if applicable),",
     "      \"magnitude\": \"+2‰ shift in δ13C\" (string, the magnitude of the excursion or anomaly),",
-    "      \"description\": \"sharp negative shift marking the K-Pg boundary\" (string, free-text description)",
+    "      \"description\": \"sharp negative shift marking the K-Pg boundary\" (string, free-text description),",
+    # BORROW-2026-09-20 (B): the event horizon as a 0-999 position too.
+    "      \"pos_0_999\": 493 (int, 0-999 position of this event on the vertical axis, same scale as in `data_points`)",
     "    }",
     "  ],",
     "  \"intervals\": [",
@@ -379,10 +651,15 @@ CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT = "\n".join([
     "      \"base_depth_m\": \"30.0\" (string),",
     "      \"top_age_ma\": \"70.5\" (string),",
     "      \"base_age_ma\": \"72.5\" (string),",
+    # BORROW-2026-09-20 (B): the two interval boundaries, same 0-999 scale.
+    "      \"top_pos_0_999\": 333 (int, 0-999 position of the top boundary on the vertical axis; 0 = bottom/oldest edge, 999 = top/youngest edge),",
+    "      \"base_pos_0_999\": 0 (int, the same scale for the base boundary),",
     "      \"characteristic_values\": \"δ13C: -1.0 to -1.5‰\" (string, the typical range in this interval),",
     "      \"lithology\": \"marl\" (string)",
     "    }",
     "  ],",
+    # BORROW-2026-09-20 (B): optional figure-level calibration of the vertical axis.
+    "  \"axis_calibration\": {\"vertical\": {\"at_0\": 30.0, \"at_999\": 0.0, \"unit\": \"m\"}} (optional object, ONLY when the depth (or age) axis carries a readable number at both ends of the plotted frame; omit otherwise — the positions stay uncalibrated evidence)",
     "  \"confidence\": 0.8 (float, 0.0-1.0 reflecting certainty across the whole figure)",
     "}",
     "",
@@ -395,6 +672,29 @@ CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT = "\n".join([
     "- Only extract what you can READ from the chart. Do not invent data points.",
     "- If the figure is NOT a chemical stratigraphy / isotopic curve chart, return all arrays empty and confidence 0.0.",
     "- Return JSON only, no markdown fences, no commentary.",
+    # BORROW-2026-09-20 (A+B): the coverage contract + the 0-999 axis positions.
+    _contract_clauses(
+        "data_points", "sampled level",
+        "a tick / sample marker with no value plotted beside it, a level listed "
+        "on the depth axis whose curve has a visible gap there"),
+    "\n" + _axis_position_clause(
+        "data_points / events / intervals",
+        POS_FIELDS["chemical_stratigraphy"],
+        "the vertical depth (or age) axis",
+        "the bottom (deepest / oldest) edge of the plotted frame",
+        "the top (shallowest / youngest) edge of the plotted frame",
+        "{\"vertical\": {\"at_0\": 30.0, \"at_999\": 0.0, \"unit\": \"m\"}}",
+        "Calibrate whichever quantity the vertical axis actually carries (depth "
+        "or age) as \"vertical\", with the number printed at each end; on a "
+        "depth-below-top axis the bottom end is the LARGER number. If both a "
+        "depth and an age scale are drawn, calibrate the one the data points are "
+        "positioned against.",
+    ),
+    "- A MISSING MEASUREMENT IS AN ANSWER, AN UNMEASURED LEVEL IS NOT THE SAME "
+    "ONE. When the profile samples this level but a curve has no value there, "
+    "emit the row with the value fields empty, `response_kind: \"not_drawn\"` and "
+    "the `no_label` / `truncated` code when one of them explains why; when the "
+    "whole interval is outside what the figure plots, add `out_of_scope`.",
     _degradation_clause(),
 ])
 
@@ -539,7 +839,14 @@ SCATTER_PLOT_SYSTEM_PROMPT = "\n".join([
     "      \"z\": \"\" (string, Z coordinate for 3D plots, else empty),",
     "      \"group\": \"Albaillella\" (string, the group this point belongs to, or empty),",
     "      \"label\": \"Specimen A-12\" (string, the point label if shown, else empty),",
-    "      \"note\": \"juvenile form\" (string, any annotation for this point, else empty)",
+    "      \"note\": \"juvenile form\" (string, any annotation for this point, else empty),",
+    # BORROW-2026-09-20 (A+B): the three-state answer, the reason codes and the
+    # two independent 0-999 axis reads (x_pos / y_pos are the names the parser
+    # folds into the row's ``geometry`` sidecar).
+    "      \"response_kind\": \"extracted\" (string, REQUIRED: one of \"extracted\", \"not_drawn\", \"uncertain\" — see the ANSWER EVERY REQUESTED CELL rule below),",
+    "      \"reason_codes\": [] (array of strings, optional; lowercase slugs from the closed list in the REASON CODES rule; empty when nothing applies),",
+    "      \"x_pos_0_999\": 207 (int, 0-999 position of the point along the X axis: 0 = left edge of the plot frame, 999 = right edge; empty when not judgeable),",
+    "      \"y_pos_0_999\": 759 (int, 0-999 position along the Y axis: 0 = bottom edge, 999 = top edge)",
     "    }",
     "  ],",
     "  \"outliers\": [",
@@ -547,7 +854,10 @@ SCATTER_PLOT_SYSTEM_PROMPT = "\n".join([
     "      \"x\": \"3.45\" (string),",
     "      \"y\": \"-2.1\" (string),",
     "      \"group\": \"Pseudoalbaillella\" (string),",
-    "      \"reason\": \"outside 95% confidence ellipse\" (string)",
+    "      \"reason\": \"outside 95% confidence ellipse\" (string),",
+    "      \"response_kind\": \"extracted\" (string, same three-state contract as `points`),",
+    "      \"x_pos_0_999\": 930 (int, same 0-999 X scale as in `points`),",
+    "      \"y_pos_0_999\": 150 (int, same 0-999 Y scale as in `points`)",
     "    }",
     "  ],",
     "  \"statistics\": {",
@@ -556,6 +866,9 @@ SCATTER_PLOT_SYSTEM_PROMPT = "\n".join([
     "    \"r_squared\": \"0.52\" (string, R² value if shown),",
     "    \"p_value\": \"p < 0.001\" (string, statistical significance if shown)",
     "  },",
+    # BORROW-2026-09-20 (B): a scatter plot has TWO continuous axes, so both
+    # get their own optional calibration (extractor maps x_pos_0_999 -> "x").
+    "  \"axis_calibration\": {\"x\": {\"at_0\": -4.0, \"at_999\": 4.0, \"unit\": \"PC1\"}, \"y\": {\"at_0\": -3.0, \"at_999\": 3.0, \"unit\": \"PC2\"}} (optional object, one entry per continuous axis, ONLY when that axis prints a legible number at both ends of the plot frame; omit an axis you cannot read — its positions stay uncalibrated evidence)",
     "  \"confidence\": 0.7 (float, 0.0-1.0)",
     "}",
     "",
@@ -568,6 +881,30 @@ SCATTER_PLOT_SYSTEM_PROMPT = "\n".join([
     "- Only extract what you can READ from the plot. Do not invent points or statistics.",
     "- If the figure is NOT a scatter plot or biplot, return all arrays empty and confidence 0.0.",
     "- Return JSON only, no markdown fences, no commentary.",
+    # BORROW-2026-09-20 (A+B): the coverage contract + the two 0-999 axis reads.
+    _contract_clauses(
+        "points", "plotted point",
+        "a labelled group in the legend that has no symbol anywhere in the "
+        "frame, or a sample the plot itself marks as empty (\"n/a\", a filtered "
+        "specimen)"),
+    "\n" + _axis_position_clause(
+        "points / outliers",
+        POS_FIELDS["scatter_plot"],
+        "the two plotted axes",
+        "the LEFT edge of the plot frame for `x_pos_0_999` and the BOTTOM edge "
+        "for `y_pos_0_999` (0 = the oldest / smallest end of each axis)",
+        "the RIGHT edge for `x_pos_0_999` and the TOP edge for `y_pos_0_999` "
+        "(999 = the youngest / largest end)",
+        "{\"x\": {\"at_0\": -4.0, \"at_999\": 4.0, \"unit\": \"PC1\"}, "
+        "\"y\": {\"at_0\": -3.0, \"at_999\": 3.0, \"unit\": \"PC2\"}}",
+        "Calibrate each axis separately under its own name (\"x\" and \"y\"), "
+        "with the tick value printed at the two ends of the frame.",
+    ),
+    "- THINNING A DENSE CLOUD IS NOT A REFUSAL. The sampling rule above (every "
+    "5th-10th point) describes the SAME population, so do NOT invent rows for "
+    "points you did not sample. What the contract does bind is honesty about the "
+    "rows you do emit: two overlapping symbols you cannot separate are "
+    "`\"uncertain\"` (with the `obscured` code), never `\"not_drawn\"`.",
     _degradation_clause(),
 ])
 
@@ -726,3 +1063,30 @@ CHART_CLASSIFY_SYSTEM_PROMPT = "\n".join([
     "\"reason\": \"<one short sentence, in English, citing what you see>\", "
     "\"confidence\": 0.0-1.0}",
 ])
+
+
+# ---------------------------------------------------------------------------
+# BORROW-2026-09-20 (A+B) — JS PARITY NOTE (js/prompt.js is NOT touched here).
+#
+# ``tests/test_prompt_fixes.py`` pins two Python<->JS invariants: the range-chart
+# prompts compared byte-identical, and PROMPT_VERSION compared per mode (its
+# check() helper only prints under pytest, so this drift is currently silent).
+# The four prompts below changed on the Python side and need the same text and
+# the same version bump mirrored in js/prompt.js:
+#
+#   * RANGE_CHART_SYSTEM_PROMPT  -> v5 (response_kind / reason_codes /
+#     range_top_pos_0_999 / range_base_pos_0_999 / axis_calibration)
+#   * ABUNDANCE_DIAGRAM_SYSTEM_PROMPT (and the "abundance" alias key) -> v4
+#     (response_kind / reason_codes / pos_0_999 / axis_calibration)
+#   * CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT -> v2
+#     (response_kind / reason_codes / pos_0_999 / top_pos_0_999 /
+#     base_pos_0_999 / axis_calibration)
+#   * SCATTER_PLOT_SYSTEM_PROMPT -> v2
+#     (response_kind / reason_codes / x_pos_0_999 / y_pos_0_999 /
+#     axis_calibration)
+#
+# js/reason-codes.js additionally has to mirror rca_core/reason_codes.py, and
+# the JS prompts must list the SAME closed vocabulary — the web pipeline has no
+# other way to learn the codes.  COLUMNAR_SECTION / PHYLOGENETIC_TREE /
+# PALEOMAP / ZONATION_CHART / CHART_CLASSIFY are unchanged on both sides.
+# ---------------------------------------------------------------------------
