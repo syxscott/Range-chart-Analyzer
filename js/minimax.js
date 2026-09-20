@@ -32,7 +32,11 @@ function rcaLoadAndMaybeResize(file, maxEdge, opts) {
       const originalDataUrl = reader.result;
       const img = new Image();
       img.onerror = () => fail('imageRead');
-      img.onload = () => {
+      // FE-BORROW-2026-09-20 (domain W): this handler is now async because the
+      // `enhance` step awaits the sharpen Worker. An async DOM event handler
+      // swallows its own rejections, which would leave the caller awaiting
+      // forever, so it is wired through `fail()` below.
+      const onImgLoaded = async () => {
         if (signal && signal.aborted) { fail('aborted'); return; }
         const w = img.naturalWidth;
         const h = img.naturalHeight;
@@ -64,6 +68,13 @@ function rcaLoadAndMaybeResize(file, maxEdge, opts) {
           // 2) Light unsharp-mask (3x3 blur) on the final canvas to sharpen
           //    edges without over-exposing or ringing. Without `enhance`
           //    the path below is unchanged.
+          //    FE-BORROW-2026-09-20 (domain W): `radius: 1` is the legacy 3x3
+          //    box and `0.4` is the old `amount`, so the OUTPUT PIXELS ARE
+          //    BIT-IDENTICAL to the pre-change loop (tests_sharpen.js pins
+          //    that against a copy of the old code); only WHERE the loop runs
+          //    changed — inside js/sharpen_worker.js when a Worker can be
+          //    built, on the main thread otherwise. rcaUnsharpMaskAsync never
+          //    rejects, so the await below cannot strand the load promise.
           const up = 2;
           let uw = Math.round(nw * up);
           let uh = Math.round(nh * up);
@@ -81,7 +92,11 @@ function rcaLoadAndMaybeResize(file, maxEdge, opts) {
           tctx.imageSmoothingQuality = 'high';
           tctx.drawImage(img, 0, 0, uw, uh);
           ctx.drawImage(tmp, 0, 0, nw, nh);
-          rcaUnsharpMask(ctx, nw, nh, 0.4, 1);
+          await rcaUnsharpMaskAsync(ctx, nw, nh, 0.4, 1, { radius: 1 });
+          // The Worker hop yields to the event loop: a file selection
+          // superseded mid-sharpen (or an abort) must not continue to encode
+          // and resolve — the caller drops the result anyway.
+          if (signal && signal.aborted) { fail('aborted'); return; }
         } else {
           ctx.drawImage(img, 0, 0, nw, nh);
         }
@@ -97,6 +112,9 @@ function rcaLoadAndMaybeResize(file, maxEdge, opts) {
           : canvas.toDataURL('image/png');
         resolve({ dataUrl, mime: outMime, width: nw, height: nh, resized: true });
       };
+      img.onload = () => {
+        Promise.resolve().then(onImgLoaded).catch((e) => fail((e && e.message) || 'imageRead'));
+      };
       img.src = originalDataUrl;
     };
     if (signal) {
@@ -107,50 +125,468 @@ function rcaLoadAndMaybeResize(file, maxEdge, opts) {
   });
 }
 
-// Light unsharp-mask sharpening applied in-place on a 2D canvas context.
-// amount: strength of the high-pass signal added back (0..1, kept low so we
-//   don't over-expose or ring). threshold: only sharpen pixels whose
-//   blur-delta exceeds this, so flat areas don't get noise amplified.
-// Wrapped in try/catch: a tainted or oversized canvas (shouldn't happen for
-// a local file) silently skips sharpening rather than throwing.
-function rcaUnsharpMask(ctx, w, h, amount, threshold) {
-  try {
-    if (w * h > 16_000_000) return; // guard against pathological sizes
-    const img = ctx.getImageData(0, 0, w, h);
-    const data = img.data;
-    // 3x3 box blur (cheap Gaussian approximation).
-    const blur = new Float32Array(w * h * 3);
-    const at = (x, y, c) => {
-      const cx = x < 0 ? 0 : (x >= w ? w - 1 : x);
-      const cy = y < 0 ? 0 : (y >= h ? h - 1 : y);
-      return data[(cy * w + cx) * 4 + c];
-    };
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        for (let c = 0; c < 3; c++) {
-          let s = 0;
-          for (let ky = -1; ky <= 1; ky++)
-            for (let kx = -1; kx <= 1; kx++)
-              s += at(x + kx, y + ky, c);
-          blur[(y * w + x) * 3 + c] = s / 9;
-        }
-      }
-    }
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const oi = (y * w + x) * 4;
-        for (let c = 0; c < 3; c++) {
-          const orig = data[oi + c];
-          const diff = orig - blur[(y * w + x) * 3 + c];
-          if (Math.abs(diff) >= threshold) {
-            const v = orig + amount * diff;
-            data[oi + c] = v < 0 ? 0 : (v > 255 ? 255 : v);
+// ---------------------------------------------------------------------------
+// FE-BORROW-2026-09-20 (domain W): unsharp-mask sharpening — pure kernel +
+// Worker offload + synchronous fallback.
+//
+// The legacy `rcaUnsharpMask` ran the whole w*h*3*9 tap loop on the main
+// thread. At the 4096px supersample ceiling used by the `enhance` path that
+// is ~50M taps and it froze the UI for seconds on a scanned figure. The work
+// is now split in three layers:
+//
+//   rcaUnsharpMaskCore(src, opts, dst)
+//       the pure math. TypedArray (or plain Array) in, same kind out, no DOM
+//       reference at all. THIS is the single source of truth for the kernel.
+//   rcaUnsharpMask(ctx | ImageData, w, h, amount, threshold, extra?)
+//       the legacy synchronous signature, unchanged for existing callers; it
+//       now delegates to the core instead of carrying its own copy of the loop.
+//   rcaUnsharpMaskAsync(ctx | ImageData, ...) -> Promise
+//       runs the core inside js/sharpen_worker.js when a Worker can be built,
+//       falls back to the synchronous core when it cannot. Never rejects.
+//
+// Single-source rule for the worker: js/sharpen_worker.js holds ONLY the
+// message glue, never a second copy of the kernel. minimax.js fetches that
+// glue as text, prepends `'use strict'` + the two cap constants (emitted from
+// the live values, so the kernel's own free identifiers are all in scope) +
+// `String(rcaUnsharpMaskCore)`, and instantiates the result as a `blob:`
+// Worker. Blob URL rather than `new Worker('js/sharpen_worker.js')` because
+// (a) it survives cache-busting query strings and a relocated js/ dir — the
+// URL is derived from minimax.js's own <script src> — and (b) it never needs
+// the worker file to be reachable as a worker *script path* by CSP/whitelist,
+// only as a same-origin GET. Under `file://` (no fetch) or a pre-Worker
+// environment the build fails once, is remembered, and every later call takes
+// the synchronous path — i.e. exactly the pre-change behaviour.
+// ---------------------------------------------------------------------------
+
+// Kernel guard rails. `rcaSharpenWorkerSource` re-declares BOTH from these
+// live values inside the composed worker script; keep that list in sync if a
+// new free identifier is ever introduced in the kernel (tests_sharpen.js
+// executes the composed text in a bare worker-like scope, so a missed
+// identifier fails there rather than in production).
+const RCA_UNSHARP_MAX_PIXELS = 16_000_000;   // legacy 16M-pixel skip guard
+const RCA_UNSHARP_MAX_RADIUS = 8;            // 17x17 taps: beyond this the O(k^2) loop stops being a good idea
+
+// The unsharp kernel. Pure: no canvas, no `ctx`, no globals but the two caps.
+// src      RGBA pixel bytes, width*height*4 entries. In the browser this IS
+//          `ImageData.data` (a Uint8ClampedArray), so the rounding + clamping
+//          of the written float is the element type's own business — exactly
+//          what the legacy loop relied on. Any TypedArray or plain Array works.
+// opts     { width, height, radius?, percent?, threshold? }
+//            radius    box half-extent k; the blur is a (2k+1)^2 box, /((2k+1)^2).
+//                      default 1 == the legacy 3x3 blur divided by 9.
+//            percent   high-pass add-back factor — this is the legacy `amount`
+//                      (0.4 = 40% of the blur delta added back). default 0.4.
+//            threshold minimum |orig - blur| before a pixel is touched. default 1.
+// dst      optional output buffer; MAY alias src (in place, like the legacy
+//          call). A fresh buffer of src's own kind is allocated when omitted.
+// Returns dst. Throws RangeError on non-integer/non-positive dimensions, on
+// width*height > RCA_UNSHARP_MAX_PIXELS, on radius > RCA_UNSHARP_MAX_RADIUS,
+// on non-finite options and on short buffers — the wrappers turn that back
+// into "skip silently", which is the legacy contract.
+function rcaUnsharpMaskCore(src, opts, dst) {
+  const o = opts || {};
+  const num = (v, dflt, name) => {
+    if (v === undefined || v === null) return dflt;
+    const n = Number(v);
+    if (!Number.isFinite(n)) throw new RangeError('rcaUnsharpMask: ' + name + ' must be a finite number');
+    return n;
+  };
+  const width = num(o.width, null, 'width');
+  const height = num(o.height, null, 'height');
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    throw new RangeError('rcaUnsharpMask: width/height must be positive integers');
+  }
+  const pixels = width * height;
+  // Checked before anything is allocated — that is what makes the guard
+  // usable on a pathological size instead of OOM-ing on the way to it.
+  if (pixels > RCA_UNSHARP_MAX_PIXELS) {
+    throw new RangeError('rcaUnsharpMask: image too large (' + pixels + ' px > ' + RCA_UNSHARP_MAX_PIXELS + ')');
+  }
+  const need = pixels * 4;
+  if (!src || typeof src.length !== 'number' || src.length < need) {
+    throw new RangeError('rcaUnsharpMask: src needs width*height*4 entries');
+  }
+  const radius = num(o.radius, 1, 'radius');
+  const percent = num(o.percent, 0.4, 'percent');
+  const threshold = Math.abs(num(o.threshold, 1, 'threshold'));
+  const k = Math.round(radius);
+  if (k < 0 || k > RCA_UNSHARP_MAX_RADIUS) {
+    throw new RangeError('rcaUnsharpMask: radius out of range (0..' + RCA_UNSHARP_MAX_RADIUS + ')');
+  }
+  const size = 2 * k + 1;
+  const div = size * size;
+  // A fresh buffer of src's own kind when the caller did not supply one.
+  // NOTE: this expression is deliberately inline rather than a call into a
+  // helper — the worker script is composed from `String(rcaUnsharpMaskCore)`
+  // alone, so the kernel may not reference any binding but its own two caps
+  // (tests_sharpen.js runs the composed text in a bare scope, which fails
+  // loudly if a free identifier is ever introduced here).
+  let out = dst;
+  if (out === undefined || out === null) {
+    out = (src.buffer !== undefined && typeof src.constructor === 'function')
+      ? new src.constructor(need)
+      : new Array(need);
+  }
+  if (!out || typeof out.length !== 'number' || out.length < need) {
+    throw new RangeError('rcaUnsharpMask: dst needs width*height*4 entries');
+  }
+  // Pass 0: seed the output with the input. Pixels below the threshold and
+  // the whole alpha channel are then simply carried through — with a FRESH
+  // `dst` they would otherwise stay zeroed, and `dst === src` (the in-place
+  // legacy shape) skips the copy entirely.
+  if (out !== src) {
+    for (let i = 0; i < need; i++) out[i] = src[i];
+  }
+  // Pass 1: box blur into three channels. The tap loop keeps the legacy
+  // ky-outer / kx-inner order and, more importantly, accumulates INTEGERS
+  // only (<= 289*255 << 2^24), so the sum is exact and the /div result is
+  // bit-identical to the old `s / 9` for k == 1.
+  const blur = new Float32Array(pixels * 3);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const pi = (y * width + x) * 3;
+      for (let c = 0; c < 3; c++) {
+        let s = 0;
+        for (let ky = -k; ky <= k; ky++) {
+          const sy = y + ky;
+          const ry = (sy < 0 ? 0 : (sy >= height ? height - 1 : sy)) * width;
+          for (let kx = -k; kx <= k; kx++) {
+            const sx = x + kx;
+            s += src[(ry + (sx < 0 ? 0 : (sx >= width ? width - 1 : sx))) * 4 + c];
           }
         }
+        blur[pi + c] = s / div;
       }
     }
-    ctx.putImageData(img, 0, 0);
-  } catch (_e) { /* sharpening is best-effort */ }
+  }
+  // Pass 2: add the high-pass signal back where it clears the threshold.
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const p = y * width + x;
+      const oi = p * 4;
+      const bi = p * 3;
+      for (let c = 0; c < 3; c++) {
+        const orig = src[oi + c];
+        const diff = orig - blur[bi + c];
+        if (Math.abs(diff) >= threshold) {
+          const v = orig + percent * diff;
+          out[oi + c] = v < 0 ? 0 : (v > 255 ? 255 : v);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// Same-kind copy — the worker job transfers its input, so the caller's
+// ImageData must not be the buffer that gets detached.
+function rcaClonePixels(src) {
+  if (src && src.buffer !== undefined && typeof src.constructor === 'function') {
+    try { return new src.constructor(src); } catch (_e) { /* fall through */ }
+  }
+  return Array.prototype.slice.call(src);
+}
+
+function rcaCopyPixels(src, dst) {
+  for (let i = 0, n = dst.length; i < n; i++) dst[i] = src[i];
+}
+
+// Legacy positional args -> core options bag. `extra` may be a bare radius
+// number or { radius, width, height, percent, threshold }.
+//
+// The three defaults below MIRROR rcaUnsharpMaskCore's own defaults; they are
+// resolved here so that a Worker message always carries a fully-specified
+// option set (the two engines then cannot disagree about an omitted field).
+// tests_sharpen.js `core-defaults-agree-with-wrapper-defaults` pins the pair.
+function rcaUnsharpArgs(w, h, amount, threshold, extra) {
+  const ex = typeof extra === 'number' ? { radius: extra } : (extra || {});
+  return {
+    width: ex.width !== undefined ? ex.width : w,
+    height: ex.height !== undefined ? ex.height : h,
+    radius: (ex.radius === undefined || ex.radius === null) ? 1 : ex.radius,
+    percent: (amount === undefined || amount === null)
+      ? ((ex.percent === undefined || ex.percent === null) ? 0.4 : ex.percent)
+      : amount,
+    threshold: (threshold === undefined || threshold === null)
+      ? ((ex.threshold === undefined || ex.threshold === null) ? 1 : ex.threshold)
+      : threshold,
+  };
+}
+
+// Accepts a 2D context (getImageData/putImageData) or a bare ImageData
+// (mutated in place — the caller owns the write-back).
+function rcaUnsharpPickPixels(target, o) {
+  // Cheap pre-check BEFORE getImageData: pulling 16M+ pixels off a canvas
+  // allocates ~64 MB just so the kernel can reject them a moment later — the
+  // legacy guard did it on the raw dimensions, and so does this one.
+  if (Number.isFinite(o.width) && Number.isFinite(o.height)
+      && o.width * o.height > RCA_UNSHARP_MAX_PIXELS) {
+    throw new RangeError('rcaUnsharpMask: image too large ('
+      + (o.width * o.height) + ' px > ' + RCA_UNSHARP_MAX_PIXELS + ')');
+  }
+  if (target && target.data && typeof target.data.length === 'number') {
+    return { img: target, ctx: null };
+  }
+  if (target && typeof target.getImageData === 'function') {
+    return { img: target.getImageData(0, 0, o.width, o.height), ctx: target };
+  }
+  throw new TypeError('rcaUnsharpMask: expected a 2D canvas context or an ImageData');
+}
+
+function rcaUnsharpWriteBack(target, picked) {
+  const ctx = picked.ctx || target;
+  if (ctx && typeof ctx.putImageData === 'function') ctx.putImageData(picked.img, 0, 0);
+}
+
+// Synchronous path — the pre-change behaviour, now expressed through the core
+// so there is exactly one sharpening implementation in the tree.
+// Wrapped in try/catch: a tainted or oversized canvas skips sharpening rather
+// than throwing.
+function rcaUnsharpMaskSync(target, w, h, amount, threshold, extra) {
+  try {
+    const o = rcaUnsharpArgs(w, h, amount, threshold, extra);
+    const picked = rcaUnsharpPickPixels(target, o);
+    rcaUnsharpMaskCore(picked.img.data, o, picked.img.data);   // in place
+    rcaUnsharpWriteBack(target, picked);
+    return true;
+  } catch (_e) { /* sharpening is best-effort */ return false; }
+}
+
+// Public legacy signature: rcaUnsharpMask(ctx, w, h, amount, threshold).
+function rcaUnsharpMask(target, w, h, amount, threshold, extra) {
+  return rcaUnsharpMaskSync(target, w, h, amount, threshold, extra);
+}
+
+// --- worker plumbing -------------------------------------------------------
+
+const RCA_SHARPEN_WORKER_PATH = 'js/sharpen_worker.js';
+const RCA_SHARPEN_JOB_TIMEOUT_MS = 30_000;
+const RCA_SHARPEN_MAX_JOB_FAILURES = 2;
+
+let _rcaSharpenWorker = null;            // live Worker, or null
+let _rcaSharpenWorkerPromise = null;     // in-flight build / cached "unavailable"
+let _rcaSharpenGluePromise = null;       // in-flight/completed glue fetch
+let _rcaSharpenBlobUrl = null;           // revoke on teardown, NOT right after new Worker()
+let _rcaSharpenJobSeq = 0;
+let _rcaSharpenJobFailures = 0;
+const _rcaSharpenPending = new Map();    // id -> { resolve, reject, timer }
+
+// Cheap capability gate — the branch the tests drive by stubbing `typeof`.
+// `fetch` is required because the kernel reaches the worker as *text*; a
+// browser without Worker, without fetch (file:// in some engines) or without
+// object URLs simply cannot take this path.
+function rcaSharpenWorkerSupported() {
+  return typeof Worker === 'function'
+    && typeof fetch === 'function'
+    && typeof Blob === 'function'
+    && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function';
+}
+
+// Which path an async call would take, for diagnostics and tests.
+function rcaSharpenPath() {
+  return rcaSharpenWorkerSupported() ? 'worker' : 'sync';
+}
+
+// Resolve the glue URL from minimax.js's OWN script tag so a cache-busting
+// `?v=` query or a relocated js/ dir keeps working; plain relative path
+// otherwise.
+function rcaSharpenWorkerUrl() {
+  try {
+    if (typeof document === 'undefined' || !document || !document.querySelectorAll) {
+      return RCA_SHARPEN_WORKER_PATH;
+    }
+    const tags = document.querySelectorAll('script[src]');
+    for (let i = 0; i < tags.length; i++) {
+      const src = tags[i].src || tags[i].getAttribute('src') || '';
+      if (src.indexOf('minimax.js') === -1) continue;
+      // Swap the basename only — a `?v=` cache-buster or `#hash` suffix and a
+      // relocated js/ directory carry over to the worker request unchanged.
+      return src.replace('minimax.js', 'sharpen_worker.js');
+    }
+  } catch (_e) { /* fall back to the relative path */ }
+  return RCA_SHARPEN_WORKER_PATH;
+}
+
+// Compose the worker script from the fetched glue. `glueText` is the verbatim
+// body of js/sharpen_worker.js; the kernel is appended as TEXT, never copied,
+// which is what keeps the two engines from drifting.
+function rcaSharpenWorkerSource(glueText) {
+  const glue = typeof glueText === 'string' ? glueText : '';
+  const kernel = String(rcaUnsharpMaskCore);
+  // A classic-script function declaration stringifies to its own declaration;
+  // only defend against an engine handing back a bare expression.
+  const kernelText = /^\s*function\b/.test(kernel)
+    ? kernel
+    : 'const rcaUnsharpMaskCore = ' + kernel + ';';
+  return "'use strict';\n"
+    + 'const RCA_UNSHARP_MAX_PIXELS = ' + RCA_UNSHARP_MAX_PIXELS + ';\n'
+    + 'const RCA_UNSHARP_MAX_RADIUS = ' + RCA_UNSHARP_MAX_RADIUS + ';\n'
+    + kernelText + '\n'
+    + glue + '\n';
+}
+
+function rcaSharpenGlueText() {
+  if (_rcaSharpenGluePromise) return _rcaSharpenGluePromise;
+  _rcaSharpenGluePromise = Promise.resolve()
+    .then(() => fetch(rcaSharpenWorkerUrl()))
+    .then((res) => (res && res.ok)
+      ? res.text()
+      : Promise.reject(new Error('sharpen worker script HTTP ' + ((res && res.status) || 0))))
+    .then((text) => (typeof text === 'string' && text.indexOf('onmessage') !== -1
+      ? text
+      : Promise.reject(new Error('sharpen worker script unusable'))))
+    .catch((e) => {
+      _rcaSharpenGluePromise = null;   // let a later call retry once
+      throw e;
+    });
+  return _rcaSharpenGluePromise;
+}
+
+function rcaOnSharpenWorkerMessage(ev) {
+  const msg = (ev && ev.data) || null;
+  if (!msg || typeof msg.id !== 'number') return;
+  const job = _rcaSharpenPending.get(msg.id);
+  if (!job) return;                 // answered after a timeout-teardown: drop
+  _rcaSharpenPending.delete(msg.id);
+  if (job.timer) clearTimeout(job.timer);
+  if (msg.ok && msg.dst) job.resolve(msg.dst);
+  else job.reject(new Error(msg.error || 'sharpen worker rejected the job'));
+}
+
+function rcaSharpenTeardown(reason) {
+  const worker = _rcaSharpenWorker;
+  _rcaSharpenWorker = null;
+  // The cached build verdict pointed at this worker; once it is gone the
+  // verdict is stale. Re-arm a rebuild, except when the job-failure budget is
+  // spent — then this deployment is pinned to the synchronous path, which is
+  // the whole point of the budget (no rebuild-per-image loop).
+  _rcaSharpenWorkerPromise = _rcaSharpenJobFailures >= RCA_SHARPEN_MAX_JOB_FAILURES
+    ? Promise.resolve(null)
+    : null;
+  if (_rcaSharpenBlobUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+    try { URL.revokeObjectURL(_rcaSharpenBlobUrl); } catch (_e) { /* best effort */ }
+  }
+  _rcaSharpenBlobUrl = null;
+  _rcaSharpenGluePromise = null;
+  for (const id of Array.from(_rcaSharpenPending.keys())) {
+    const job = _rcaSharpenPending.get(id);
+    _rcaSharpenPending.delete(id);
+    if (job.timer) clearTimeout(job.timer);
+    job.reject(new Error(reason || 'sharpen worker torn down'));
+  }
+  if (worker) { try { worker.terminate(); } catch (_e) { /* ignore */ } }
+}
+
+// Forget the cached worker (and the failed-build verdict) so the next call
+// rebuilds it. Exported for tests and for a future "retry sharpening" UI hook.
+function rcaSharpenWorkerReset() {
+  rcaSharpenTeardown('reset');
+  _rcaSharpenWorkerPromise = null;
+  _rcaSharpenJobFailures = 0;
+}
+
+function rcaSharpenCreateWorker(glueText) {
+  const blob = new Blob([rcaSharpenWorkerSource(glueText)], { type: 'application/javascript' });
+  const url = URL.createObjectURL(blob);
+  _rcaSharpenBlobUrl = url;
+  const worker = new Worker(url);
+  worker.onmessage = rcaOnSharpenWorkerMessage;
+  // A worker that dies (CSP refused the blob, a syntax error in the composed
+  // script, an unhandled throw) counts against the same small budget the
+  // timeout and postMessage failures use, so a hostile deployment falls back
+  // to the synchronous core for good instead of rebuilding per image.
+  worker.onerror = () => { _rcaSharpenJobFailures += 1; rcaSharpenTeardown('worker error'); };
+  _rcaSharpenWorker = worker;
+  return worker;
+}
+
+// -> Promise<Worker|null>. `null` means "no worker here, use the synchronous
+// core"; that verdict is cached so a file:// deployment pays for one fetch,
+// not one per image.
+function rcaGetSharpenWorker() {
+  if (_rcaSharpenWorker) return Promise.resolve(_rcaSharpenWorker);
+  if (_rcaSharpenWorkerPromise) return _rcaSharpenWorkerPromise;
+  const unavailable = () => { _rcaSharpenWorkerPromise = Promise.resolve(null); return _rcaSharpenWorkerPromise; };
+  if (!rcaSharpenWorkerSupported()) return unavailable();
+  if (_rcaSharpenJobFailures >= RCA_SHARPEN_MAX_JOB_FAILURES) return unavailable();
+  _rcaSharpenWorkerPromise = rcaSharpenGlueText().then(
+    (glue) => rcaSharpenCreateWorker(glue),
+    () => unavailable()
+  );
+  return _rcaSharpenWorkerPromise;
+}
+
+// One sharpen job. `src` is transferred (detached here, reborn in the worker),
+// which is why the caller hands over a private clone.
+function rcaSharpenJob(worker, src, o) {
+  return new Promise((resolve, reject) => {
+    const id = ++_rcaSharpenJobSeq;
+    let timer = null;
+    if (typeof setTimeout === 'function') {
+      timer = setTimeout(() => {
+        if (!_rcaSharpenPending.has(id)) return;
+        _rcaSharpenPending.delete(id);
+        _rcaSharpenJobFailures += 1;
+        rcaSharpenTeardown('sharpen worker timed out');
+        reject(new Error('sharpen worker timed out'));
+      }, RCA_SHARPEN_JOB_TIMEOUT_MS);
+    }
+    _rcaSharpenPending.set(id, { resolve, reject, timer });
+    try {
+      const transfer = (src && src.buffer !== undefined) ? [src.buffer] : [];
+      worker.postMessage({ id: id, src: src, opts: o }, transfer);
+    } catch (e) {
+      if (timer) clearTimeout(timer);
+      _rcaSharpenPending.delete(id);
+      _rcaSharpenJobFailures += 1;
+      rcaSharpenTeardown('postMessage failed');
+      reject(e);
+    }
+  });
+}
+
+// Asynchronous sharpening. Always resolves with
+//   { applied: boolean, via: 'worker' | 'sync' | 'none', error?: string }
+// and NEVER rejects: sharpening is best-effort, and a rejection here would
+// turn a preview that used to work into a failed upload. `via: 'sync'` covers
+// both "no worker available" and "the worker failed", so the pixel output is
+// identical either way; `applied: false` only on a canvas/CSP/oversize error,
+// i.e. the legacy silent skip.
+function rcaUnsharpMaskAsync(target, w, h, amount, threshold, extra) {
+  let o, picked;
+  try {
+    o = rcaUnsharpArgs(w, h, amount, threshold, extra);
+    picked = rcaUnsharpPickPixels(target, o);
+  } catch (e) {
+    return Promise.resolve({ applied: false, via: 'none', error: (e && e.message) || String(e) });
+  }
+  const runSync = () => {
+    try {
+      rcaUnsharpMaskCore(picked.img.data, o, picked.img.data);
+      rcaUnsharpWriteBack(target, picked);
+      return { applied: true, via: 'sync' };
+    } catch (e) {
+      return { applied: false, via: 'none', error: (e && e.message) || String(e) };
+    }
+  };
+  if (!rcaSharpenWorkerSupported()) return Promise.resolve(runSync());
+  return rcaGetSharpenWorker().then((worker) => {
+    if (!worker) return runSync();
+    let clone;
+    try { clone = rcaClonePixels(picked.img.data); } catch (e) { return runSync(); }
+    return rcaSharpenJob(worker, clone, o).then(
+      (dst) => {
+        try {
+          rcaCopyPixels(dst, picked.img.data);
+          rcaUnsharpWriteBack(target, picked);
+          return { applied: true, via: 'worker' };
+        } catch (e) {
+          return { applied: false, via: 'none', error: (e && e.message) || String(e) };
+        }
+      },
+      () => runSync()          // worker broke: same math, main thread, no freeze unless unavoidable
+    );
+  }, () => runSync());
 }
 
 // Split a data URL into { mediaType, base64 }.

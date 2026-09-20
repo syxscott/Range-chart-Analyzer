@@ -10,12 +10,33 @@
          404 console error. Point the browser at the real logo asset. -->
     <link rel="icon" type="image/png" href="assets/logo.png">
     <link rel="stylesheet" href="css/style.css">
+    <!-- FE-BORROW-2026-09-20 (域P): the split-out stylesheets of this
+         optimisation round (viz canvas / table editor / UX polish). They load
+         AFTER style.css so their rules win the cascade, and they are plain
+         <link>s (not @imports) so the downloads start in parallel with the
+         deferred scripts instead of after one parse pass.
+         js/sharpen_worker.js is deliberately NOT referenced here: it is a
+         Worker source fetched by new Worker() only when 图像增强 runs, and a
+         preload would cost every page load to speed up an optional feature. -->
+    <link rel="stylesheet" href="css/viz.css">
+    <link rel="stylesheet" href="css/table-edit.css">
+    <link rel="stylesheet" href="css/app-ux.css">
 </head>
 <body>
     <!-- Keyboard/screen-reader users should not have to tab through the
          whole header (theme toggle, language switch, logos) on every visit.
          Visible only while focused; see .skip-link in css/style.css. -->
     <a class="skip-link" href="#main" data-i18n="a11y.skipToContent">Skip to main content</a>
+    <!-- FE-BORROW-2026-09-20 (域P): every [data-i18n] element now carries its
+         Chinese (default locale, cf. ``RCA_LANG = 'zh'`` in js/i18n.js) label
+         as static markup. i18n.js rewrites ``textContent`` on the first
+         ``rcaApplyI18n()`` call either way, so the markup costs nothing at
+         runtime — but before that call (and for the whole time the deferred
+         scripts are still downloading) an empty label used to collapse the
+         heading / button / field to zero width and then pop back in, which
+         read as a flicker on every load. Keeping the zh string inline makes
+         the first paint layout-stable. Translators: editing a label here does
+         NOT change the UI text, js/i18n.js stays the source of truth. -->
     <div class="container">
         <header class="header">
             <div class="header-content">
@@ -23,17 +44,31 @@
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
                     <span data-i18n="app.title">Range Chart Analyzer</span>
                 </h1>
-                <p class="subtitle" data-i18n="app.subtitle"></p>
+                <p class="subtitle" data-i18n="app.subtitle">地层沿线图数据提取工具</p>
                 <div class="header-actions">
-                    <div class="theme-toggle" role="group" aria-label="Theme">
-                        <button type="button" data-theme-choice="system" aria-pressed="false" title="System">AUTO</button>
-                        <button type="button" data-theme-choice="light" aria-pressed="false" title="Light">☀</button>
-                        <button type="button" data-theme-choice="dark" aria-pressed="false" title="Dark">☾</button>
+                    <!-- FE-BORROW-2026-09-20 (domain U): the hardcoded
+                         a11y strings (title="System/Light/Dark",
+                         aria-label="Theme"/"Language") now go through the
+                         i18n runtime: data-i18n-title -> title attribute,
+                         data-i18n-label -> aria-label (see rcaApplyI18n in
+                         js/i18n.js). The literal attributes stay as the
+                         pre-JS fallback. -->
+                    <div class="theme-toggle" role="group" aria-label="Theme" data-i18n-label="a11y.themeLabel">
+                        <button type="button" data-theme-choice="system" aria-pressed="false" title="System" data-i18n-title="theme.system">AUTO</button>
+                        <button type="button" data-theme-choice="light" aria-pressed="false" title="Light" data-i18n-title="theme.light">☀</button>
+                        <button type="button" data-theme-choice="dark" aria-pressed="false" title="Dark" data-i18n-title="theme.dark">☾</button>
                     </div>
-                    <div class="lang-switch" id="lang-switch" role="tablist" aria-label="Language">
-                        <button type="button" data-lang="zh" role="tab" aria-selected="false">CN</button>
-                        <button type="button" data-lang="en" role="tab" aria-selected="false">EN</button>
-                        <button type="button" data-lang="ja" role="tab" aria-selected="false">JA</button>
+                    <!-- FE-BORROW-2026-09-20 (domain U): role="tablist" was
+                         wrong — language buttons do not page-switch, they
+                         select one value like radios. Now role=radiogroup +
+                         role=radio + aria-checked, kept in sync by
+                         applyLangButtons(); ArrowLeft/Right move the choice.
+                         tabindex is roving at runtime (only the checked
+                         button is a tab stop), so the group is entered once. -->
+                    <div class="lang-switch" id="lang-switch" role="radiogroup" aria-label="Language" data-i18n-label="a11y.languageLabel">
+                        <button type="button" data-lang="zh" role="radio" aria-checked="false">CN</button>
+                        <button type="button" data-lang="en" role="radio" aria-checked="false">EN</button>
+                        <button type="button" data-lang="ja" role="radio" aria-checked="false">JA</button>
                     </div>
                 </div>
             </div>
@@ -46,79 +81,79 @@
             <section class="card" id="settings-card">
                 <h2>
                     <span class="card-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
-                    <span data-i18n="settings.title"></span>
+                    <span data-i18n="settings.title">API 设置</span>
                 </h2>
-                <p class="card-desc" data-i18n="settings.desc"></p>
+                <p class="card-desc" data-i18n="settings.desc">使用你自己的 MiniMax API Key。密钥仅保存在本浏览器，绝不上传到任何服务器。</p>
 
                 <div class="form-row">
-                    <label class="field-label" for="api-key" data-i18n="settings.apiKey"></label>
+                    <label class="field-label" for="api-key" data-i18n="settings.apiKey">MiniMax API Key</label>
                     <div class="input-with-toggle">
                         <input type="password" id="api-key" autocomplete="off" spellcheck="false" data-i18n-ph="settings.apiKey.placeholder">
-                        <button type="button" class="input-toggle-btn" id="api-key-toggle" data-i18n="settings.show"></button>
+                        <button type="button" class="input-toggle-btn" id="api-key-toggle" data-i18n="settings.show">显示</button>
                     </div>
-                    <p class="field-hint" data-i18n="settings.apiKey.hint"></p>
+                    <p class="field-hint" data-i18n="settings.apiKey.hint">在 MiniMax 平台获取。留空则无法调用。</p>
                 </div>
 
                 <div class="form-grid">
                     <div class="form-row">
-                        <label class="field-label" for="endpoint" data-i18n="settings.endpoint"></label>
+                        <label class="field-label" for="endpoint" data-i18n="settings.endpoint">API 端点 (Endpoint)</label>
                         <input type="text" id="endpoint" spellcheck="false">
-                        <p class="field-hint" data-i18n="settings.endpoint.hint"></p>
+                        <p class="field-hint" data-i18n="settings.endpoint.hint">Anthropic 兼容端点。一般无需修改。</p>
                     </div>
                     <div class="form-row">
-                        <label class="field-label" for="model" data-i18n="settings.model"></label>
+                        <label class="field-label" for="model" data-i18n="settings.model">模型 (Model)</label>
                         <input type="text" id="model" spellcheck="false">
-                        <p class="field-hint" data-i18n="settings.model.hint"></p>
+                        <p class="field-hint" data-i18n="settings.model.hint">默认 MiniMax-M3。</p>
                     </div>
                     <div class="form-row">
-                        <label class="field-label" for="max-tokens" data-i18n="settings.maxTokens"></label>
+                        <label class="field-label" for="max-tokens" data-i18n="settings.maxTokens">最大输出 Token</label>
                         <div class="range-row">
                             <input type="range" id="max-tokens" min="500" max="32000" step="500" aria-describedby="max-tokens-hint">
                             <output for="max-tokens" id="max-tokens-out">4000</output>
                         </div>
-                        <p class="field-hint" id="max-tokens-hint" data-i18n="settings.maxTokens.hint"></p>
+                        <p class="field-hint" id="max-tokens-hint" data-i18n="settings.maxTokens.hint">种属很多的大图可调高，避免结果被截断。</p>
                     </div>
                     <div class="form-row">
-                        <label class="field-label" for="max-edge" data-i18n="settings.maxEdge"></label>
+                        <label class="field-label" for="max-edge" data-i18n="settings.maxEdge">图像分辨率上限 (px)</label>
                         <div class="range-row">
                             <input type="range" id="max-edge" min="0" max="8000" step="500" aria-describedby="max-edge-hint">
                             <output for="max-edge" id="max-edge-out">4000</output>
                         </div>
-                        <p class="field-hint" id="max-edge-hint" data-i18n="settings.maxEdge.hint"></p>
+                        <p class="field-hint" id="max-edge-hint" data-i18n="settings.maxEdge.hint">压缩上传前的长边上限。默认 4000，越大越清晰、越利于识读密排小字；0=不压缩。</p>
                     </div>
                     <div class="form-row">
-                        <label class="field-label" for="enhance" data-i18n="settings.enhance"></label>
+                        <label class="field-label" for="enhance" data-i18n="settings.enhance">图像增强</label>
                         <div class="range-row">
                             <input type="checkbox" id="enhance" role="switch" aria-describedby="enhance-hint">
                         </div>
-                        <p class="field-hint" id="enhance-hint" data-i18n="settings.enhance.hint"></p>
+                        <p class="field-hint" id="enhance-hint" data-i18n="settings.enhance.hint">对薄延长线和小字号标注启用 3× 上采样 + 去噪，提升识别率（会增加传输时间）。</p>
                     </div>
                     <div class="form-row">
-                        <label class="field-label" for="runs" data-i18n="settings.runs"></label>
+                        <label class="field-label" for="runs" data-i18n="settings.runs">运行次数 (1–5)</label>
                         <div class="range-row">
                             <input type="range" id="runs" min="1" max="5" step="1" aria-describedby="runs-hint">
                             <output for="runs" id="runs-out">1</output>
                         </div>
-                        <p class="field-hint" id="runs-hint" data-i18n="settings.runs.hint"></p>
+                        <p class="field-hint" id="runs-hint" data-i18n="settings.runs.hint">同一张图运行多次并合并结果，可减少偶发 OCR 误读。每次为一次 API 调用。</p>
                     </div>
                     <div class="form-row">
-                        <label class="field-label" for="proxy" data-i18n="settings.proxy"></label>
+                        <label class="field-label" for="proxy" data-i18n="settings.proxy">代理地址（可选）</label>
                         <input type="text" id="proxy" spellcheck="false" data-i18n-ph="settings.proxy.placeholder">
-                        <p class="field-hint" data-i18n="settings.proxy.hint"></p>
+                        <p class="field-hint" data-i18n="settings.proxy.hint">若浏览器直连被 CORS 拦截，填入你自建的代理地址。留空则直连 MiniMax。</p>
                     </div>
                     <div class="form-row">
-                        <span class="field-label" id="conn-mode-label" data-i18n="settings.mode"></span>
+                        <span class="field-label" id="conn-mode-label" data-i18n="settings.mode">连接模式</span>
                         <div class="segmented" role="radiogroup" aria-labelledby="conn-mode-label" id="conn-mode-seg">
-                            <button type="button" role="radio" data-value="auto" aria-checked="true" data-i18n="settings.mode.auto"></button>
-                            <button type="button" role="radio" data-value="backend" aria-checked="false" data-i18n="settings.mode.backend"></button>
-                            <button type="button" role="radio" data-value="direct" aria-checked="false" data-i18n="settings.mode.direct"></button>
+                            <button type="button" role="radio" data-value="auto" aria-checked="true" data-i18n="settings.mode.auto">自动</button>
+                            <button type="button" role="radio" data-value="backend" aria-checked="false" data-i18n="settings.mode.backend">经本地后端（推荐，避免 CORS）</button>
+                            <button type="button" role="radio" data-value="direct" aria-checked="false" data-i18n="settings.mode.direct">浏览器直连 / 代理</button>
                         </div>
                         <select id="conn-mode" hidden aria-hidden="true">
                             <option value="auto" selected></option>
                             <option value="backend"></option>
                             <option value="direct"></option>
                         </select>
-                        <p class="field-hint" id="conn-mode-hint" data-i18n="settings.mode.hint"></p>
+                        <p class="field-hint" id="conn-mode-hint" data-i18n="settings.mode.hint">自动：由本地服务器打开时走后端（避免 CORS），否则浏览器直连。</p>
                     </div>
                 </div>
 
@@ -128,29 +163,29 @@
                          only works on <label>) and the switch button had
                          no accessible name, so screen readers announced
                          an unnamed switch. -->
-                    <span class="field-label" id="remember-key-label" data-i18n="settings.remember"></span>
+                    <span class="field-label" id="remember-key-label" data-i18n="settings.remember">在本浏览器记住 API Key</span>
                     <button type="button" id="remember-key" role="switch" aria-checked="true"
                             aria-labelledby="remember-key-label" class="ios-switch">
                         <span class="ios-switch-knob" aria-hidden="true"></span>
                     </button>
-                    <p class="field-hint" data-i18n="settings.remember.hint"></p>
+                    <p class="field-hint" data-i18n="settings.remember.hint">密钥仅保存在当前会话（sessionStorage），关闭标签页即清除；勾选「记住」仅在本会话内保留密钥。</p>
                 </div>
 
-                <button type="button" class="btn btn-secondary btn-small" id="save-settings" data-i18n="settings.save"></button>
+                <button type="button" class="btn btn-secondary btn-small" id="save-settings" data-i18n="settings.save">保存设置</button>
             </section>
 
             <section class="card" id="upload-card">
                 <h2>
                     <span class="card-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span>
-                    <span data-i18n="upload.title"></span>
+                    <span data-i18n="upload.title">上传地层沿线图</span>
                 </h2>
-                <p class="card-desc" data-i18n="upload.desc"></p>
+                <p class="card-desc" data-i18n="upload.desc">支持 PNG / JPG / WEBP。图片直接从你的浏览器发送到 MiniMax。支持中 / 英 / 日 / 俄 四种语言的图表。</p>
 
                 <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-describedby="dz-aria">
                     <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    <div class="dz-title" data-i18n="upload.dz.title"></div>
-                    <div class="dz-hint" data-i18n="upload.dz.hint"></div>
-                    <span id="dz-aria" class="visually-hidden" data-i18n="upload.dz.aria">Drop an image here or click to upload</span>
+                    <div class="dz-title" data-i18n="upload.dz.title">拖拽图片到此处，或点击选择</div>
+                    <div class="dz-hint" data-i18n="upload.dz.hint">单张图片，最大约 20 MB</div>
+                    <span id="dz-aria" class="visually-hidden" data-i18n="upload.dz.aria">点击或拖拽图片到此区域上传，支持 PNG、JPG、WEBP。</span>
                 </div>
                 <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" class="hidden">
 
@@ -161,55 +196,65 @@
 
                 <div class="form-grid" style="margin-top:16px;">
                     <div class="form-row">
-                        <label class="field-label" for="chart-mode" data-i18n="upload.chartMode"></label>
+                        <label class="field-label" for="chart-mode" data-i18n="upload.chartMode">图表类型</label>
                         <select id="chart-mode">
-                            <option value="auto" data-i18n="upload.chartMode.auto"></option>
-                            <option value="range_chart" data-i18n="upload.chartMode.rangeChart"></option>
-                            <option value="columnar_section" data-i18n="upload.chartMode.columnarSection"></option>
-                            <option value="abundance_diagram" data-i18n="upload.chartMode.abundanceDiagram"></option>
-                            <option value="phylogenetic_tree" data-i18n="upload.chartMode.phylogeneticTree"></option>
-                        <option value="zonation_chart" data-i18n="upload.chartMode.zonationChart"></option>
+                            <option value="auto" data-i18n="upload.chartMode.auto">自动</option>
+                            <option value="range_chart" data-i18n="upload.chartMode.rangeChart">种属延限图</option>
+                            <option value="columnar_section" data-i18n="upload.chartMode.columnarSection">柱状对比图</option>
+                            <option value="abundance_diagram" data-i18n="upload.chartMode.abundanceDiagram">丰度/孢粉图</option>
+                            <option value="phylogenetic_tree" data-i18n="upload.chartMode.phylogeneticTree">系统发育树</option>
+                        <option value="zonation_chart" data-i18n="upload.chartMode.zonationChart">生物带对比图</option>
                         </select>
-                        <p class="field-hint" data-i18n="upload.chartMode.hint"></p>
+                        <p class="field-hint" data-i18n="upload.chartMode.hint">「自动」按文件名/图注启发式判定；也可手动指定。</p>
                     </div>
                     <div class="form-row">
-                        <label class="field-label" for="chart-lang" data-i18n="upload.chartLang"></label>
+                        <label class="field-label" for="chart-lang" data-i18n="upload.chartLang">图表语言</label>
                         <select id="chart-lang">
-                            <option value="auto" data-i18n="upload.chartLang.auto"></option>
-                            <option value="zh" data-i18n="upload.chartLang.zh"></option>
-                            <option value="en" data-i18n="upload.chartLang.en"></option>
-                            <option value="ja" data-i18n="upload.chartLang.ja"></option>
-                            <option value="ru" data-i18n="upload.chartLang.ru"></option>
+                            <option value="auto" data-i18n="upload.chartLang.auto">自动检测</option>
+                            <option value="zh" data-i18n="upload.chartLang.zh">中文</option>
+                            <option value="en" data-i18n="upload.chartLang.en">English</option>
+                            <option value="ja" data-i18n="upload.chartLang.ja">日本語</option>
+                            <option value="ru" data-i18n="upload.chartLang.ru">Русский</option>
                         </select>
-                        <p class="field-hint" data-i18n="upload.chartLang.hint"></p>
+                        <p class="field-hint" data-i18n="upload.chartLang.hint">选择图表文字的主要语言，帮助模型更准确地识读。</p>
                     </div>
                 </div>
 
                 <div class="form-row">
-                    <label class="field-label" for="caption" data-i18n="upload.caption"></label>
+                    <label class="field-label" for="caption" data-i18n="upload.caption">图注 / 备注（可选）</label>
                     <textarea id="caption" data-i18n-ph="upload.caption.placeholder" maxlength="2000"></textarea>
                     <div class="caption-meta">
-                        <p class="field-hint" data-i18n="upload.caption.hint"></p>
+                        <p class="field-hint" data-i18n="upload.caption.hint">若有图注文字，粘贴在此有助于提高提取准确度。</p>
                         <span class="caption-counter" id="caption-counter" aria-live="polite">0 / 2000</span>
                     </div>
                 </div>
 
                 <div class="btn-row">
                     <button type="button" class="btn btn-primary btn-lg" id="extract-btn">
-                        <span id="extract-btn-label" data-i18n="upload.extract"></span>
+                        <span id="extract-btn-label" data-i18n="upload.extract">开始提取</span>
                     </button>
-                    <button type="button" class="btn btn-secondary" id="reset-btn" data-i18n="upload.reset"></button>
-                    <button type="button" class="btn btn-secondary hidden" id="cancel-btn" data-i18n="upload.cancel"></button>
-                    <button type="button" class="btn btn-secondary hidden" id="force-rerun-btn" data-i18n="upload.forceRerun"></button>
+                    <button type="button" class="btn btn-secondary" id="reset-btn" data-i18n="upload.reset">清除</button>
+                    <button type="button" class="btn btn-secondary hidden" id="cancel-btn" data-i18n="upload.cancel">取消</button>
+                    <button type="button" class="btn btn-secondary hidden" id="force-rerun-btn" data-i18n="upload.forceRerun">强制重新提取</button>
                 </div>
             </section>
 
             <section class="card" id="results-card">
                 <h2>
                     <span class="card-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg></span>
-                    <span data-i18n="results.title"></span>
+                    <span data-i18n="results.title">提取结果</span>
                 </h2>
 
+                <!-- FE-BORROW-2026-09-20 (domain U, a11y): this slot is the
+                     ONE live region for banner announcements. It used to be
+                     role="status" aria-live="polite" while showAlert() gave
+                     every banner inside it its own role="alert"/"status" —
+                     nested live regions, so a failure was read out twice (and
+                     for danger, politely AND assertively at once). The slot
+                     now stays in the DOM from page load (regions inserted
+                     later are ignored by several screen readers) and
+                     app.js flips ITS role/aria-live to match the banner kind;
+                     the banner element itself is a plain node. -->
                 <div id="alert-slot" role="status" aria-live="polite"></div>
 
                 <div id="loading-slot" class="hidden" role="status" aria-live="polite">
@@ -219,20 +264,52 @@
                             <div class="skeleton h20"></div>
                             <div class="skeleton h16"></div>
                         </div>
-                        <p data-i18n="loading.text"></p>
+                        <!-- FE-BORROW-2026-09-20 (domain U): determinate
+                             multi-run progress. Direct transport already
+                             counts finished runs ({done}/{total}); setBusyLabel
+                             fills this bar (width + aria-valuenow) and
+                             updateActionButtons hides it whenever no extraction
+                             is running. Stays .hidden in backend mode, where
+                             the client never sees per-run signals. -->
+                        <div id="run-progress" class="run-progress hidden"
+                             role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                             aria-valuenow="0" aria-label="提取进度" data-i18n-label="loading.progress">
+                            <div id="run-progress-fill" class="run-progress-fill"></div>
+                        </div>
+                        <p data-i18n="loading.text">正在识读图表，请稍候……通常需要 20 秒到 2 分钟</p>
                     </div>
                 </div>
 
                 <div id="results-empty" class="empty-state">
                     <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
-                    <p data-i18n="results.empty"></p>
+                    <p data-i18n="results.empty">还没有结果。请在上方上传一张地层沿线图并点击「开始提取」。</p>
                 </div>
 
                 <div id="results-content" class="hidden">
-                    <!-- Future ECharts Gantt mount point for species-range
-                         visualization. Hidden until rcaRenderViz is wired up.
-                         Do not remove. -->
-                    <div id="viz-host" hidden></div>
+                    <!-- FE-BORROW-2026-09-20 (域V): the placeholder is now the
+                         real result-linked Gantt mount point, rendered by
+                         rcaViz.render(this, state.result, state.dataUrl) in
+                         js/viz.js. Three stacked layers, WebPlotDigitizer
+                         discipline: the source image (reference, dimmed), one
+                         canvas for the bars, one canvas for the transient hover
+                         feedback. Static markup on purpose: app.js captures and
+                         re-appends #viz-host around every innerHTML rewrite, so
+                         these nodes are the ones the renderer draws into.
+                         The canvases are decorative (aria-hidden + role="img");
+                         #viz-summary holds the text alternative and the DOM
+                         tables below stay the semantic truth source. -->
+                    <div id="viz-host" class="viz-host" role="group" aria-labelledby="viz-heading">
+                        <div class="viz-head">
+                            <span class="viz-heading-text" id="viz-heading">延限—层位联动图</span>
+                            <span class="viz-hint">悬停画布行＝高亮表格行 · 点击＝固定聚焦 · Esc 取消</span>
+                        </div>
+                        <div class="rca-viz-stage">
+                            <img class="rca-viz-image" alt="" aria-hidden="true">
+                            <canvas class="rca-viz-canvas rca-viz-bars" aria-hidden="true" role="img"></canvas>
+                            <canvas class="rca-viz-canvas rca-viz-hover" aria-hidden="true" role="img"></canvas>
+                        </div>
+                        <p class="rca-viz-summary" id="viz-summary" role="status" aria-live="polite"></p>
+                    </div>
                 </div>
             </section>
         </main>
@@ -243,29 +320,50 @@
     </div>
 
     <div class="page-drop-overlay" id="page-drop-overlay" aria-hidden="true">
-        <div class="pd-card" data-i18n="upload.dropOverlay"></div>
+        <div class="pd-card" data-i18n="upload.dropOverlay">松手上传</div>
     </div>
 
     <div class="toast toast-glass" id="toast" role="status" aria-live="polite"></div>
 
-    <script src="js/config.js"></script>
-    <script src="js/i18n.js"></script>
-    <script src="js/prompt.js"></script>
-    <script src="js/json-utils.js"></script>
-    <script src="js/error-utils.js"></script>
-    <script src="js/minimax.js"></script>
+    <!-- FE-BORROW-2026-09-20 (域P): every script is now `defer`.
+         These tags sit after all body markup, so they already executed once the
+         document was parsed; `defer` keeps that ordering contract (deferred
+         scripts run in document order, before DOMContentLoaded) while letting
+         the browser fetch all of them in parallel over the server's HTTP/1.1
+         keep-alive connections instead of one blocking fetch at a time.
+         Do not "optimise" this into `async`: the load order below is the
+         dependency graph (config -> i18n -> prompt/json-utils/error-utils ->
+         minimax -> reason-codes -> aggregate -> ics_table -> quality -> table
+         -> export -> theme -> app), and app.js / theme.js guard on
+         document.readyState === 'loading', so a deferred load still sees the
+         same "DOM complete, DOMContentLoaded not yet fired" moment they were
+         written for. -->
+    <script defer src="js/config.js"></script>
+    <script defer src="js/i18n.js"></script>
+    <script defer src="js/prompt.js"></script>
+    <script defer src="js/json-utils.js"></script>
+    <script defer src="js/error-utils.js"></script>
+    <script defer src="js/minimax.js"></script>
     <!-- 2026-09-20 (BORROW-2026-09-20 A): the coverage-contract mirror
          (reason codes / response_kind / coverage ledger). js/aggregate.js and
          js/quality.js call into it, so it must come first. -->
-    <script src="js/reason-codes.js"></script>
-    <script src="js/aggregate.js"></script>
-    <script src="js/ics_table.js"></script>
-    <script src="js/quality.js"></script>
-    <script src="js/table.js"></script>
-    <script src="js/export.js"></script>
+    <script defer src="js/reason-codes.js"></script>
+    <script defer src="js/aggregate.js"></script>
+    <script defer src="js/ics_table.js"></script>
+    <script defer src="js/quality.js"></script>
+    <script defer src="js/table.js"></script>
+    <script defer src="js/export.js"></script>
     <!-- theme.js must run before app.js so it can set data-theme on documentElement
          before the first paint and wire the three theme buttons. -->
-    <script src="js/theme.js"></script>
-    <script src="js/app.js"></script>
+    <script defer src="js/theme.js"></script>
+    <!-- FE-BORROW-2026-09-20 (域P): the new feature modules, ahead of app.js
+         because app.js calls init() the moment it executes (its readyState
+         guard), so anything it must find on `window` (rcaViz, rcaHistory) has
+         to have been defined by then. They may not exist yet in this round of
+         parallel work; the server answers 404 for a missing whitelisted asset,
+         which shows up as one console error rather than a broken page. -->
+    <script defer src="js/viz.js"></script>
+    <script defer src="js/history.js"></script>
+    <script defer src="js/app.js"></script>
 </body>
 </html>

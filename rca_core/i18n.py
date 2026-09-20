@@ -10,6 +10,23 @@ TRANSLATIONS = {
 
 TRANSLATIONS["zh"] = {
     "history.filter.zonation": "生物带",
+    # FE-BORROW-2026-09-20 (domain U): mirror of the browser catalog in
+    # js/i18n.js — a11y strings (theme / language labels, theme button
+    # titles), error-banner actions, confirm dialog and progress bar copy.
+    # GUI code does not read them today; the parity tests keep the three
+    # locales aligned so it can.
+    "a11y.skipToContent": "跳到主要内容",
+    "a11y.themeLabel": "主题",
+    "a11y.languageLabel": "语言",
+    "theme.system": "跟随系统",
+    "theme.light": "浅色",
+    "theme.dark": "深色",
+    "loading.progress": "提取进度",
+    "err.copyDetails": "复制详情",
+    "err.retry": "重试",
+    "err.copyFailed": "复制失败，请手动选择文本复制。",
+    "confirm.forceRerun": "将忽略服务端缓存重新调用模型提取，会产生新的 API 费用。确定继续吗？",
+    "confirm.reset": "确定要重置吗？当前提取结果将被清除。",
     "err.exportFailed": "无法写入文件，请检查目标路径是否可写：",
     # REVIEW-2026-09-10: err.* keys produced by gui.py and rca_core had no entry in any language, so failures rendered the raw key.
     "err.imageDecode": "无法解码该图片，请换一张 PNG / JPG / WEBP。",
@@ -426,6 +443,19 @@ TRANSLATIONS["zh"] = {
 
 TRANSLATIONS["en"] = {
     "history.filter.zonation": "Zonation",
+    # FE-BORROW-2026-09-20 (domain U): see the zh block comment.
+    "a11y.skipToContent": "Skip to main content",
+    "a11y.themeLabel": "Theme",
+    "a11y.languageLabel": "Language",
+    "theme.system": "Follow system",
+    "theme.light": "Light",
+    "theme.dark": "Dark",
+    "loading.progress": "Extraction progress",
+    "err.copyDetails": "Copy details",
+    "err.retry": "Retry",
+    "err.copyFailed": "Copy failed — select the text and copy it manually.",
+    "confirm.forceRerun": "This bypasses the server cache and calls the model again, using fresh API credits. Continue?",
+    "confirm.reset": "Are you sure you want to reset? Current extraction results will be cleared.",
     "err.exportFailed": "Could not write the file — check that the target path is writable:",
     # REVIEW-2026-09-10: err.* keys produced by gui.py and rca_core had no entry in any language, so failures rendered the raw key.
     "err.imageDecode": "Could not decode that image — try a PNG / JPG / WEBP file.",
@@ -817,6 +847,19 @@ TRANSLATIONS["en"] = {
 
 TRANSLATIONS["ja"] = {
     "history.filter.zonation": "帯区分",
+    # FE-BORROW-2026-09-20 (domain U): see the zh block comment.
+    "a11y.skipToContent": "メインコンテンツへスキップ",
+    "a11y.themeLabel": "テーマ",
+    "a11y.languageLabel": "言語",
+    "theme.system": "システム設定",
+    "theme.light": "ライト",
+    "theme.dark": "ダーク",
+    "loading.progress": "抽出の進捗",
+    "err.copyDetails": "詳細をコピー",
+    "err.retry": "再試行",
+    "err.copyFailed": "コピーに失敗しました。テキストを手動で選択してコピーしてください。",
+    "confirm.forceRerun": "サーバー側のキャッシュを無視してモデルを再呼び出しします。新しい API 消費が発生します。続行しますか？",
+    "confirm.reset": "リセットしてもよろしいですか？現在の抽出結果がクリアされます。",
     "err.exportFailed": "ファイルに書き込めません。保存先に書き込み権限があるか確認してください：",
     # REVIEW-2026-09-10: err.* keys produced by gui.py and rca_core had no entry in any language, so failures rendered the raw key.
     "err.imageDecode": "画像を読み込めませんでした。PNG / JPG / WEBP をお試しください。",

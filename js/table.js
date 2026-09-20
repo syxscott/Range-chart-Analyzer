@@ -117,6 +117,44 @@ function rcaTableConfigs(data) {
   return rcaRangeChartConfigs(data, multi);
 }
 
+// ---- editable column metadata (FE-BORROW-2026-09-20, 域T) ------------
+//
+// One `edit` entry per column, index-aligned with `cols` (same length —
+// tests_edit_history.js asserts the alignment for EVERY table of EVERY chart
+// mode, so a future column cannot silently arrive without an editor).
+//
+//   field     model key the cell writes back into (rca_core/exporter.py
+//             TABLE_CONFIGS `data_keys`, NOT the i18n label)
+//   type      mirrors rca_core/exporter.py COL_TYPES verbatim:
+//             'str' | 'number' | 'int' | 'float' | 'list' | 'bool_yn'
+//             | 'nullable_str'. It drives BOTH the text→value coercion
+//             (exporter.py:_coerce_cell) and the numeric "is this cell a
+//             number?" validation, so the browser and the Qt Apply-edits path
+//             cannot disagree about what a typed cell means.
+//   editable  false for computed columns ('agreement', mirrored from
+//             editable.py:_template_from_cfg, which skips `agreement`) and for
+//             identity columns the other tables reference ('id', node 'id').
+//   validate  extra validator: 'stage' (ICS stage name) or a range pair
+//             ('bed-pair' / 'range-pair' / 'age-pair', with `peer` giving
+//             [topField, baseField]) for the inversions quality.js already
+//             penalises (range_top_lt_base / bed_index_order_invalid /
+//             fad_lt_lad).
+//   model     nested-model key when it differs from the exported key
+//             (lithology_blocks top_idx -> range_top_idx), mirroring
+//             exporter.py `nested_in.key_map`.
+function rcaEC(field, type, extra) {
+  const spec = { field: field, type: type || 'str', editable: true, validate: null };
+  if (extra && typeof extra === 'object') {
+    for (const k of Object.keys(extra)) spec[k] = extra[k];
+  }
+  return spec;
+}
+
+// A column that exists for display only (agreement / id / reference keys).
+function rcaECro(field, type) {
+  return rcaEC(field, type || 'str', { editable: false });
+}
+
 // -------- abundance-diagram (pollen / percentage) mode --------
 function rcaAbundanceDiagramConfigs(data, multi) {
   const abCols = ['col.taxon', 'col.site', 'col.level', 'col.depth', 'col.abundance', 'col.abundanceUnit'];
@@ -128,6 +166,7 @@ function rcaAbundanceDiagramConfigs(data, multi) {
       id: 'sites',
       titleKey: 'sec.sites',
       cols: ['col.name', 'col.location', 'col.ageRange', 'col.depthUnit'],
+      edit: [rcaEC('name'), rcaEC('location'), rcaEC('age_range'), rcaEC('depth_unit')],
       italicCol: -1,
       row: (s) => [s.name, s.location, s.age_range, s.depth_unit],
     },
@@ -135,6 +174,14 @@ function rcaAbundanceDiagramConfigs(data, multi) {
       id: 'abundances',
       titleKey: 'sec.abundances',
       cols: abColsFinal,
+      // COL_TYPES['abundances'] is {} — depth / abundance stay TEXT on the
+      // Python side ("35%", "common"), so no numeric validation here.
+      edit: abColsFinal.map((c) => (c === 'col.agreement' ? rcaECro('agreement') : rcaEC(
+        c === 'col.taxon' ? 'taxon'
+          : c === 'col.site' ? 'site'
+            : c === 'col.level' ? 'level'
+              : c === 'col.depth' ? 'depth'
+                : c === 'col.abundance' ? 'abundance' : 'abundance_unit'))),
       italicCol: 0,
       row: abRowFinal,
     },
@@ -142,6 +189,7 @@ function rcaAbundanceDiagramConfigs(data, multi) {
       id: 'zones',
       titleKey: 'sec.zones',
       cols: ['col.name', 'col.age', 'col.levelRange'],
+      edit: [rcaEC('name'), rcaEC('age'), rcaEC('level_range')],
       italicCol: -1,
       row: (z) => [z.name, z.age, z.level_range],
     },
@@ -181,6 +229,14 @@ function rcaColumnarSectionConfigs(data, multi) {
       id: 'sections',
       titleKey: 'sec.sections',
       cols: secColsFinal,
+      // `id` is the join key every sub-table row carries as `section_id`, so
+      // editing it in place would orphan the lithology / age / sample rows —
+      // read-only, like `agreement`. thickness_m is COL_TYPES 'number'.
+      edit: secColsFinal.map((c) => (c === 'col.sectionId' ? rcaECro('id')
+        : c === 'col.sectionGroup' ? rcaEC('group')
+          : c === 'col.thickness' ? rcaEC('thickness_m', 'number')
+            : c === 'col.coordinates' ? rcaEC('coordinates_text')
+              : rcaECro('agreement'))),
       italicCol: 0,
       row: secRowFinal,
     },
@@ -188,6 +244,15 @@ function rcaColumnarSectionConfigs(data, multi) {
       id: 'lithology_blocks',
       titleKey: 'sec.lithologyBlocks',
       cols: ['col.secId', 'col.pattern', 'col.topIdx', 'col.baseIdx'],
+      edit: [rcaECro('section_id'), rcaEC('pattern'),
+        rcaEC('top_idx', 'int', { validate: 'bed-pair', peer: ['top_idx', 'base_idx'], model: 'range_top_idx' }),
+        rcaEC('base_idx', 'int', { validate: 'bed-pair', peer: ['top_idx', 'base_idx'], model: 'range_base_idx' })],
+      // exporter.py:511-535 `nested_in` — the model has no top-level
+      // `lithology_blocks` key; the rows are flattened out of
+      // ``sections[i]`` and must be written back through ``(section_index,
+      // sub_key, row_index)`` (the `_src` provenance rcaColumnarSubTableRows
+      // now records, exactly like exporter.py:441).
+      nested: { parent: 'sections', subKey: 'lithology_blocks', derived: ['section_id'] },
       italicCol: -1,
       row: (r) => [r.section_id, r.pattern,
         r.top_idx == null ? '' : String(r.top_idx),
@@ -197,6 +262,10 @@ function rcaColumnarSectionConfigs(data, multi) {
       id: 'age_units',
       titleKey: 'sec.ageUnits',
       cols: ['col.secId', 'col.label', 'col.topIdx', 'col.baseIdx'],
+      edit: [rcaECro('section_id'), rcaEC('label'),
+        rcaEC('top_idx', 'int', { validate: 'bed-pair', peer: ['top_idx', 'base_idx'], model: 'range_top_idx' }),
+        rcaEC('base_idx', 'int', { validate: 'bed-pair', peer: ['top_idx', 'base_idx'], model: 'range_base_idx' })],
+      nested: { parent: 'sections', subKey: 'age_units', derived: ['section_id'] },
       italicCol: -1,
       row: (r) => [r.section_id, r.label,
         r.top_idx == null ? '' : String(r.top_idx),
@@ -206,6 +275,11 @@ function rcaColumnarSectionConfigs(data, multi) {
       id: 'samples',
       titleKey: 'sec.samples',
       cols: ['col.secId', 'col.bedIdx', 'col.fossilMarker', 'col.ref'],
+      edit: [rcaECro('section_id'), rcaEC('bed_idx', 'int'),
+        rcaEC('fossil_marker'), rcaEC('ref')],
+      // samples keep their export names (exporter.py:563-570 key_map {}),
+      // so no `model` override is needed on the specs above.
+      nested: { parent: 'sections', subKey: 'samples', derived: ['section_id'] },
       italicCol: -1,
       row: (r) => [r.section_id,
         r.bed_idx == null ? '' : String(r.bed_idx),
@@ -215,6 +289,7 @@ function rcaColumnarSectionConfigs(data, multi) {
       id: 'fossil_legend',
       titleKey: 'sec.fossils', // reuse fossils title to keep the keyset small
       cols: ['col.fossilMarker', 'col.fossilMeaning'],
+      edit: [rcaEC('marker'), rcaEC('meaning')],
       italicCol: -1,
       row: (it) => [it.marker || '', it.meaning || ''],
     },
@@ -222,6 +297,7 @@ function rcaColumnarSectionConfigs(data, multi) {
       id: 'lithology_legend',
       titleKey: 'sec.columnarLithology',
       cols: ['col.lithologyPattern', 'col.lithologyMeaning'],
+      edit: [rcaEC('pattern'), rcaEC('meaning')],
       italicCol: -1,
       row: (it) => [it.pattern || it.marker || '', it.meaning || ''],
     },
@@ -229,6 +305,8 @@ function rcaColumnarSectionConfigs(data, multi) {
       id: 'cross_beds',
       titleKey: 'sec.crossBeds',
       cols: ['col.crossFrom', 'col.crossFromBed', 'col.crossTo', 'col.crossToBed'],
+      edit: [rcaEC('from_section'), rcaEC('from_bed_idx', 'int'),
+        rcaEC('to_section'), rcaEC('to_bed_idx', 'int')],
       italicCol: -1,
       row: (it) => [
         it.from_section || '',
@@ -252,6 +330,13 @@ function rcaPhylogeneticTreeConfigs(data, multi) {
       titleKey: 'sec.nodes',
       cols: ['col.nodeId', 'col.parent', 'col.name', 'col.isLeaf',
              'col.branchLength', 'col.nodeAgeMa', 'col.support'],
+      // Types are COL_TYPES['nodes'] (exporter.py:1038-1053): is_leaf is the
+      // Y/N display of a bool, parent is nullable_str ("" -> None so the
+      // "root has parent None" invariant survives), the three numbers are
+      // floats. `id` stays read-only because `parent` values reference it.
+      edit: [rcaECro('id'), rcaEC('parent', 'nullable_str'), rcaEC('name'),
+        rcaEC('is_leaf', 'bool_yn'), rcaEC('branch_length', 'float'),
+        rcaEC('node_age_ma', 'float'), rcaEC('support', 'float')],
       italicCol: -1,
       row: (n) => [
         n.id,
@@ -275,6 +360,7 @@ function rcaZonationChartConfigs(data, multi) {
       id: 'zonations',
       titleKey: 'sec.zonations',
       cols: ['col.name', 'col.region', 'col.framework', 'col.reference'],
+      edit: [rcaEC('name'), rcaEC('region'), rcaEC('framework'), rcaEC('reference')],
       italicCol: -1,
       row: (z) => [
         z.name || '',
@@ -289,6 +375,14 @@ function rcaZonationChartConfigs(data, multi) {
       cols: ['col.name', 'col.zonation', 'col.rank', 'col.ageSpan',
              'col.baseAge', 'col.topAge', 'col.stage', 'col.definedBy',
              'col.note'],
+      // col.stage runs the ICS validator (RCA_ICS_TABLE + the period alias
+      // maps, js/ics_table.js); the two Ma columns are a top/base pair that
+      // must not cross (top_age <= base_age, younger sits higher).
+      edit: [rcaEC('name'), rcaEC('zonation'), rcaEC('rank'), rcaEC('age_span'),
+        rcaEC('base_age', 'float', { validate: 'age-pair', peer: ['top_age', 'base_age'] }),
+        rcaEC('top_age', 'float', { validate: 'age-pair', peer: ['top_age', 'base_age'] }),
+        rcaEC('stage', 'str', { validate: 'stage' }),
+        rcaEC('defined_by'), rcaEC('note')],
       italicCol: 0,
       row: (r) => [
         r.name || '',
@@ -307,6 +401,8 @@ function rcaZonationChartConfigs(data, multi) {
       titleKey: 'sec.correlations',
       cols: ['col.fromZone', 'col.fromZonation', 'col.toZone',
              'col.toZonation', 'col.basis', 'col.note'],
+      edit: [rcaEC('from_zone'), rcaEC('from_zonation'), rcaEC('to_zone'),
+        rcaEC('to_zonation'), rcaEC('basis'), rcaEC('note')],
       italicCol: -1,
       row: (c) => [
         c.from_zone || '',
@@ -334,18 +430,20 @@ function rcaRangeChartConfigs(data, multi) {
   // NOT `v || ''`: a legitimate 0 (range_top_idx, confidence) or an empty
   // author string must still count as "populated" and be written out.
   const optText = (v) => (v === null || v === undefined ? '' : String(v));
-  // [column label, getter] — the getter doubles as the "does ANY row
-  // populate this column?" predicate, exactly like the Python tuple list.
+  // [column label, getter, editable-column spec] — the getter doubles as the
+  // "does ANY row populate this column?" predicate, exactly like the Python
+  // tuple list; the third slot keeps the editor metadata aligned with the
+  // conditional column set (FE-BORROW-2026-09-20).
   const speciesOpt = [
-    ['col.authorYear', (r) => optText(r.author_year)],
-    ['col.rangeTopBed', (r) => optText(r.range_top_bed)],
-    ['col.rangeTopIdx', (r) => optText(r.range_top_idx)],
+    ['col.authorYear', (r) => optText(r.author_year), rcaEC('author_year')],
+    ['col.rangeTopBed', (r) => optText(r.range_top_bed), rcaEC('range_top_bed')],
+    ['col.rangeTopIdx', (r) => optText(r.range_top_idx), rcaEC('range_top_idx', 'number')],
     ['col.endpointKind', (r) => (r.endpoint_kind === null || r.endpoint_kind === undefined
-      || r.endpoint_kind === 'unknown' ? '' : String(r.endpoint_kind))],
+      || r.endpoint_kind === 'unknown' ? '' : String(r.endpoint_kind)), rcaEC('endpoint_kind')],
     ['col.occurrenceMode', (r) => (r.occurrence_mode === null || r.occurrence_mode === undefined
-      || r.occurrence_mode === 'unknown' ? '' : String(r.occurrence_mode))],
-    ['col.colConfidence', (r) => optText(r.confidence)],
-    ['col.note', (r) => optText(r.note)],
+      || r.occurrence_mode === 'unknown' ? '' : String(r.occurrence_mode)), rcaEC('occurrence_mode')],
+    ['col.colConfidence', (r) => optText(r.confidence), rcaEC('confidence', 'float')],
+    ['col.note', (r) => optText(r.note), rcaEC('note')],
   ];
   // Non-dict rows are skipped for the predicates only (exporter.py:325
   // `if isinstance(r, dict)`) — the row renderers still show them.
@@ -354,15 +452,27 @@ function rcaRangeChartConfigs(data, multi) {
     : []).filter((r) => r !== null && typeof r === 'object' && !Array.isArray(r));
   const speciesOptCols = [];
   const speciesOptGetters = [];
-  for (const [label, getter] of speciesOpt) {
-    if (speciesRowsForPred.some((r) => getter(r))) {
-      speciesOptCols.push(label);
-      speciesOptGetters.push(getter);
+  const speciesOptEdit = [];
+  for (const entry of speciesOpt) {
+    if (speciesRowsForPred.some((r) => entry[1](r))) {
+      speciesOptCols.push(entry[0]);
+      speciesOptGetters.push(entry[1]);
+      speciesOptEdit.push(entry[2]);
     }
   }
   const speciesColsFinal = multi
     ? speciesBaseCols.concat(speciesOptCols, ['col.agreement'])
     : speciesBaseCols.concat(speciesOptCols);
+  // Base editor specs, range_base / range_top cross-checked as a pair
+  // (quality.js `range_top_lt_base` becomes a red frame instead of a
+  // downstream quality penalty).
+  const speciesEditFinal = [
+    rcaEC('species'), rcaEC('section'),
+    rcaEC('range_base', 'str', { validate: 'range-pair', peer: ['range_top', 'range_base'] }),
+    rcaEC('range_top', 'str', { validate: 'range-pair', peer: ['range_top', 'range_base'] }),
+    rcaEC('biozone'),
+  ].concat(speciesOptEdit);
+  if (multi) speciesEditFinal.push(rcaECro('agreement'));
   const speciesRowFinal = (r) => {
     const row = speciesBaseRow(r);
     for (const g of speciesOptGetters) row.push(g(r));
@@ -377,6 +487,14 @@ function rcaRangeChartConfigs(data, multi) {
       // (P1-9) — the stale key rendered "[?col.formations]" in every
       // section header.
       cols: ['col.name', 'col.ageRange', 'col.formation', 'col.thickness', 'col.coordinates'],
+      // `col.formation` renders `formations.join('; ')` and COL_TYPES tags it
+      // 'list', so the editor splits on ';' exactly like exporter._coerce_cell.
+      // `formation_thickness_m` stays 'str': COL_TYPES['sections'] tags only
+      // the columnar `thickness_m`, and _coerce_cell's default branch keeps
+      // the operator's text untouched — coercing here would make the browser
+      // write 120 where Qt writes "120".
+      edit: [rcaEC('name'), rcaEC('age_range'), rcaEC('formations', 'list'),
+        rcaEC('formation_thickness_m'), rcaEC('coordinates')],
       italicCol: -1,
       row: (s) => [
         s.name,
@@ -390,6 +508,7 @@ function rcaRangeChartConfigs(data, multi) {
       id: 'species_ranges',
       titleKey: 'sec.species',
       cols: speciesColsFinal,
+      edit: speciesEditFinal,
       italicCol: 0,
       row: speciesRowFinal,
     },
@@ -401,6 +520,8 @@ function rcaRangeChartConfigs(data, multi) {
       // Without it the two modes exported divergent tables for the same
       // payload, even though the in-memory normalization was equivalent.
       cols: ['col.name', 'col.section', 'col.age', 'col.thickness'],
+      edit: [rcaEC('name'), rcaEC('section'), rcaEC('age'),
+        rcaEC('thickness_m', 'number')],
       italicCol: -1,
       row: (b) => [b.name, b.section, b.age, b.thickness_m],
     },
@@ -408,6 +529,12 @@ function rcaRangeChartConfigs(data, multi) {
       id: 'other_fossils',
       titleKey: 'sec.fossils',
       cols: ['col.fossil'],
+      // `scalar: true` — the row itself may be a plain string, so the editor
+      // writes the LIST ITEM instead of a key of it (mirrors editable.py's
+      // scalar-row branch, which compares strings directly and replays the
+      // whole list through `_replaced`). For a dict row the writer resolves
+      // fossil/text exactly like the `row` renderer below.
+      edit: [rcaEC(null, null, { scalar: true })],
       italicCol: -1,
       // M1 (REVIEW-2026-08-19): rows may be a plain string or a dict.
       // M4 (REVIEW-2026-09-20): the dict keys are now the Python ones —
@@ -446,30 +573,42 @@ function rcaColumnarSubTableRows(data) {
   const lithology_blocks = [];
   const age_units = [];
   const samples = [];
-  for (const sec of (data && data.sections) || []) {
+  const sections = (data && Array.isArray(data.sections)) ? data.sections : [];
+  for (let si = 0; si < sections.length; si++) {
+    const sec = sections[si];
     const sid = sec && sec.id ? String(sec.id) : '';
-    for (const b of (sec && sec.lithology_blocks) || []) {
+    for (let bi = 0; bi < ((sec && sec.lithology_blocks) || []).length; bi++) {
+      const b = sec.lithology_blocks[bi];
       lithology_blocks.push({
         section_id: sid,
         pattern: b && b.pattern ? String(b.pattern) : '',
         top_idx: b ? b.range_top_idx : null,
         base_idx: b ? b.range_base_idx : null,
+        // FE-BORROW-2026-09-20: exporter.py:441 provenance triple — the
+        // editor writes back into sections[si][subKey][ri] instead of
+        // inventing a top-level key nothing reads. Never reaches a cell: the
+        // table's `row` extractor picks its keys explicitly.
+        _src: [si, 'lithology_blocks', bi],
       });
     }
-    for (const u of (sec && sec.age_units) || []) {
+    for (let ui = 0; ui < ((sec && sec.age_units) || []).length; ui++) {
+      const u = sec.age_units[ui];
       age_units.push({
         section_id: sid,
         label: u && u.label ? String(u.label) : '',
         top_idx: u ? u.range_top_idx : null,
         base_idx: u ? u.range_base_idx : null,
+        _src: [si, 'age_units', ui],
       });
     }
-    for (const s of (sec && sec.samples) || []) {
+    for (let mi = 0; mi < ((sec && sec.samples) || []).length; mi++) {
+      const s = sec.samples[mi];
       samples.push({
         section_id: sid,
         bed_idx: s ? s.bed_idx : null,
         fossil_marker: s && s.fossil_marker ? String(s.fossil_marker) : '',
         ref: s && s.ref ? String(s.ref) : '',
+        _src: [si, 'samples', mi],
       });
     }
   }
@@ -580,8 +719,15 @@ function rcaRowAgreementBand(item, runsRaw) {
 }
 
 // Render the whole result. `data` is the normalized result object.
-function rcaRenderResults(data, rawText) {
+//
+// FE-BORROW-2026-09-20 (域T) adds an OPTIONAL third argument,
+// `opts = { editable: true }`. Without it the output is byte-identical to the
+// old read-only markup — the Qt Fluent history dialog (gui_fluent_history_detail
+// .py) reuses this renderer through QWebEngineView and must stay read-only, so
+// editing is strictly opt-in and the two callers cannot drift.
+function rcaRenderResults(data, rawText, opts) {
   const configs = rcaTableConfigs(data);
+  const editOn = rcaEditFlag(opts);
   const parts = [];
 
   // Confidence ring + global actions toolbar.
@@ -672,6 +818,19 @@ function rcaRenderResults(data, rawText) {
   }
   parts.push('</div>');
   parts.push('<div class="rt-actions">');
+  // FE-BORROW-2026-09-20 (domain T integration): undo/redo live in the
+  // toolbar so the operator can see the stack state without hunting the
+  // keyboard. rcaHistoryAttachUi (js/history.js) enables/disables these
+  // after every render; disabled here because a fresh result always has an
+  // empty stack.
+  if (editOn) {
+    parts.push('<button type="button" class="btn btn-secondary btn-small" data-rca-undo="1" disabled '
+      + 'title="' + rcaEscAttr(rcaEditT('edit.undo')) + '">'
+      + rcaEsc(rcaEditT('edit.undo')) + '</button>');
+    parts.push('<button type="button" class="btn btn-secondary btn-small" data-rca-redo="1" disabled '
+      + 'title="' + rcaEscAttr(rcaEditT('edit.redo')) + '">'
+      + rcaEsc(rcaEditT('edit.redo')) + '</button>');
+  }
   parts.push('<button type="button" class="btn btn-secondary btn-small" id="btn-export-all">' + rcaEsc(t('results.exportAll')) + '</button>');
   parts.push('</div>');
   parts.push('</div>');
@@ -686,7 +845,19 @@ function rcaRenderResults(data, rawText) {
     // them and every sub-table rendered empty with no copy/CSV buttons).
     const rows = rcaRowsForTable(data, cfg.id);
     const safeId = rcaEscAttr(cfg.id);
-    parts.push('<div class="result-section" data-table="' + safeId + '">');
+    // An empty table is still an editing target: the operator adds the first
+    // row from here (Tabulator has the same "no data -> add row" affordance).
+    if (editOn && rows.length === 0) {
+      parts.push('<div class="result-section" data-table="' + safeId + '" data-editable="1">');
+      parts.push('<div class="result-section-head">');
+      parts.push('<h3>' + rcaEsc(t(cfg.titleKey)) + ' <span class="result-count">(0)</span></h3>');
+      parts.push('</div>');
+      parts.push('<div class="cell-empty" style="padding:8px 2px;">' + rcaEsc(t('results.noRows')) + '</div>');
+      parts.push(rcaEditAddRowButton(cfg));
+      parts.push('</div>');
+      continue;
+    }
+    parts.push('<div class="result-section" data-table="' + safeId + '"' + (editOn ? ' data-editable="1"' : '') + '>');
     parts.push('<div class="result-section-head">');
     parts.push('<h3>' + rcaEsc(t(cfg.titleKey)) + ' <span class="result-count">(' + rows.length + ')</span></h3>');
     if (rows.length > 0) {
@@ -716,10 +887,23 @@ function rcaRenderResults(data, rawText) {
     // cell navigation, so we keep the markup native rather than bolting a
     // role="grid" roving-tabindex widget onto read-only data.
     const tblLabel = rcaEscAttr(t(cfg.titleKey) + ' (' + rows.length + ')');
-    parts.push('<div class="table-wrap"><table class="data-table" aria-label="' + tblLabel + '"><thead><tr>');
+    // The scroll container is the J/K focus context (`tabindex="0"` only in
+    // edit mode — the read-only renderer must not gain a tab stop).
+    parts.push('<div class="table-wrap"'
+      + (editOn ? ' tabindex="0" data-table-nav="' + safeId + '"' : '')
+      + '><table class="data-table" aria-label="' + tblLabel + '"><thead><tr>');
+    if (editOn) {
+      parts.push('<th scope="col" class="rca-col-select"><input type="checkbox" class="rca-select-all"'
+        + ' data-select-all="' + safeId + '"'
+        + ' aria-label="' + rcaEscAttr(rcaEditT('edit.selectAll')) + '"></th>');
+    }
     parts.push('<th scope="col">' + rcaEsc(t('col.index')) + '</th>');
     for (const c of cfg.cols) {
       parts.push('<th scope="col">' + rcaEsc(t(c)) + '</th>');
+    }
+    if (editOn) {
+      parts.push('<th scope="col" class="rca-col-locate">'
+        + rcaEsc(rcaEditT('edit.locateColumn')) + '</th>');
     }
     parts.push('</tr></thead><tbody>');
     rows.forEach((item, idx) => {
@@ -734,10 +918,22 @@ function rcaRenderResults(data, rawText) {
       let rowCls = '';
       if ((cfg.id === 'species_ranges' || cfg.id === 'sections') && data && Number(data.runs) > 1) {
         if (rcaRowAgreementBand(item, data.runs) === 'low') {
-          rowCls = ' class="row-low-agreement"';
+          rowCls = 'row-low-agreement';
         }
       }
-      parts.push('<tr' + rowCls + '>');
+      // FE-BORROW-2026-09-20: the low-confidence marker is what J/K walks
+      // over, so it has to be on the row already at render time (a CSS-only
+      // highlight the keyboard can follow without re-querying the model).
+      if (editOn && rcaTableIsLowConfidenceRow(data, cfg.id, item)) {
+        rowCls = rowCls ? rowCls + ' rca-row-lowconf' : 'rca-row-lowconf';
+      }
+      parts.push('<tr' + (rowCls ? ' class="' + rowCls + '"' : '')
+        + ' data-row="' + idx + '">');
+      if (editOn) {
+        parts.push('<td class="rca-cell-select"><input type="checkbox" class="rca-row-select"'
+          + ' data-row-select="' + safeId + '" data-row="' + idx + '"'
+          + ' aria-label="' + rcaEscAttr(rcaEditT('edit.selectRow') + ' ' + (idx + 1)) + '"></td>');
+      }
       parts.push('<th class="cell-empty" scope="row">' + (idx + 1) + '</th>');
       // M4 (REVIEW-2026-09-20): rcaRowCellsFor is the `_row_values` mirror —
       // the one cell builder behind BOTH this render loop and
@@ -780,11 +976,38 @@ function rcaRenderResults(data, rawText) {
         }
         const titleAttr = val.trim() ? ' title="' + rcaEscAttr(val) + '"' : '';
         const disp = val.trim() ? rcaEsc(val) : '-';
+        // FE-BORROW-2026-09-20: the editable cell. `contenteditable` + the
+        // data-* descriptors let js/table.js's delegated handlers resolve the
+        // target column WITHOUT re-deriving it from the model (a re-render
+        // mid-edit must not misattribute the value). The dirty marker comes
+        // from the edits registry, so an edit survives a re-render (language
+        // switch, viz refresh) instead of being painted over.
+        const spec = editOn ? rcaColEditSpec(cfg, ci) : null;
+        if (spec && spec.editable) {
+          const dirty = rcaTableEdits.isCellEdited(cfg.id, idx, rcaEditFieldOf(spec, item));
+          parts.push('<td class="' + cls + ' rca-edit-cell' + (dirty ? ' rca-cell-dirty' : '') + '"'
+            + ' contenteditable="true" spellcheck="false"'
+            + rcaEditDataAttrs(cfg, idx, ci, spec) + '>' + disp + '</td>');
+          return;
+        }
         parts.push('<td class="' + cls + '"' + titleAttr + '>' + disp + '</td>');
       });
+      if (editOn) {
+        // Row-tail 定位 button: hover / focus drive window.rcaViz (guarded),
+        // and it is the anchor the viz's own row highlight scrolls to.
+        parts.push('<td class="rca-cell-locate">'
+          + '<button type="button" class="btn btn-secondary btn-small rca-locate-btn"'
+          + ' data-rca-locate="' + safeId + ':' + idx + '"'
+          + ' title="' + rcaEscAttr(rcaEditT('edit.locateHint')) + '">'
+          + rcaEsc(rcaEditT('edit.locate')) + '</button></td>');
+      }
       parts.push('</tr>');
     });
     parts.push('</tbody></table></div>');
+    if (editOn) {
+      parts.push(rcaEditAddRowButton(cfg));
+      parts.push(rcaEditSelectionBar(cfg));
+    }
     parts.push('</div>');
   }
 
@@ -865,3 +1088,1988 @@ function rcaRenderNameIssues(issues) {
   host.appendChild(box);
 }
 if (typeof globalThis !== 'undefined') globalThis.rcaRenderNameIssues = rcaRenderNameIssues;
+
+// ===========================================================================
+// FE-BORROW-2026-09-20 (域T): IN-BROWSER TABLE EDITING
+// ===========================================================================
+//
+// Borrowed patterns (no network needed, the shape is what matters):
+//   * Tabulator Edit.js — `editTriggerEvent: "focus"`, a dirty-cell registry
+//     (`setCellEdited` / `getEditedCells` / `clearCellEdited`),
+//     `navigateUp/Down/Left/Right`, and `focus({preventScroll:true})` with
+//     self-managed scrolling. Crucially: a cell whose validation failed KEEPS
+//     focus (red frame, "lock focus") instead of silently reverting.
+//   * editable-history's `undoManager` + Tabulator History's
+//     `{type, ...} -> undoers[type]` dispatch table — implemented in
+//     js/history.js, which only ever sees the three actions defined below
+//     (cellEdit / rowDelete / rowAdd).
+//
+// The DIRTY MODEL is a deliberate mirror of rca_core/editable.py, which is the
+// only edit engine the Qt side has. Every rule below cites the Python line it
+// copies, and tests_edit_history.js replays a shared case table through both
+// engines so they cannot drift silently.
+//
+// Editing is opt-in: `rcaRenderResults(data, raw, {editable:true})` plus
+// `rcaTableEditAttach(root, data)`. The Qt Fluent history dialog keeps calling
+// the two-argument form and therefore keeps rendering read-only markup.
+
+// ---- i18n: t() with a built-in bilingual fallback -----------------------
+//
+// js/i18n.js has no `edit.*` cell-editor keys yet (domain U owns that file),
+// and `t()` answers a missing key with "[?edit.addRow]" — a string that would
+// reach the user. So every editor string goes through rcaEditT(): use the real
+// key when i18n has it, otherwise this local temporary zh/en table. The
+// key list is exported as RCA_EDIT_I18N_KEYS so the i18n owner can lift it and
+// so tests_edit_history.js fails the moment a key lands in js/i18n.js only in
+// one locale.
+const RCA_EDIT_STRINGS = {
+  'edit.addRow': { zh: '新增行', en: 'Add row' },
+  'edit.addRowHint': { zh: '在表尾追加一行空白记录（可撤销）',
+    en: 'Append a blank row at the end of the table (undoable)' },
+  'edit.exportSelected': { zh: '导出所选', en: 'Export selected' },
+  'edit.deleteSelected': { zh: '删除所选', en: 'Delete selected' },
+  'edit.clearSelection': { zh: '清除选择', en: 'Clear selection' },
+  'edit.locate': { zh: '定位', en: 'Locate' },
+  'edit.locateColumn': { zh: '操作', en: 'Actions' },
+  'edit.locateHint': { zh: '在图表中定位该行', en: 'Locate this row in the chart' },
+  'edit.selectAll': { zh: '选择全部行', en: 'Select all rows' },
+  'edit.selectRow': { zh: '选择行', en: 'Select row' },
+  'edit.selectedCount': { zh: '已选 {n} 行', en: '{n} row(s) selected' },
+  'edit.cellNotNumber': { zh: '此列需要数值：{value}', en: 'A number is required: {value}' },
+  'edit.cellNotYesNo': { zh: '此列只接受 Y / N：{value}', en: 'Only Y / N accepted: {value}' },
+  'edit.badStage': { zh: '不是 ICS 阶名：{value}', en: 'Not an ICS stage name: {value}' },
+  'edit.rangeInverted': { zh: '延限倒置：顶 {top} 不得老于底 {base}',
+    en: 'Range inverted: top {top} is older than base {base}' },
+  'edit.ageInverted': { zh: '年龄倒置：顶 {top} Ma 应小于等于底 {base} Ma',
+    en: 'Age inverted: top {top} Ma must not exceed base {base} Ma' },
+  'edit.idxInverted': { zh: '层号倒置：顶 {top} 应大于等于底 {base}',
+    en: 'Bed order inverted: top {top} must be >= base {base}' },
+  'edit.undo': { zh: '撤销', en: 'Undo' },
+  'edit.redo': { zh: '重做', en: 'Redo' },
+  'edit.editsPending': { zh: '{n} 处未保存的修改', en: '{n} unsaved edit(s)' },
+  'edit.rowsDeleted': { zh: '已删除 {n} 行', en: 'Deleted {n} row(s)' },
+  'edit.noViz': { zh: '暂无联动图表可定位', en: 'No linked chart to locate in' },
+};
+const RCA_EDIT_I18N_KEYS = Object.keys(RCA_EDIT_STRINGS);
+
+function rcaEditLang() {
+  // RCA_LANG is a top-level `let` in js/i18n.js; a bare `typeof` guard keeps
+  // this file loadable on its own (tests_edit_history.js loads table.js
+  // without the whole app).
+  return (typeof RCA_LANG !== 'undefined' && RCA_LANG) ? String(RCA_LANG) : 'zh';
+}
+
+function rcaEditT(key, params) {
+  let s = null;
+  if (typeof t === 'function') {
+    const candidate = t(key);
+    // t() answers an unknown key with "[?key]" (and warns on the console).
+    if (candidate && candidate.indexOf('[?') !== 0) s = candidate;
+  }
+  if (s === null) {
+    const entry = RCA_EDIT_STRINGS[key];
+    if (!entry) return key;
+    s = entry[rcaEditLang()] || entry.en || entry.zh;
+  }
+  if (params && typeof params === 'object') {
+    for (const k of Object.keys(params)) {
+      s = s.split('{' + k + '}').join(String(params[k]));
+    }
+  }
+  return s;
+}
+
+// ---- edit mode flag ------------------------------------------------------
+// opts = { editable: true } (or any object without `editable: false`).
+// The two-argument call stays read-only so the Qt reuse cannot gain editors.
+function rcaEditFlag(opts) {
+  return !!(opts && opts.editable !== false);
+}
+
+// ---- Python-mirror primitives -------------------------------------------
+
+// copy.deepcopy for JSON-shaped model data. Written by hand rather than via
+// JSON round-trip because JSON.stringify DROPS `undefined` valued keys, and
+// "key present with undefined" is exactly the null-vs-missing distinction
+// editable.py's `_deleted_keys` branch turns on.
+function rcaClone(value) {
+  if (Array.isArray(value)) return value.map(rcaClone);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value)) out[k] = rcaClone(value[k]);
+    return out;
+  }
+  return value;
+}
+
+// editable.py:_coerce — "trim whitespace; pass through everything else".
+// Non-strings (ints, lists, None) come back untouched.
+function rcaCoerceVal(value) {
+  return typeof value === 'string' ? value.trim() : value;
+}
+
+// Python `str(x)` as far as a model value goes: None->'None' is never needed
+// here (callers test for null first), booleans follow Python's capitalised
+// spelling, numbers use the shortest round-trip form.
+function rcaPyStr(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'boolean') return value ? 'True' : 'False';
+  return String(value);
+}
+
+// Python `a != b` for model values. The JS `!==` is NOT equivalent: it splits
+// 1 from "1" the same way Python does, but it also splits True from 1 and
+// None from undefined, both of which Python calls equal. Array / object
+// compare deep (Python list/dict equality), which is what makes a nested
+// columnar edit (sections[i].lithology_blocks) visible to the diff at all.
+function rcaPyNotEqual(a, b) {
+  return rcaPyEqual(a, b) === false;
+}
+
+function rcaPyEqual(a, b) {
+  const an = (a === undefined) ? null : a;
+  const bn = (b === undefined) ? null : b;
+  if (an === null || bn === null) return an === bn;
+  if (Array.isArray(an) || Array.isArray(bn)) {
+    if (!Array.isArray(an) || !Array.isArray(bn)) return false;
+    if (an.length !== bn.length) return false;
+    for (let i = 0; i < an.length; i += 1) {
+      if (!rcaPyEqual(an[i], bn[i])) return false;
+    }
+    return true;
+  }
+  if (rcaIsDict(an) || rcaIsDict(bn)) {
+    if (!rcaIsDict(an) || !rcaIsDict(bn)) return false;
+    const ak = Object.keys(an).filter((k) => an[k] !== undefined);
+    const bk = Object.keys(bn).filter((k) => bn[k] !== undefined);
+    if (ak.length !== bk.length) return false;
+    for (const k of ak) {
+      if (!(k in bn)) return false;
+      if (!rcaPyEqual(an[k], bn[k])) return false;
+    }
+    return true;
+  }
+  if (typeof an === 'boolean' || typeof bn === 'boolean') {
+    // Python: True == 1, False == 0, but True != "True" and True != 0.5.
+    const anNum = typeof an === 'boolean' ? (an ? 1 : 0) : an;
+    const bnNum = typeof bn === 'boolean' ? (bn ? 1 : 0) : bn;
+    return typeof anNum === 'number' && typeof bnNum === 'number' && anNum === bnNum;
+  }
+  if (typeof an !== typeof bn) return false;
+  if (typeof an === 'number') {
+    // NaN != NaN on both engines.
+    if (Number.isNaN(an) || Number.isNaN(bn)) return false;
+    return an === bn;
+  }
+  return an === bn;
+}
+
+// rca_core/exporter.py:_coerce_cell — the ONE text -> model-value rule the Qt
+// Apply-edits path uses. Mirroring it here is what makes a browser edit and a
+// GUI edit of the same cell produce the same model value.
+// NOTE: exporter.py deliberately KEEPS unparseable numeric text ("5m") rather
+// than dropping the field; the editor additionally *warns* about it before
+// anything is written (rcaValidateCell), which is stricter at input time but
+// stores exactly the same value once a value does arrive from a payload.
+// Python's int()/float() accept a sign, a decimal point, an exponent and the
+// PEP-515 underscore separators (int("1_000") == 1000), and reject everything
+// else — including JS's beloved hex ("0x10") and Infinity. Same grammar here,
+// or the two engines disagree about which cells are numbers.
+const RCA_NUMERIC_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+function rcaPyParseNumber(text) {
+  const cleaned = String(text).trim().replace(/_/g, '');
+  if (!RCA_NUMERIC_RE.test(cleaned)) return null;
+  const num = Number(cleaned);
+  // Deliberate deviation, flagged: Python float("inf") succeeds and would
+  // store an infinity in the model; a non-finite cell value is worthless
+  // downstream (rcaExportCellText blanks it), so it counts as unparsable.
+  if (!Number.isFinite(num)) return null;
+  return num;
+}
+
+function rcaCoerceCellValue(rawText, type) {
+  const tname = type || 'str';
+  let value = (rawText === null || rawText === undefined) ? '' : rawText;
+  const s = typeof value === 'string' ? value : rcaPyStr(value);
+  if (tname === 'list') {
+    return (s || '').split(';').map((x) => x.trim()).filter((x) => x.length > 0);
+  }
+  if (tname === 'int' || tname === 'float' || tname === 'number') {
+    const txt = (s || '').trim();
+    if (!txt) return null;                       // an empty cell is "not filled"
+    const num = rcaPyParseNumber(txt);
+    if (num === null) return txt;                // keep what the operator typed
+    if (tname === 'float' || tname === 'number') return num;
+    // 'int': Python int("3.0") raises, then the fall-back branch does
+    // int(float(s)) — i.e. truncation toward zero.
+    return Math.trunc(num);
+  }
+  if (tname === 'bool_yn') {
+    const v = (s || '').trim().toLowerCase();
+    return v === 'y' || v === 'yes' || v === 'true' || v === '1' || v === 't';
+  }
+  if (tname === 'nullable_str') {
+    const v = (s || '').trim();
+    return v || null;
+  }
+  return s || '';
+}
+
+// "This value carries no information" — the point where a cleared cell becomes
+// a KEY REMOVAL (so the diff records it under `_deleted_keys`, which is what
+// normalize_result does to an emptied field and what apply_edits replays).
+function rcaIsEmptyModelValue(value) {
+  if (value === null || value === undefined) return true;
+  if (value === '') return true;
+  if (Array.isArray(value) && value.length === 0) return true;
+  return false;
+}
+
+// ---- the list keys the diff walks (editable.py:_LIST_KEYS) --------------
+const RCA_EDIT_LIST_KEYS = [
+  'sections', 'species_ranges', 'biozones',
+  'fossil_legend', 'lithology_legend', 'cross_beds',
+  'other_fossils',
+  'sites', 'abundances', 'zones',
+  'nodes', 'zonations', 'correlations',
+  'lithology_blocks', 'age_units', 'samples',
+];
+// editable.py:_SCALAR_LIST_KEYS — rows that are plain strings, not dicts.
+const RCA_EDIT_SCALAR_LIST_KEYS = ['other_fossils'];
+// editable.py:_DELETED_KEYS
+const RCA_EDIT_DELETED_KEYS = '_deleted_keys';
+const RCA_EDIT_EXTRAS_KEY = '_extras';
+
+// capture_edits() for ONE list. See editable.py:133-212 for the source rules;
+// each branch below cites them.
+function rcaCaptureListEdits(beforeList, afterList) {
+  const b = Array.isArray(beforeList) ? beforeList : [];
+  const a = Array.isArray(afterList) ? afterList : [];
+  // editable.py:147-154 — a deletion cannot be represented index-wise, so the
+  // whole AFTER list replaces the list.
+  if (a.length < b.length) return { _replaced: rcaClone(a) };
+  const edits = {};
+  const n = Math.min(b.length, a.length);
+  let scalarChanged = false;
+  for (let i = 0; i < n; i += 1) {
+    const bDict = rcaIsDict(b[i]);
+    const aDict = rcaIsDict(a[i]);
+    // editable.py:166-170 — dict vs scalar row: no per-cell merge possible.
+    if (bDict !== aDict) { scalarChanged = true; continue; }
+    if (!aDict) {
+      // editable.py:171-175 — both rows are scalars, compare the values.
+      if (rcaPyNotEqual(rcaCoerceVal(a[i]), rcaCoerceVal(b[i]))) scalarChanged = true;
+      continue;
+    }
+    const bi = b[i] || {};
+    const ai = a[i] || {};
+    const cellEdits = {};
+    // editable.py:186 — the UNION of both rows' keys, before-keys first.
+    const cols = Object.keys(bi);
+    for (const k of Object.keys(ai)) {
+      if (cols.indexOf(k) === -1) cols.push(k);
+    }
+    for (const col of cols) {
+      if (col === RCA_EDIT_EXTRAS_KEY) continue;   // editable.py:187
+      const inA = Object.prototype.hasOwnProperty.call(ai, col);
+      const inB = Object.prototype.hasOwnProperty.call(bi, col);
+      if (inA && inB) {
+        if (rcaPyNotEqual(rcaCoerceVal(ai[col]), rcaCoerceVal(bi[col]))) {
+          cellEdits[col] = ai[col];
+        }
+      } else if (inA) {
+        // editable.py:192-196 — new key: compare against None, so an added
+        // `col: ""` IS an edit ('' != None in Python).
+        if (rcaPyNotEqual(rcaCoerceVal(ai[col]), rcaCoerceVal(null))) {
+          cellEdits[col] = ai[col];
+        }
+      } else {
+        // editable.py:197-199 — present before, gone after: a deletion.
+        if (!Array.isArray(cellEdits[RCA_EDIT_DELETED_KEYS])) {
+          cellEdits[RCA_EDIT_DELETED_KEYS] = [];
+        }
+        cellEdits[RCA_EDIT_DELETED_KEYS].push(col);
+      }
+    }
+    if (Object.keys(cellEdits).length > 0) edits[i] = cellEdits;
+  }
+  // editable.py:202-204 — a scalar row change replaces the list (and wins on
+  // replay, because apply_edits tests `_replaced` first).
+  if (scalarChanged) edits._replaced = rcaClone(a);
+  // editable.py:205-209 — appended rows ride as `new_<index>`; only dicts,
+  // and by reference (the deep copy happens on apply).
+  for (let i = n; i < a.length; i += 1) {
+    if (rcaIsDict(a[i])) edits['new_' + i] = a[i];
+  }
+  return edits;
+}
+
+// editable.py:capture_edits for a whole result dict.
+function rcaCaptureEdits(before, after) {
+  if (!rcaIsDict(before) || !rcaIsDict(after)) return {};
+  const out = {};
+  for (const key of RCA_EDIT_LIST_KEYS) {
+    const b = before[key] || [];
+    const a = after[key] || [];
+    if (!Array.isArray(b) || !Array.isArray(a)) continue;
+    const edits = rcaCaptureListEdits(b, a);
+    if (Object.keys(edits).length > 0) out[key] = edits;
+  }
+  return out;
+}
+
+// Python `int(x)` on a table index: only an optionally signed run of digits.
+function rcaPyInt(text) {
+  const s = String(text).trim();
+  if (!/^[+-]?\d+$/.test(s)) return null;
+  const n = parseInt(s, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+// editable.py:apply_edits — replays a payload onto a result dict IN PLACE.
+function rcaApplyEdits(result, edits) {
+  if (!rcaIsDict(result) || !rcaIsDict(edits)) return result;
+  for (const key of Object.keys(edits)) {
+    if (RCA_EDIT_LIST_KEYS.indexOf(key) === -1) continue;
+    const items = result[key];
+    if (!Array.isArray(items)) continue;
+    const rowEdits = edits[key];
+    if (!rcaIsDict(rowEdits)) continue;
+    if (Object.prototype.hasOwnProperty.call(rowEdits, '_replaced')) {
+      result[key] = rcaClone(rowEdits._replaced);
+      continue;
+    }
+    const modifications = [];
+    const insertions = [];
+    for (const idx of Object.keys(rowEdits)) {
+      const cellEdits = rowEdits[idx];
+      if (idx.indexOf('new_') === 0) {
+        const insertAt = rcaPyInt(idx.slice(4));
+        if (insertAt === null) continue;
+        if (rcaIsDict(cellEdits)) insertions.push([insertAt, rcaClone(cellEdits)]);
+        continue;
+      }
+      const i = rcaPyInt(idx);
+      if (i === null) continue;
+      if (rcaIsDict(cellEdits)) modifications.push([i, cellEdits]);
+    }
+    // editable.py:265-290 — modifications first (in-place, no reindexing).
+    for (const [i, cellEdits] of modifications) {
+      if (i < 0 || i >= items.length) continue;
+      let item = items[i];
+      if (!rcaIsDict(item)) {
+        // editable.py:271-275 — promote a scalar row so it can hold fields.
+        items[i] = { value: item };
+        item = items[i];
+      }
+      for (const col of Object.keys(cellEdits)) {
+        if (col === RCA_EDIT_EXTRAS_KEY) continue;
+        const val = cellEdits[col];
+        if (col === RCA_EDIT_DELETED_KEYS) {
+          if (Array.isArray(val)) {
+            for (const drop of val) {
+              if (typeof drop === 'string') delete item[drop];
+            }
+          }
+          continue;
+        }
+        item[col] = rcaClone(val);
+      }
+    }
+    // editable.py:291-299 — insertions in ASCENDING index order, clamped like
+    // list.insert().
+    insertions.sort((x, y) => x[0] - y[0]);
+    for (const [insertAt, payload] of insertions) {
+      const at = Math.max(0, Math.min(items.length, insertAt));
+      items.splice(at, 0, payload);
+    }
+  }
+  return result;
+}
+
+// editable.py:is_dirty
+function rcaIsDirtyEdits(edits) {
+  return Object.keys(edits || {}).length > 0;
+}
+
+// editable.py:_default_for / new_row_template, driven off the SAME column
+// metadata the editor renders from (cfg.edit) instead of a second hand-maintained
+// template table. `agreement` is skipped exactly like _template_from_cfg does,
+// and a scalar list key yields "" exactly like new_row_template does.
+function rcaNewRowTemplate(cfg, tableId) {
+  if (RCA_EDIT_SCALAR_LIST_KEYS.indexOf(tableId) !== -1) return '';
+  if (!cfg || !Array.isArray(cfg.edit)) return {};
+  const out = {};
+  for (const spec of cfg.edit) {
+    if (!spec || !spec.field) continue;
+    if (spec.field === 'agreement') continue;
+    const model = spec.model || spec.field;
+    if (spec.type === 'list') out[model] = [];
+    else if (spec.type === 'int' || spec.type === 'float' || spec.type === 'number'
+      || spec.type === 'bool_yn' || spec.type === 'nullable_str') out[model] = null;
+    else out[model] = '';
+  }
+  return out;
+}
+
+// ---- validators ----------------------------------------------------------
+
+// quality.js:_parseBedN (private there) — "the first integer in the cell".
+// Duplicated rather than reached into quality.js so table.js has no load-order
+// dependency on the scorer.
+function rcaParseBedN(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'boolean') return null;
+  if (typeof value === 'number') return Number.isNaN(value) ? null : Math.trunc(value);
+  const s = String(value).trim();
+  if (!s) return null;
+  const m = s.match(/-?\d+/);
+  return m ? parseInt(m[0], 10) : null;
+}
+
+// quality.js:_looksLikeAge — a bed number and a Ma age must not be compared to
+// each other, which is why the range pair has two branches.
+const RCA_AGE_UNIT_RE = /(?:\bMa\b|\bMyr\b|\bMya\b|百万年|年前)/i;
+function rcaLooksLikeAgeText(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'number') return false;
+  return RCA_AGE_UNIT_RE.test(String(value));
+}
+
+// quality.js:_INFORMAL_STAGE_RE — "unnumbered stage I" & co. are legal values
+// the ICS table cannot answer for.
+const RCA_INFORMAL_STAGE_RE = /^\s*(?:unnumbered|unnamed|stage)\s+[\dxvi]+\s*$/i;
+
+// Resolve a stage / period label against the bundled ICS tables. Reuses what
+// js/ics_table.js already ships instead of growing a second gazetteer:
+// RCA_ICS_TABLE (stage -> ma bounds), RCA_ICS_PERIOD_NAMES +
+// RCA_ICS_CN_PERIOD_NAMES (alias -> canonical period).
+function rcaIcsLookupStage(name) {
+  const raw = String(name === null || name === undefined ? '' : name).trim();
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  const table = (typeof globalThis !== 'undefined' && globalThis.RCA_ICS_TABLE)
+    ? globalThis.RCA_ICS_TABLE : null;
+  if (table) {
+    if (Object.prototype.hasOwnProperty.call(table, raw)) return raw;
+    for (const k of Object.keys(table)) {
+      if (k.toLowerCase() === lower) return k;
+    }
+  }
+  const en = (typeof globalThis !== 'undefined' && globalThis.RCA_ICS_PERIOD_NAMES)
+    ? globalThis.RCA_ICS_PERIOD_NAMES : null;
+  if (en && Object.prototype.hasOwnProperty.call(en, lower)) return en[lower];
+  const cn = (typeof globalThis !== 'undefined' && globalThis.RCA_ICS_CN_PERIOD_NAMES)
+    ? globalThis.RCA_ICS_CN_PERIOD_NAMES : null;
+  if (cn && Object.prototype.hasOwnProperty.call(cn, raw)) return cn[raw];
+  return null;
+}
+
+// rca_core/quality.py's bed branch: top < base is the inversion (younger end
+// numerically BELOW the older end).
+function rcaBedPairInverted(topVal, baseVal) {
+  const top = rcaParseBedN(topVal);
+  const base = rcaParseBedN(baseVal);
+  if (top === null || base === null) return null;
+  return top < base;
+}
+
+// The species range pair: quality.js tries the bed numbers first and only
+// falls back to Ma ages when either side reads like an age.
+function rcaRangePairInverted(topVal, baseVal) {
+  const top = rcaParseBedN(topVal);
+  const base = rcaParseBedN(baseVal);
+  const agey = rcaLooksLikeAgeText(topVal) || rcaLooksLikeAgeText(baseVal);
+  if (top !== null && base !== null && !agey) return top < base;
+  const topMa = rcaAgeTextToMa(topVal);
+  const baseMa = rcaAgeTextToMa(baseVal);
+  if (topMa === null || baseMa === null) return null;   // not comparable
+  return baseMa < topMa;                                // older below younger
+}
+
+function rcaAgeTextToMa(value) {
+  if (value === null || value === undefined) return null;
+  const num = rcaPyParseNumber(String(value).replace(/\s*(?:Ma|Myr|Mya|百万年|年前)\s*$/i, ''));
+  return num;
+}
+
+// zones.top_age / base_age: both are Ma numbers, top (younger) must not exceed
+// base (older).
+function rcaAgePairInverted(topVal, baseVal) {
+  const top = rcaAgeTextToMa(topVal);
+  const base = rcaAgeTextToMa(baseVal);
+  if (top === null || base === null) return null;
+  return top > base;
+}
+
+// Validate one edited cell BEFORE it is written. Pure: `ref` is the plain
+// descriptor ({type, validate, peer, field}), `text` the raw cell content and
+// `row` the live model row (used for the pair checks' peer value).
+// Returns {ok:true} or {ok:false, key, params, text} — `key` is the i18n key
+// so the caller can re-render the message in another language.
+function rcaValidateCell(ref, text, row) {
+  const spec = ref || {};
+  const s = (text === null || text === undefined) ? '' : String(text).trim();
+  const type = spec.type || 'str';
+  // An empty cell is always acceptable: clearing a field is a legitimate
+  // correction (it travels as `_deleted_keys`, see editable.py:197).
+  if (s === '' && type !== 'bool_yn') return { ok: true };
+  if (type === 'int' || type === 'float' || type === 'number') {
+    if (rcaPyParseNumber(s) === null) {
+      return {
+        ok: false, key: 'edit.cellNotNumber', params: { value: s },
+        text: rcaEditT('edit.cellNotNumber', { value: s }),
+      };
+    }
+  }
+  if (type === 'bool_yn') {
+    const v = s.toLowerCase();
+    if (['y', 'n', 'yes', 'no', 'true', 'false', '1', '0', 't', 'f'].indexOf(v) === -1) {
+      return {
+        ok: false, key: 'edit.cellNotYesNo', params: { value: s },
+        text: rcaEditT('edit.cellNotYesNo', { value: s }),
+      };
+    }
+  }
+  if (spec.validate === 'stage' && !RCA_INFORMAL_STAGE_RE.test(s)) {
+    if (rcaIcsLookupStage(s) === null) {
+      return {
+        ok: false, key: 'edit.badStage', params: { value: s },
+        text: rcaEditT('edit.badStage', { value: s }),
+      };
+    }
+  }
+  if (spec.validate === 'range-pair' || spec.validate === 'bed-pair'
+      || spec.validate === 'age-pair') {
+    const pair = Array.isArray(spec.peer) ? spec.peer : [];
+    const topField = pair[0];
+    const baseField = pair[1];
+    if (!topField || !baseField || !rcaIsDict(row)) return { ok: true };
+    const isEditedTop = (spec.field === topField);
+    const topVal = isEditedTop ? s : row[topField];
+    const baseVal = !isEditedTop ? s : row[baseField];
+    const fn = spec.validate === 'bed-pair' ? rcaBedPairInverted
+      : spec.validate === 'age-pair' ? rcaAgePairInverted : rcaRangePairInverted;
+    const inverted = fn(topVal, baseVal);
+    if (inverted === true) {
+      const key = spec.validate === 'age-pair' ? 'edit.ageInverted'
+        : spec.validate === 'bed-pair' ? 'edit.idxInverted' : 'edit.rangeInverted';
+      return {
+        ok: false, key: key, params: { top: rcaPyStr(topVal), base: rcaPyStr(baseVal) },
+        text: rcaEditT(key, { top: rcaPyStr(topVal), base: rcaPyStr(baseVal) }),
+      };
+    }
+  }
+  return { ok: true };
+}
+
+// ---- low-confidence rows (J/K walk) --------------------------------------
+
+// quality.js:rcaWarningFlags mirrors rca_core/quality.py::_warning_flags;
+// table.js keeps its own copy so the editor loads without the scorer.
+function rcaEditWarningFlags(value) {
+  if (value === null || value === undefined) return [];
+  if (typeof value === 'string') return value ? [value] : [];
+  if (Array.isArray(value)) return value.filter(Boolean).map(String);
+  return [String(value)];
+}
+
+// A row deserves a second look when ANY of the existing review signals fires.
+// These are all data the pipeline already writes — nothing new is invented:
+//   * per-row `confidence` below RCA_LOWCONF_THRESHOLD (species_ranges)
+//   * low agreement band (multi-run merge, rcaRowAgreementBand)
+//   * a `_warning` flag from the normalizers (index_order_swap, ...)
+//   * the coverage contract's `not_drawn` state (js/reason-codes.js)
+//   * endpoint_kind / occurrence_mode left at the "unknown" sentinel
+//   * a malformed (non-dict) row in a dict table
+const RCA_LOWCONF_THRESHOLD = 0.6;
+
+function rcaTableIsLowConfidenceRow(data, tableId, item, runsOverride) {
+  // other_fossils rows are plain strings BY DESIGN (editable.py:_SCALAR_LIST_KEYS),
+  // so "not a dict" is not a review signal there.
+  if (tableId === 'other_fossils') return false;
+  if (!rcaIsDict(item)) return true;
+  const runsRaw = (runsOverride === undefined && data) ? data.runs : runsOverride;
+  const runs = Number(runsRaw);
+  if (Number.isFinite(runs) && runs > 1 && rcaRowAgreementBand(item, runs) === 'low') return true;
+  if (rcaEditWarningFlags(item._warning).length > 0) return true;
+  if (typeof rcaCoverageState === 'function' && rcaCoverageState(item) === 'not_drawn') return true;
+  if (item.endpoint_kind === 'unknown' || item.occurrence_mode === 'unknown') return true;
+  const conf = Number(item.confidence);
+  if (Number.isFinite(conf) && conf < RCA_LOWCONF_THRESHOLD) return true;
+  return false;
+}
+
+// Indices of the review rows of one table, in row order.
+function rcaTableLowConfidenceRows(data, tableId) {
+  const out = [];
+  const rows = rcaRowsForTable(data, tableId);
+  rows.forEach((item, idx) => {
+    if (rcaTableIsLowConfidenceRow(data, tableId, item)) out.push(idx);
+  });
+  return out;
+}
+
+// "上一个 / 下一个低置信行" (Tabulator's navigate semantics, but hopping between
+// the rows that actually need proofreading). Returns the index, or -1 for
+// "nothing further in that direction"; dir is -1 (up) or +1 (down).
+function rcaNextLowConfidenceRow(indices, currentRow, dir) {
+  const list = (Array.isArray(indices) ? indices : []).slice();
+  if (!list.length) return -1;
+  const step = dir < 0 ? -1 : 1;
+  const cur = Number(currentRow);
+  const base = Number.isFinite(cur) ? cur : (step > 0 ? -1 : list.length);
+  if (step > 0) {
+    for (const i of list) if (i > base) return i;
+  } else {
+    for (let k = list.length - 1; k >= 0; k -= 1) if (list[k] < base) return list[k];
+  }
+  return -1;
+}
+
+// ---- the dirty-cell registry (Tabulator's edit model, editable.py's diff) --
+//
+// One object owns the editing session:
+//   attach(data)          snapshot (the `before` of the diff) + cfg lookup
+//   editCell(...)         validate -> coerce -> write -> mark dirty -> action
+//   capture(tableId)      editable.py:capture_edits for ONE table
+//   captureAll()          ... for the whole result (what "Apply edits" sends)
+//   applyEdits(res, edits)  editable.py:apply_edits
+//   getEditedCells / setCellEdited / clearCellEdited / clearEdited
+//   selection: toggleRow / selectAll / selectedRows / clearSelection
+//
+// The registry — not the DOM — decides what "dirty" means, so a re-render can
+// repaint the dirty frames from data alone and the Qt payload and the browser
+// agree on the same edit set.
+const rcaTableEdits = {
+  data: null,
+  snapshot: null,
+  _cfgs: {},
+  _edited: {},        // tableId -> { 'row|field': true }
+  _selection: {},     // tableId -> { row: true }
+
+  attach(data, cfgs) {
+    this.data = rcaIsDict(data) ? data : null;
+    this.snapshot = this.data ? rcaClone(this.data) : null;
+    this._edited = {};
+    this._selection = {};
+    this._cfgs = {};
+    const list = Array.isArray(cfgs) ? cfgs : (this.data ? rcaTableConfigs(this.data) : []);
+    for (const cfg of list || []) {
+      if (cfg && cfg.id) this._cfgs[cfg.id] = cfg;
+    }
+    return this;
+  },
+
+  detach() {
+    this.data = null;
+    this.snapshot = null;
+    this._cfgs = {};
+    this._edited = {};
+    this._selection = {};
+  },
+
+  isAttached() { return !!this.data; },
+  live() { return this.data; },
+  original() { return this.snapshot; },
+
+  cfg(tableId) { return this._cfgs[tableId] || null; },
+  setConfig(cfg) { if (cfg && cfg.id) this._cfgs[cfg.id] = cfg; return cfg; },
+
+  // The result key the diff walks. A nested sub-table edits through its
+  // PARENT list (editable.py's comment on the columnar sub-tables: those
+  // changes are already captured by the `sections` row diff, because the
+  // list value compares deep).
+  listKey(tableId) {
+    const cfg = this.cfg(tableId);
+    if (cfg && cfg.nested && cfg.nested.parent) return cfg.nested.parent;
+    return tableId;
+  },
+
+  spec(tableId, colIdx) {
+    const cfg = this.cfg(tableId);
+    return cfg ? rcaColEditSpec(cfg, colIdx) : null;
+  },
+
+  specByField(tableId, field) {
+    const cfg = this.cfg(tableId);
+    if (!cfg || !Array.isArray(cfg.edit)) return null;
+    for (const spec of cfg.edit) {
+      if (!spec) continue;
+      if (rcaEditFieldOf(spec) === field) return spec;
+    }
+    return null;
+  },
+
+  // ---- dirty marks (Tabulator: setCellEdited / getEditedCells / clear) ----
+  setCellEdited(tableId, row, field) {
+    const bucket = this._edited[tableId] || (this._edited[tableId] = {});
+    bucket[rcaEditDirtyKey(row, field)] = true;
+    return this;
+  },
+  clearCellEdited(tableId, row, field) {
+    const bucket = this._edited[tableId];
+    if (bucket) delete bucket[rcaEditDirtyKey(row, field)];
+    return this;
+  },
+  isCellEdited(tableId, row, field) {
+    const bucket = this._edited[tableId];
+    return !!(bucket && bucket[rcaEditDirtyKey(row, field)]);
+  },
+  getEditedCells(tableId) {
+    const out = [];
+    const bucket = this._edited[tableId] || {};
+    for (const key of Object.keys(bucket)) {
+      const parts = key.split('|');
+      out.push([rcaPyInt(parts[0]), parts.slice(1).join('|')]);
+    }
+    return out;
+  },
+  editedCount() {
+    let n = 0;
+    for (const tableId of Object.keys(this._edited)) {
+      n += Object.keys(this._edited[tableId]).length;
+    }
+    return n;
+  },
+  clearEdited(tableId) {
+    if (tableId === undefined) this._edited = {};
+    else delete this._edited[tableId];
+    return this;
+  },
+  // Structural edits shift row indices: keep the dirty marks attached to the
+  // rows they were made on.
+  shiftEdited(tableId, fromRow, delta) {
+    const bucket = this._edited[tableId];
+    if (!bucket) return this;
+    const moved = {};
+    for (const key of Object.keys(bucket)) {
+      const parts = key.split('|');
+      const row = rcaPyInt(parts[0]);
+      const field = parts.slice(1).join('|');
+      const next = (row !== null && row >= fromRow) ? row + delta : row;
+      if (next === null || next < 0) continue;
+      moved[rcaEditDirtyKey(next, field)] = true;
+    }
+    this._edited[tableId] = moved;
+    return this;
+  },
+
+  // ---- the write path -----------------------------------------------------
+  // One cell edit, end to end: validate -> coerce -> write into the live data
+  // -> update the dirty registry -> return the history action (or null when
+  // the value did not actually change, so nothing lands on the undo stack).
+  editCell(tableId, rowIdx, colIdx, text) {
+    const spec = this.spec(tableId, colIdx);
+    if (!spec || !spec.editable) {
+      return { ok: false, key: 'edit.notEditable', text: '' };
+    }
+    const target = this.resolveCell(tableId, rowIdx);
+    if (!target.found) return { ok: false, key: 'edit.noRow', text: '' };
+    const check = rcaValidateCell(spec, text, target.row);
+    if (!check.ok) return check;
+    const model = spec.model || spec.field;
+    const fieldKey = rcaEditFieldOf(spec);
+    const before = target.cellValue(model, spec);
+    const hadKey = target.hasKey(model, spec);
+    const after = rcaCoerceCellValue(text, spec.type);
+    if (hadKey && rcaPyEqual(rcaCoerceVal(before), rcaCoerceVal(after === null ? '' : after))
+        && !rcaIsEmptyModelValue(after)) {
+      // Same value: nothing is written and nothing is pushed. The frame still
+      // has to be RE-DERIVED (markCell), never blindly dropped: a cell that
+      // reads "A*" in a model whose snapshot says "A" is dirty, and re-typing
+      // the very same "A*" (or "  A*  " — `_coerce` trims before comparing,
+      // editable.py:130) must not make that review marker vanish.
+      this.markCell(tableId, rowIdx, spec, fieldKey);
+      return { ok: true, changed: false, action: null };
+    }
+    target.write(model, spec, after);
+    if (rcaIsEmptyModelValue(after) && !hadKey) {
+      this.clearCellEdited(tableId, rowIdx, fieldKey);
+      return { ok: true, changed: false, action: null };
+    }
+    this.markCell(tableId, rowIdx, spec, fieldKey);
+    return {
+      ok: true,
+      changed: true,
+      action: {
+        type: 'cellEdit',
+        tableId: tableId,
+        row: rowIdx,
+        col: colIdx,
+        field: fieldKey,
+        model: model,
+        before: before,
+        hadKey: hadKey,
+        after: after,
+        cleared: rcaIsEmptyModelValue(after),
+      },
+    };
+  },
+
+  // Re-apply a value WITHOUT validating or recording history — this is what
+  // js/history.js's undoers call, and it mirrors what apply_edits does with a
+  // payload cell (index-based, `null` / empty removes the key).
+  setCellValue(tableId, rowIdx, field, value, opts) {
+    const spec = (opts && opts.spec) || this.specByField(tableId, field)
+      || (field === rcaEditScalarField() ? { field: null, scalar: true, type: 'str' } : null);
+    const target = this.resolveCell(tableId, rowIdx, spec);
+    if (!target.found) return false;
+    const model = (spec && spec.model) || (spec && spec.field) || field;
+    target.write(model, spec, value);
+    const fieldKey = rcaEditFieldOf(spec, null);
+    // `write` already removed the key for an empty value (the same shape a
+    // cleared cell has after apply_edits), so undo needs no extra branch:
+    // restoring `before === undefined` means "remove the key again".
+    this.markCell(tableId, rowIdx, spec, fieldKey);
+    return true;
+  },
+
+  // Dirty mark = "this cell differs from the snapshot", i.e. exactly the
+  // per-cell branch of editable.py:capture_edits (key presence first, then the
+  // trimmed value). Re-deriving it after EVERY write — instead of setting the
+  // mark on write and clearing it on empty — is what makes an undo back to the
+  // original value clear the frame instead of leaving a phantom "unsaved".
+  markCell(tableId, rowIdx, spec, fieldKey) {
+    const model = (spec && (spec.model || spec.field)) || null;
+    const live = this.resolveCell(tableId, rowIdx, spec);
+    const orig = this.originalCell(tableId, rowIdx, spec);
+    const liveHas = live.found && live.hasKey(model, spec);
+    let dirty;
+    if (!orig.found) dirty = true;                       // row appeared: structural
+    else if (liveHas !== orig.hasKey) dirty = true;
+    else if (!liveHas) dirty = false;                    // neither side has it
+    else {
+      dirty = rcaPyNotEqual(
+        rcaCoerceVal(live.cellValue(model, spec)),
+        rcaCoerceVal(orig.value)
+      );
+    }
+    if (dirty) this.setCellEdited(tableId, rowIdx, fieldKey);
+    else this.clearCellEdited(tableId, rowIdx, fieldKey);
+    return dirty;
+  },
+
+  // The snapshot's version of one cell (the `before` of the diff). Nested
+  // sub-tables resolve through their own flattened _src, exactly like
+  // resolveCell does for the live data.
+  originalCell(tableId, rowIdx, spec) {
+    const snap = this.snapshot;
+    const model = (spec && (spec.model || spec.field)) || null;
+    const miss = { found: false, value: undefined, hasKey: false };
+    if (!rcaIsDict(snap)) return miss;
+    const cfg = this.cfg(tableId);
+    let item = null;
+    if (cfg && cfg.nested) {
+      const flat = rcaRowsForTable(snap, tableId);
+      const src = flat[rowIdx] && flat[rowIdx]._src;
+      if (!Array.isArray(src)) return miss;
+      const parents = snap[cfg.nested.parent];
+      const parent = Array.isArray(parents) ? parents[src[0]] : null;
+      const sub = rcaIsDict(parent) ? parent[cfg.nested.subKey] : null;
+      if (!Array.isArray(sub) || src[2] >= sub.length) return miss;
+      item = sub[src[2]];
+    } else {
+      const list = snap[this.listKey(tableId)];
+      if (!Array.isArray(list) || rowIdx < 0 || rowIdx >= list.length) return miss;
+      item = list[rowIdx];
+    }
+    if (item === null || item === undefined) return miss;
+    if (spec && spec.scalar) return { found: true, value: item, hasKey: true };
+    if (!rcaIsDict(item)) return { found: true, value: undefined, hasKey: false };
+    return {
+      found: true,
+      value: item[model],
+      hasKey: Object.prototype.hasOwnProperty.call(item, model),
+    };
+  },
+
+  resolveCell(tableId, rowIdx, spec) {
+    const data = this.data;
+    const api = {
+      found: false,
+      row: null,
+      list: null,
+      index: rowIdx,
+      hasKey(model, sp) { return api.found && api.rowHas ? api.rowHas(model, sp) : false; },
+      cellValue(model, sp) { return api.found ? api.rowGet(model, sp) : undefined; },
+      write(model, sp, value) { if (api.found) api.rowWrite(model, sp, value); },
+    };
+    if (!data || !rcaIsDict(data)) return api;
+    const cfg = this.cfg(tableId);
+    if (cfg && cfg.nested) {
+      // Nested rows are only reachable through their _src provenance; index
+      // based addressing matches the flattened table the user sees.
+      const flat = rcaRowsForTable(data, tableId);
+      const frow = flat[rowIdx];
+      const src = frow && frow._src;
+      if (!Array.isArray(src)) return api;
+      const parents = data[cfg.nested.parent];
+      const parent = Array.isArray(parents) ? parents[src[0]] : null;
+      if (!rcaIsDict(parent)) return api;
+      const sub = parent[cfg.nested.subKey];
+      if (!Array.isArray(sub) || src[2] >= sub.length) return api;
+      api.found = true;
+      api.row = sub[src[2]];
+      api.list = sub;
+      api.index = src[2];
+      api.rowHas = (model) => rcaIsDict(api.row) && Object.prototype.hasOwnProperty.call(api.row, model);
+      api.rowGet = (model) => (rcaIsDict(api.row) ? api.row[model] : undefined);
+      api.rowWrite = (model, sp, value) => {
+        if (!rcaIsDict(api.row)) return;
+        if (rcaIsEmptyModelValue(value)) delete api.row[model];
+        else api.row[model] = value;
+      };
+      return api;
+    }
+    const key = this.listKey(tableId);
+    const list = data[key];
+    if (!Array.isArray(list) || rowIdx < 0 || rowIdx >= list.length) return api;
+    api.found = true;
+    api.list = list;
+    api.index = rowIdx;
+    api.row = list[rowIdx];
+    api.rowHas = (model, sp) => {
+      if (sp && sp.scalar) return true;              // the row IS the value
+      if (!rcaIsDict(list[rowIdx])) return false;
+      return Object.prototype.hasOwnProperty.call(list[rowIdx], model);
+    };
+    api.rowGet = (model, sp) => {
+      const item = list[rowIdx];
+      if (sp && sp.scalar) return item;
+      return rcaIsDict(item) ? item[model] : undefined;
+    };
+    api.rowWrite = (model, sp, value) => {
+      const item = list[rowIdx];
+      if (sp && sp.scalar) {
+        list[rowIdx] = (value === null || value === undefined) ? '' : value;
+        return;
+      }
+      if (!rcaIsDict(item)) {
+        // editable.py:271-275 — promote a scalar row so it can carry fields.
+        list[rowIdx] = { value: item };
+      }
+      if (rcaIsEmptyModelValue(value)) delete list[rowIdx][model];
+      else list[rowIdx][model] = value;
+    };
+    return api;
+  },
+
+  // ---- structural edits ---------------------------------------------------
+  // Row delete / add are index operations on the live list, exactly what the
+  // `_replaced` / `new_<i>` branches of the payload encode. Nested sub-tables
+  // are excluded: the flattened row has no stable index in a parent list.
+  canDeleteRows(tableId) {
+    // Same rule as the renderer (rcaTableStructuralEdits), read through the
+    // ATTACHED session: no session -> no rows to mutate -> false, fail closed.
+    return rcaTableStructuralEdits(this.cfg(tableId));
+  },
+
+  deleteRow(tableId, rowIdx) {
+    if (!this.canDeleteRows(tableId)) return null;
+    const key = this.listKey(tableId);
+    const list = this.data && this.data[key];
+    if (!Array.isArray(list) || rowIdx < 0 || rowIdx >= list.length) return null;
+    const item = rcaClone(list[rowIdx]);
+    list.splice(rowIdx, 1);
+    this.shiftEdited(tableId, rowIdx, -1);
+    this.shiftSelection(tableId, rowIdx, -1);
+    return { type: 'rowDelete', tableId: tableId, row: rowIdx, item: item };
+  },
+
+  undoDeleteRow(tableId, rowIdx, item) {
+    const key = this.listKey(tableId);
+    const list = this.data && this.data[key];
+    if (!Array.isArray(list)) return false;
+    const at = Math.max(0, Math.min(list.length, rowIdx));
+    list.splice(at, 0, rcaClone(item));
+    this.shiftEdited(tableId, at, +1);
+    this.shiftSelection(tableId, at, +1);
+    return true;
+  },
+
+  addRow(tableId, rowIdx) {
+    if (!this.canDeleteRows(tableId)) return null;
+    const key = this.listKey(tableId);
+    const list = this.data && this.data[key];
+    if (!Array.isArray(list)) return null;
+    const at = (rowIdx === undefined || rowIdx === null) ? list.length
+      : Math.max(0, Math.min(list.length, rowIdx));
+    const template = rcaNewRowTemplate(this.cfg(tableId), tableId);
+    list.splice(at, 0, template);
+    this.shiftEdited(tableId, at, +1);
+    return { type: 'rowAdd', tableId: tableId, row: at, item: rcaClone(template) };
+  },
+
+  undoAddRow(tableId, rowIdx) {
+    const key = this.listKey(tableId);
+    const list = this.data && this.data[key];
+    if (!Array.isArray(list) || rowIdx < 0 || rowIdx >= list.length) return false;
+    const removed = rcaClone(list[rowIdx]);
+    list.splice(rowIdx, 1);
+    this.shiftEdited(tableId, rowIdx, -1);
+    this.shiftSelection(tableId, rowIdx, -1);
+    return removed;
+  },
+
+  // ---- selection ----------------------------------------------------------
+  toggleRow(tableId, rowIdx, on) {
+    const bucket = this._selection[tableId] || (this._selection[tableId] = {});
+    if (on === undefined) on = !bucket[rowIdx];
+    if (on) bucket[rowIdx] = true; else delete bucket[rowIdx];
+    return this;
+  },
+  selectAll(tableId, rows, on) {
+    if (!on) { delete this._selection[tableId]; return this; }
+    const bucket = this._selection[tableId] = {};
+    (rows || []).forEach((item, idx) => { bucket[idx] = true; });
+    return this;
+  },
+  selectedRows(tableId) {
+    const bucket = this._selection[tableId] || {};
+    return Object.keys(bucket).map((k) => rcaPyInt(k)).filter((n) => n !== null).sort((a, b) => a - b);
+  },
+  hasSelection(tableId) { return this.selectedRows(tableId).length > 0; },
+  clearSelection(tableId) {
+    if (tableId === undefined) this._selection = {};
+    else delete this._selection[tableId];
+    return this;
+  },
+  shiftSelection(tableId, fromRow, delta) {
+    const bucket = this._selection[tableId];
+    if (!bucket) return this;
+    const moved = {};
+    for (const key of Object.keys(bucket)) {
+      const row = rcaPyInt(key);
+      if (row === null) continue;
+      const next = row >= fromRow ? row + delta : row;
+      if (next < 0) continue;
+      moved[next] = true;
+    }
+    this._selection[tableId] = moved;
+    return this;
+  },
+
+  // ---- the diff -----------------------------------------------------------
+  capture(tableId) {
+    if (!this.data || !this.snapshot) return {};
+    const key = this.listKey(tableId);
+    if (RCA_EDIT_LIST_KEYS.indexOf(key) === -1) return {};
+    const one = {};
+    one[key] = rcaCaptureListEdits(this.snapshot[key] || [], this.data[key] || []);
+    if (Object.keys(one[key]).length === 0) return {};
+    return one[key];
+  },
+
+  captureAll() {
+    if (!this.data || !this.snapshot) return {};
+    return rcaCaptureEdits(this.snapshot, this.data);
+  },
+
+  applyEdits(result, edits) { return rcaApplyEdits(result, edits); },
+
+  isDirty() { return rcaIsDirtyEdits(this.captureAll()); },
+
+  // The dirty frames the DOM has to repaint after a re-render.
+  dirtyTables() { return Object.keys(this._edited); },
+
+  // Export ONLY the selected rows of a table (the selection bar's action).
+  exportRows(tableId, rowIdxs) {
+    if (!this.data) return { headers: [], rows: [] };
+    const cfg = this.cfg(tableId);
+    if (!cfg) return { headers: [], rows: [] };
+    const pick = Array.isArray(rowIdxs) ? rowIdxs : this.selectedRows(tableId);
+    const headers = [t('col.index')].concat(cfg.cols.map((c) => t(c)));
+    const items = rcaRowsForTable(this.data, tableId);
+    const rows = pick.filter((i) => i >= 0 && i < items.length).map((i) => {
+      const cells = rcaRowCellsFor(cfg, items[i]).map(rcaExportCellText);
+      return [String(i + 1)].concat(cells);
+    });
+    return { headers, rows };
+  },
+};
+
+function rcaEditDirtyKey(row, field) { return String(row) + '|' + String(field); }
+function rcaEditScalarField() { return '__row'; }
+
+// The model field a spec writes. A scalar spec (other_fossils) has no field —
+// its dirty mark hangs off the pseudo-field so the row itself can be flagged.
+function rcaEditFieldOf(spec, item) {
+  if (!spec) return null;
+  if (spec.scalar) return rcaEditScalarField();
+  return spec.model || spec.field || null;
+}
+
+// Column metadata accessor: `cfg.edit` is index-aligned with `cfg.cols`.
+function rcaColEditSpec(cfg, colIdx) {
+  if (!cfg || !Array.isArray(cfg.edit)) return null;
+  return cfg.edit[colIdx] || null;
+}
+
+// The data-* descriptors an editable <td> carries. The delegated handlers read
+// these back instead of re-deriving the column from the model, so a re-render
+// mid-edit cannot misattribute the typed value.
+function rcaEditDataAttrs(cfg, rowIdx, colIdx, spec) {
+  const safeId = rcaEscAttr(cfg.id);
+  let out = ' data-rca-edit="1"'
+    + ' data-table="' + safeId + '"'
+    + ' data-row="' + rowIdx + '"'
+    + ' data-col="' + colIdx + '"';
+  if (spec.scalar) out += ' data-scalar="1"';
+  else out += ' data-field="' + rcaEscAttr(spec.model || spec.field) + '"';
+  out += ' data-type="' + rcaEscAttr(spec.type || 'str') + '"';
+  if (spec.validate) out += ' data-validate="' + rcaEscAttr(spec.validate) + '"';
+  if (Array.isArray(spec.peer)) out += ' data-peer="' + rcaEscAttr(spec.peer.join(',')) + '"';
+  return out;
+}
+
+// Structural editability is a property of the COLUMN CONFIG, not of the
+// editing session: a nested sub-table (`lithology_blocks`, `age_units`,
+// `samples`, ...) is addressed through its PARENT row, so its flattened rows
+// have no stable index to insert into or splice out of.
+//
+// KNOWN-GAP(域T) CLOSED 2026-09-20: this used to be answered through
+// `rcaTableEdits.canDeleteRows(cfg.id)`, i.e. through the registry's `_cfgs`
+// map — which is only populated by `attach()`. `rcaRenderResults` is a PURE
+// function (the Qt Fluent history dialog, the print template and the
+// "results arrived but nothing is attached yet" first paint all call it that
+// way), so every structural affordance — the 新增行 button of an EMPTY table
+// above all, since an empty result is exactly the state where nothing has been
+// attached yet — silently vanished outside a live editing session. Keep the
+// renderer cfg-driven; the registry keeps its own guard for the WRITE path
+// (`canDeleteRows` refuses to mutate a detached / nested table, which is right).
+function rcaTableStructuralEdits(cfg) {
+  return !!cfg && !cfg.nested;
+}
+
+function rcaEditAddRowButton(cfg) {
+  if (!rcaTableStructuralEdits(cfg)) return '';
+  return '<div class="rca-table-foot">'
+    + '<button type="button" class="btn btn-secondary btn-small rca-addrow-btn"'
+    + ' data-rca-addrow="' + rcaEscAttr(cfg.id) + '"'
+    + ' title="' + rcaEscAttr(rcaEditT('edit.addRowHint')) + '">'
+    + rcaEsc(rcaEditT('edit.addRow')) + '</button></div>';
+}
+
+function rcaEditSelectionBar(cfg) {
+  const safeId = rcaEscAttr(cfg.id);
+  const del = rcaTableStructuralEdits(cfg)
+    ? '<button type="button" class="btn btn-secondary btn-small" data-rca-sel-action="delete"'
+      + ' data-rca-sel-table="' + safeId + '">' + rcaEsc(rcaEditT('edit.deleteSelected')) + '</button>'
+    : '';
+  return '<div class="rca-selection-bar" data-selection-bar="' + safeId + '" hidden>'
+    + '<span class="rsb-count" data-selection-count="' + safeId + '">0</span>'
+    + '<span class="rsb-actions">'
+    + '<button type="button" class="btn btn-secondary btn-small" data-rca-sel-action="export"'
+    + ' data-rca-sel-table="' + safeId + '">' + rcaEsc(rcaEditT('edit.exportSelected')) + '</button>'
+    + del
+    + '<button type="button" class="btn btn-secondary btn-small" data-rca-sel-action="clear"'
+    + ' data-rca-sel-table="' + safeId + '">' + rcaEsc(rcaEditT('edit.clearSelection')) + '</button>'
+    + '</span></div>';
+}
+
+// ===========================================================================
+// FE-BORROW-2026-09-20 (域T): the DOM layer
+// ===========================================================================
+//
+// Everything above this line is data-only (Node-testable, no DOM at all).
+// What follows is the thin event layer that turns the rendered markup into an
+// editor, borrowed shape-for-shape from Tabulator's Edit module:
+//
+//   editTriggerEvent : "focus"   -> focusin starts the edit (snapshots text)
+//   commit / cancel  : Enter/Esc  -> rcaEditCommitCell / rcaEditRevertCell
+//   blockedEditor    : validation -> red frame, focus is KEPT (no revert)
+//   navigate(Row/Col): arrows     -> rcaEditNavigateCell
+//
+// Handlers are DELEGATED on the table root, so replacing `root.innerHTML`
+// (a structural edit re-renders) cannot orphan a listener and never needs a
+// re-attach. `document` / `window` are only ever touched inside a `typeof`
+// guard, which is what lets tests_edit_history.js drive this code through a
+// ~60-line DOM stub.
+const RCA_EDIT_DOM = {
+  root: null,
+  opts: null,
+  rawText: '',
+  editing: null,        // { tableId, row, col, cell, text0 } while a cell is focused
+  invalid: null,       // the cell currently locked by a failed validation
+  hoverRow: null,      // last row reported to the viz (dedupe mouseover)
+  unsubHover: null,    // rcaViz.onRowHover unsubscribe
+  wired: false,
+  wiredRoot: null,     // the element the delegated listeners live on
+};
+
+// ---- tiny DOM helpers (stub-friendly) -------------------------------------
+
+function rcaEditAttr(el, name) {
+  if (!el || typeof el.getAttribute !== 'function') return null;
+  const v = el.getAttribute(name);
+  return v === null || v === undefined ? null : String(v);
+}
+
+function rcaEditMatches(el, selector) {
+  if (!el) return false;
+  if (typeof el.matches === 'function') {
+    try { return !!el.matches(selector); } catch (_e) { return false; }
+  }
+  return false;
+}
+
+// Element.closest with a manual walk, so a stub without `closest` still works.
+function rcaEditClosest(node, selector) {
+  let el = node;
+  while (el && el !== RCA_EDIT_DOM.root) {
+    if (rcaEditMatches(el, selector)) return el;
+    el = el.parentNode || (typeof el.parentElement === 'object' ? el.parentElement : null);
+    if (!el || el.nodeType === 9) break;
+  }
+  return rcaEditMatches(el, selector) ? el : null;
+}
+
+function rcaEditText(el, value) {
+  if (!el) return '';
+  if (value !== undefined) {
+    if (typeof el.textContent !== 'undefined') el.textContent = String(value);
+    return String(value);
+  }
+  const raw = (typeof el.textContent !== 'undefined') ? el.textContent
+    : (typeof el.innerText !== 'undefined' ? el.innerText : '');
+  return raw === null || raw === undefined ? '' : String(raw);
+}
+
+// focus({preventScroll:true}) + self-managed scrolling — Tabulator's editor
+// pattern: the browser's caret-into-view scroll fights the sticky first column,
+// so the caller scrolls the row itself.
+function rcaEditFocus(el) {
+  if (!el || typeof el.focus !== 'function') return false;
+  try { el.focus({ preventScroll: true }); } catch (_e) {
+    try { el.focus(); } catch (_e2) { return false; }
+  }
+  rcaEditScrollIntoView(el);
+  return true;
+}
+
+function rcaEditScrollIntoView(el) {
+  if (!el) return;
+  if (typeof el.scrollIntoView === 'function') {
+    try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+    catch (_e) { try { el.scrollIntoView(); } catch (_e2) { /* stub */ } }
+  }
+}
+
+function rcaEditClass(el, name, on) {
+  if (!el) return;
+  if (el.classList && typeof el.classList.toggle === 'function') {
+    el.classList.toggle(name, !!on);
+    return;
+  }
+  const cur = rcaEditAttr(el, 'class') || '';
+  const parts = cur.split(/\s+/).filter(Boolean);
+  const at = parts.indexOf(name);
+  if (on && at === -1) parts.push(name);
+  if (!on && at !== -1) parts.splice(at, 1);
+  if (typeof el.setAttribute === 'function') el.setAttribute('class', parts.join(' '));
+}
+
+function rcaEditAll(root, selector) {
+  if (!root || typeof root.querySelectorAll !== 'function') return [];
+  const out = root.querySelectorAll(selector);
+  return out ? Array.prototype.slice.call(out) : [];
+}
+
+function rcaEditOne(root, selector) {
+  if (!root || typeof root.querySelector !== 'function') return null;
+  return root.querySelector(selector) || null;
+}
+
+// ---- cell addressing ------------------------------------------------------
+
+// The <td> descriptor back into a {tableId, row, col, spec} reference. Reading
+// it off the DOM (not off the model) is what keeps a mid-edit re-render from
+// misattributing the typed value.
+function rcaEditRefFromCell(cell) {
+  if (!cell || rcaEditAttr(cell, 'data-rca-edit') !== '1') return null;
+  const tableId = rcaEditAttr(cell, 'data-table');
+  const row = rcaPyInt(rcaEditAttr(cell, 'data-row'));
+  const col = rcaPyInt(rcaEditAttr(cell, 'data-col'));
+  if (tableId === null || row === null || col === null) return null;
+  const cfg = rcaTableEdits.cfg(tableId);
+  const spec = cfg ? rcaColEditSpec(cfg, col) : null;
+  if (!spec) return null;
+  return { tableId: tableId, row: row, col: col, cell: cell, spec: spec,
+    scalar: rcaEditAttr(cell, 'data-scalar') === '1' };
+}
+
+function rcaEditCellEl(tableId, row, col) {
+  const root = RCA_EDIT_DOM.root;
+  if (!root) return null;
+  return rcaEditOne(root, '[data-rca-edit="1"][data-table="' + tableId
+    + '"][data-row="' + row + '"][data-col="' + col + '"]');
+}
+
+function rcaEditRowEl(tableId, row) {
+  const root = RCA_EDIT_DOM.root;
+  if (!root) return null;
+  const sec = rcaEditOne(root, '[data-table="' + tableId + '"]');
+  return sec ? rcaEditOne(sec, 'tr[data-row="' + row + '"]') : null;
+}
+
+// The FIRST editable column of a table — where J/K and Enter-from-outside land.
+function rcaEditFirstCol(cfg) {
+  if (!cfg || !Array.isArray(cfg.edit)) return null;
+  for (let i = 0; i < cfg.edit.length; i += 1) {
+    if (cfg.edit[i] && cfg.edit[i].editable) return i;
+  }
+  return null;
+}
+
+// Walk to the neighbouring EDITABLE cell, skipping read-only columns
+// (agreement / id) the same way Tabulator's navigate() skips non-editable ones.
+function rcaEditNeighbourCell(ref, dRow, dCol) {
+  const cfg = rcaTableEdits.cfg(ref.tableId);
+  if (!cfg || !Array.isArray(cfg.edit)) return null;
+  const nCols = cfg.edit.length;
+  const nRows = rcaRowsForTable(rcaTableEdits.live(), ref.tableId).length;
+  let row = ref.row;
+  let col = ref.col;
+  if (dRow) {
+    row += dRow > 0 ? 1 : -1;
+    col = ref.col;
+    while (row >= 0 && row < nRows && !(cfg.edit[col] && cfg.edit[col].editable)) col += 1;
+    if (row < 0 || row >= nRows) return null;
+    if (col >= nCols) return null;
+  } else if (dCol) {
+    col += dCol > 0 ? 1 : -1;
+    while (col >= 0 && col < nCols && !(cfg.edit[col] && cfg.edit[col].editable)) {
+      col += dCol > 0 ? 1 : -1;
+    }
+    if (col < 0 || col >= nCols) return null;
+  }
+  if (row < 0 || row >= nRows || col < 0 || col >= nCols) return null;
+  const el = rcaEditCellEl(ref.tableId, row, col);
+  return el || null;
+}
+
+// ---- hint / live region ---------------------------------------------------
+
+function rcaEditAnnounce(text) {
+  const root = RCA_EDIT_DOM.root;
+  if (!root || !text) return;
+  let live = rcaEditOne(root, '[data-rca-edit-status]');
+  if (!live && typeof document !== 'undefined' && document && document.createElement) {
+    live = document.createElement('div');
+    if (typeof live.setAttribute === 'function') {
+      live.setAttribute('class', 'rca-edit-status');
+      live.setAttribute('data-rca-edit-status', '1');
+      live.setAttribute('role', 'status');
+      live.setAttribute('aria-live', 'polite');
+    }
+    if (typeof root.appendChild === 'function') root.appendChild(live);
+  }
+  rcaEditText(live, text);
+}
+
+// ---- the write / paint path ----------------------------------------------
+
+function rcaEditPaintCell(cell, ref, value) {
+  const text = rcaExportCellText(value);
+  const shown = text.trim() ? text : '-';
+  rcaEditText(cell, shown);
+  if (typeof cell.setAttribute === 'function') {
+    cell.setAttribute('title', text);
+  }
+  rcaEditClass(cell, 'cell-empty', !text.trim());
+  rcaEditClass(cell, 'rca-cell-dirty',
+    rcaTableEdits.isCellEdited(ref.tableId, ref.row, rcaEditFieldOf(ref.spec)));
+}
+
+function rcaEditMarkInvalid(cell, message) {
+  rcaEditClass(cell, 'rca-cell-invalid', true);
+  if (cell && typeof cell.setAttribute === 'function') {
+    cell.setAttribute('aria-invalid', 'true');
+    cell.setAttribute('data-rca-invalid', message || '');
+  }
+  RCA_EDIT_DOM.invalid = cell;
+  rcaEditAnnounce(message || '');
+}
+
+function rcaEditClearInvalid(cell) {
+  rcaEditClass(cell, 'rca-cell-invalid', false);
+  if (cell && typeof cell.removeAttribute === 'function') {
+    cell.removeAttribute('aria-invalid');
+    cell.removeAttribute('data-rca-invalid');
+  }
+  if (RCA_EDIT_DOM.invalid === cell) RCA_EDIT_DOM.invalid = null;
+}
+
+// One commit, end to end. Returns the rcaTableEdits result so callers (and the
+// tests) can branch on `ok` / `changed` / `action`.
+function rcaEditCommitCell(cell, textOverride) {
+  const ref = rcaEditRefFromCell(cell);
+  if (!ref) return { ok: true, changed: false, action: null, skipped: true };
+  const text = textOverride !== undefined ? String(textOverride) : rcaEditText(cell);
+  const res = rcaTableEdits.editCell(ref.tableId, ref.row, ref.col, text);
+  if (!res.ok) {
+    // Tabulator's blocked-editor behaviour: the value stays on screen, the
+    // cell keeps focus (red frame), and the reason is announced.
+    rcaEditMarkInvalid(cell, res.text || rcaEditT('edit.cellNotNumber', { value: text }));
+    rcaEditFocus(cell);
+    return res;
+  }
+  rcaEditClearInvalid(cell);
+  if (res.changed && res.action) {
+    const target = rcaTableEdits.resolveCell(ref.tableId, ref.row, ref.spec);
+    rcaEditPaintCell(cell, ref, target.cellValue(res.action.model, ref.spec));
+    rcaEditPublishAction(res.action);
+    rcaEditSyncDirtyDom();
+  }
+  if (RCA_EDIT_DOM.editing && RCA_EDIT_DOM.editing.cell === cell) {
+    RCA_EDIT_DOM.editing = null;
+  }
+  return res;
+}
+
+// Esc: put the pre-focus text back and leave. Nothing reaches the model, so
+// nothing reaches the undo stack either.
+function rcaEditRevertCell(cell) {
+  const ref = rcaEditRefFromCell(cell);
+  if (!ref) return false;
+  const rec = RCA_EDIT_DOM.editing;
+  const original = (rec && rec.cell === cell) ? rec.text0
+    : rcaExportCellText(rcaTableEdits.resolveCell(ref.tableId, ref.row, ref.spec)
+      .cellValue(ref.spec.model || ref.spec.field, ref.spec));
+  RCA_EDIT_DOM.reverting = true;
+  rcaEditClearInvalid(cell);
+  rcaEditPaintCell(cell, ref, rcaTableEdits.resolveCell(ref.tableId, ref.row, ref.spec)
+    .cellValue(ref.spec.model || ref.spec.field, ref.spec));
+  rcaEditText(cell, original);
+  RCA_EDIT_DOM.editing = null;
+  if (typeof cell.blur === 'function') cell.blur();
+  RCA_EDIT_DOM.reverting = false;
+  return true;
+}
+
+// Enter / arrow navigation (Tabulator navigateUp/Down/Left/Right).
+function rcaEditNavigate(cell, dRow, dCol) {
+  const ref = rcaEditRefFromCell(cell);
+  if (!ref) return false;
+  const res = rcaEditCommitCell(cell);
+  if (!res.ok) return false;          // blocked: focus stays on the bad cell
+  const next = rcaEditNeighbourCell(ref, dRow, dCol);
+  if (!next) return false;
+  return rcaEditFocus(next);
+}
+
+// ---- structural re-render -------------------------------------------------
+
+function rcaEditRerender() {
+  const root = RCA_EDIT_DOM.root;
+  if (!root) return false;
+  const opts = RCA_EDIT_DOM.opts || {};
+  if (typeof opts.rerender === 'function') return opts.rerender(root, rcaTableEdits.live()) !== false;
+  if (typeof rcaRenderResults !== 'function') return false;
+  root.innerHTML = rcaRenderResults(rcaTableEdits.live(), RCA_EDIT_DOM.rawText, { editable: true });
+  rcaEditSyncSelectionDom(root);
+  rcaEditSyncDirtyDom(root);
+  return true;
+}
+
+function rcaEditSyncDirtyDom(root) {
+  const scope = root || RCA_EDIT_DOM.root;
+  if (!scope) return 0;
+  let n = 0;
+  for (const tableId of rcaTableEdits.dirtyTables()) {
+    for (const pair of rcaTableEdits.getEditedCells(tableId)) {
+      const field = pair[1];
+      const cfg = rcaTableEdits.cfg(tableId);
+      if (!cfg) continue;
+      const spec = rcaTableEdits.specByField(tableId, field);
+      if (!spec) continue;
+      const col = cfg.edit.indexOf(spec);
+      const el = rcaEditCellEl(tableId, pair[0], col);
+      if (el) { rcaEditClass(el, 'rca-cell-dirty', true); n += 1; }
+    }
+  }
+  return n;
+}
+
+// ---- selection ------------------------------------------------------------
+
+function rcaEditSelectionCount(tableId) {
+  return rcaTableEdits.selectedRows(tableId).length;
+}
+
+function rcaEditUpdateSelectionBar(tableId) {
+  const root = RCA_EDIT_DOM.root;
+  if (!root) return;
+  const bar = rcaEditOne(root, '[data-selection-bar="' + tableId + '"]');
+  if (!bar) return;
+  const n = rcaEditSelectionCount(tableId);
+  const count = rcaEditOne(bar, '[data-selection-count="' + tableId + '"]');
+  rcaEditText(count, String(n));
+  if (typeof bar.setAttribute === 'function') {
+    if (n > 0) bar.removeAttribute('hidden');
+    else bar.setAttribute('hidden', '');
+  }
+  rcaEditAnnounce(rcaEditT('edit.selectedCount', { n: n }));
+}
+
+// `extraTables` names tables whose bucket is ALREADY gone. clearSelection()
+// deletes the key, and the loop below only walks the tables that still have
+// one — without it 清除所选 would leave the bar visible with its checkboxes
+// still ticked (the delete path escapes this because it re-renders the whole
+// table straight afterwards, which paints a fresh, empty bar).
+function rcaEditSyncSelectionDom(root, extraTables) {
+  const scope = root || RCA_EDIT_DOM.root;
+  if (!scope) return;
+  const ids = Object.keys(rcaTableEdits._selection);
+  for (const tableId of (extraTables || [])) {
+    if (tableId && ids.indexOf(tableId) === -1) ids.push(tableId);
+  }
+  for (const tableId of ids) {
+    const picked = {};
+    for (const row of rcaTableEdits.selectedRows(tableId)) picked[row] = true;
+    rcaEditAll(scope, '[data-row-select="' + tableId + '"]').forEach((box) => {
+      const row = rcaPyInt(rcaEditAttr(box, 'data-row'));
+      box.checked = !!(row !== null && picked[row]);
+    });
+    const all = rcaEditOne(scope, '[data-select-all="' + tableId + '"]');
+    if (all) {
+      const nRows = rcaRowsForTable(rcaTableEdits.live(), tableId).length;
+      all.checked = nRows > 0 && Object.keys(picked).length >= nRows;
+    }
+    rcaEditUpdateSelectionBar(tableId);
+  }
+}
+
+// The bar's three actions. 删除所选 pushes ONE rowDelete action per row so a
+// single Ctrl+Z walks back through them one row at a time (an undo stack that
+// swallowed a 20-row delete as one step would be unreviewable).
+function rcaEditSelectionAction(action, tableId) {
+  const rows = rcaTableEdits.selectedRows(tableId);
+  if (!rows.length) return { ok: false, reason: 'empty' };
+  if (action === 'clear') {
+    rcaTableEdits.clearSelection(tableId);
+    rcaEditSyncSelectionDom(null, [tableId]);
+    return { ok: true, action: 'clear' };
+  }
+  if (action === 'export') {
+    const payload = rcaTableEdits.exportRows(tableId, rows);
+    const opts = RCA_EDIT_DOM.opts || {};
+    if (typeof opts.onExport === 'function') {
+      opts.onExport(tableId, rows, payload);
+    } else {
+      rcaEditDownloadSelected(tableId, payload);
+    }
+    return { ok: true, action: 'export', payload: payload };
+  }
+  if (action === 'delete') {
+    if (!rcaTableEdits.canDeleteRows(tableId)) return { ok: false, reason: 'nested' };
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const act = rcaTableEdits.deleteRow(tableId, rows[i]);
+      if (act) rcaEditPublishAction(act);
+    }
+    rcaTableEdits.clearSelection(tableId);
+    rcaEditAnnounce(rcaEditT('edit.rowsDeleted', { n: rows.length }));
+    rcaEditRerender();
+    return { ok: true, action: 'delete', count: rows.length };
+  }
+  return { ok: false, reason: 'unknown' };
+}
+
+function rcaEditDownloadSelected(tableId, payload) {
+  if (!payload || !payload.headers) return false;
+  if (typeof rcaToCsv !== 'function' || typeof rcaDownload !== 'function') return false;
+  rcaDownload('rca-' + tableId + '-selected.csv',
+    rcaToCsv(payload.headers, payload.rows), 'text/csv;charset=utf-8');
+  return true;
+}
+
+// ---- viz guards -----------------------------------------------------------
+//
+// js/viz.js owns the linked canvas; when it is absent (unit tests, a build
+// without the canvas, a table-only view) every call here is a silent no-op —
+// the editor must never break because the chart is missing.
+function rcaVizNs() {
+  const ns = (typeof globalThis !== 'undefined' && globalThis.rcaViz)
+    ? globalThis.rcaViz : ((typeof window !== 'undefined' && window.rcaViz) ? window.rcaViz : null);
+  return ns && typeof ns === 'object' ? ns : null;
+}
+
+function rcaVizCall(method, arg) {
+  const ns = rcaVizNs();
+  if (!ns || typeof ns[method] !== 'function') return false;
+  try { return !!ns[method](arg); } catch (_e) { return false; }
+}
+
+function rcaVizFocusRow(idx) { return rcaVizCall('focusRow', idx); }
+function rcaVizClearFocus() { return rcaVizCall('clearFocus', null); }
+function rcaVizLocateTo(idx) { return rcaVizCall('locateTo', idx); }
+
+// ---- row highlight / locate ----------------------------------------------
+
+let RCA_TABLE_HIGHLIGHT_ROW = null;
+
+// Public: paint the "this row is being reviewed" state. `idx` is the row index
+// inside `tableId` (defaults to the table the user last touched). app.js and
+// js/viz.js's own hover callback both go through here, so the table and the
+// canvas can never disagree about which row is lit.
+function rcaTableHighlightRow(idx, tableId) {
+  const root = RCA_EDIT_DOM.root;
+  const tid = tableId || RCA_EDIT_DOM.lastTable
+    || (root ? (rcaTableEdits.dirtyTables()[0] || (rcaTableConfigs(rcaTableEdits.live())[0] || {}).id) : null);
+  if (!root || !tid) return false;
+  const prev = rcaEditOne(root, '[data-table="' + tid + '"] '
+    + 'tr[data-row="' + (RCA_TABLE_HIGHLIGHT_ROW === idx ? '' : RCA_TABLE_HIGHLIGHT_ROW) + '"]');
+  if (RCA_TABLE_HIGHLIGHT_ROW !== null && RCA_TABLE_HIGHLIGHT_ROW !== undefined) {
+    const old = rcaEditRowEl(tid, RCA_TABLE_HIGHLIGHT_ROW);
+    rcaEditClass(old, 'rca-row-active', false);
+  } else if (prev) {
+    rcaEditClass(prev, 'rca-row-active', false);
+  }
+  if (idx === null || idx === undefined) {
+    RCA_TABLE_HIGHLIGHT_ROW = null;
+    rcaVizClearFocus();
+    return true;
+  }
+  const row = rcaEditRowEl(tid, idx);
+  rcaEditClass(row, 'rca-row-active', true);
+  RCA_TABLE_HIGHLIGHT_ROW = idx;
+  RCA_EDIT_DOM.lastTable = tid;
+  rcaEditScrollIntoView(row);
+  rcaVizFocusRow(idx);
+  return !!row;
+}
+
+// 定位 button / row focus: pin the focus AND scroll the canvas to that bar.
+function rcaEditLocateRow(tableId, idx) {
+  RCA_EDIT_DOM.lastTable = tableId;
+  rcaTableHighlightRow(idx, tableId);
+  const ok = rcaVizLocateTo(idx);
+  if (!ok) rcaEditAnnounce(rcaEditT('edit.noViz'));
+  return ok;
+}
+
+// ---- J / K: hop between the rows that need proofreading -------------------
+
+function rcaEditLowConfidenceRows(tableId) {
+  return rcaTableLowConfidenceRows(rcaTableEdits.live(), tableId);
+}
+
+// dir: +1 next, -1 previous. Focuses the row's first editable cell so the
+// keyboard lands straight in the field that needs checking.
+function rcaEditStepLowConfidence(tableId, dir) {
+  const cfg = rcaTableEdits.cfg(tableId);
+  if (!cfg) return false;
+  const list = rcaEditLowConfidenceRows(tableId);
+  const current = RCA_EDIT_DOM.reviewRow !== undefined && RCA_EDIT_DOM.reviewRow !== null
+    ? RCA_EDIT_DOM.reviewRow : -1;
+  const next = rcaNextLowConfidenceRow(list, current, dir);
+  if (next < 0) return false;
+  RCA_EDIT_DOM.reviewRow = next;
+  rcaTableHighlightRow(next, tableId);
+  const col = rcaEditFirstCol(cfg);
+  const cell = col === null ? null : rcaEditCellEl(tableId, next, col);
+  if (cell) rcaEditFocus(cell);
+  return true;
+}
+
+// ---- history bridge -------------------------------------------------------
+
+function rcaEditHistoryNs() {
+  const ns = (typeof globalThis !== 'undefined' && globalThis.rcaHistory)
+    ? globalThis.rcaHistory : ((typeof window !== 'undefined' && window.rcaHistory) ? window.rcaHistory : null);
+  return ns && typeof ns.push === 'function' ? ns : null;
+}
+
+// An action has already been applied to the live data by rcaTableEdits; all
+// that is left is to remember it. Without js/history.js the editor still
+// works, it just cannot step back.
+function rcaEditPublishAction(action) {
+  const opts = RCA_EDIT_DOM.opts || {};
+  if (typeof opts.onAction === 'function') {
+    try { opts.onAction(action); } catch (_e) { /* a bad hook must not lose the edit */ }
+  }
+  const hist = rcaEditHistoryNs();
+  if (hist) hist.push(action);
+  else rcaEditAnnounce(rcaEditT('edit.editsPending', { n: rcaTableEdits.editedCount() }));
+  return !!hist;
+}
+
+// ---- keyboard -------------------------------------------------------------
+
+// Returns true when the event was consumed. Exported (and tested) as a pure
+// function: the stub hands it a fake event, no browser needed.
+function rcaEditHandleKey(ev) {
+  if (!ev) return false;
+  const target = ev.target || null;
+  const key = ev.key || '';
+  const cell = rcaEditRefFromCell(target) ? target : null;
+
+  if (cell) {
+    if (key === 'Enter' && !ev.shiftKey) { ev.preventDefault && ev.preventDefault(); return rcaEditNavigate(cell, +1, 0); }
+    if (key === 'Enter' && ev.shiftKey) { ev.preventDefault && ev.preventDefault(); return rcaEditNavigate(cell, -1, 0); }
+    if (key === 'Escape' || key === 'Esc') { ev.preventDefault && ev.preventDefault(); return rcaEditRevertCell(cell); }
+    if (key === 'ArrowDown') { ev.preventDefault && ev.preventDefault(); return rcaEditNavigate(cell, +1, 0); }
+    if (key === 'ArrowUp') { ev.preventDefault && ev.preventDefault(); return rcaEditNavigate(cell, -1, 0); }
+    if (key === 'ArrowRight') { ev.preventDefault && ev.preventDefault(); return rcaEditNavigate(cell, 0, +1); }
+    if (key === 'ArrowLeft') { ev.preventDefault && ev.preventDefault(); return rcaEditNavigate(cell, 0, -1); }
+    return false;
+  }
+
+  // Outside a cell: J/K walk the review rows of the focused table container.
+  const nav = rcaEditClosest(target, '[data-table-nav]');
+  const tableId = nav ? rcaEditAttr(nav, 'data-table-nav') : null;
+  if (tableId && (key === 'j' || key === 'J')) { ev.preventDefault && ev.preventDefault(); return rcaEditStepLowConfidence(tableId, +1); }
+  if (tableId && (key === 'k' || key === 'K')) { ev.preventDefault && ev.preventDefault(); return rcaEditStepLowConfidence(tableId, -1); }
+  return false;
+}
+
+// ---- delegated handlers ---------------------------------------------------
+
+function rcaEditOnFocusIn(ev) {
+  const target = ev && ev.target;
+  const cell = rcaEditRefFromCell(target) ? target : null;
+  if (cell) {
+    if (!RCA_EDIT_DOM.editing || RCA_EDIT_DOM.editing.cell !== cell) {
+      RCA_EDIT_DOM.editing = { tableId: rcaEditAttr(cell, 'data-table'),
+        row: rcaPyInt(rcaEditAttr(cell, 'data-row')),
+        col: rcaPyInt(rcaEditAttr(cell, 'data-col')),
+        cell: cell, text0: rcaEditText(cell) };
+    }
+    RCA_EDIT_DOM.lastTable = RCA_EDIT_DOM.editing.tableId;
+    RCA_EDIT_DOM.reviewRow = RCA_EDIT_DOM.editing.row;
+    rcaTableHighlightRow(RCA_EDIT_DOM.editing.row, RCA_EDIT_DOM.editing.tableId);
+    return;
+  }
+  const locate = rcaEditClosest(target, '.rca-locate-btn');
+  if (locate) {
+    const parts = (rcaEditAttr(locate, 'data-rca-locate') || '').split(':');
+    const idx = rcaPyInt(parts[1]);
+    if (parts[0] && idx !== null) rcaTableHighlightRow(idx, parts[0]);
+  }
+}
+
+function rcaEditOnFocusOut(ev) {
+  const cell = rcaEditRefFromCell(ev && ev.target) ? ev.target : null;
+  if (!cell) return;
+  // A failed validation LOCKS the focus (Tabulator's blocked editor): hand the
+  // caret straight back and leave the red frame up.
+  if (RCA_EDIT_DOM.invalid === cell) { rcaEditFocus(cell); return; }
+  if (RCA_EDIT_DOM.reverting) return;
+  rcaEditCommitCell(cell);
+}
+
+function rcaEditOnClick(ev) {
+  const target = ev && ev.target;
+  if (!target) return;
+  const locate = rcaEditClosest(target, '[data-rca-locate]');
+  if (locate) {
+    const parts = (rcaEditAttr(locate, 'data-rca-locate') || '').split(':');
+    const idx = rcaPyInt(parts[1]);
+    if (parts[0] && idx !== null) {
+      ev.preventDefault && ev.preventDefault();
+      rcaEditLocateRow(parts[0], idx);
+    }
+    return;
+  }
+  const add = rcaEditClosest(target, '[data-rca-addrow]');
+  if (add) {
+    ev.preventDefault && ev.preventDefault();
+    const tableId = rcaEditAttr(add, 'data-rca-addrow');
+    const rows = rcaRowsForTable(rcaTableEdits.live(), tableId);
+    const act = rcaTableEdits.addRow(tableId, rows.length);
+    if (act) { rcaEditPublishAction(act); rcaEditRerender(); }
+    return;
+  }
+  const sel = rcaEditClosest(target, '[data-rca-sel-action]');
+  if (sel) {
+    ev.preventDefault && ev.preventDefault();
+    const tableId = rcaEditAttr(sel, 'data-rca-sel-table');
+    if (tableId) rcaEditSelectionAction(rcaEditAttr(sel, 'data-rca-sel-action'), tableId);
+  }
+}
+
+function rcaEditOnChange(ev) {
+  const target = ev && ev.target;
+  if (!target) return;
+  const rowBox = rcaEditClosest(target, '[data-row-select]');
+  if (rowBox) {
+    const tableId = rcaEditAttr(rowBox, 'data-row-select');
+    const row = rcaPyInt(rcaEditAttr(rowBox, 'data-row'));
+    if (tableId && row !== null) {
+      rcaTableEdits.toggleRow(tableId, row, !!rowBox.checked);
+      rcaEditUpdateSelectionBar(tableId);
+      rcaEditSyncSelectionDom(null, [tableId]);
+    }
+    return;
+  }
+  const all = rcaEditClosest(target, '[data-select-all]');
+  if (all) {
+    const tableId = rcaEditAttr(all, 'data-select-all');
+    if (tableId) {
+      rcaTableEdits.selectAll(tableId, rcaRowsForTable(rcaTableEdits.live(), tableId), !!all.checked);
+      rcaEditUpdateSelectionBar(tableId);
+      rcaEditSyncSelectionDom(null, [tableId]);
+    }
+  }
+}
+
+// mouseenter / mouseleave arrive as delegated mouseover / mouseout; the row is
+// only "left" when the pointer moves to a node outside it (Tabulator's
+// rowMouseEnter/rowMouseLeave, minus per-row listeners).
+function rcaEditOnMouseOver(ev) {
+  const target = ev && ev.target;
+  const rowEl = rcaEditClosest(target, 'tr[data-row]');
+  const idx = rowEl ? rcaPyInt(rcaEditAttr(rowEl, 'data-row')) : null;
+  if (idx !== null && idx !== RCA_EDIT_DOM.hoverRow) {
+    const tableId = rcaEditAttr(rcaEditClosest(rowEl, '[data-table]') || {}, 'data-table');
+    RCA_EDIT_DOM.hoverRow = idx;
+    if (tableId) RCA_EDIT_DOM.lastTable = tableId;
+    rcaVizFocusRow(idx);
+    if (RCA_EDIT_DOM.invalid !== target) rcaEditClass(rowEl, 'rca-row-hover', true);
+  }
+}
+
+function rcaEditOnMouseOut(ev) {
+  const target = ev && ev.target;
+  const rowEl = rcaEditClosest(target, 'tr[data-row]');
+  if (!rowEl) return;
+  const idx = rcaPyInt(rcaEditAttr(rowEl, 'data-row'));
+  if (idx === null || idx !== RCA_EDIT_DOM.hoverRow) return;
+  RCA_EDIT_DOM.hoverRow = null;
+  rcaEditClass(rowEl, 'rca-row-hover', false);
+  rcaVizClearFocus();
+}
+
+const RCA_EDIT_EVENTS = [
+  ['focusin', rcaEditOnFocusIn],
+  ['focusout', rcaEditOnFocusOut],
+  ['click', rcaEditOnClick],
+  ['change', rcaEditOnChange],
+  ['keydown', rcaEditHandleKey],
+  ['mouseover', rcaEditOnMouseOver],
+  ['mouseout', rcaEditOnMouseOut],
+];
+
+// ---- attach / detach -------------------------------------------------------
+
+function rcaTableEditAttach(root, data, opts) {
+  if (!root || typeof root.addEventListener !== 'function') return null;
+  const o = opts || {};
+  RCA_EDIT_DOM.root = root;
+  RCA_EDIT_DOM.opts = o;
+  RCA_EDIT_DOM.rawText = o.rawText || '';
+  RCA_EDIT_DOM.editing = null;
+  RCA_EDIT_DOM.invalid = null;
+  RCA_EDIT_DOM.hoverRow = null;
+  RCA_EDIT_DOM.reviewRow = null;
+  RCA_EDIT_DOM.lastTable = o.tableId || null;
+  rcaTableEdits.attach(data, o.cfgs);
+  if (RCA_EDIT_DOM.wiredRoot !== root) {
+    if (RCA_EDIT_DOM.wiredRoot && typeof RCA_EDIT_DOM.wiredRoot.removeEventListener === 'function') {
+      for (const pair of RCA_EDIT_EVENTS) {
+        RCA_EDIT_DOM.wiredRoot.removeEventListener(pair[0], pair[1]);
+      }
+    }
+    for (const pair of RCA_EDIT_EVENTS) {
+      root.addEventListener(pair[0], pair[1], o.capture ? true : false);
+    }
+    RCA_EDIT_DOM.wiredRoot = root;
+    RCA_EDIT_DOM.wired = true;
+  }
+  // Canvas -> table direction: when the viz hovers a bar, light up its row.
+  const ns = rcaVizNs();
+  if (!RCA_EDIT_DOM.unsubHover && ns && typeof ns.onRowHover === 'function') {
+    RCA_EDIT_DOM.unsubHover = ns.onRowHover((idx) => {
+      if (idx === null || idx === undefined) {
+        const old = rcaEditRowEl(RCA_EDIT_DOM.lastTable, RCA_TABLE_HIGHLIGHT_ROW);
+        rcaEditClass(old, 'rca-row-active', false);
+        return;
+      }
+      rcaTableHighlightRow(idx, RCA_EDIT_DOM.lastTable);
+    });
+  }
+  rcaEditSyncSelectionDom(root);
+  rcaEditSyncDirtyDom(root);
+  return { detach: rcaTableEditDetach, root: root };
+}
+
+function rcaTableEditDetach() {
+  const root = RCA_EDIT_DOM.root;
+  if (root && typeof root.removeEventListener === 'function') {
+    for (const pair of RCA_EDIT_EVENTS) root.removeEventListener(pair[0], pair[1]);
+  }
+  if (typeof RCA_EDIT_DOM.unsubHover === 'function') RCA_EDIT_DOM.unsubHover();
+  RCA_EDIT_DOM.unsubHover = null;
+  RCA_EDIT_DOM.root = null;
+  RCA_EDIT_DOM.opts = null;
+  RCA_EDIT_DOM.editing = null;
+  RCA_EDIT_DOM.invalid = null;
+  RCA_EDIT_DOM.wired = false;
+  RCA_EDIT_DOM.wiredRoot = null;
+  rcaTableEdits.detach();
+  return true;
+}
+
+// Called by js/history.js after an undo/redo re-applied something to the live
+// data: repaint what the DOM cannot know about (rows that came / went back).
+function rcaTableEditAfterHistory(action, direction) {
+  const structural = action && (action.type === 'rowDelete' || action.type === 'rowAdd');
+  if (structural) rcaEditRerender();
+  else {
+    const cfg = rcaTableEdits.cfg(action.tableId);
+    const col = cfg && rcaPyInt(action.col);
+    const cell = (cfg && col !== null) ? rcaEditCellEl(action.tableId, action.row, col) : null;
+    const ref = cell ? rcaEditRefFromCell(cell) : null;
+    if (cell && ref) {
+      const spec = ref.spec;
+      rcaEditPaintCell(cell, ref, rcaTableEdits.resolveCell(ref.tableId, ref.row, spec)
+        .cellValue(spec.model || spec.field, spec));
+    }
+  }
+  rcaEditAnnounce((direction === 'redo' ? rcaEditT('edit.redo') : rcaEditT('edit.undo'))
+    + ' — ' + rcaEditT('edit.editsPending', { n: rcaTableEdits.editedCount() }));
+  return true;
+}
+
+// ---- exports (plain globals; no ES-module syntax anywhere) ----------------
+if (typeof globalThis !== 'undefined') {
+  globalThis.rcaTableEdits = rcaTableEdits;
+  globalThis.RCA_EDIT_DOM = RCA_EDIT_DOM;
+  globalThis.RCA_EDIT_STRINGS = RCA_EDIT_STRINGS;
+  globalThis.RCA_EDIT_I18N_KEYS = RCA_EDIT_I18N_KEYS;
+  globalThis.rcaTableEditAttach = rcaTableEditAttach;
+  globalThis.rcaTableEditDetach = rcaTableEditDetach;
+  globalThis.rcaTableEditAfterHistory = rcaTableEditAfterHistory;
+  globalThis.rcaTableHighlightRow = rcaTableHighlightRow;
+  globalThis.rcaEditCommitCell = rcaEditCommitCell;
+  globalThis.rcaEditHandleKey = rcaEditHandleKey;
+  globalThis.rcaEditNavigate = rcaEditNavigate;
+  globalThis.rcaEditRevertCell = rcaEditRevertCell;
+  globalThis.rcaEditRefFromCell = rcaEditRefFromCell;
+  globalThis.rcaEditSelectionAction = rcaEditSelectionAction;
+  globalThis.rcaEditStepLowConfidence = rcaEditStepLowConfidence;
+  globalThis.rcaEditLocateRow = rcaEditLocateRow;
+  globalThis.rcaValidateCell = rcaValidateCell;
+  globalThis.rcaCaptureEdits = rcaCaptureEdits;
+  globalThis.rcaApplyEdits = rcaApplyEdits;
+  globalThis.rcaIsDirtyEdits = rcaIsDirtyEdits;
+  globalThis.rcaNewRowTemplate = rcaNewRowTemplate;
+  globalThis.rcaColEditSpec = rcaColEditSpec;
+  globalThis.rcaT = rcaEditT;
+  globalThis.rcaTableT = rcaEditT;
+  globalThis.rcaEditT = rcaEditT;
+  globalThis.rcaEditLang = rcaEditLang;
+  globalThis.rcaEditAnnounce = rcaEditAnnounce;
+  globalThis.rcaTableRerender = rcaEditRerender;
+  globalThis.rcaTableEditCellEl = rcaEditCellEl;
+  globalThis.rcaTableEditRowEl = rcaEditRowEl;
+}
+
+
+
+
+
+
+

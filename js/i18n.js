@@ -5,6 +5,19 @@ const RCA_I18N = {
   zh: {
     _label: '中文',
     'a11y.skipToContent': '跳到主要内容',
+    // FE-BORROW-2026-09-20 (domain U): a11y strings that used to be hardcoded
+    // in index.html (title="System/Light/Dark", aria-label="Theme"/"Language")
+    // plus the new error-banner / confirm-dialog / progress-bar copy.
+    'a11y.themeLabel': '主题',
+    'a11y.languageLabel': '语言',
+    'theme.system': '跟随系统',
+    'theme.light': '浅色',
+    'theme.dark': '深色',
+    'loading.progress': '提取进度',
+    'err.copyDetails': '复制详情',
+    'err.retry': '重试',
+    'err.copyFailed': '复制失败，请手动选择文本复制。',
+    'confirm.forceRerun': '将忽略服务端缓存重新调用模型提取，会产生新的 API 费用。确定继续吗？',
     'history.filter.zonation': '生物带',
     'err.exportFailed': '无法写入文件，请检查目标路径是否可写：',
     // REVIEW-2026-09-10: err.* keys had no entry in any locale.
@@ -324,6 +337,18 @@ const RCA_I18N = {
 RCA_I18N.en = {
   _label: 'English',
   'a11y.skipToContent': 'Skip to main content',
+  // FE-BORROW-2026-09-20 (domain U): see the zh block comment — same keys,
+  // three-way parity is locked by tests_frontend.js `i18n-zh-{en,ja}-parity`.
+  'a11y.themeLabel': 'Theme',
+  'a11y.languageLabel': 'Language',
+  'theme.system': 'Follow system',
+  'theme.light': 'Light',
+  'theme.dark': 'Dark',
+  'loading.progress': 'Extraction progress',
+  'err.copyDetails': 'Copy details',
+  'err.retry': 'Retry',
+  'err.copyFailed': 'Copy failed — select the text and copy it manually.',
+  'confirm.forceRerun': 'This bypasses the server cache and calls the model again, using fresh API credits. Continue?',
   'history.filter.zonation': 'Zonation',
   'err.exportFailed': 'Could not write the file — check that the target path is writable:',
   // REVIEW-2026-09-10: err.* keys had no entry in any locale.
@@ -613,6 +638,17 @@ RCA_I18N.en = {
 RCA_I18N.ja = {
   _label: '日本語',
   'a11y.skipToContent': 'メインコンテンツへスキップ',
+  // FE-BORROW-2026-09-20 (domain U): see the zh block comment.
+  'a11y.themeLabel': 'テーマ',
+  'a11y.languageLabel': '言語',
+  'theme.system': 'システム設定',
+  'theme.light': 'ライト',
+  'theme.dark': 'ダーク',
+  'loading.progress': '抽出の進捗',
+  'err.copyDetails': '詳細をコピー',
+  'err.retry': '再試行',
+  'err.copyFailed': 'コピーに失敗しました。テキストを手動で選択してコピーしてください。',
+  'confirm.forceRerun': 'サーバー側のキャッシュを無視してモデルを再呼び出しします。新しい API 消費が発生します。続行しますか？',
   'history.filter.zonation': '帯区分',
   'err.exportFailed': 'ファイルに書き込めません。保存先に書き込み権限があるか確認してください：',
   // REVIEW-2026-09-10: err.* keys had no entry in any locale.
@@ -938,6 +974,9 @@ function t(key, params) {
 
 // Apply translations to all [data-i18n] / [data-i18n-ph] / [data-i18n-title]
 // / [data-i18n-alt] elements currently in the DOM.
+// FE-BORROW-2026-09-20 (domain U): + [data-i18n-label] -> aria-label, so the
+// role="group"/"radiogroup"/"progressbar" accessible names in index.html are
+// translated like any other string instead of being hardcoded per language.
 function rcaApplyI18n(root) {
   const scope = root || document;
   scope.querySelectorAll('[data-i18n]').forEach((el) => {
@@ -951,5 +990,8 @@ function rcaApplyI18n(root) {
   });
   scope.querySelectorAll('[data-i18n-alt]').forEach((el) => {
     el.setAttribute('alt', t(el.getAttribute('data-i18n-alt')));
+  });
+  scope.querySelectorAll('[data-i18n-label]').forEach((el) => {
+    el.setAttribute('aria-label', t(el.getAttribute('data-i18n-label')));
   });
 }

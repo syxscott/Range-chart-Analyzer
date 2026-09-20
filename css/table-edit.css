@@ -1,0 +1,352 @@
+/* ===========================================================================
+ * css/table-edit.css — in-browser table editing states (FE-BORROW-2026-09-20, 域T)
+ * ===========================================================================
+ *
+ * Only the EDITING layer lives here: the affordance of a contenteditable cell,
+ * the dirty / invalid marks, the selection bar, the review-row highlight and
+ * the sticky focus column. The base table look stays in css/style.css so this
+ * file can be dropped without restyling anything.
+ *
+ * Rules borrowed from the references, made token-only:
+ *   Tabulator      — .tabulator-cell.tabulator-editing gets an inset accent
+ *                    ring; a failed validation adds a red border and KEEPS the
+ *                    editor focused. Same idea, our tokens.
+ *   ui-ux-pro-max  — :focus-visible ring >= 2px and never colour-only
+ *                    (ring + icon + text), and everything inside
+ *                    prefers-reduced-motion collapses to 0.01ms.
+ *
+ * Every value comes from an existing css/style.css token; nothing is redefined
+ * here so dark mode / prefers-color-scheme keep working.
+ */
+
+/* ---- the editable cell --------------------------------------------------- */
+
+[data-editable="1"] .rca-edit-cell {
+    position: relative;
+    cursor: text;
+    /* A cell that can be edited should not look like printed paper: the
+       dotted underline is the non-colour affordance pair for the focus ring
+       below (WCAG 1.4.1 — the dirty/invalid states are also distinguished by
+       an icon and by aria, never by hue alone). */
+    text-decoration: underline dotted transparent;
+    transition: box-shadow var(--transition-fast),
+                background-color var(--transition-fast),
+                outline-color var(--transition-fast);
+}
+
+[data-editable="1"] .rca-edit-cell:hover {
+    background-color: var(--primary-soft);
+    text-decoration-color: var(--border-strong);
+}
+
+:root[data-theme="dark"] [data-editable="1"] .rca-edit-cell:hover {
+    background-color: rgba(37, 99, 235, 0.14);
+}
+
+/* editTriggerEvent: "focus" — the ring appears while the caret is in the cell,
+   not only after a change. preventScroll + our own scrollIntoView mean the row
+   is already in view, so the ring can never be clipped off-screen. */
+[data-editable="1"] .rca-edit-cell:focus,
+[data-editable="1"] .rca-edit-cell:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+    background-color: var(--bg-white);
+    cursor: text;
+    z-index: 2;
+}
+
+:root[data-theme="dark"] [data-editable="1"] .rca-edit-cell:focus {
+    background-color: var(--bg-light);
+}
+
+/* Non-editable columns must not pretend to be targets. */
+[data-editable="1"] .rca-edit-cell[contenteditable="false"] {
+    cursor: default;
+    background-image: none;
+}
+
+/* ---- dirty: "this cell differs from the extraction" ---------------------- */
+/*
+ * Mirrors rca_core/editable.py's diff: a mark exists exactly while
+ * capture_edits() would report something for that (row, field).
+ */
+.rca-edit-cell.rca-cell-dirty {
+    box-shadow: inset 3px 0 0 0 var(--warning-color);
+    background-color: var(--warning-soft);
+}
+
+.rca-edit-cell.rca-cell-dirty::after {
+    content: "●";
+    position: absolute;
+    top: 2px;
+    right: 3px;
+    font-size: 8px;
+    line-height: 1;
+    color: var(--warning-color);
+}
+
+:root[data-theme="dark"] .rca-edit-cell.rca-cell-dirty {
+    background-color: rgba(180, 83, 9, 0.18);
+}
+
+/* ---- invalid: the red frame that keeps focus ---------------------------- */
+/*
+ * Tabulator's blocked editor: the value stays on screen, the caret stays in
+ * the cell (js/table.js re-focuses on focusout), and the reason is in the
+ * aria-live region — so the state is announced, not just coloured.
+ */
+.rca-edit-cell.rca-cell-invalid,
+.rca-edit-cell.rca-cell-invalid:focus {
+    outline: 2px solid var(--danger-color);
+    outline-offset: -2px;
+    background-color: var(--danger-soft);
+    animation: rca-edit-shake 180ms ease-out 1;
+}
+
+.rca-edit-cell.rca-cell-invalid::before {
+    content: "⚠ ";
+    color: var(--danger-color);
+    font-weight: 700;
+}
+
+@keyframes rca-edit-shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-2px); }
+    75% { transform: translateX(2px); }
+}
+
+/* ---- hint line ----------------------------------------------------------- */
+.rca-edit-status {
+    min-height: 1.2em;
+    margin: 6px 2px 0;
+    color: var(--text-muted);
+    font-size: 12.5px;
+}
+
+.rca-edit-status:not(:empty)::before {
+    content: "› ";
+    color: var(--primary-color);
+}
+
+/* ---- selection ----------------------------------------------------------- */
+.rca-col-select,
+.rca-cell-select {
+    width: 34px;
+    min-width: 34px;
+    padding-left: 10px;
+    padding-right: 0;
+    text-align: center;
+}
+
+.rca-row-select,
+.rca-select-all {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    vertical-align: middle;
+    cursor: pointer;
+    accent-color: var(--primary-color);
+}
+
+tr[data-row].rca-row-selected > td,
+tr[data-row].rca-row-selected > th {
+    background-color: var(--primary-soft);
+}
+
+/* Floating action bar, one per table: 导出所选 / 删除所选 / 清除选择.
+   `hidden` is toggled by js/table.js the moment the count changes. */
+.rca-selection-bar {
+    position: sticky;
+    bottom: 8px;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 8px 0 0;
+    padding: 8px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--bg-white);
+    box-shadow: var(--shadow-md);
+    font-size: 13px;
+}
+
+:root[data-theme="dark"] .rca-selection-bar {
+    background: var(--bg-light);
+}
+
+.rca-selection-bar[hidden] {
+    display: none;
+}
+
+.rca-selection-bar .rsb-count {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: var(--text-base);
+}
+
+.rca-selection-bar .rsb-count::after {
+    content: " 行";
+    color: var(--text-muted);
+    font-weight: 400;
+}
+
+html[lang="en"] .rca-selection-bar .rsb-count::after {
+    content: " row(s)";
+}
+
+.rca-selection-bar .rsb-actions {
+    display: inline-flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* 删除所选 is the only destructive verb: give it the danger hue + a red focus
+   ring so it cannot be mistaken for its two neighbours. */
+.rca-selection-bar [data-rca-sel-action="delete"] {
+    color: var(--danger-color);
+    border-color: var(--danger-color);
+}
+
+.rca-selection-bar [data-rca-sel-action="delete"]:hover {
+    background: var(--danger-soft);
+}
+
+/* ---- the row-tail 定位 column ------------------------------------------- */
+.rca-col-locate,
+.rca-cell-locate {
+    width: 52px;
+    min-width: 52px;
+    text-align: right;
+    padding-right: 8px;
+}
+
+.rca-locate-btn {
+    opacity: 0;
+    padding: 1px 7px;
+    font-size: 11.5px;
+    line-height: 1.5;
+}
+
+tr:hover .rca-locate-btn,
+tr:focus-within .rca-locate-btn,
+.rca-locate-btn:focus-visible,
+.rca-locate-btn:hover {
+    opacity: 1;
+}
+
+/* Keyboard users get the button without hovering: the row that carries focus
+   or the review highlight always shows it. */
+tr.rca-row-active .rca-locate-btn {
+    opacity: 1;
+}
+
+/* ---- review-row highlight (J/K walk + viz hover hand-off) ---------------- */
+tr.rca-row-active > td,
+tr.rca-row-active > th {
+    background-color: var(--info-soft);
+}
+
+tr.rca-row-active > th[scope="row"] {
+    box-shadow: inset 3px 0 0 0 var(--info-color);
+    font-weight: 700;
+}
+
+:root[data-theme="dark"] tr.rca-row-active > td,
+:root[data-theme="dark"] tr.rca-row-active > th {
+    background-color: rgba(99, 102, 241, 0.18);
+}
+
+/* Low-confidence rows are the J/K walking route; mark them with a leading bar
+   so the operator sees which rows still need proofreading. */
+tr.rca-row-lowconf > th[scope="row"] {
+    box-shadow: inset 3px 0 0 0 var(--warning-color);
+}
+
+tr.rca-row-lowconf.rca-row-active > th[scope="row"] {
+    box-shadow: inset 3px 0 0 0 var(--info-color);
+}
+
+/* ---- sticky focus column ------------------------------------------------ */
+/*
+ * The row header + the checkbox column stay put while a wide species table
+ * scrolls sideways; without it an edited cell loses its row identity.
+ * css/app-ux.css already makes the first header sticky — this only extends
+ * that to the select column and keeps the paint order sane in edit mode.
+ */
+[data-editable="1"] .table-wrap {
+    overflow: auto;
+}
+
+[data-editable="1"] table.data-table th.cell-empty,
+[data-editable="1"] table.data-table td.rca-cell-select {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--bg-white);
+}
+
+[data-editable="1"] table.data-table thead th.rca-col-select {
+    left: 34px;
+    z-index: 3;
+}
+
+:root[data-theme="dark"] [data-editable="1"] table.data-table th.cell-empty,
+:root[data-theme="dark"] [data-editable="1"] table.data-table td.rca-cell-select {
+    background: var(--bg-light);
+}
+
+/* ---- the table footer (新增行) ------------------------------------------ */
+.rca-table-foot {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 6px;
+}
+
+.rca-addrow-btn {
+    font-size: 12px;
+}
+
+/* ---- undo / redo toolbar buttons (index.html wires [data-rca-undo]) ----- */
+#btn-undo[disabled],
+#btn-redo[disabled],
+[data-rca-undo][disabled],
+[data-rca-redo][disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+[data-rca-undo]::before,
+[data-rca-redo]::before {
+    /* The label is text; the glyph is the redundant cue that survives a
+       colour-blind or high-contrast display. */
+    font-size: 13px;
+    margin-right: 4px;
+}
+
+[data-rca-undo]::before { content: "↶"; }
+[data-rca-redo]::before { content: "↷"; }
+
+/* ---- forced colors / reduced motion ------------------------------------- */
+@media (forced-colors: active) {
+    .rca-edit-cell.rca-cell-dirty,
+    .rca-edit-cell.rca-cell-invalid {
+        box-shadow: none;
+        border: 2px solid CanvasText;
+    }
+
+    .rca-selection-bar,
+    tr.rca-row-active > td {
+        border: 1px solid CanvasText;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    [data-editable="1"] .rca-edit-cell,
+    .rca-edit-cell.rca-cell-invalid,
+    .rca-edit-cell.rca-cell-invalid:focus {
+        animation: none;
+        transition: none;
+    }
+}

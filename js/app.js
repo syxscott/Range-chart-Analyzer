@@ -287,6 +287,101 @@
     toast._t = setTimeout(() => el.classList.remove('show'), 2200);
   }
 
+  // FE-BORROW-2026-09-20 (domain U): in-house confirmation dialog for the
+  // destructive / costly actions (reset, force-rerun). window.confirm is
+  // blocked in some embedded webviews and gives no control over focus; the
+  // borrowed Windows popup guidance keeps it tiny — open with the DEFAULT
+  // action focused (first button), Esc / backdrop = cancel, focus returns to
+  // the opener, and Tab only ever reaches the dialog's own buttons. Two
+  // buttons in the DOM (confirm first, then cancel) so "首钮" is the primary
+  // action; anything heavier (portals, animation libs) is out of scope.
+  function rcaConfirm(opts) {
+    return new Promise((resolve) => {
+      const backdrop = document.createElement('div');
+      backdrop.className = 'rca-dialog-backdrop';
+      const dlg = document.createElement('div');
+      dlg.className = 'rca-dialog' + (opts.danger ? ' rca-dialog-danger' : '');
+      dlg.setAttribute('role', 'dialog');
+      dlg.setAttribute('aria-modal', 'true');
+      const msgId = 'rca-dialog-msg';
+      dlg.setAttribute('aria-labelledby', msgId);
+      const msg = document.createElement('p');
+      msg.id = msgId;
+      msg.textContent = opts.message;
+      const row = document.createElement('div');
+      row.className = 'rca-dialog-actions';
+      const okBtn = document.createElement('button');
+      okBtn.type = 'button';
+      okBtn.className = 'btn ' + (opts.danger ? 'btn-primary' : 'btn-secondary');
+      okBtn.textContent = opts.confirmText;
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'btn btn-secondary';
+      cancelBtn.textContent = t('upload.cancel');
+      row.appendChild(okBtn);
+      row.appendChild(cancelBtn);
+      dlg.appendChild(msg);
+      dlg.appendChild(row);
+      backdrop.appendChild(dlg);
+      const prevFocus = document.activeElement;
+      function settle(value) {
+        document.removeEventListener('keydown', onKey);
+        if (backdrop.parentNode && backdrop.parentNode.removeChild) {
+          backdrop.parentNode.removeChild(backdrop);
+        }
+        if (prevFocus && typeof prevFocus.focus === 'function') prevFocus.focus();
+        resolve(value);
+      }
+      function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); settle(false); return; }
+        if (e.key === 'Tab') {
+          // Two focusables only — bounce between them (mini focus trap).
+          e.preventDefault();
+          const first = !e.shiftKey;
+          const target = first ? okBtn : cancelBtn;
+          if (typeof target.focus === 'function') target.focus();
+        }
+      }
+      okBtn.addEventListener('click', () => settle(true));
+      cancelBtn.addEventListener('click', () => settle(false));
+      backdrop.addEventListener('click', (e) => {
+        if (!e || e.target === backdrop) settle(false);
+      });
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(backdrop);
+      // WPD: focus lands on the dialog's first button (the default action)
+      // so Enter / Space confirms and Esc cancels without hunting for focus.
+      if (typeof okBtn.focus === 'function') okBtn.focus();
+    });
+  }
+
+  function _rcaIsEditable(el) {
+    if (!el) return false;
+    if (el.isContentEditable === true) return true;
+    if (typeof el.getAttribute !== 'function') return false;
+    const ce = el.getAttribute('contenteditable');
+    // present-and-not-"false" is how the browser treats the attribute
+    // (a bare `contenteditable` has the empty-string value).
+    return ce != null && ce !== 'false';
+  }
+
+  // FE-BORROW-2026-09-20 (domain U): shared "is the caret inside a text
+  // editor right now?" probe. Used by the clipboard-paste guard (the global
+  // paste handler must not steal a text paste aimed at an input or an
+  // editable table cell) and by the in-place re-translation, which skips a
+  // rebuild while the user is mid-edit. Works for the event target when the
+  // caller has one and falls back to document.activeElement; the test sandbox
+  // has no activeElement, hence every read is guarded.
+  function _rcaIsTextTarget(node) {
+    const el = node && node.nodeType === 1 ? node
+      : (node && node.target && node.target.nodeType === 1 ? node.target : null)
+      || document.activeElement || null;
+    if (!el || !el.tagName) return false;
+    const tag = String(el.tagName).toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    return _rcaIsEditable(el);
+  }
+
   // ---- settings persistence ----
   function loadSettings() {
     $('endpoint').value = rcaStoreGet(RCA_STORE.endpoint, RCA_CONFIG.defaultEndpoint);
@@ -433,10 +528,27 @@
   }
 
   // ---- alerts ----
+  // FE-BORROW-2026-09-20 (domain U, a11y): #alert-slot is the only live
+  // region on the announcement path. It is declared polite in index.html
+  // because that is what warnings and info banners need; a danger banner
+  // raises it to role="alert"/aria-live="assertive" for as long as it is on
+  // screen (and clearAlert puts the politeness back). The banner ELEMENTS
+  // used to carry role="alert"/"status" themselves while the slot stayed
+  // aria-live — a nested pair of live regions, so the same failure text was
+  // announced twice, once politely and once assertively.
+  function _alertSlotLive(role) {
+    const slot = $('alert-slot');
+    if (!slot || typeof slot.setAttribute !== 'function') return;
+    slot.setAttribute('role', role);
+    slot.setAttribute('aria-live', role === 'alert' ? 'assertive' : 'polite');
+  }
+
   function clearAlert() {
     const slot = $('alert-slot');
     if (!slot) return;
     slot.innerHTML = '';
+    _alertSlotLive('status');
+    _currentAlertSpec = null;
   }
 
   // UI-REVIEW-2026-09-05: remember how the visible alert was built so
@@ -445,6 +557,9 @@
   // this, switching language left the old banner in the previous language.
   // Pure t() messages store {key, params, status}; callers that pass a
   // pre-composed string store it verbatim (fmt = null).
+  // FE-BORROW-2026-09-20 (domain U): opts is the new optional 5th arg
+  // ({ onRetry }); it travels inside _currentAlertSpec so a language switch
+  // re-renders the banner WITHOUT losing the retry action.
   let _currentAlertSpec = null;
 
   function _alertMessage(spec) {
@@ -454,18 +569,21 @@
     return msg;
   }
 
-  function showAlert(kind, message, rawDetail, fmt) {
+  function showAlert(kind, message, rawDetail, fmt, opts) {
     const slot = $('alert-slot');
     if (!slot) return;
-    _currentAlertSpec = { kind, message, rawDetail, fmt: fmt || null };
-    // M3: error-level alerts need role="alert" so screen readers announce
-    // them immediately (aria-live=polite on the parent slot only gets the
-    // "next opportunity" announcement). Keep role="status" for warnings —
-    // they're informational and shouldn't interrupt the user.
+    _currentAlertSpec = { kind, message, rawDetail, fmt: fmt || null, opts: opts || null };
+    // M3: error-level alerts need "assertive" announcement so screen readers
+    // interrupt the user (polite only announces at the "next opportunity"),
+    // while warnings stay polite/informational.
+    // FE-BORROW-2026-09-20 (domain U, a11y): the politeness lives on the
+    // SLOT (the single live region) instead of on the banner element, so the
+    // message is announced once instead of twice. See _alertSlotLive.
     const role = (kind === 'danger') ? 'alert' : 'status';
+    _alertSlotLive(role);
     const div = document.createElement('div');
     div.className = 'alert alert-' + kind;
-    div.setAttribute('role', role);
+    div.setAttribute('data-alert-kind', kind);
     const inner = document.createElement('div');
     inner.textContent = message;
     div.appendChild(inner);
@@ -473,6 +591,36 @@
       const pre = document.createElement('pre');
       pre.textContent = String(rawDetail).slice(0, 4000);
       div.appendChild(pre);
+    }
+    // FE-BORROW-2026-09-20 (domain U): an error banner that only tells the
+    // user "it failed" forces a screenshot to report it. Danger banners now
+    // carry "copy details" (clipboard, with the legacy execCommand fallback
+    // inside rcaCopyText) and — when the caller supplied opts.onRetry — a
+    // "retry" button. Built via createElement + textContent (never innerHTML
+    // with translated strings) so raw payloads cannot inject markup.
+    if (kind === 'danger') {
+      const actions = document.createElement('div');
+      actions.className = 'alert-actions';
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'btn btn-secondary btn-small';
+      copyBtn.textContent = t('err.copyDetails');
+      copyBtn.addEventListener('click', () => {
+        const dump = message + (rawDetail ? '\n\n' + String(rawDetail) : '');
+        Promise.resolve(rcaCopyText(dump)).then((ok) => {
+          toast(ok ? t('results.copied') : t('err.copyFailed'));
+        });
+      });
+      actions.appendChild(copyBtn);
+      if (opts && typeof opts.onRetry === 'function') {
+        const retryBtn = document.createElement('button');
+        retryBtn.type = 'button';
+        retryBtn.className = 'btn btn-primary btn-small';
+        retryBtn.textContent = t('err.retry');
+        retryBtn.addEventListener('click', () => { opts.onRetry(); });
+        actions.appendChild(retryBtn);
+      }
+      div.appendChild(actions);
     }
 
     // UI polish: fade transition for alert appearance.
@@ -638,13 +786,28 @@
       }
     }
     $('loading-slot').classList.toggle('hidden', !busy);
+    // FE-BORROW-2026-09-20 (domain U): the determinate run-progress bar is
+    // part of the loading chrome — hide + zero it whenever no extraction runs
+    // (or a new one starts before any per-run signal arrives).
+    const prog = $('run-progress');
+    const progFill = $('run-progress-fill');
+    if (prog) {
+      prog.classList.add('hidden');
+      if (prog && prog.setAttribute) prog.setAttribute('aria-valuenow', '0');
+      if (progFill) progFill.style.width = '0%';
+    }
     // FIX-6: show the Cancel button only while an extraction is in flight.
     const cancelBtn = $('cancel-btn');
     if (cancelBtn) cancelBtn.classList.toggle('hidden', !busy);
     // FIX (force-rerun): show "Force rerun" when a result is present so the
     // user can re-extract (bypassing cache) without resetting the image.
+    // FE-BORROW-2026-09-20 (domain U): the original condition hid the button
+    // whenever state.result was null — but after a FAILED first run there is
+    // no result and the banner's whole point is "retry, bypassing cache".
+    // An uploaded image (state.dataUrl) is the actionable precondition, not
+    // a previous success.
     const rerunBtn = $('force-rerun-btn');
-    if (rerunBtn) rerunBtn.classList.toggle('hidden', !(!!state.result && !busy));
+    if (rerunBtn) rerunBtn.classList.toggle('hidden', busy || !(state.result || state.dataUrl));
     if (busy) {
       $('results-empty').classList.add('hidden');
       $('results-content').classList.add('hidden');
@@ -982,7 +1145,11 @@
       if (myToken !== state.extractToken) return;
       // FIX-6: user cancelled — no error alert.
       if (abort.signal.aborted) return;
-      showAlert('danger', t('err.network'), String(extractError), { key: 'err.network' });
+      // FE-BORROW-2026-09-20 (domain U): onRetry turns the danger banner's
+      // new "retry" button into a re-run of THIS flow (cache bypass stays a
+      // separate, confirmed action on the button row).
+      showAlert('danger', t('err.network'), String(extractError),
+        { key: 'err.network' }, { onRetry: runExtraction });
       return;
     }
 
@@ -1010,7 +1177,9 @@
       const msg = t(errKey) +
         (res.status ? ' (HTTP ' + res.status + ')' : '');
       // H7: prefer upstream error body for 5xx debugging.
-      showAlert('danger', msg, res.errorBody || res.raw, { key: errKey, status: res.status || 0 });
+      // FE-BORROW-2026-09-20 (domain U): retry action wired into the banner.
+      showAlert('danger', msg, res.errorBody || res.raw,
+        { key: errKey, status: res.status || 0 }, { onRetry: runExtraction });
       // FIX (results-empty): setBusy(true) hid both #results-empty and
       // #results-content. On failure there is nothing to render, so restore
       // the empty-state placeholder — otherwise the previous result (if any)
@@ -1078,7 +1247,11 @@
       showAlert('warning', t('err.truncated'), null, { key: 'err.truncated' });
     }
 
-    renderCurrentResult();
+    // FE-BORROW-2026-09-20 (domain U): `focus: true` only here — this is the
+    // one render that answers "the extraction you just started finished".
+    // The re-render paths (failed retry, language switch) must not move the
+    // caret out from under the user.
+    renderCurrentResult({ focus: true });
     // UI-REVIEW-2026-09-08 (borrowed: gnfinder/GBIF): verify extracted
     // species names in the background; fuzzy suggestions surface as an
     // info block. Fire-and-forget, capped, fail-silent.
@@ -1110,7 +1283,33 @@
       _busyLabelFmt.i18nKey = arg.i18nKey;
       _busyLabelFmt.params = arg.params || {};
       p.textContent = formatBusyLabel(arg.i18nKey, arg.params || {});
+      // FE-BORROW-2026-09-20 (domain U): every ({done}/{total}) label we
+      // already draw for multi-run direct transport now ALSO drives the
+      // determinate progress bar in the loading slot (markup lives in
+      // index.html inside #loading-slot). Labels without the counters
+      // (single run, aggregating, classifying) leave the bar untouched.
+      const prm = arg.params;
+      if (prm && prm.done != null && prm.total != null && prm.total > 0) {
+        _rcaSetRunProgress(prm.done, prm.total);
+      }
     }
+  }
+
+  // Draw the #loading-slot determinate run-progress bar. Both nodes live in
+  // index.html; `.hidden` is toggled by updateActionButtons when the bar
+  // must disappear. Stub environments without style support degrade to a
+  // width-less div — the aria-valuenow still narrates progress.
+  function _rcaSetRunProgress(done, total) {
+    const prog = $('run-progress');
+    const fill = $('run-progress-fill');
+    if (!prog) return;
+    const pct = Math.max(0, Math.min(100, Math.round((done / total) * 100)));
+    prog.classList.remove('hidden');
+    if (prog.setAttribute) {
+      prog.setAttribute('aria-valuenow', String(pct));
+      prog.setAttribute('aria-valuetext', done + '/' + total);
+    }
+    if (fill && fill.style) fill.style.width = pct + '%';
   }
 
   // Build the loading-slot text from the i18n key + params. Mirrors the
@@ -1123,7 +1322,7 @@
     return base;
   }
 
-  function renderCurrentResult() {
+  function renderCurrentResult(opts) {
     if (!state.result) return;
     const content = $('results-content');
     // FIX (viz-host-preserve): capture any existing #viz-host before we
@@ -1133,7 +1332,12 @@
     // to recreate the container each time — and any cached state inside
     // an initialized chart instance would be lost.
     const vizHost = content.querySelector('#viz-host');
-    content.innerHTML = rcaRenderResults(state.result, state.rawText);
+    // FE-BORROW-2026-09-20 (integration): the web panel becomes an editing
+    // surface - {editable:true} makes rcaRenderResults emit the select/
+    // locate/undo chrome, and rcaTableEditAttach wires the delegated edit
+    // listeners onto the (surviving) root. Read-only callers (Qt history
+    // dialog) keep the two-argument form.
+    content.innerHTML = rcaRenderResults(state.result, state.rawText, { editable: true });
     if (vizHost) {
       // Re-append the original element (preserving any DOM state inside
       // it — handlers, child nodes, attribute changes — that a fresh
@@ -1151,6 +1355,31 @@
     }
     $('results-empty').classList.add('hidden');
     bindResultActions();
+    // FE-BORROW-2026-09-20 (integration): the linked canvas is painted
+    // BEFORE the edit layer attaches, so rcaTableEditAttach's onRowHover
+    // subscription finds a live rcaViz (canvas -> row highlight). The table
+    // -> canvas direction (hover/locate) is wired inside table.js against
+    // window.rcaViz and degrades silently when viz is absent.
+    if (typeof rcaViz !== 'undefined' && rcaViz && vizHost) {
+      rcaViz.render(vizHost, state.result, state.dataUrl);
+    }
+    if (typeof rcaTableEditAttach === 'function') {
+      rcaTableEditAttach(content, state.result, {
+        editable: true,
+        rawText: state.rawText,
+        // Selected-rows export reuses the panel's own CSV path (same prefix
+        // naming as data-csv buttons above).
+        onExport: function (tableId, rows, payload) {
+          if (!payload || !payload.headers) return;
+          const prefix = rcaResultFilePrefix(state.result);
+          rcaDownload(prefix + tableId + '-selected.csv',
+            rcaToCsv(payload.headers, payload.rows), 'text/csv');
+        },
+      });
+    }
+    if (typeof rcaHistoryAttachUi === 'function') {
+      rcaHistoryAttachUi(content);
+    }
     // UI-REVIEW-2026-09-08: restore name-verification hints (re-rendered
     // on language switch so the wording follows the active language).
     if (state._nameIssues && typeof rcaRenderNameIssues === 'function') {
@@ -1180,6 +1409,118 @@
     }
     // Bring results into view.
     $('results-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // FE-BORROW-2026-09-20 (domain U): scrolling a result into view is only
+    // half of the hand-off — keyboard / screen-reader users must also have
+    // their FOCUS moved there, otherwise the next Tab continues from the
+    // extract button and the announcement never happens. tabindex="-1" makes
+    // the section programmatically focusable without adding a tab stop;
+    // preventScroll keeps the smooth scrollIntoView above authoritative.
+    // The hand-off is opt-in (opts.focus) because renderCurrentResult is also
+    // the re-render path for a FAILED retry and for the language switch —
+    // stealing the caret from the banner's "retry" button or from the language
+    // radiogroup mid-action would be worse than the announcement it buys.
+    if (opts && opts.focus) {
+      const rc = $('results-card');
+      if (rc && rc.setAttribute && !rc.getAttribute('tabindex')) rc.setAttribute('tabindex', '-1');
+      if (rc && typeof rc.focus === 'function') rc.focus({ preventScroll: true });
+    }
+    // FE-BORROW-2026-09-20 (domain U): remember every text node with the
+    // string it held at render time. switchLang uses this to retarget the
+    // translated labels IN PLACE (see rcaRetranslateResult) instead of
+    // rebuilding the whole result tree — and to tell a re-translation apart
+    // from a user's table-cell edit (node whose live text differs from the
+    // snapshot is left untouched).
+    state._resultTexts = _rcaResultTextNodes(content);
+  }
+
+  // Containers inside #results-content that rcaRenderResults() does NOT
+  // produce: #viz-host is static markup js/viz.js paints into (and that
+  // renderCurrentResult deliberately re-appends after the innerHTML swap),
+  // #names-verify-slot is filled asynchronously by the GBIF round. Their text
+  // nodes therefore have no counterpart in a freshly rendered template, so
+  // counting them would make the two lists disagree on EVERY language switch
+  // and silently force the old full rebuild — which is exactly what the
+  // in-place path exists to avoid.
+  const _RCA_FOREIGN_RESULT_SLOTS = { 'viz-host': 1, 'names-verify-slot': 1 };
+
+  function _rcaResultTextNodes(root) {
+    return _rcaTextNodes(root, null, true).map((n) => ({ node: n, text: n.textContent }));
+  }
+
+  // Depth-first text nodes of a subtree. Plain recursion (no TreeWalker) so
+  // the Node-API-light test sandbox walks the same code path as the browser.
+  // `skipSlots` drops the foreign containers above.
+  function _rcaTextNodes(root, out, skipSlots) {
+    const acc = out || [];
+    const kids = (root && root.childNodes) || [];
+    for (let i = 0; i < kids.length; i++) {
+      const n = kids[i];
+      if (skipSlots && n.nodeType === 1 && n.id && _RCA_FOREIGN_RESULT_SLOTS[n.id]) continue;
+      if (n.nodeType === 3) acc.push(n);
+      else if (n.nodeType === 1 || n.nodeType === 11) _rcaTextNodes(n, acc, skipSlots);
+    }
+    return acc;
+  }
+
+  // FE-BORROW-2026-09-20 (domain U): language switch used to run the full
+  // renderCurrentResult() — innerHTML wipe + re-insert — losing scroll
+  // position, focus and (once js/table.js lands its edit mode) unsaved cell
+  // edits. New contract: only the WORDING may change, never the tree.
+  //   * re-render rcaRenderResults() into a detached template;
+  //   * same text-node count ⇒ copy the differing labels across, skipping
+  //     any node whose live text no longer matches the render-time snapshot
+  //     (= the user edited it — conservative per-task rule, keyed off
+  //     document.activeElement.isContentEditable for the in-progress case);
+  //   * structural mismatch ⇒ fall back to the old full rebuild.
+  function rcaRetranslateResult() {
+    if (!state.result) return;
+    const content = $('results-content');
+    if (!content) return;
+    const ae = document.activeElement;
+    const editing = _rcaIsTextTarget(ae) && !!(ae && (ae.isContentEditable
+      || (typeof ae.getAttribute === 'function' && ae.getAttribute('contenteditable') !== null
+        && ae.getAttribute('contenteditable') !== 'false')));
+    if (editing) {
+      // Unsaved edit in flight: swap only the static page chrome (which
+      // rcaApplyI18n already did in switchLang) and leave the result panel
+      // in the previous language until the next render.
+      return;
+    }
+    if (!state._resultTexts) {
+      // Never snapshotted (the panel was filled by another module, or before
+      // this code existed) — fall back to the old full rebuild so the switch
+      // still takes effect.
+      renderCurrentResult();
+      return;
+    }
+    const tpl = document.createElement('div');
+    // FE-BORROW-2026-09-20 (integration): SAME opts as renderCurrentResult -
+    // a template rendered read-only would have fewer text nodes than the
+    // editable snapshot and force the fallback rebuild on every switch.
+    tpl.innerHTML = rcaRenderResults(state.result, state.rawText, { editable: true });
+    // Same harvest rule as the snapshot: the foreign slots (#viz-host,
+    // #names-verify-slot) are dropped from BOTH lists, otherwise a panel that
+    // has a canvas or name hints would never line up and every switch would
+    // take the fallback rebuild.
+    const fresh = _rcaTextNodes(tpl, null, true);
+    const snap = state._resultTexts;
+    if (fresh.length !== snap.length) {
+      renderCurrentResult();
+      return;
+    }
+    for (let i = 0; i < snap.length; i++) {
+      const rec = snap[i];
+      if (rec.node.textContent !== rec.text) continue; // edited node — keep
+      const want = fresh[i].textContent;
+      if (want !== rec.text) rec.node.textContent = want;
+    }
+    // The GBIF hints live in #results-content but are not part of
+    // rcaRenderResults' output — re-render that small block (it holds no
+    // editable state) so its wording follows the new language too.
+    if (state._nameIssues && typeof rcaRenderNameIssues === 'function') {
+      rcaRenderNameIssues(state._nameIssues);
+    }
+    state._resultTexts = _rcaResultTextNodes(content);
   }
 
   // ---- result action buttons (event delegation) ----
@@ -1257,6 +1598,15 @@
     state._frontendEnhanced = false;
     state.result = null;
     state.rawText = null;
+    // FE-BORROW-2026-09-20 (integration): tear the edit layer down BEFORE
+    // the tree goes away - delegated listeners would otherwise let a late
+    // commit write into a detached model, and the canvas keeps a reference
+    // to the old result layout until cleared.
+    if (typeof rcaTableEditDetach === 'function') rcaTableEditDetach();
+    if (typeof rcaViz !== 'undefined' && rcaViz) rcaViz.clear();
+    // FE-BORROW-2026-09-20 (domain U): the in-place re-translation snapshot
+    // refers to nodes we are about to drop — invalidate it.
+    state._resultTexts = null;
     $('file-input').value = '';
     $('caption').value = '';
     $('preview-wrap').classList.add('hidden');
@@ -1277,12 +1627,31 @@
 
   // ---- language ----
   function applyLangButtons() {
-    document.querySelectorAll('#lang-switch button').forEach((b) => {
+    // FE-BORROW-2026-09-20 (domain U): the switch is a radiogroup now (its
+    // buttons pick one value; they do not switch tabs), so the checked state
+    // travels in aria-checked. The old role=tab/aria-selected pair was a
+    // semantic mismatch screen readers announced as "tab".
+    // The roving tabindex is the other half of that role: a radiogroup is
+    // ONE tab stop, and the arrow keys implemented in init() move the
+    // selection inside it. Leaving every button tabbable promised arrow
+    // navigation while still making users Tab through three controls.
+    const btns = document.querySelectorAll('#lang-switch button');
+    let anyActive = false;
+    btns.forEach((b) => {
+      if (b.getAttribute('data-lang') === RCA_LANG) anyActive = true;
+    });
+    let tabbableTaken = false;
+    btns.forEach((b) => {
       const isActive = b.getAttribute('data-lang') === RCA_LANG;
       b.classList.toggle('active', isActive);
-      // M39 / a11y: keep aria-selected in sync so screen readers
-      // announce the active language tab.
-      b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      b.setAttribute('aria-checked', isActive ? 'true' : 'false');
+      // When RCA_LANG holds an unknown value (a stale stored preference)
+      // still expose exactly one entry point: the first button.
+      const tabbable = anyActive ? isActive : !tabbableTaken;
+      if (tabbable) tabbableTaken = true;
+      if (typeof b.setAttribute === 'function') {
+        b.setAttribute('tabindex', tabbable ? '0' : '-1');
+      }
     });
   }
 
@@ -1303,7 +1672,12 @@
     // walk — we must call it explicitly to pick up the new translation.
     syncFooterRuntime();
     // Re-render results so column headers follow the new language.
-    if (state.result) renderCurrentResult();
+    // FE-BORROW-2026-09-20 (domain U): full rebuild replaced by the in-place
+    // text retarget (rcaRetranslateResult) — headers, section titles and the
+    // empty-state copy are plain text nodes whose content changes only when
+    // the wording does; rebuilding would also throw away scroll position,
+    // focus and any in-progress table-cell edit.
+    if (state.result) rcaRetranslateResult();
     // Re-apply preview meta labels if a file is loaded.
     if (state.file && state.dataUrl) {
       // meta is language-dependent; rebuild it cheaply.
@@ -1317,7 +1691,8 @@
         _currentAlertSpec.kind,
         _alertMessage(_currentAlertSpec),
         _currentAlertSpec.rawDetail,
-        _currentAlertSpec.fmt || undefined
+        _currentAlertSpec.fmt || undefined,
+        _currentAlertSpec.opts || undefined
       );
     }
     // BUGFIX: the loading-slot label is a plain <p> (not data-i18n), so
@@ -1362,9 +1737,32 @@
     syncFooterRuntime();
 
     // language switch
-    $('lang-switch').addEventListener('click', (e) => {
-      const b = e.target.closest('button');
+    // FE-BORROW-2026-09-20 (domain U): #lang-switch is a radiogroup now (see
+    // index.html), and a radiogroup is contracted to move its selection with
+    // the arrow keys — the old role=tab markup got that for free from the
+    // browser only in the sense that it never promised it either. Without this
+    // handler the group is a single tab stop whose non-active options are
+    // unreachable from the keyboard.
+    const langSwitch = $('lang-switch');
+    langSwitch.addEventListener('click', (e) => {
+      const b = e.target && e.target.closest && e.target.closest('button');
       if (b && b.getAttribute('data-lang')) switchLang(b.getAttribute('data-lang'));
+    });
+    langSwitch.addEventListener('keydown', (e) => {
+      const langs = ['zh', 'en', 'ja'];
+      const cur = Math.max(0, langs.indexOf(RCA_LANG));
+      let next = -1;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (cur + 1) % langs.length;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (cur - 1 + langs.length) % langs.length;
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = langs.length - 1;
+      if (next < 0 || next === cur) return;
+      if (typeof e.preventDefault === 'function') e.preventDefault();
+      switchLang(langs[next]);
+      // Roving focus: keep the caret on the newly-checked button so a blind
+      // user does not lose their place after the re-translate.
+      const btn = langSwitch.querySelector('[data-lang="' + langs[next] + '"]');
+      if (btn && typeof btn.focus === 'function') btn.focus();
     });
 
     // api key show/hide
@@ -1382,34 +1780,48 @@
     $('save-settings').addEventListener('click', () => saveSettings(false));
 
     // dropzone
+    // FE-BORROW-2026-09-20 (domain U): the original `if (!dz || !fileInput)
+    // return;` here unbound EVERY handler below it — paste, extract, reset,
+    // cancel, force-rerun, caption counter, ... — whenever #dropzone or
+    // #file-input were missing/renamed. The page then looked "dead" with no
+    // clue in the console. Fail loudly for the one feature, keep the rest.
     const dz = $('dropzone');
     const fileInput = $('file-input');
-    if (!dz || !fileInput) return;
-    dz.addEventListener('click', () => fileInput.click());
-    dz.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
-    });
-    dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('dragover'); });
-    dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
-    dz.addEventListener('drop', (e) => {
-      e.preventDefault();
-      // FIX (drop double-trigger): stop the event bubbling to the window-level
-      // drop handler (line ~897), which would otherwise fire handleFile() a
-      // second time for the same file. The token mechanism in handleFile
-      // prevents a duplicate preview, but blocking propagation avoids the
-      // wasted second image decode (notable for large charts).
-      e.stopPropagation();
-      dz.classList.remove('dragover');
-      const f = e.dataTransfer.files && e.dataTransfer.files[0];
-      if (f) handleFile(f);
-    });
-    fileInput.addEventListener('change', () => {
-      const f = fileInput.files && fileInput.files[0];
-      if (f) handleFile(f);
-    });
+    if (dz && fileInput) {
+      dz.addEventListener('click', () => fileInput.click());
+      dz.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+      });
+      dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('dragover'); });
+      dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+      dz.addEventListener('drop', (e) => {
+        e.preventDefault();
+        // FIX (drop double-trigger): stop the event bubbling to the window-level
+        // drop handler (line ~897), which would otherwise fire handleFile() a
+        // second time for the same file. The token mechanism in handleFile
+        // prevents a duplicate preview, but blocking propagation avoids the
+        // wasted second image decode (notable for large charts).
+        e.stopPropagation();
+        dz.classList.remove('dragover');
+        const f = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f) handleFile(f);
+      });
+      fileInput.addEventListener('change', () => {
+        const f = fileInput.files && fileInput.files[0];
+        if (f) handleFile(f);
+      });
+    } else {
+      console.warn('[FE-BORROW-2026-09-20] init: #dropzone / #file-input missing — drag-and-drop upload is disabled; the remaining controls are still wired.');
+    }
 
     // paste image from clipboard anywhere on the page
     window.addEventListener('paste', (e) => {
+      // FE-BORROW-2026-09-20 (domain U): Excalidraw-style guard. When the
+      // caret sits in a text field (caption, API key) or an editable table
+      // cell, the user is pasting TEXT into that field — hijacking the event
+      // both loses their text and silently starts an extraction from any
+      // image still on the clipboard.
+      if (_rcaIsTextTarget(e.target)) return;
       // e.clipboardData can be null in Firefox/Safari Private Mode and some
       // embedded contexts — guard before reading .items.
       const items = e.clipboardData && e.clipboardData.items;
@@ -1424,10 +1836,19 @@
 
     $('extract-btn').addEventListener('click', runExtraction);
     // UX improvement: confirm before reset to prevent accidental data loss
+    // FE-BORROW-2026-09-20 (domain U): was window.confirm — a blocking native
+    // box that is unstyled, bypasses our i18n catalog, and in some embedded
+    // webviews simply returns false. rcaConfirm resolves asynchronously, so
+    // the "nothing to lose" path still resets immediately.
     $('reset-btn').addEventListener('click', () => {
       // Only confirm if there's actual data to lose
       if (state.result || state.dataUrl) {
-        if (!confirm(t('confirm.reset'))) return;
+        rcaConfirm({
+          message: t('confirm.reset'),
+          confirmText: t('upload.reset'),
+          danger: true,
+        }).then((ok) => { if (ok) resetUpload(); });
+        return;
       }
       resetUpload();
     });
@@ -1447,9 +1868,20 @@
     const rerunBtn = $('force-rerun-btn');
     if (rerunBtn) {
       rerunBtn.addEventListener('click', () => {
-        state._forceRerun = true;
-        runExtraction();
-        state._forceRerun = false;
+        // FE-BORROW-2026-09-20 (domain U): force-rerun throws away a cached
+        // answer and spends another billable VLM call, so it asks first —
+        // same dialog as reset. The flag is set around the call exactly as
+        // before (runExtraction reads it synchronously when building the
+        // request), only the moment of the click moved behind the confirm.
+        rcaConfirm({
+          message: t('confirm.forceRerun'),
+          confirmText: t('upload.forceRerun'),
+        }).then((ok) => {
+          if (!ok) return;
+          state._forceRerun = true;
+          runExtraction();
+          state._forceRerun = false;
+        });
       });
     }
 

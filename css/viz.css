@@ -1,0 +1,191 @@
+/* css/viz.css — FE-BORROW-2026-09-20 (域V: 结果联动画布).
+ *
+ * Styles for the #viz-host mount point index.html used to keep as a hidden
+ * placeholder. It is now the result-linked Gantt rendered by js/viz.js, so
+ * this file owns: the three-layer stack (image / bars / hover), the caption
+ * that is the accessible twin of the canvas, and the two row classes the table
+ * side uses for the REVERSE highlight (canvas hover -> DOM row).
+ *
+ * Every colour comes from an existing css/style.css token, so light/dark
+ * follows `--*` automatically and no duplicate palette is introduced. Only the
+ * image reference opacity needs a dark-mode nudge, and it is done by flipping a
+ * local custom property rather than re-declaring colours.
+ *
+ * Loaded AFTER css/style.css (see index.html <head>) so these rules win.
+ */
+
+/* ------------------------------------------------------------------ host -- */
+
+#viz-host {
+    /* Local tokens (overridden in dark below) keep the two themes in one
+       place instead of scattering prefers-color-scheme selectors. */
+    --viz-image-opacity: 0.42;
+    --viz-frame-bg: var(--bg-light);
+    --viz-grid: var(--border-color);
+
+    margin: 0 0 18px;
+    padding: 10px 12px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--viz-frame-bg);
+    box-shadow: var(--shadow-sm);
+    /* Scrolling lives on the HOST, not on the stage: js/viz.js sizes the stage
+       to the row count and paints its canvases at exactly that box, so any
+       clamp on the stage itself would squash the backing store (and
+       rcaViz.locateTo() scrolls this element). */
+    max-height: 68vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+/* The wiring (app.js) hides the whole block when a result has no plottable
+   rows — `hidden` alone would still be laid out inside a flex parent. */
+#viz-host[hidden],
+#viz-host.is-empty {
+    display: none;
+}
+
+.viz-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 6px 12px;
+    margin-bottom: 6px;
+}
+
+#viz-heading {
+    font-size: var(--text-sm);
+    font-weight: 650;
+    letter-spacing: var(--tracking-wide);
+    color: var(--text-base);
+}
+
+.viz-hint {
+    font-size: var(--text-2xs);
+    color: var(--text-light);
+}
+
+/* ------------------------------------------------------- three layers ---- */
+/* WebPlotDigitizer graphicsWidget.js discipline: one background image, one
+   data layer, one hover layer. Only the top layer takes pointer events, so
+   the crosshair can be cleared and repainted without touching the bars. */
+
+.rca-viz-stage {
+    position: relative;
+    /* Height is set inline by rcaViz from the row count; no max-height here —
+       see the #viz-host note about keeping the canvas box exact. */
+    min-height: 120px;
+    border: 1px solid var(--viz-grid);
+    border-radius: var(--radius-sm);
+    background: var(--bg-white);
+    overflow: hidden;
+}
+
+.rca-viz-image {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    /* `fill`, NOT `contain`: the coordinate contract in js/viz.js says a bar
+       at (u,v) lands at u * image-width on screen, and only a stretched-to-box
+       image keeps that map linear. When the species list is long the stage is
+       taller than the image's natural aspect, and the resulting vertical
+       stretch is published as [data-rca-viz-stretch] on the stage (and read by
+       rcaViz.getState()); a calibrated pass can pin the registration exactly by
+       handing rcaVizLayout a `frame` rect. */
+    object-fit: fill;
+    opacity: var(--viz-image-opacity);
+    pointer-events: none;
+    user-select: none;
+}
+
+.rca-viz-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.rca-viz-bars {
+    z-index: 1;
+    pointer-events: none;   /* the data layer never steals the pointer */
+}
+
+.rca-viz-hover {
+    z-index: 2;
+    cursor: crosshair;
+    touch-action: none;     /* a touch drag must not scroll the page away */
+}
+
+/* ------------------------------------------------------------- caption --- */
+/* The a11y twin of the canvas (uPlot legend-ivi idea): the canvases are
+   aria-hidden + role="img", so this line is what a screen reader gets. */
+
+.rca-viz-summary {
+    margin: 8px 0 0;
+    font-size: var(--text-2xs);
+    line-height: 1.5;
+    color: var(--text-muted);
+    /* Long "unplaceable" lists must not widen the card. */
+    overflow-wrap: anywhere;
+}
+
+.rca-viz-summary:empty {
+    display: none;
+}
+
+/* ------------------------------------------- reverse highlight (table) --- */
+/* The seam js/viz.js leaves for the table side: rcaViz.onRowHover(row_index)
+   drives these two classes on the species_ranges <tr> (and app.js can call
+   rcaViz.locateTo() from a row click). Declared here because both ends of the
+   link are visual states of the same view. */
+
+tr.row-viz-hover > th,
+tr.row-viz-hover > td {
+    background: var(--primary-soft);
+}
+
+tr.row-viz-hover {
+    outline: 2px solid var(--primary-active);
+    outline-offset: -2px;
+}
+
+tr.row-viz-focus > th,
+tr.row-viz-focus > td {
+    background: var(--warning-soft);
+}
+
+/* A row the canvas could not place is greyed on both sides of the link. */
+tr.row-viz-unplaceable > td:first-of-type {
+    box-shadow: inset 3px 0 0 var(--text-light);
+}
+
+/* -------------------------------------------------------------- themes --- */
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) #viz-host {
+        /* The dark card is already low-contrast; a dimmer reference image
+           keeps the bars legible without touching the palette. */
+        --viz-image-opacity: 0.22;
+    }
+}
+
+:root[data-theme="dark"] #viz-host {
+    --viz-image-opacity: 0.22;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #viz-host * {
+        transition: none !important;
+        animation: none !important;
+    }
+}
+
+/* Narrow cards: the hint is the first thing that can go. */
+@media (max-width: 640px) {
+    .viz-hint {
+        display: none;
+    }
+}

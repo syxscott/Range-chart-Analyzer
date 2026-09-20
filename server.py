@@ -15,6 +15,7 @@ import argparse
 import base64
 import collections
 import concurrent.futures
+import hashlib  # FE-BORROW-2026-09-20 (域P): static ETag fingerprint
 import ipaddress
 import json
 import os
@@ -527,6 +528,23 @@ STATIC_ALLOWED_ENTRIES = (
     "assets",
     "app",
     "favicon.ico",
+    # FE-BORROW-2026-09-20 (域P): the split-out frontend assets of the
+    # current optimisation round. The directory entries above already cover
+    # everything under ``js/`` and ``css/``, but these names are registered
+    # explicitly (``_safe_local_path`` matches the full relative path as well
+    # as the first segment) so that:
+    #   * they survive a future tightening of the whitelist to per-file
+    #     entries, and
+    #   * the frontend/server contract for "which assets the page asks for"
+    #     is stated in one place instead of being implied by a directory.
+    # The files may not exist yet (they are being authored in parallel); an
+    # allowed-but-missing path answers 404, never 403.
+    "css/viz.css",
+    "css/table-edit.css",
+    "css/app-ux.css",
+    "js/viz.js",
+    "js/history.js",
+    "js/sharpen_worker.js",
     # REVIEW-2026-09-20: "references" (604 MB of research-paper PDFs and
     # markdown notes, vendored for the docs/ pipeline) used to be on this list.
     # Nothing in the web frontend, in app/ (the PyWebView loading screen) or in
@@ -807,6 +825,57 @@ MAX_BODY_BYTES = 20 * 1024 * 1024  # S9 fix: 20 MB cap (was 40 MB).
 # of being slurped into one bytes object (see do_GET).
 _STATIC_CHUNK_BYTES = 64 * 1024
 
+# FE-BORROW-2026-09-20 (域P): revalidation policy for the same-origin static
+# handler. This is a *local tool* whose js/css/html is edited while the page is
+# open, so a long ``max-age`` would serve stale code after a reload; but
+# re-downloading 100+ KB of JS on every navigation is also pointless. The
+# combination that satisfies both is ``Cache-Control: no-cache`` (always
+# revalidate) plus a strong entity tag, so an unchanged file costs one
+# conditional round trip and a 304 with no body, while an edited file is picked
+# up on the very next load. Same policy for images/ico: they are small, and
+# assets are replaced in place during development too.
+STATIC_CACHE_CONTROL = "no-cache"
+
+
+def _static_etag(st: os.stat_result) -> str:
+    """Strong ETag for a static file from its already-fetched stat result.
+
+    ``mtime_ns`` (not ``mtime``: second granularity would make two edits inside
+    one second collide) + ``size`` hashed, so the tag is opaque, fixed width and
+    carries no path/timestamp information to a remote client. Quoted per
+    RFC 7232; strong (no ``W/``) because the comparison is byte-for-byte
+    identical content for this handler.
+    """
+    digest = hashlib.sha1(
+        f"{st.st_mtime_ns:x}-{st.st_size:x}".encode("ascii")
+    ).hexdigest()[:16]
+    return f'"{digest}"'
+
+
+def _etag_header_matches(value: str, etag: str) -> bool:
+    """Does an ``If-None-Match`` header value *value* select *etag*?
+
+    Handles ``*``, a comma-separated list, and weak (``W/``) tags on either
+    side — a conditional GET is a content comparison, so weakness is ignored
+    (RFC 7232 §2.3.2).
+    """
+    if not value:
+        return False
+
+    def _norm(token: str) -> str:
+        token = token.strip()
+        if token[:2].upper() == "W/":
+            token = token[2:]
+        return token
+
+    target = _norm(etag)
+    if value.strip() == "*":
+        return True
+    # Our tags are hex inside quotes, so splitting on commas is safe even if a
+    # client sends several candidates.
+    return any(_norm(tok) == target for tok in value.split(",") if tok.strip())
+
+
 # REVIEW-2026-09-20: global memory budget. MAX_BODY_BYTES caps ONE request, and
 # _BoundedThreadingHTTPServer caps one batch of connections at
 # ``max_workers`` (default 32), so 32 simultaneous 20 MB uploads = 640 MB of
@@ -951,13 +1020,59 @@ def _spawn_extract_thread(mode: str, common: dict,
 class Handler(BaseHTTPRequestHandler):
     server_version = "RangeChartAnalyzer/1.0"
 
+    # FE-BORROW-2026-09-20 (域P): HTTP/1.1 so the browser reuses one TCP+
+    # (optional) TLS connection for the ~15 scripts + stylesheets the page
+    # loads instead of paying a connection setup per file.
+    #
+    # Keep-alive is the DEFAULT once we announce 1.1, and it only works if
+    # every response states its own length: a response with neither
+    # ``Content-Length`` nor chunked framing is "terminated by the socket
+    # closing", which on a persistent connection means the client hangs until
+    # the 60 s inactivity timeout. Every exit point of this handler was
+    # audited for that, and the framing is enforced rather than trusted:
+    #   * :meth:`_send_json` writes Content-Length (and no body at all for
+    #     HEAD, which is still length-correct because the GET twin declares
+    #     the same size);
+    #   * the provenance 200 and the static 200/304 write Content-Length
+    #     (304 has no body by definition, RFC 7232 §4.1, and clients frame it
+    #     by the empty line, so no length is sent);
+    #   * ``send_error`` (unsupported method, malformed request line, header
+    #     too large) comes from the stdlib and always sets both
+    #     Content-Length and ``Connection: close``;
+    #   * the raw 503 in ``_BoundedThreadingHTTPServer.process_request`` (pre
+    #     handler) sends ``Content-Length: 0`` + ``Connection: close``;
+    #   * a POST answered BEFORE its body was read must not stay on the
+    #     socket either - the unread bytes would be parsed as the next pipelined
+    #     request (response desync), so ``_send_json`` force-closes those
+    #     connections (see ``_request_body_consumed``), and ``finish`` drains
+    #     them first so the hang-up does not RST our own response away.
+    #
+    # Verified empirically, not just by reading the stdlib: two GETs over one
+    # ``http.client`` connection, a conditional GET that returns 304 followed by
+    # another request on the same socket, and a HEAD followed by a GET all reuse
+    # the connection with no extra read - see
+    # tests/test_server_static_perf_2026_09_20.py.
+    protocol_version = "HTTP/1.1"
+
     # Slowloris / slow-read DoS guard: BaseHTTPRequestHandler applies this
     # to the connection socket in setup(), so a client that opens a
     # connection (or declares a large Content-Length) then sends bytes at a
     # trickle is disconnected after `timeout` seconds of inactivity instead
     # of pinning a worker thread indefinitely. 60s is generous for a normal
     # request line + headers + JSON body upload.
+    #
+    # FE-BORROW-2026-09-20: under HTTP/1.1 this timer now also bounds the idle
+    # gap *between* keep-alive requests on one connection, which is what stops a
+    # browser's warm connection pool from holding worker threads forever (an
+    # idle socket raises socket.timeout inside readline, and the stdlib turns
+    # that into "close and release the thread").
     timeout = 60
+
+    # FE-BORROW-2026-09-20 (域P): keep-alive framing guard. Set True once the
+    # whole declared request body has been read off the socket. While it is
+    # False a response to a body-carrying request must close the connection, so
+    # the unread bytes can never be mis-parsed as a second request.
+    _request_body_consumed = False
 
     # REVIEW-2026-09-10: `timeout` is a per-recv INACTIVITY timeout (it maps
     # to socket.settimeout), not a request deadline. A client that sends one
@@ -967,6 +1082,15 @@ class Handler(BaseHTTPRequestHandler):
     # minute and starve every legitimate request. The body read therefore
     # enforces its own wall-clock deadline.
     _BODY_DEADLINE_SEC = 60
+
+    # FE-BORROW-2026-09-20 (域P): bounds for the polite-close drain in
+    # :meth:`finish` - at most this many abandoned request bytes, read with at
+    # most this much wall-clock time. Memory is not the binding constraint (the
+    # chunks are discarded, never retained); the thread is, so the deadline is
+    # what caps the cost - and it only ever applies to a connection we are
+    # already tearing down, never to a kept-alive one.
+    _BODY_DRAIN_BYTES = 4 * 1024 * 1024
+    _BODY_DRAIN_TIMEOUT_SEC = 0.5
 
     def _read_body_with_deadline(self, length: int):
         """Read exactly ``length`` body bytes, or None past the deadline.
@@ -1014,7 +1138,8 @@ class Handler(BaseHTTPRequestHandler):
         return b"".join(chunks)
 
     # --- helpers ---
-    def _send_json(self, status: int, payload: dict) -> None:
+    def _send_json(self, status: int, payload: dict, *,
+                   head_only: bool = False) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1022,9 +1147,101 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+        # FE-BORROW-2026-09-20 (域P): Content-Length is mandatory on every
+        # response now that the connection may outlive it (HTTP/1.1 keep-alive);
+        # for HEAD the length still describes what the GET twin would have sent,
+        # which is exactly what RFC 7231 §4.3.2 asks for, and no body follows.
         self.send_header("Content-Length", str(len(body)))
+        # FE-BORROW-2026-09-20 (域P): if the request carried a body we have not
+        # finished reading (rejections ahead of the read: 429/415/403/411/413/
+        # 503/408), the leftovers would be parsed as the *next* request on a
+        # kept-alive socket. Announce the close instead of risking desync.
+        if self._body_pending():
+            self.close_connection = True
+            self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(body)
+        if not head_only:
+            self.wfile.write(body)
+
+    def parse_request(self) -> bool:
+        """Per-request state reset for the keep-alive case.
+
+        FE-BORROW-2026-09-20 (域P): with HTTP/1.1 one ``Handler`` instance serves
+        every request on a reused connection, so any per-request attribute has
+        to be re-initialised here (the stdlib does the same for
+        ``close_connection``).
+        """
+        self._request_body_consumed = False
+        return super().parse_request()
+
+    def _body_pending(self) -> bool:
+        """True when the request still has unread body bytes on the socket."""
+        return self._pending_body_bytes() is not None
+
+    def _pending_body_bytes(self) -> "int | None":
+        """How many request-body bytes are known to be unread, or None.
+
+        None means "nothing pending" (no body declared / everything already
+        read); a number is the declared length we have not consumed. Chunked
+        bodies report None as well - their size is not knowable up front, and
+        this server rejects them with 411 before reading anything.
+        """
+        if getattr(self, "_request_body_consumed", True):
+            return None
+        headers = getattr(self, "headers", None)
+        if headers is None:  # request line never parsed (HTTP/0.9, bad request)
+            return None
+        try:
+            declared = int(headers.get("Content-Length", "0"))
+        except (TypeError, ValueError):
+            # Unparseable length: treat it as "there is something out there"
+            # so the caller errs towards closing rather than reusing.
+            return 1
+        return declared if declared > 0 else None
+
+    def finish(self) -> None:
+        """Close the connection without eating our own response.
+
+        FE-BORROW-2026-09-20 (域P): HTTP/1.1 keep-alive makes "answer early and
+        hang up" (403/411/413/415/429/503 on a POST whose body we never read) a
+        normal path, and on Windows a ``close()`` with unread bytes still in the
+        receive buffer aborts the connection - the RST it emits can discard the
+        response we just wrote, so the client sees a connection error instead of
+        our 415 (observed as WinError 10053 out of ``http.client._read_status``;
+        the same happens on Linux from the peer's side). So: flush the response,
+        drain a *bounded* amount of the abandoned body, then close.
+
+        Bodies above the cap are abandoned exactly as before - hauling 20 MB of
+        rejected upload off the network to keep the socket tidy is the one thing
+        the size guard forbids, and a client that is still writing after we
+        answered has already lost those bytes either way.
+        """
+        try:
+            self.wfile.flush()
+        except (OSError, ValueError):
+            pass
+        pending = self._pending_body_bytes()
+        if pending is not None and pending <= self._BODY_DRAIN_BYTES:
+            reader = getattr(self.rfile, "read1", None) or self.rfile.read
+            deadline = time.monotonic() + self._BODY_DRAIN_TIMEOUT_SEC
+            try:
+                self.connection.settimeout(self._BODY_DRAIN_TIMEOUT_SEC)
+                while pending > 0:
+                    if time.monotonic() >= deadline:
+                        break
+                    chunk = reader(min(pending, 8 * 1024))
+                    if not chunk:
+                        break
+                    pending -= len(chunk)
+            except (OSError, ValueError):
+                # Timed out or the peer is gone: nothing left to protect.
+                pass
+            finally:
+                try:
+                    self.connection.settimeout(self.timeout)
+                except OSError:
+                    pass
+        super().finish()
 
     def _validate_csrf_and_origin(self) -> bool:
         """Returns True if CSRF/origin validation passes, False if request should be rejected.
@@ -1112,7 +1329,11 @@ class Handler(BaseHTTPRequestHandler):
             return None
         # First path segment must be in the allowed-entries whitelist.
         first = rel.split("/", 1)[0]
-        if first not in STATIC_ALLOWED_ENTRIES:
+        # FE-BORROW-2026-09-20 (域P): the whitelist is directory-level ("js",
+        # "css", ...), but individual asset paths can be registered too and are
+        # then matched verbatim — so the explicit frontend asset names in
+        # STATIC_ALLOWED_ENTRIES are live entries rather than comments.
+        if first not in STATIC_ALLOWED_ENTRIES and rel not in STATIC_ALLOWED_ENTRIES:
             return None
         target = os.path.normpath(os.path.join(ROOT, rel))
         # Resolve symlinks + check the resolved path stays under ROOT.
@@ -1269,6 +1490,38 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        self._serve_static(head_only=False)
+
+    def do_HEAD(self) -> None:
+        """FE-BORROW-2026-09-20 (域P): header-only mirror of the static GET.
+
+        Same code path, same headers (Content-Type, ETag, Cache-Control,
+        Content-Length, CSP, the security trio) and the same conditional-304
+        behaviour - only the body is suppressed, which is what RFC 7231
+        §4.3.2 requires of HEAD ("the user agent can assume the header set
+        that would have been sent in response to an identical GET").
+        Without it, a preload/probe/`curl -I` against a js or css asset 501s
+        and the connection is dropped, which also defeats keep-alive.
+
+        The two API GETs have no representation to describe, so they answer
+        405 with headers only (still length-framed).
+        """
+        _path = urlparse(self.path).path
+        if _path.rstrip("/") == "/api/extract" or _PROVENANCE_ID_RE.match(_path):
+            self._send_json(405, {
+                "ok": False,
+                "error_key": "err.methodNotAllowed",
+                "error_body": "HEAD is not supported on this endpoint",
+            }, head_only=True)
+            return
+        self._serve_static(head_only=True)
+
+    def _serve_static(self, *, head_only: bool) -> None:
+        """Serve one whitelisted file from ROOT; shared by do_GET/do_HEAD."""
+        # FE-BORROW-2026-09-20 (域P): a GET/HEAD that (wrongly) carries a body
+        # leaves bytes on a connection we would otherwise keep alive.
+        if self._body_pending():
+            self.close_connection = True
         target = self._safe_local_path(self.path)
         if target is None:
             self._send_json(403, {"error": "forbidden"})
@@ -1299,12 +1552,28 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with _fh as f:
                 try:
-                    file_size = os.fstat(f.fileno()).st_size
+                    st = os.fstat(f.fileno())
                 except OSError:
                     self._send_json(500, {"error": "read error"})
                     return
+                file_size = st.st_size
                 if file_size > 50 * 1024 * 1024:
                     self._send_json(413, {"error": "file too large"})
+                    return
+                # FE-BORROW-2026-09-20 (域P): conditional revalidation. The tag
+                # is derived from the same ``fstat`` that sizes the response, so
+                # a 304 can never be issued for bytes other than the ones the
+                # client already holds (barring an in-flight rewrite, which the
+                # next load resolves). ``If-None-Match`` wins over everything
+                # else here, and a 304 carries no body and no Content-Length
+                # (RFC 7232 §4.1) - clients frame it on the empty line, so the
+                # connection stays reusable.
+                etag = _static_etag(st)
+                if _etag_header_matches(self.headers.get("If-None-Match"), etag):
+                    self.send_response(304)
+                    self.send_header("ETag", etag)
+                    self.send_header("Cache-Control", STATIC_CACHE_CONTROL)
+                    self.end_headers()
                     return
                 self.send_response(200)
                 self.send_header("Content-Type", _CONTENT_TYPES[ext])
@@ -1318,14 +1587,32 @@ class Handler(BaseHTTPRequestHandler):
                 # broken under the default backend deployment. script-src still
                 # falls back to 'self' (no inline scripts), keeping the security
                 # posture for scripts intact.
+                #
+                # FE-BORROW-2026-09-20 (域P) TODO(security): ``'unsafe-inline'``
+                # for style-src is still load-bearing and is deliberately NOT
+                # tightened this round. It can only be dropped once every inline
+                # ``style`` attribute / ``el.style.*`` write in the frontend is
+                # gone - the blockers are in js/table.js (it clears and sets
+                # ``style.cssText``/``width``/``display`` on rendered cells and
+                # the sort/filter widgets), which the current optimisation round
+                # is refactoring into css/table-edit.css classes. Until then,
+                # ``style-src 'self'`` silently breaks the result table instead
+                # of failing loudly, which is why this stays as-is with the
+                # regression test in tests/test_review_2026_07_31_core.py.
                 self.send_header(
                     "Content-Security-Policy",
                     "default-src 'self'; img-src 'self' data:; "
                     "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
                 )
+                # FE-BORROW-2026-09-20 (域P): revalidation contract.
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", STATIC_CACHE_CONTROL)
+                # Content-Length is mandatory on 1.1 keep-alive; on HEAD it
+                # advertises the size the GET would have returned, body aside.
                 self.send_header("Content-Length", str(file_size))
                 self.end_headers()
-                shutil.copyfileobj(f, self.wfile, _STATIC_CHUNK_BYTES)
+                if not head_only:
+                    shutil.copyfileobj(f, self.wfile, _STATIC_CHUNK_BYTES)
         except (BrokenPipeError, ConnectionResetError, OSError):
             # A client that hangs up mid-download is not an error worth a
             # traceback; ``handle_one_request`` swallows the same classes.
@@ -1446,6 +1733,10 @@ class Handler(BaseHTTPRequestHandler):
                     "error_body": "request body not received within the upload deadline",
                 })
                 return
+            # FE-BORROW-2026-09-20 (域P): the socket is now clean of request
+            # bytes, so this connection may legally be reused for the next one
+            # (see _body_pending / _send_json).
+            self._request_body_consumed = True
             req = json.loads(raw.decode("utf-8"))
         except Exception as exc:
             self._send_json(400, {

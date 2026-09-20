@@ -17,7 +17,12 @@
     --success-soft:  #d1fae5;
     --warning-color: #b45309;  /* amber-700: ~4.7:1 on white (was #f59e0b ≈ 2.9:1, failed WCAG AA) */
     --warning-soft:  #fef3c7;
-    --danger-color:  #ef4444;
+    /* FE-BORROW-2026-09-20 (domain U): --danger-color is used as TEXT, not just
+       as a fill (.caption-counter.over here, the invalid-cell text/outline in
+       css/table-edit.css), and #ef4444 on white measured 3.76:1 — a WCAG AA
+       failure for 11-13px text. red-600 #dc2626 is 4.79:1 and still reads as
+       the same alarm red; the dark theme keeps the lighter #f87171 override. */
+    --danger-color:  #dc2626;
     --danger-soft:   #fee2e2;
     --info-color:    #6366f1;
     --info-soft:     #e0e7ff;
@@ -65,7 +70,17 @@
     --text-2xs: 11px;
     --text-xs:  12px;
     --text-sm:  13px;
-    --text-base:14px;
+    /* FE-BORROW-2026-09-20 (domain U): this step used to be `--text-base:14px`
+       — the SAME name as the body-text COLOR token defined above. Custom
+       properties resolve last-declaration-wins per element, so in light mode
+       `--text-base` was `14px`, every `color: var(--text-base)` became invalid
+       at computed-value time and silently fell back to the inherited color
+       (and the dark blocks, which override --text-base back to a color, made
+       the two themes disagree). Renamed the size step; the color keeps the
+       name because 15 of the 16 call sites ask for a color. tests_contrast.js
+       now audits every color-position var() reference, so the collision can
+       not come back unnoticed. */
+    --text-base-size: 14px;
     --text-md:  16px;
     --text-lg:  20px;
     --text-xl:  24px;
@@ -96,6 +111,16 @@
         --primary-color: #60a5fa;
         --primary-hover: #93c5fd;
         --primary-soft:  #1e3a8a;
+        /* FE-BORROW-2026-09-20 (domain U): --primary-dark was never overridden
+           in dark mode, and the dark --primary-soft IS #1e3a8a — so the
+           dropzone hover (bg --primary-soft, text --primary-dark) rendered
+           #1e3a8a-on-#1e3a8a (1.0:1, invisible). Lighten it here.
+           --warning-color / --danger-color get the same treatment: they are
+           used as TEXT colors (.caption-counter.warn / .over) and measured
+           3.26:1 / 4.35:1 on the dark card surface (fails AA 4.5). */
+        --primary-dark:  #bfdbfe;
+        --warning-color: #fbbf24;
+        --danger-color:  #f87171;
         /* M1: active button background — dark blue keeps white text >= 4.5:1. */
         --primary-active: #1d4ed8;
         --success-soft:  #064e3b;
@@ -126,6 +151,13 @@
     --primary-color: #60a5fa;
     --primary-hover: #93c5fd;
     --primary-soft:  #1e3a8a;
+    /* FE-BORROW-2026-09-20 (domain U): keep the explicit-dark path in sync
+       with the prefers-color-scheme block above (see the comment there for
+       why --primary-dark / --warning-color / --danger-color need dark
+       overrides). */
+    --primary-dark:  #bfdbfe;
+    --warning-color: #fbbf24;
+    --danger-color:  #f87171;
     --primary-active: #1d4ed8;  /* M1: active-button bg, AA contrast with white text */
     --success-soft:  #064e3b;
     --warning-soft:  #78350f;
@@ -149,6 +181,14 @@
 :root[data-theme="dark"] .alert-danger,
 :root[data-theme="dark"] .pill-low  { color: #fca5a5; }
 :root[data-theme="dark"] .alert-info { color: #a5b4fc; }
+/* FE-BORROW-2026-09-20 (domain U): the badges sit on the SAME soft tokens
+   the alerts/pills do, but were never added to the dark text override — so
+   in dark mode .badge-success rendered #065f46 text on the #064e3b soft
+   (1.26:1 — effectively invisible). Mirror the alert colors. */
+:root[data-theme="dark"] .badge-success { color: #6ee7b7; }
+:root[data-theme="dark"] .badge-warning { color: #fcd34d; }
+:root[data-theme="dark"] .badge-danger  { color: #fca5a5; }
+:root[data-theme="dark"] .badge-info    { color: #a5b4fc; }
 
 /* Follow the OS dark preference when no explicit theme is set. Kept in a
    separate @media block — @media must never appear inside a selector list. */
@@ -160,6 +200,12 @@
     :root:not([data-theme]) .alert-danger,
     :root:not([data-theme]) .pill-low  { color: #fca5a5; }
     :root:not([data-theme]) .alert-info { color: #a5b4fc; }
+    /* FE-BORROW-2026-09-20: same badge overrides for the OS-preference path
+       as the [data-theme="dark"] block above. */
+    :root:not([data-theme]) .badge-success { color: #6ee7b7; }
+    :root:not([data-theme]) .badge-warning { color: #fcd34d; }
+    :root:not([data-theme]) .badge-danger  { color: #fca5a5; }
+    :root:not([data-theme]) .badge-info    { color: #a5b4fc; }
 }
 
 /* Button row layout */
@@ -377,10 +423,18 @@ input[type="text"], input[type="password"], input[type="number"], select, textar
 input:focus, select:focus, textarea:focus {
     outline: none;
 }
+/* FE-BORROW-2026-09-20 (domain U, a11y): the previous ring was
+   `box-shadow: 0 0 0 3px var(--primary-soft)` — on a white card
+   (--bg-white #ffffff) the light-mode --primary-soft (#eff6ff) measures
+   1.03:1 against the page, i.e. keyboard users saw NO focus indicator at
+   all (WCAG 2.4.7 / 1.4.11). A 2px solid outline in --primary-color
+   (5.17:1 on white, 6.44:1 on the dark surface) is visible in both
+   themes without needing the dark --primary-soft override at all. */
 input:focus-visible, select:focus-visible, textarea:focus-visible {
-    outline: none;
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
     border-color: var(--primary-color);
-    box-shadow: 0 0 0 3px var(--primary-soft);
+    box-shadow: none;
 }
 textarea { resize: vertical; min-height: 64px; }
 
@@ -605,6 +659,15 @@ textarea { resize: vertical; min-height: 64px; }
     background: var(--border-color);
     outline: none;
     cursor: pointer;
+}
+/* FE-BORROW-2026-09-20 (domain U, a11y): the `outline:none` above used to be
+   the whole story — keyboard users got no replacement indicator on the
+   sliders (WCAG 2.4.7). Draw a ring around the TRACK (offset clears the
+   thumb) whenever the control receives keyboard focus. */
+.range-row input[type=range]:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 6px;
+    border-radius: 999px;
 }
 .range-row input[type=range]::-webkit-slider-thumb {
     -webkit-appearance: none;
@@ -868,8 +931,15 @@ button.btn.btn-primary:not(:disabled):active {
 }
 .quality-badge.high { border-color: #1f7a3a; background: #1f7a3a; color: #ffffff; }
 .quality-badge.high .qb-grade { color: #ffffff; }
-.quality-badge.mid  { border-color: #c08400; background: #c08400; color: #ffffff; }
-.quality-badge.mid .qb-grade { color: #ffffff; }
+/* FE-BORROW-2026-09-20 (domain U): white-on-#c08400 measured 3.21:1, below the
+   AA 4.5:1 floor for this 12px text. The background stays the solid amber that
+   LOW-6 locked in (tests_frontend `low-badge-mid-color`), the foreground flips
+   to stone-950 instead: #0c0a09 on #c08400 is 6.15:1 and, unlike
+   var(--text-dark), it does not invert to #f5f5f4 under data-theme="dark" —
+   the badge background is a fixed color in both themes, so its text must be
+   too. */
+.quality-badge.mid  { border-color: #c08400; background: #c08400; color: #0c0a09; }
+.quality-badge.mid .qb-grade { color: #0c0a09; }
 .quality-badge.low  { border-color: #c0392b; background: #c0392b; color: #ffffff; }
 .quality-badge.low .qb-grade { color: #ffffff; }
 
@@ -992,7 +1062,13 @@ button.btn.btn-primary:not(:disabled):active {
        than the viewport. Since these result tables render inline in a card
        (the whole page scrolls, not a fixed-height region), we intentionally
        do NOT rely on a viewport-sticky thead here — correct horizontal
-       scrolling matters more than a header that sticks while page-scrolling. */
+       scrolling matters more than a header that sticks while page-scrolling.
+       FE-BORROW-2026-09-20 (domain U): css/app-ux.css now makes .table-wrap
+       a bounded scroll region (max-height + overflow-y:auto) and sticks the
+       thead to ITS top edge — the two no longer contradict: inside a
+       height-capped scroller, a sticky header is the WCAG-friendly way to
+       keep column labels visible while vertical scrolling. If app-ux.css is
+       absent, this comment remains the truth. */
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     border: 1px solid var(--border-color);
@@ -1022,7 +1098,11 @@ table.data-table thead th {
     /* Note: position:sticky was removed because .table-wrap is now the
        horizontal-scroll container; a sticky thead inside it would stick to
        the table-wrap's top edge rather than the viewport, with no visual
-       benefit. The strong bottom-border keeps the header visually distinct. */
+       benefit. The strong bottom-border keeps the header visually distinct.
+       FE-BORROW-2026-09-20 (domain U): css/app-ux.css re-enables it once
+       .table-wrap is a height-capped scroll region (where sticking to the
+       container IS sticking to what the user scrolls), with an opaque
+       background so rows never show through. */
 }
 /* FIX-8: no blur for older browsers (graceful degradation). */
 @supports not (backdrop-filter: blur(1px)) {

@@ -1,0 +1,154 @@
+/* css/app-ux.css — FE-BORROW-2026-09-20 (domain U): interaction-detail &
+   accessibility layer that style.css deliberately keeps out of the token
+   blocks. Linked LAST (after css/style.css) from index.html so equal-
+   specificity rules here win by cascade order. Everything in this file must
+   degrade gracefully when the stylesheet is missing (e.g. served 404 during
+   the integration window): the affected widgets fall back to their
+   style.css base look, they never break the layout. */
+
+/* ==================== Sticky table headers ====================
+   A sticky thead only "sticks" relative to its nearest scroll container.
+   .table-wrap in style.css is an overflow-x:auto region; without a height
+   cap it grows to the table and never scrolls vertically, so a sticky
+   header there is dead code (that is exactly why FIX-8 removed it). Here
+   we give the region a max-height — the table then scrolls INSIDE the
+   card, the header sticks to the region's top edge, and the first-column
+   corner cell keeps its horizontal stickiness. Backgrounds are OPAQUE
+   (the translucent glass value in style.css would let rows ghost through
+   once content actually scrolls under the header). */
+.table-wrap {
+    max-height: 72vh;
+    overflow-y: auto;
+}
+table.data-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--bg-lighter);
+    backdrop-filter: none;
+}
+/* Corner cell: sticky-left AND sticky-top, so it must beat both. */
+table.data-table thead th:first-child {
+    z-index: 4;
+    background: var(--bg-lighter);
+}
+/* Dark path: --bg-lighter is already the dark chip (#1f1c1a); keep the
+   header opaque there too. */
+:root[data-theme="dark"] table.data-table thead th,
+:root[data-theme="dark"] table.data-table thead th:first-child {
+    background: #1f1c1a;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) table.data-table thead th,
+    :root:not([data-theme]) table.data-table thead th:first-child {
+        background: #1f1c1a;
+    }
+}
+/* Rows must paint under the header, never over the sticky index column. */
+table.data-table tbody td:first-child,
+table.data-table tbody th[scope="row"]:first-child {
+    z-index: 1;
+}
+
+/* ==================== Error-banner action row ====================
+   FE-BORROW-2026-09-20: danger alerts gain "copy details / retry" buttons.
+   .alert is display:flex; the row keeps the buttons left-aligned under the
+   message text and away from the <pre> detail block. */
+.alert-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+.alert-actions .btn {
+    padding: 5px 12px;
+    font-size: var(--text-xs);
+}
+
+/* ==================== Confirmation dialog (reset / force-rerun) ====================
+   Borrowed from the Windows Popup guidance (WPD "popups" three tiers):
+   open with the default action focused, Esc cancels, focus returns to the
+   opener. Deliberately minimal — no animation library, no focus-trap npm
+   package; app.js builds exactly this structure. */
+.rca-dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(12, 10, 9, 0.45);
+}
+.rca-dialog {
+    background: var(--bg-white);
+    color: var(--text-base);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xl);
+    max-width: 420px;
+    width: 100%;
+    padding: 20px 22px;
+}
+.rca-dialog p {
+    /* FE-BORROW-2026-09-20 (domain U): --text-base-size, not --text-base —
+       the latter is the body-text COLOR token (style.css renames the size
+       step out of the collision). */
+    font-size: var(--text-base-size);
+    line-height: 1.55;
+    margin-bottom: 16px;
+}
+.rca-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.rca-dialog-danger {
+    border-color: var(--danger-color);
+}
+@media (max-width: 480px) {
+    .rca-dialog-actions .btn { flex: 1 1 auto; }
+}
+
+/* ==================== Determinate multi-run progress ====================
+   The client already knows ({done}/{total}) per completed run in direct
+   transport; style.css only paints the shimmering skeleton. This is the
+   solid progress bar the skeleton is NOT: a 6px track filling left→right.
+   `.hidden` (style.css) does the show/hide; width is set inline by app.js. */
+.run-progress {
+    width: min(280px, 80%);
+    height: 6px;
+    margin: 2px auto 14px;
+    border-radius: 999px;
+    background: var(--bg-lighter);
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+}
+.run-progress-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: var(--primary-color);
+    transition: width 240ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+    .run-progress-fill { transition: none; }
+}
+
+/* ==================== Language switch as a real radiogroup ====================
+   The tablist->radiogroup fix is in the markup; these rules keep the
+   selected state visually identical to the old .active class so nothing
+   else about the control changes. */
+.lang-switch button[aria-checked="true"] {
+    background: var(--primary-active);
+    color: #fff;
+}
+
+/* ==================== Skip / focus niceties ====================
+   Buttons inside alerts and dialogs reuse .btn; give keyboard focus extra
+   offset against the colored alert backgrounds so the ring never sits on a
+   same-hue fill. */
+.alert :focus-visible {
+    outline-offset: 3px;
+}
