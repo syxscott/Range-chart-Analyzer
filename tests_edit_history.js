@@ -142,6 +142,13 @@ function makeContext() {
     'rcaHistoryAttachUi', 'rcaHistoryWireClicksOnce',
     'RCA_HISTORY_TYPES', 'RCA_HISTORY_STRINGS', 'rcaExportCellText',
     'rcaIcsLookupStage', 'rcaSetLang',
+    // FE-BORROW-2026-09-21: seams the audit-item regression section drives —
+    // the Python str(float)/str(bool) mirrors (items 13/10), the PEP-515
+    // numeric grammar (item 12), the paste guard (item 9), the foreign-slot
+    // capture (item 2), the plain re-render entry point and the neighbour
+    // scan that used to run off the column end (item 16).
+    'rcaPyFloatStr', 'rcaEditPyStr', 'rcaPyParseNumber', 'rcaEditOnPaste',
+    'rcaEditForeignCapture', 'rcaTableRerender', 'rcaEditNeighbourCell',
   ];
   const out = { __ctx: ctx, __run: run };
   for (const n of names) {
@@ -844,25 +851,34 @@ check('hist-rowadd-undo', H.undo() !== null && hd4.biozones.length === 1);
 check('hist-rowadd-redo', H.redo() !== null && hd4.biozones.length === 2
   && canonical(hd4.biozones[1]) === canonical(addAct.item));
 
-// stale indices: insert clamps (list.insert mirror), remove fails closed
+// stale indices: an out-of-range INSERT undo FAILS CLOSED now (FE-FIX-2026-09-21
+// audit item 1). The old expectation praised the clamp (append the row at the
+// end and report success) — the audit proved that wrong: the row lands at the
+// wrong index while the stack believes the exact-position restore happened.
+// undoDeleteRow accepts `row === len` (Python list.insert append) and refuses
+// `row > len`, which history.js classifies as transient ('retry'): the entry
+// stays on the stack, the model is untouched.
 H.clear();
 H.push({ type: 'rowDelete', tableId: 'species_ranges', row: 99, item: { species: 'ghost' } });
-// hist-rowdelete-redo (:835) left ONE species row behind, so the clamped
-// undoDeleteRow lands at index 1 — the row count the old expectation quoted
-// (3) assumed the round-trip had restored both rows.
-check('hist-stale-insert-clamps', H.undo() !== null && hd4.species_ranges.length === 2
-  && hd4.species_ranges[1].species === 'ghost', 'editable.py:298 clamped insert -> min(row, len)');
-check('hist-stale-insert-undo', H.redo() === null && hd4.species_ranges.length === 2
-  && hd4.species_ranges[1].species === 'ghost',
-  'asymmetric on purpose: the INSERT clamps (Python list.insert(99, x) appends, '
-  + 'js/table.js:2071 min(len, row)) while the stale REMOVE fails closed '
-  + '(deleteRow refuses an out-of-range index, js/table.js:2059), so redo keeps '
-  + 'the restored row and leaves the action retryable instead of popping');
+check('hist-stale-insert-clamps', H.undo() === null && hd4.species_ranges.length === 1
+  && H.depth() === 1,
+  'out-of-range undoDeleteRow returns false (js/table.js FE-FIX item 1); the '
+  + 'rowDelete/undo verb does not TOUCH a row, so it is retryable, not stale');
+check('hist-stale-insert-undo', H.redo() === null && hd4.species_ranges.length === 1,
+  'the failed undo never moved the action to the redo stack, so there is '
+  + 'nothing to redo and no phantom ghost row (the old clamp appended one)');
 H.clear();
 H.push({ type: 'rowAdd', tableId: 'species_ranges', row: 400, item: { species: 'x' } });
-const depthBefore = H.depth();
-check('hist-stale-remove-fails-closed', H.undo() === null && H.depth() === depthBefore,
-  'a stale index must not throw nor pop the stack');
+// FE-FIX-2026-09-21 (audit, history.js item 5 contract): a rowAdd UNDO removes
+// the row AT `row` — row 400 is deterministically out of range, so the entry
+// can never succeed. The old expectation demanded it stay on the stack
+// (depth unchanged, silent no-op forever: the button remained enabled and
+// every click moved nothing). js/history.js now classifies that as 'stale'
+// and POISONS the entry — popped, announced, and the stack walks on. The
+// model stays untouched either way.
+check('hist-stale-remove-fails-closed', H.undo() === null && H.depth() === 0
+  && hd4.species_ranges.length === 1,
+  'a deterministically impossible action is dropped, not stuck');
 
 H.clear();
 const savedMax = H.MAX;
@@ -1661,6 +1677,471 @@ check('index-loads-history-and-css', idx.indexOf('js/history.js') !== -1
   && idx.indexOf('css/table-edit.css') !== -1);
 check('history-after-table-order', idx.indexOf('js/table.js') < idx.indexOf('js/history.js'),
   'history.js resolves rcaTableEdits lazily anyway, but the order must not fight it');
+
+// ===========================================================================
+// 9. FE-FIX-2026-09-21 — the 19 table.js audit fixes, one block per item
+// ===========================================================================
+//
+// The CODE fixes (marked "FE-FIX-2026-09-21 (audit item N)" in js/table.js)
+// landed fleet-wide; this section is the regression net. Note the comment
+// numbering in table.js is the AUDIT's own (its item 1 covers both
+// attach-clears-history AND undoDeleteRow; its item 17 is the apply_edits
+// negative index) — the checks below are named by the task list and each
+// cites the table.js line it pins.
+//
+// Already-covered elsewhere and NOT re-asserted here:
+//   * undoDeleteRow out-of-range via the STACK (hist-stale-insert-clamps /
+//     hist-stale-insert-undo, section 4) — only the direct registry-level
+//     verb is added below.
+//   * history.js-side items (1/2/5/6) owned by tests_history_fixes_2026_09_21.js.
+
+// ---- item 1: attach(DIFFERENT data) clears the undo stack ------------------
+{
+  const a1 = deep(FIX);
+  freshEdits(a1);
+  H.clear();
+  H.push({ type: 'cellEdit', tableId: 'species_ranges', row: 0, col: 0, field: 'species',
+    model: 'species', before: 'A', hadKey: true, after: 'Q*' });
+  check('audit1-attach-different-data-clears-history', (function () {
+    const b1 = deep(FIX);
+    S.rcaTableEdits.attach(b1);           // no detach() in between — the re-render path
+    return H.depth() === 0;
+  })(), 'depth=' + H.depth() + ' (js/table.js rcaTableEdits.attach, FE-FIX item 1)');
+  H.push({ type: 'cellEdit', tableId: 'species_ranges', row: 0, col: 0, field: 'species',
+    model: 'species', before: 'A', hadKey: true, after: 'Q*' });
+  const same = S.rcaTableEdits.live();
+  S.rcaTableEdits.attach(same);           // SAME object identity -> protected
+  check('audit1-attach-same-object-keeps-history', H.depth() === 1,
+    'depth=' + H.depth() + ' — re-attaching the SAME data must not wipe the stack');
+  H.clear();
+}
+
+// ---- item 2: undoDeleteRow verb itself refuses row > length ----------------
+{
+  const a2 = deep(FIX);
+  freshEdits(a2);
+  const len0 = a2.species_ranges.length;
+  check('audit2-undo-deleterow-out-of-range', (function () {
+    const tooFar = S.rcaTableEdits.undoDeleteRow('species_ranges', len0 + 5, { species: 'ghost' });
+    const negative = S.rcaTableEdits.undoDeleteRow('species_ranges', -1, { species: 'ghost' });
+    const refusedUntouched = a2.species_ranges.length === len0;
+    const atEnd = S.rcaTableEdits.undoDeleteRow('species_ranges', len0, { species: 'tail' });
+    return tooFar === false && negative === false && refusedUntouched
+      && atEnd === true && a2.species_ranges.length === len0 + 1
+      && a2.species_ranges[len0].species === 'tail';
+  })(), 'row>len and row<0 fail closed; row===len stays legal (Python list.insert appends)');
+}
+
+// ---- item 3: a structural re-render preserves the foreign slots -------------
+{
+  const a3 = deep(FIX);
+  const dom3 = buildDom(a3, ['species_ranges']);
+  S.rcaTableEditAttach(dom3, a3, { editable: true });
+  const vizHost = makeEl('DIV', { id: 'viz-host' });
+  const canvas = makeEl('CANVAS');
+  vizHost.appendChild(canvas);
+  dom3.appendChild(vizHost);
+  const nameSlot = makeEl('DIV', { id: 'names-verify-slot' });
+  const slotted = makeEl('SPAN');
+  nameSlot.appendChild(slotted);
+  dom3.appendChild(nameSlot);
+  const rerendered = S.rcaTableRerender();
+  check('audit3-rerender-preserves-viz-host-identity', rerendered === true
+    && dom3.children.indexOf(vizHost) !== -1 && vizHost.parentNode === dom3
+    && vizHost.children.indexOf(canvas) !== -1,
+    'the SAME #viz-host node object (with its mounted canvas) must survive the innerHTML swap');
+  check('audit3-rerender-preserves-names-verify-slot',
+    dom3.children.indexOf(nameSlot) !== -1 && nameSlot.children.indexOf(slotted) !== -1,
+    '#names-verify-slot keeps the content app.js filled asynchronously');
+  S.rcaTableEditDetach();
+}
+
+// ---- item 4: the '-' placeholder can never be committed ---------------------
+{
+  // (a) the editable branch renders an EMPTY cell + .cell-empty, never a '-'
+  //     inside the contenteditable (js/table.js FE-FIX items 3 + 14).
+  check('audit4-editable-markup-has-no-dash-inside-cell', (function () {
+    const html = S.rcaRenderResults(deep(FIX), '', { editable: true });
+    const dashInCell = /<td class="[^"]*rca-edit-cell[^"]*"[^>]*>-<\/td>/.test(html);
+    const emptyCell = /<td class="[^"]*cell-empty[^"]*rca-edit-cell[^"]*"[^>]*><\/td>/.test(html);
+    return !dashInCell && emptyCell;
+  })(), 'row 0 has no confidence value -> that editable cell must be empty, not "-"');
+
+  // (b) the OLD-style cell (a '-' still sitting in the contenteditable, which
+  //     the app's own buildDom fixture renders): a visit + blur must be a pure
+  //     no-op — no commit, no model write, no invalid frame, no re-focus loop
+  //     on the numeric column (js/table.js rcaEditOnFocusOut, FE-FIX item 3).
+  const a4 = deep(FIX);
+  const dom4 = buildDom(a4, ['species_ranges']);
+  S.rcaTableEditAttach(dom4, a4, { editable: true });
+  const confCell4 = cellOf(dom4, 'species_ranges', 0, confCol);   // float column, text '-'
+  confCell4.textContent = '-';
+  const focusBefore4 = confCell4.focused;
+  dom4.dispatchEvent(mkEvent('focusin', confCell4));
+  dom4.dispatchEvent(mkEvent('focusout', confCell4));
+  check('audit4-placeholder-blur-is-noop', confCell4.focused === focusBefore4
+    && confCell4.className.indexOf('rca-cell-invalid') === -1
+    && !('confidence' in a4.species_ranges[0])
+    && eqJson(S.rcaTableEdits.captureAll(), {}) && S.rcaHistory.depth() === 0,
+    'visit-then-blur on a "-" numeric cell must not loop or write (FE-FIX item 3/4)');
+
+  // (c) even a hard Enter-commit of '-' is refused BEFORE the model: the value
+  //     never lands, the stack never grows (the red frame + kept focus is the
+  //     documented blocked-editor behaviour, covered by dom-invalid-* above).
+  dom4.dispatchEvent(mkEvent('focusin', confCell4));
+  const blockedEnter = S.rcaEditHandleKey(mkEvent('keydown', confCell4, { key: 'Enter' }));
+  check('audit4-dash-enter-never-stores', blockedEnter === false
+    && a4.species_ranges[0].confidence === undefined
+    && eqJson(S.rcaTableEdits.captureAll(), {}) && S.rcaHistory.depth() === 0,
+    'literal "-" must not reach the model on any path');
+  S.rcaTableEditDetach();
+}
+
+// ---- item 5: a second commit of one cell keeps the key-removal mark ---------
+{
+  const a5 = deep(FIX);
+  const dom5 = buildDom(a5, ['species_ranges']);
+  S.rcaTableEditAttach(dom5, a5, { editable: true });
+  H.clear();
+  const c5 = cellOf(dom5, 'species_ranges', 0, 4);   // biozone 'Z1'
+  dom5.dispatchEvent(mkEvent('focusin', c5));
+  c5.textContent = '';
+  S.rcaEditHandleKey(mkEvent('keydown', c5, { key: 'Enter' }));   // commit 1: key removed
+  check('audit5-double-commit-keeps-dirty-mark', (function () {
+    const midCount = S.rcaTableEdits.editedCount();
+    dom5.dispatchEvent(mkEvent('focusin', c5));                   // re-enter the cell
+    c5.textContent = '';
+    dom5.dispatchEvent(mkEvent('focusout', c5));                  // blur-commit path #2
+    S.rcaTableEdits.editCell('species_ranges', 0, 4, '');         // forced third commit
+    return midCount === 1 && S.rcaTableEdits.editedCount() === 1
+      && S.rcaTableEdits.isCellEdited('species_ranges', 0, 'biozone')
+      && eqJson(S.rcaTableEdits.capture('species_ranges'), { 0: { _deleted_keys: ['biozone'] } });
+  })(), 'js/table.js editCell FE-FIX item 4: markCell re-derives, never blind-clears');
+  H.clear();
+  S.rcaTableEditDetach();
+}
+
+// ---- item 6: deleteRow drops the deleted row's marks; undo restores them ----
+{
+  const a6 = deep(FIX);
+  freshEdits(a6);
+  S.rcaTableEdits.editCell('species_ranges', 1, 0, 'B*');
+  const del6 = S.rcaTableEdits.deleteRow('species_ranges', 1);
+  check('audit6-deleterow-drops-own-marks', del6 && S.rcaTableEdits.editedCount() === 0
+    && !S.rcaTableEdits.isCellEdited('species_ranges', 0, 'species')
+    && !S.rcaTableEdits.isCellEdited('species_ranges', 1, 'species'),
+    'the old shiftEdited(rowIdx,-1) parked the deleted row\'s mark on the PREVIOUS row');
+  const back6 = S.rcaTableEdits.undoDeleteRow('species_ranges', 1, del6.item);
+  check('audit6-undo-deleterow-restores-marks', back6 === true
+    && S.rcaTableEdits.isCellEdited('species_ranges', 1, 'species')
+    && S.rcaTableEdits.editedCount() === 1,
+    'stash/restore by (row, item) — FE-FIX item 5 popEditedRow/takeStashedMarks');
+  check('audit6-surviving-marks-still-shift', (function () {
+    freshEdits(a6);
+    S.rcaTableEdits.editCell('species_ranges', 1, 0, 'B**');
+    S.rcaTableEdits.deleteRow('species_ranges', 0);   // row 1 walks up to 0
+    return S.rcaTableEdits.isCellEdited('species_ranges', 0, 'species');
+  })(), 'a mark on a row that MOVED must move with it — only the deleted row dies clean');
+  S.rcaTableEdits.clearEdited();
+}
+
+// ---- item 7: undo of a clear on an originally-EMPTY cell keeps the key ------
+{
+  const a7 = { sections: [{ name: 'S1', age_range: '', formations: [],
+    formation_thickness_m: '', coordinates: '' }], species_ranges: [] };
+  freshEdits(a7);
+  H.clear();
+  const formCol7 = fieldCol(cfgOf(a7, 'sections'), 'formations');
+  const ed7 = S.rcaTableEdits.editCell('sections', 0, formCol7, 'A;B');
+  check('audit7-empty-baseline-edit', ed7.ok === true && ed7.changed === true
+    && eqJson(a7.sections[0].formations, ['A', 'B']), canonical(a7.sections[0]));
+  H.push(ed7.action);
+  H.undo();
+  check('audit7-empty-baseline-undo-keeps-key', (function () {
+    const row = a7.sections[0];
+    return Object.prototype.hasOwnProperty.call(row, 'formations')
+      && eqJson(row.formations, [])
+      && eqJson(S.rcaTableEdits.capture('sections'), {});
+  })(), 'editable.py:290 ASSIGNS the restored [] (no _deleted_keys) — '
+    + 'rcaEditKeepsEmptyKey mirrors it; the old JS deleted the key');
+  check('audit7-apply-parity-empty-list', (function () {
+    const applied = S.rcaApplyEdits({ sections: [{ name: 'S1', formations: [] }] },
+      { sections: { 0: { formations: [] } } });
+    return Object.prototype.hasOwnProperty.call(applied.sections[0], 'formations')
+      && eqJson(applied.sections[0].formations, []);
+  })(), 'cross-checked against rca_core/editable.py apply_edits (item[col] = deepcopy(val))');
+  H.clear();
+}
+
+// ---- item 8: inverted idx pairs on the nested columnar tables are refused --
+{
+  const a8 = {
+    chart_mode: 'columnar_section',
+    sections: [{
+      id: 'S1', name: 'S1',
+      lithology_blocks: [{ pattern: 'mud', range_top_idx: 1, range_base_idx: 9 }],
+      age_units: [{ label: 'U1', range_top_idx: 1, range_base_idx: 9 }],
+      samples: [],
+    }],
+  };
+  freshEdits(a8);
+  const blkCfg8 = cfgOf(a8, 'lithology_blocks');
+  const blkBaseCol8 = fieldCol(blkCfg8, 'base_idx');
+  const rej8 = S.rcaTableEdits.editCell('lithology_blocks', 0, blkBaseCol8, '2');
+  check('audit8-lithology-inverted-rejected', rej8.ok === false
+    && rej8.key === 'edit.idxInverted'
+    && a8.sections[0].lithology_blocks[0].range_base_idx === 9,
+    'top 1 / base 2 is inverted (bed rule: top < base) — the row is keyed by '
+    + 'range_top_idx while peer says top_idx; only peerModel closes the gap (FE-FIX item 7)');
+  const auCfg8 = cfgOf(a8, 'age_units');
+  const rejAu = S.rcaTableEdits.editCell('age_units', 0, fieldCol(auCfg8, 'base_idx'), '2');
+  check('audit8-age-units-inverted-rejected', rejAu.ok === false
+    && a8.sections[0].age_units[0].range_base_idx === 9, canonical(rejAu));
+  const ok8 = S.rcaTableEdits.editCell('lithology_blocks', 0, blkBaseCol8, '1');
+  check('audit8-inverted-control-accepts', ok8.ok === true
+    && a8.sections[0].lithology_blocks[0].range_base_idx === 1,
+    'top 1 / base 1 is legal — the refusal above is the pair rule, not a dead column');
+  S.rcaTableEdits.detach();
+}
+
+// ---- item 9: after a structural op the toolbar reflects the stack depth -----
+{
+  // The REAL app re-renders the whole results root, and rcaEditToolbar emits
+  // FRESH `disabled` undo/redo buttons on every write (they are part of the
+  // innerHTML). buildDom's setter would just drop a hand-appended button, so
+  // this fixture replays the app's behaviour: wipe, emit a fresh disabled
+  // toolbar, refill the tables. The fix (js/table.js rcaEditRerender, FE-FIX
+  // item 8) re-runs rcaHistorySyncButtons AFTER the swap.
+  const a9 = deep(FIX);
+  const barRoot = makeEl('DIV');
+  barRoot.rcaData = a9;
+  let barHtml = '';
+  Object.defineProperty(barRoot, 'innerHTML', {
+    get: () => barHtml,
+    set: (v) => {
+      barHtml = String(v);
+      barRoot.children.length = 0;
+      barRoot.appendChild(makeEl('BUTTON', { 'data-rca-undo': '1', disabled: 'disabled' }));
+      barRoot.appendChild(makeEl('BUTTON', { 'data-rca-redo': '1', disabled: 'disabled' }));
+      fillDom(barRoot, a9, ['species_ranges']);
+    },
+    enumerable: true,
+  });
+  barRoot.innerHTML = '';                       // initial render == fresh toolbar
+  S.rcaTableEditAttach(barRoot, a9, { editable: true });
+  // The app.js wiring: a stack subscription that re-syncs the CURRENT toolbar
+  // nodes on every push/undo/redo.
+  S.rcaHistoryAttachUi(barRoot);
+  H.clear();
+  check('audit9-fresh-toolbar-starts-disabled',
+    barRoot.querySelector('[data-rca-undo]').getAttribute('disabled') !== null);
+  barRoot.dispatchEvent(mkEvent('click', barRoot.querySelector('[data-rca-addrow="species_ranges"]')));
+  const afterAdd = barRoot.querySelector('[data-rca-undo]');
+  check('audit9-undo-enabled-after-structural-rerender', H.depth() === 1
+    && afterAdd.getAttribute('disabled') === null
+    && afterAdd.getAttribute('aria-disabled') === 'false',
+    'the fresh post-addRow toolbar used to stay disabled while the stack had the rowAdd');
+  S.rcaHistory.undo();                           // -> afterHistory -> re-render again
+  const afterUndo = barRoot.querySelector('[data-rca-undo]');
+  const afterUndoRedo = barRoot.querySelector('[data-rca-redo]');
+  check('audit9-toolbar-resynced-after-undo-rerender', H.depth() === 0
+    && afterUndo !== afterAdd && afterUndo.getAttribute('disabled') !== null
+    && afterUndoRedo.getAttribute('disabled') === null,
+    'undo empties the stack -> the NEW toolbar ends up undo-disabled, redo-enabled '
+    + '(rerender sync + the stack subscription; the in-apply sync runs pre-pop) — '
+    + canonical([H.depth(), afterUndo === afterAdd, afterUndo.getAttribute('disabled'),
+      afterUndoRedo.getAttribute('disabled')]));
+  H.clear();
+  S.rcaTableEditDetach();
+}
+
+// ---- item 10: paste inserts PLAIN TEXT only ---------------------------------
+{
+  const a10 = deep(FIX);
+  const dom10 = buildDom(a10, ['species_ranges']);
+  S.rcaTableEditAttach(dom10, a10, { editable: true });
+  const cell10 = cellOf(dom10, 'species_ranges', 1, 0);   // species 'B'
+  cell10.textContent = 'B';
+  const seenFormats = [];
+  const paste10 = mkEvent('paste', cell10, { clipboardData: {
+    getData: (fmt) => {
+      seenFormats.push(fmt);
+      return fmt === 'text/plain' ? 'p10text' : '<table><tr><td><b>EXCEL</b></td></tr></table>';
+    },
+  } });
+  dom10.dispatchEvent(paste10);
+  check('audit10-paste-plain-text-only', paste10.defaultPrevented === true
+    && seenFormats.indexOf('text/plain') !== -1
+    && cell10.textContent === 'Bp10text'
+    && cell10.textContent.indexOf('<b>') === -1,
+    'rcaEditOnPaste cancels the native paste and appends text/plain only (FE-FIX item 9)');
+  const plainTarget = makeEl('TH');
+  const paste10b = mkEvent('paste', plainTarget, { clipboardData: { getData: () => 'x' } });
+  dom10.dispatchEvent(paste10b);
+  check('audit10-paste-ignores-noneditable', paste10b.defaultPrevented === false,
+    'outside an editable cell the native behaviour must stay untouched');
+  S.rcaTableEditDetach();
+}
+
+// ---- item 11: table.js no longer clobbers viz.js / minimax.js globals -------
+{
+  // The renamed helpers (js/table.js FE-FIX items 10 + the viz-guard block):
+  // the OLD public names must be absent from the sandbox, the new private
+  // names present. (history.js/app.js never define them either — table.js
+  // alone leaked them before.)
+  check('audit11-no-leaked-globals', S.__ctx.rcaVizFocusRow === undefined
+    && S.__ctx.rcaVizClearFocus === undefined && S.__ctx.rcaVizLocateTo === undefined
+    && S.__ctx.rcaPyStr === undefined,
+    'rcaVizFocusRow/rcaVizClearFocus/rcaVizLocateTo/rcaPyStr must not exist on the context');
+  check('audit11-renamed-helpers-exist', typeof S.__ctx.rcaEditVizFocus === 'function'
+    && typeof S.__ctx.rcaEditVizClearFocus === 'function'
+    && typeof S.__ctx.rcaEditVizLocateTo === 'function'
+    && typeof S.__ctx.rcaEditPyStr === 'function'
+    && S.rcaEditPyStr(true) === 'True' && S.rcaEditPyStr(null) === '',
+    'the table.js-private copies carry the same Python str() semantics');
+}
+
+// ---- item 12: rcaPyParseNumber runs the PEP-515 grammar on the RAW text ----
+{
+  check('audit12-underscore-grammar', S.rcaPyParseNumber('_1') === null
+    && S.rcaPyParseNumber('1_') === null && S.rcaPyParseNumber('1__0') === null
+    && S.rcaPyParseNumber('1_0') === 10 && S.rcaPyParseNumber('1_000') === 1000,
+    'int("_1")/int("1_")/int("1__0") raise; int("1_0")==10 — the old test stripped '
+    + 'underscores first, which accepted all three rejects (FE-FIX item 12)');
+  check('audit12-ascii-digits-only', S.rcaPyParseNumber('\u0663\u0665') === null
+    && S.rcaCoerceCellValue('\u0663', 'int') === '\u0663',
+    'Arabic-Indic digits: JS \\d admits them, CPython int() rejects them');
+}
+
+// ---- item 13: the Python str(float) grammar --------------------------------
+{
+  check('audit13-pyfloatstr-grammar', S.rcaPyFloatStr(3) === '3.0'
+    && S.rcaPyFloatStr(2.5) === '2.5' && S.rcaPyFloatStr(1e16) === '1e+16'
+    && S.rcaPyFloatStr(1e-7) === '1e-07' && S.rcaPyFloatStr(0.0001) === '0.0001',
+    'integral float -> ".0", decpt<=-4 or >16 -> 2-digit padded exponent (str(3.0)="3.0")');
+  check('audit13-exportcelltext-routing', S.rcaExportCellText(2.5) === '2.5'
+    && S.rcaExportCellText(3) === '3' && S.rcaExportCellText(true) === 'True'
+    && S.rcaExportCellText(Infinity) === '',
+    'JSON collapses 3.0 to the int 3 (documented limitation, js/table.js:696) — '
+    + 'the float grammar is pinned on rcaPyFloatStr above');
+}
+
+// ---- item 14: the editable branch keeps its title tooltip -------------------
+{
+  check('audit14-editable-cell-title-attr', (function () {
+    const html = S.rcaRenderResults(deep(FIX), '', { editable: true });
+    return /<td class="[^"]*rca-edit-cell[^"]*"[^>]*title="A"/.test(html);
+  })(), 'the read-only path had title=, the editable one used to drop it (FE-FIX item 14)');
+  const a14 = deep(FIX);
+  const dom14 = buildDom(a14, ['species_ranges']);
+  S.rcaTableEditAttach(dom14, a14, { editable: true });
+  const c14 = cellOf(dom14, 'species_ranges', 0, 0);
+  dom14.dispatchEvent(mkEvent('focusin', c14));
+  c14.textContent = 'T14';
+  S.rcaEditCommitCell(c14);
+  check('audit14-paint-keeps-title', c14.getAttribute('title') === 'T14',
+    'rcaEditPaintCell sets title on every repaint');
+  S.rcaTableEditDetach();
+}
+
+// ---- item 15: detach / re-wire honour the capture flag ----------------------
+{
+  const a15 = deep(FIX);
+  const dom15 = buildDom(a15, ['species_ranges']);
+  const countL15 = (el) => Object.keys(el._listeners)
+    .reduce((n, k) => n + el._listeners[k].length, 0);
+  S.rcaTableEditAttach(dom15, a15, { editable: true, capture: true });
+  const wired15 = countL15(dom15);
+  S.rcaTableEditAttach(dom15, a15, { editable: true });     // flag flip on the SAME root
+  check('audit15-capture-flip-rewires-once', wired15 === countL15(dom15)
+    && wired15 > 0 && S.RCA_EDIT_DOM.capture === false,
+    'js/table.js FE-FIX item 15: remove+add under the OLD flag, bookkeeping updated');
+  S.rcaTableEditDetach();
+  check('audit15-detach-unhooks-everything', countL15(dom15) === 0 && (function () {
+    const c15 = cellOf(dom15, 'species_ranges', 0, 0);
+    dom15.dispatchEvent(mkEvent('focusin', c15));
+    return S.RCA_EDIT_DOM.editing === null;
+  })(), 'after detach no delegated listener may still fire');
+}
+
+// ---- item 16: rcaApplyEdits negative new_-index mirrors CPython insert ------
+{
+  const neg16 = S.rcaApplyEdits(
+    { species_ranges: [{ species: 'A' }, { species: 'B' }] },
+    { species_ranges: { 'new_-1': { species: 'X' } } });
+  const far16 = S.rcaApplyEdits(
+    { species_ranges: [{ species: 'A' }, { species: 'B' }] },
+    { species_ranges: { 'new_-5': { species: 'X' } } });
+  check('audit16-negative-insert-mirrors-python', (function () {
+    const ids = (o) => o.species_ranges.map((r) => r.species).join(',');
+    // CPython [A,B].insert(-1, X) -> [A, X, B]; insert(-5, X) floors at 0.
+    return ids(neg16) === 'A,X,B' && ids(far16) === 'X,A,B';
+  })(), 'the old clamp folded every negative to 0 — the browser and the GUI '
+    + 'disagreed on where new_-1 lands (editable.py:299, table.js FE-FIX item 17)');
+}
+
+// ---- item 17: the ghost focusout after an innerHTML swap is skipped ---------
+{
+  const a17 = deep(FIX);
+  const dom17 = buildDom(a17, ['species_ranges']);
+  S.rcaTableEditAttach(dom17, a17, { editable: true });
+  const c17 = cellOf(dom17, 'species_ranges', 0, 0);
+  dom17.dispatchEvent(mkEvent('focusin', c17));            // registers the edit record
+  c17.textContent = 'GHOST';
+  c17.parentNode = null;                                    // innerHTML swap killed the node
+  const res17 = S.rcaEditCommitCell(c17);
+  check('audit17-detached-cell-commit-skipped', res17.skipped === true
+    && res17.changed === false && a17.species_ranges[0].species === 'A'
+    && S.RCA_EDIT_DOM.editing === null,
+    'rcaEditCellDetached (FE-FIX item 18): stale value must never reach the model');
+  const plain17 = makeEl('TD', { 'data-rca-edit': '1', 'data-table': 'species_ranges',
+    'data-row': '1', 'data-col': '0', 'data-field': 'species', 'data-type': 'str',
+    contenteditable: 'true' });
+  plain17.textContent = 'P*';
+  const res17b = S.rcaEditCommitCell(plain17);
+  check('audit17-untracked-plain-cell-still-commits', res17b.ok === true
+    && res17b.changed === true && a17.species_ranges[1].species === 'P*',
+    'only the CURRENTLY TRACKED cell can be a ghost — the app.js/Qt bridge API stays legal');
+  S.rcaTableEditDetach();
+}
+
+// ---- item 18: selected rows carry .rca-row-selected on the <tr> -------------
+{
+  const a18 = deep(FIX);
+  const dom18 = buildDom(a18, ['species_ranges']);
+  S.rcaTableEditAttach(dom18, a18, { editable: true });
+  const box18 = dom18.querySelector('[data-row-select="species_ranges"][data-row="0"]');
+  box18.checked = true;
+  dom18.dispatchEvent(mkEvent('change', box18));
+  const tr18 = rowOf(dom18, 'species_ranges', 0);
+  const onWhileSelected = tr18.classList.contains('rca-row-selected')
+    && !rowOf(dom18, 'species_ranges', 1).classList.contains('rca-row-selected');
+  dom18.dispatchEvent(mkEvent('click',
+    dom18.querySelector('[data-rca-sel-action="clear"][data-rca-sel-table="species_ranges"]')));
+  check('audit18-row-selected-class-toggles', onWhileSelected
+    && !rowOf(dom18, 'species_ranges', 0).classList.contains('rca-row-selected'),
+    'css/table-edit.css paints tr.rca-row-selected — table.js FE-FIX item 19 must emit it');
+  S.rcaTableEditDetach();
+}
+
+// ---- item 19: the sticky focus columns are pinned in RENDER order -----------
+{
+  // The emitted tbody row is [td.rca-cell-select | th[scope=row] | data...]
+  // (js/table.js:1004-1009), so the checkbox column must pin at the SMALLER
+  // left offset; the old CSS had them swapped (row index at 0, checkbox at 34px).
+  // NOTE: the CSS uses the bare `left: 0` zero form (no unit), so `px` is
+  // optional in the probe regexes.
+  const selM = css.match(/td\.rca-cell-select\s*\{[^}]*?left:\s*(\d+)(?:px)?/);
+  const idxM = css.match(/th\[scope="row"\]\s*\{[^}]*?left:\s*(\d+)(?:px)?/);
+  check('audit19-sticky-column-order', !!selM && !!idxM
+    && Number(selM[1]) < Number(idxM[1]),
+    'checkbox left:' + (selM && selM[1]) + 'px must precede row-index left:'
+    + (idxM && idxM[1]) + 'px (css/table-edit.css FE-FIX item 11)');
+  const firstCell = /<tr[^>]*data-row="0"[^>]*>\s*<td class="rca-cell-select"/
+    .test(S.rcaRenderResults(deep(FIX), '', { editable: true }));
+  check('audit19-emitted-order-matches-css', firstCell,
+    'the FIRST cell of an edit-mode tbody row is the checkbox — the CSS pinning follows it');
+}
 
 // ===========================================================================
 

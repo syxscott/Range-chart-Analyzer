@@ -264,20 +264,28 @@
                             <div class="skeleton h20"></div>
                             <div class="skeleton h16"></div>
                         </div>
-                        <!-- FE-BORROW-2026-09-20 (domain U): determinate
-                             multi-run progress. Direct transport already
-                             counts finished runs ({done}/{total}); setBusyLabel
-                             fills this bar (width + aria-valuenow) and
-                             updateActionButtons hides it whenever no extraction
-                             is running. Stays .hidden in backend mode, where
-                             the client never sees per-run signals. -->
-                        <div id="run-progress" class="run-progress hidden"
-                             role="progressbar" aria-valuemin="0" aria-valuemax="100"
-                             aria-valuenow="0" aria-label="提取进度" data-i18n-label="loading.progress">
-                            <div id="run-progress-fill" class="run-progress-fill"></div>
-                        </div>
                         <p data-i18n="loading.text">正在识读图表，请稍候……通常需要 20 秒到 2 分钟</p>
                     </div>
+                </div>
+                <!-- FE-FIX-2026-09-21 (audit item 7): the determinate run
+                     progress bar used to live INSIDE #loading-slot's
+                     role="status" aria-live="polite" region — every
+                     aria-valuenow update was announced by the live region on
+                     top of the progressbar's own semantics (the duplicate-
+                     announcement pattern domain U removed for the nested
+                     banners). It now sits NEXT to the live slot; it self-
+                     manages visibility (_rcaSetRunProgress shows it,
+                     updateActionButtons hides + zeroes it), so the layout
+                     contract (only visible during a direct-transport
+                     extraction) is unchanged. Original note kept: direct
+                     transport counts finished runs ({done}/{total});
+                     setBusyLabel fills this bar (width + aria-valuenow);
+                     stays .hidden in backend mode, where the client never
+                     sees per-run signals. -->
+                <div id="run-progress" class="run-progress hidden"
+                     role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                     aria-valuenow="0" aria-label="提取进度" data-i18n-label="loading.progress">
+                    <div id="run-progress-fill" class="run-progress-fill"></div>
                 </div>
 
                 <div id="results-empty" class="empty-state">
@@ -301,7 +309,12 @@
                     <div id="viz-host" class="viz-host" role="group" aria-labelledby="viz-heading">
                         <div class="viz-head">
                             <span class="viz-heading-text" id="viz-heading">延限—层位联动图</span>
-                            <span class="viz-hint">悬停画布行＝高亮表格行 · 点击＝固定聚焦 · Esc 取消</span>
+                            <!-- FE-FIX-2026-09-21 (audit item 7, copy check):
+                                 js/viz.js is being fixed to honor exactly this
+                                 promise — hover is transient, one click PINS
+                                 the focus row, clicking again (or Esc) unpins.
+                                 The old copy only mentioned Esc. -->
+                            <span class="viz-hint">悬停画布行＝高亮表格行 · 点击＝固定聚焦 · 再点/Esc＝取消</span>
                         </div>
                         <div class="rca-viz-stage">
                             <img class="rca-viz-image" alt="" aria-hidden="true">

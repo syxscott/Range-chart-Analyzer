@@ -1546,6 +1546,61 @@ test_aggregate_author_h7_parity();
 test_prompt_phylo_parent_and_degradation();
 test_ics_table_data_parity();
 
+// FE-FIX-2026-09-21: structural parity lock between resources/ics_current.json
+// (the authority, refreshed by scripts/update_ics.py — which does NOT emit
+// JS, so js/ics_table.js is hand-synced) and globalThis.RCA_ICS_TABLE. The
+// Silurian/Quaternian stages Aeronian, Rhuddanian, Telychian, Homerian,
+// Gorstian, Sheinwoodian, Ludfordian, Greenlandian, Meghalayan,
+// Northgrippian and Late Pleistocene were silently missing, so viz.js
+// rcaVizStageBounds returned null for them (unplaceable in the browser while
+// Python placed them). These checks make ANY future JSON<->table drift —
+// missing rows, extra rows, or age/era mismatches — fail this suite loudly on
+// the next refresh instead of degrading placement quality silently.
+function test_ics_table_vs_ics_current_json() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const t = ctx.RCA_ICS_TABLE;
+  const authority = JSON.parse(fs.readFileSync(
+    path.join(__dirname, 'rca_core', 'resources', 'ics_current.json'), 'utf8'));
+  const jsonKeys = Object.keys(authority);
+  const missing = jsonKeys.filter((k) => !t[k]);
+  const extra = Object.keys(t).filter((k) => !authority[k]);
+  check('ics-parity no rows missing vs ics_current.json',
+    missing.length === 0, 'missing: ' + JSON.stringify(missing));
+  check('ics-parity no extra rows vs ics_current.json',
+    extra.length === 0, 'extra: ' + JSON.stringify(extra));
+  const ageDiffs = [];
+  const eraDiffs = [];
+  for (const k of jsonKeys) {
+    if (!t[k]) continue;
+    if (t[k].top_ma !== authority[k].top_ma ||
+        t[k].base_ma !== authority[k].base_ma) {
+      ageDiffs.push(k + ' js[' + t[k].top_ma + ',' + t[k].base_ma +
+        '] json[' + authority[k].top_ma + ',' + authority[k].base_ma + ']');
+    }
+    if (authority[k].era && t[k].era && t[k].era !== authority[k].era) {
+      eraDiffs.push(k + ' js=' + t[k].era + ' json=' + authority[k].era);
+    }
+  }
+  check('ics-parity top/base ages byte-consistent with ics_current.json',
+    ageDiffs.length === 0, ageDiffs.join(' | '));
+  check('ics-parity eras match ics_current.json',
+    eraDiffs.length === 0, eraDiffs.join(' | '));
+  // Spot regression guards for the 11 formerly-missing rows: they must
+  // resolve through the same shape viz.js consumes (numeric top/base).
+  for (const k of ['Aeronian', 'Rhuddanian', 'Telychian', 'Homerian',
+                   'Gorstian', 'Sheinwoodian', 'Ludfordian', 'Greenlandian',
+                   'Meghalayan', 'Northgrippian', 'Late Pleistocene']) {
+    check('ics-parity ' + k + ' resolvable',
+      !!t[k] && typeof t[k].top_ma === 'number' &&
+      typeof t[k].base_ma === 'number' &&
+      t[k].top_ma === authority[k].top_ma &&
+      t[k].base_ma === authority[k].base_ma);
+  }
+}
+
+test_ics_table_vs_ics_current_json();
+
 // UI-REVIEW-2026-08-01 (H1): the force-rerun button must become visible
 // after the FIRST successful result. Previously setBusy(false) ran in
 // `finally` BEFORE state.result was assigned, so the visibility check

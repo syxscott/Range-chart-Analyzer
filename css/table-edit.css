@@ -109,6 +109,19 @@
     font-weight: 700;
 }
 
+/* FE-FIX-2026-09-21 (audit item 3): the '-' placeholder for an empty cell used
+   to live INSIDE the contenteditable, so a focus-out without typing committed
+   the literal "-" (and a numeric column then rejected it: "此列需要数值：-" +
+   a focus loop). js/table.js now paints empty cells with no text content and
+   puts .cell-empty on them; the placeholder is drawn here instead, where it
+   cannot be selected, edited or committed. The :not(.rca-cell-invalid) guard
+   keeps the ⚠ ::before of the blocked-editor state intact. */
+[data-editable="1"] .rca-edit-cell.cell-empty:not(.rca-cell-invalid)::before {
+    content: "-";
+    color: var(--text-light);
+    pointer-events: none;
+}
+
 @keyframes rca-edit-shake {
     0%, 100% { transform: translateX(0); }
     25% { transform: translateX(-2px); }
@@ -279,22 +292,71 @@ tr.rca-row-lowconf.rca-row-active > th[scope="row"] {
     overflow: auto;
 }
 
-[data-editable="1"] table.data-table th.cell-empty,
-[data-editable="1"] table.data-table td.rca-cell-select {
+/* FE-FIX-2026-09-21 (audit item 11): the old block assumed the WRONG column
+   order — it pinned the row-index header (`th.cell-empty`) at left:0, where
+   the CHECKBOX column actually lives, and pushed `th.rca-col-select` to
+   left:34px. In the rendered edit table the order is
+   [checkbox td.rca-cell-select | row-index th[scope=row] | data...], so the
+   two pinned columns now sit side by side: checkbox at 0 (its 34px width is
+   declared with .rca-col-select above), row index at left:34px. Both need an
+   OPAQUE token background (style.css's translucent zebra would let scrolled
+   content ghost through), and the state paints (hover / selected / active)
+   are re-applied afterwards so they stay visible on the pinned cells. */
+
+/* Column 1 — checkbox, pinned at the table's left edge. */
+[data-editable="1"] table.data-table tbody td.rca-cell-select {
     position: sticky;
     left: 0;
     z-index: 1;
     background: var(--bg-white);
 }
 
-[data-editable="1"] table.data-table thead th.rca-col-select {
+/* Column 2 — the row index, pinned right beside it. */
+[data-editable="1"] table.data-table tbody th[scope="row"] {
+    position: sticky;
     left: 34px;
-    z-index: 3;
+    z-index: 1;
+    background: var(--bg-white);
 }
 
-:root[data-theme="dark"] [data-editable="1"] table.data-table th.cell-empty,
-:root[data-theme="dark"] [data-editable="1"] table.data-table td.rca-cell-select {
+/* Zebra rows keep the two-tone opaque paint (tokens flip in dark mode). */
+[data-editable="1"] table.data-table tbody tr:nth-child(even) td.rca-cell-select,
+[data-editable="1"] table.data-table tbody tr:nth-child(even) th[scope="row"] {
     background: var(--bg-light);
+}
+
+:root[data-theme="dark"] [data-editable="1"] table.data-table tbody td.rca-cell-select,
+:root[data-theme="dark"] [data-editable="1"] table.data-table tbody th[scope="row"] {
+    background: var(--bg-light);
+}
+
+/* Header corners: both sticky-top (css/app-ux.css) AND sticky-left here, so
+   they must out-stack the data headers (app-ux gives th:first-child z 4). */
+[data-editable="1"] table.data-table thead th.rca-col-select {
+    position: sticky;
+    left: 0;
+    z-index: 4;
+    background: var(--bg-lighter);
+}
+
+[data-editable="1"] table.data-table thead th[scope="col"]:nth-child(2) {
+    position: sticky;
+    left: 34px;
+    z-index: 4;
+    background: var(--bg-lighter);
+}
+
+/* State paints win over the pinned-column backgrounds (declared last). */
+[data-editable="1"] table.data-table tbody tr:hover > td.rca-cell-select,
+[data-editable="1"] table.data-table tbody tr:hover > th[scope="row"],
+[data-editable="1"] table.data-table tbody tr.rca-row-selected > td.rca-cell-select,
+[data-editable="1"] table.data-table tbody tr.rca-row-selected > th[scope="row"] {
+    background: var(--primary-soft);
+}
+
+[data-editable="1"] table.data-table tbody tr.rca-row-active > td.rca-cell-select,
+[data-editable="1"] table.data-table tbody tr.rca-row-active > th[scope="row"] {
+    background: var(--info-soft);
 }
 
 /* ---- the table footer (新增行) ------------------------------------------ */

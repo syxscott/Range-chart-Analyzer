@@ -43,6 +43,11 @@ const RCA_HISTORY_STRINGS = {
   'edit.redoRowAdd': { zh: '重新加入第 {row} 行', en: 'Re-add row {row}' },
   'edit.historyEmpty': { zh: '没有可撤销的修改', en: 'Nothing to undo' },
   'edit.historyEnd': { zh: '没有可重做的修改', en: 'Nothing to redo' },
+  // FE-FIX-2026-09-21: audit item 5 — a deterministic apply failure (the
+  // action's table/row no longer exists) must be announced too, distinct
+  // from the empty-stack case; the entry is also popped (see undo/redo).
+  'edit.historyFailed': { zh: '过期的修改记录已移出历史栈（目标表或行已不存在）',
+    en: 'Stale history entry removed (its table or row no longer exists)' },
 };
 
 function rcaHistoryT(key, params) {
@@ -117,16 +122,30 @@ function rcaHistoryEdits(history) {
 // and `rowAdd` are literal inverses of each other, so both verbs share two
 // primitives (insert-record-at-index / remove-record-at-index) — the same
 // observation Tabulator's History module encodes as "action + its mirror".
+//
+// FE-FIX-2026-09-21 (audit item 1): the primitives were re-derived from
+// js/table.js's ACTUAL signatures, not their names:
+//   * edits.undoDeleteRow(tableId, row, item)  INSERTS `item` at `row`
+//     (js/table.js:2081, splices the clone in, clamped) — so it is the correct
+//     verb for BOTH rowDelete.undo AND rowAdd.redo ("re-add the stored item at
+//     action.row"). It returns a strict boolean.
+//   * edits.undoAddRow(tableId, row)           REMOVES the row at `row` and
+//     returns the removed ITEM (js/table.js:2105) — which for a scalar list
+//     row (other_fossils) is the EMPTY STRING: `!!removed` was false, so
+//     rowAdd.undo on a scalar row had already spliced the row out of the model
+//     yet reported failure — the stacks stuck (depth 1, button enabled, every
+//     later click a silent no-op). Compare against `false` instead of taking
+//     a truthiness test of the payload.
 const rcaHistoryUndoers = {
   cellEdit: {
     undo(action, edits) {
       const restore = action.hadKey ? action.before : null;
       return edits.setCellValue(action.tableId, action.row, action.field, restore,
-        { model: action.model });
+        { model: action.model }) !== false;
     },
     redo(action, edits) {
       return edits.setCellValue(action.tableId, action.row, action.field, action.after,
-        { model: action.model });
+        { model: action.model }) !== false;
     },
     describe(action, dir) {
       return rcaHistoryT(dir === 'redo' ? 'edit.redoCell' : 'edit.undoCell',
@@ -134,22 +153,80 @@ const rcaHistoryUndoers = {
     },
   },
   rowDelete: {
-    undo(action, edits) { return edits.undoDeleteRow(action.tableId, action.row, action.item); },
-    redo(action, edits) { return !!edits.deleteRow(action.tableId, action.row); },
+    // undo = re-INSERT the stored item at the deleted index.
+    undo(action, edits) { return edits.undoDeleteRow(action.tableId, action.row, action.item) !== false; },
+    // redo = REMOVE the row again (deleteRow returns the action object or null).
+    redo(action, edits) { return edits.deleteRow(action.tableId, action.row) != null; },
     describe(action, dir) {
       return rcaHistoryT(dir === 'redo' ? 'edit.redoRowDelete' : 'edit.undoRowDelete',
         { row: Number(action.row) + 1 });
     },
   },
   rowAdd: {
-    undo(action, edits) { return !!edits.undoAddRow(action.tableId, action.row); },
-    redo(action, edits) { return edits.undoDeleteRow(action.tableId, action.row, action.item); },
+    // undo = REMOVE the added row. undoAddRow answers with the removed ITEM,
+    // which is '' for a scalar-list row — FE-FIX-2026-09-21: a truthiness
+    // test on that payload lost successful undos, compare against false.
+    undo(action, edits) { return edits.undoAddRow(action.tableId, action.row) !== false; },
+    // redo = RE-ADD the stored item at action.row. This is NOT
+    // edits.addRow(): that would insert a FRESH template and ignore the
+    // recorded item. edits.undoDeleteRow(tableId, row, item) is table.js's
+    // generic "insert item at index" primitive (its name only tells which
+    // action it was first written for), so it is the correct re-add verb —
+    // it replays the exact item the stack recorded.
+    redo(action, edits) { return edits.undoDeleteRow(action.tableId, action.row, action.item) !== false; },
     describe(action, dir) {
       return rcaHistoryT(dir === 'redo' ? 'edit.redoRowAdd' : 'edit.undoRowAdd',
         { row: Number(action.row) + 1 });
     },
   },
 };
+
+// FE-FIX-2026-09-21 (audit item 5): classify a failed apply() so the stack can
+// tell "the model is not attached YET" (transient — the action stays on top,
+// retryable, exactly the hist-no-engine-fails-closed contract) from
+// "deterministically poisoned — the action's tableId no longer exists / its
+// row is out of range" (retrying can never succeed; leaving it on top makes
+// the button permanently enabled and every click silent). Read through the
+// same engine seam the undoers use: edits.listKey(tableId) + edits.live() are
+// js/table.js's public resolution path (registry :1784), and nested tables
+// bound-check against rcaRowsForTable's flattened rows.
+function rcaHistoryActionIsStale(action, direction, edits) {
+  try {
+    const data = (edits && typeof edits.live === 'function') ? edits.live()
+      : (edits && edits.data);
+    if (!data || typeof data !== 'object') return false;
+    const key = (edits && typeof edits.listKey === 'function')
+      ? edits.listKey(action.tableId) : action.tableId;
+    const list = data[key];
+    if (!Array.isArray(list)) return true;            // tableId gone
+    const row = Number(action.row);
+    // INSERTS clamp (undoDeleteRow mirrors Python list.insert), so a big row
+    // index still succeeds; only REMOVE/TOUCH-in-place verbs fail closed.
+    const touchesRow = action.type === 'cellEdit'
+      || (action.type === 'rowDelete' && direction === 'redo')
+      || (action.type === 'rowAdd' && direction === 'undo');
+    if (!touchesRow) return false;
+    let count = list.length;
+    const cfg = (edits && typeof edits.cfg === 'function') ? edits.cfg(action.tableId) : null;
+    if (cfg && cfg.nested && typeof globalThis !== 'undefined'
+      && typeof globalThis.rcaRowsForTable === 'function') {
+      const flat = globalThis.rcaRowsForTable(data, action.tableId);
+      count = Array.isArray(flat) ? flat.length : 0;
+    }
+    return !(row >= 0 && row < count);
+  } catch (_e) { return false; }                       // unknown shape: keep
+}
+
+// FE-FIX-2026-09-21 (audit item 5): feedback for clicks/keys that moved
+// nothing. rcaEditAnnounce is the editor's live-region seam (js/table.js
+// :2455); guarded by typeof so headless callers and tests without table.js
+// stay silent instead of throwing.
+function rcaHistoryAnnounce(msg) {
+  const g = (typeof globalThis !== 'undefined') ? globalThis : {};
+  const fn = (typeof g.rcaEditAnnounce === 'function') ? g.rcaEditAnnounce : null;
+  if (!fn || !msg) return false;
+  try { fn(msg); return true; } catch (_e) { return false; }
+}
 
 // ---- the stack -------------------------------------------------------------
 
@@ -184,38 +261,89 @@ function rcaHistoryCreate() {
     },
 
     undo() {
-      if (!H.undoStack.length) { H.notify('empty', null); return null; }
+      if (!H.undoStack.length) {
+        H.notify('empty', null);
+        // FE-FIX-2026-09-21 (audit item 5): 'edit.historyEmpty' was dead
+        // code — say it out loud when the button/keyboard click moved nothing
+        // because there is nothing to move.
+        rcaHistoryAnnounce(rcaHistoryT('edit.historyEmpty'));
+        return null;
+      }
       const action = H.undoStack[H.undoStack.length - 1];
-      const ok = H.apply(action, 'undo');
-      if (!ok) return null;                     // stack untouched, retryable
-      H.undoStack.pop();
-      H.redoStack.push(action);
-      H.notify('undo', action);
-      return action;
+      const res = H.applyResult(action, 'undo');
+      if (res === 'ok') {
+        H.undoStack.pop();
+        H.redoStack.push(action);
+        H.notify('undo', action);
+        return action;
+      }
+      if (res === 'stale') H.poison('undoStack', action);   // FE-FIX-2026-09-21
+      return null;                                          // 'retry': stacks untouched
     },
 
     redo() {
-      if (!H.redoStack.length) { H.notify('empty', null); return null; }
+      if (!H.redoStack.length) {
+        H.notify('empty', null);
+        rcaHistoryAnnounce(rcaHistoryT('edit.historyEnd'));  // FE-FIX-2026-09-21
+        return null;
+      }
       const action = H.redoStack[H.redoStack.length - 1];
-      const ok = H.apply(action, 'redo');
-      if (!ok) return null;
-      H.redoStack.pop();
-      H.undoStack.push(action);
-      H.notify('redo', action);
+      const res = H.applyResult(action, 'redo');
+      if (res === 'ok') {
+        H.redoStack.pop();
+        H.undoStack.push(action);
+        H.notify('redo', action);
+        return action;
+      }
+      if (res === 'stale') H.poison('redoStack', action);    // FE-FIX-2026-09-21
+      return null;
+    },
+
+    // FE-FIX-2026-09-21 (audit item 5): a deterministic apply failure means
+    // the entry can NEVER succeed again (its table or row is gone from the
+    // live model). Leaving it on top kept the button enabled and made every
+    // subsequent click a silent no-op — drop it and announce, so the button
+    // re-syncs from the subscribers and the stack walks on to the next
+    // undoable action. Transient failures (no attached model) do NOT come
+    // here: those stay retryable (hist-no-engine-fails-closed contract).
+    poison(stackName, action) {
+      const at = H[stackName].indexOf(action);
+      if (at !== -1) H[stackName].splice(at, 1);
+      H.notify('failed', action);
+      rcaHistoryAnnounce(rcaHistoryT('edit.historyFailed'));
       return action;
     },
 
     // Run one action's undoer. Returns false (leaving the stacks as they were)
     // when the model no longer has the row — a stale index after an external
     // refresh must not throw, it must simply fail to move.
-    apply(action, direction) {
+    //
+    // FE-FIX-2026-09-21 (audit item 2): this is the SINGLE apply funnel —
+    // toolbar clicks, the document-delegated click router, rcaHistory.bind
+    // AND the keyboard Ctrl+Z (handleKey -> undo()/redo() -> applyResult)
+    // all land here, so afterApply below (rcaTableEditAfterHistory ->
+    // rcaEditRerender for rowDelete/rowAdd, cell repaint for cellEdit) fires
+    // identically no matter which surface moved the stack. The KEYBOARD
+    // path was re-checked against that claim: it does go through this
+    // funnel, so structural + following cell repaints stay in sync with the
+    // shifted [data-row] indices regardless of entry point.
+    apply(action, direction) { return H.applyResult(action, direction) === 'ok'; },
+
+    // 'ok'      — applied, afterApply + announce ran.
+    // 'retry'   — failed transiently (no engine / model not attached yet);
+    //             the action stays on the stack, retryable.
+    // 'stale'   — deterministically poisoned (tableId gone / row out of
+    //             range, or an action type with no undoer); the caller pops.
+    applyResult(action, direction) {
       const undoer = H.undoers[action && action.type];
-      if (!undoer || typeof undoer[direction] !== 'function') return false;
+      if (!undoer || typeof undoer[direction] !== 'function') return 'stale';
       const edits = H.edits();
-      if (!edits || !edits.isAttached()) return false;
+      if (!edits || !edits.isAttached()) return 'retry';
       let ok = false;
       try { ok = !!undoer[direction](action, edits); } catch (_e) { ok = false; }
-      if (!ok) return false;
+      if (!ok) {
+        return rcaHistoryActionIsStale(action, direction, edits) ? 'stale' : 'retry';
+      }
       const eng = H.engine || rcaHistoryDefaultEngine();
       if (eng && typeof eng.afterApply === 'function') {
         try { eng.afterApply(action, direction); } catch (_e2) { /* repaint is best-effort */ }
@@ -223,7 +351,7 @@ function rcaHistoryCreate() {
       if (eng && typeof eng.announce === 'function') {
         try { eng.announce(undoer.describe(action, direction)); } catch (_e3) { /* ditto */ }
       }
-      return true;
+      return 'ok';
     },
 
     canUndo() { return H.undoStack.length > 0; },
@@ -295,8 +423,13 @@ function rcaHistoryCreate() {
       const redo = key === 'y' || !!ev.shiftKey;
       ev.preventDefault = ev.preventDefault || function () { ev.defaultPrevented = true; };
       ev.preventDefault();
+      // FE-FIX-2026-09-21 (audit items 2+5): undo()/redo() now notify AND
+      // announce the empty / stale outcomes themselves (and the keyboard
+      // path shares the exact apply funnel of the buttons, so structural
+      // repaints happen identically here) — a second blanket
+      // notify('empty') here mislabeled a deterministic failure as "nothing
+      // to undo".
       const moved = redo ? H.redo() : H.undo();
-      if (!moved) H.notify('empty', null);
       return !!moved;
     },
 
@@ -370,7 +503,15 @@ var rcaHistory = rcaHistoryCreate();
 // every re-render; a document-level one survives). Disabled <button>s swallow
 // their own clicks in every browser, so no extra canUndo guard is needed —
 // but the branch stays as a no-op-safe fallback for stub DOMs.
-function rcaHistoryWireClicksOnce(doc) {
+//
+// FE-FIX-2026-09-21 (audit item 6): all three helpers below take the history
+// INSTANCE as an optional last argument (`H`). Omitted, they keep driving the
+// page singleton `rcaHistory`, so every existing caller (app.js, table.js,
+// the tests that call the plain names) behaves exactly as before — but a
+// second stack (rcaHistoryCreate(), e.g. a preview panel) can now wire its
+// own buttons instead of being hard-wired to the global one.
+function rcaHistoryWireClicksOnce(doc, H) {
+  const hist = H || rcaHistory;
   if (!doc || typeof doc.addEventListener !== 'function') return false;
   if (doc.__RCA_HISTORY_CLICK_BOUND__) return true;
   doc.addEventListener('click', (ev) => {
@@ -381,35 +522,41 @@ function rcaHistoryWireClicksOnce(doc) {
     const isRedo = typeof btn.hasAttribute === 'function'
       ? btn.hasAttribute('data-rca-redo')
       : String(btn.getAttribute ? (btn.getAttribute('data-rca-redo') || '') : '') !== '';
-    const moved = isRedo ? rcaHistory.redo() : rcaHistory.undo();
-    if (!moved) rcaHistory.notify('empty', null);
+    // FE-FIX-2026-09-21 (audit item 5): undo/redo self-notify on the empty
+    // and stale outcomes — the old blanket notify('empty') here called a
+    // poisoned entry "nothing to undo".
+    if (isRedo) hist.redo(); else hist.undo();
   });
   doc.__RCA_HISTORY_CLICK_BOUND__ = true;
   return true;
 }
 
 // `subscribe` accumulates a listener per call, and renderCurrentResult runs on
-// every result refresh — so keep exactly one live subscription and retire the
-// previous one here instead of leaking a closure per render.
+// every result refresh — so keep exactly one live subscription per instance
+// and retire the previous one here instead of leaking a closure per render.
 var rcaHistoryUiUnsub = null;
 
-function rcaHistoryAttachUi(root) {
-  rcaHistoryWireClicksOnce(rcaHistoryDocument());
-  if (typeof rcaHistoryUiUnsub === 'function') {
-    try { rcaHistoryUiUnsub(); } catch (_e) { /* already gone */ }
-    rcaHistoryUiUnsub = null;
+function rcaHistoryAttachUi(root, H) {
+  const hist = H || rcaHistory;
+  rcaHistoryWireClicksOnce(rcaHistoryDocument(), hist);
+  if (typeof hist.__uiUnsub === 'function') {
+    try { hist.__uiUnsub(); } catch (_e) { /* already gone */ }
   }
-  rcaHistoryUiUnsub = rcaHistory.subscribe(() => rcaHistorySyncButtons(root));
-  rcaHistorySyncButtons(root);
+  hist.__uiUnsub = hist.subscribe(() => rcaHistorySyncButtons(root, hist));
+  rcaHistorySyncButtons(root, hist);
+  // Keep the module-level handle pointed at the page singleton's last
+  // subscription (pre-FE-FIX callers/tests only ever used that one).
+  if (hist === rcaHistory) rcaHistoryUiUnsub = hist.__uiUnsub;
   return true;
 }
 
 // Sync the toolbar buttons' disabled state from the stack so they can never
 // disagree with it.
-function rcaHistorySyncButtons(root) {
+function rcaHistorySyncButtons(root, H) {
+  const hist = H || rcaHistory;
   const scope = root || (typeof document !== 'undefined' ? document : null);
   if (!scope || typeof scope.querySelectorAll !== 'function') return 0;
-  const st = rcaHistory.state();
+  const st = hist.state();
   const pairs = [['[data-rca-undo]', st.canUndo], ['[data-rca-redo]', st.canRedo]];
   let n = 0;
   for (const pair of pairs) {
@@ -451,6 +598,9 @@ if (typeof globalThis !== 'undefined') {
   globalThis.rcaHistorySyncButtons = rcaHistorySyncButtons;
   globalThis.rcaHistoryAttachUi = rcaHistoryAttachUi;
   globalThis.rcaHistoryWireClicksOnce = rcaHistoryWireClicksOnce;
+  // FE-FIX-2026-09-21: exposed for tests_history_fixes_2026_09_21.js.
+  globalThis.rcaHistoryActionIsStale = rcaHistoryActionIsStale;
+  globalThis.rcaHistoryAnnounce = rcaHistoryAnnounce;
   globalThis.RCA_HISTORY_TYPES = RCA_HISTORY_TYPES;
   globalThis.RCA_HISTORY_STRINGS = RCA_HISTORY_STRINGS;
 }

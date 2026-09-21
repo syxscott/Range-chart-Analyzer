@@ -211,7 +211,12 @@ function makeWorkerEnv(opts) {
   const o = opts || {};
   const glue = o.glue === undefined ? fs.readFileSync(WORKER, 'utf8') : o.glue;
   const env = {
-    stats: { fetches: 0, blobs: 0, workers: 0, transfers: [], revoked: 0, urls: [] },
+    // FE-FIX-2026-09-21 (test harness): expose the options object so a case
+    // can flip failure modes mid-run (a worker that timed out once and is
+    // healthy again must not stay condemned), and count constructor throws
+    // separately from built workers.
+    opts: o,
+    stats: { fetches: 0, blobs: 0, workers: 0, constructThrows: 0, transfers: [], revoked: 0, urls: [] },
     posted: [],        // messages the main thread sent INTO the worker
     workerSelf: null,  // the fake worker's global object, for direct pokes
   };
@@ -233,6 +238,14 @@ function makeWorkerEnv(opts) {
   };
   env.Worker = class Worker {
     constructor(url) {
+      // FE-FIX-2026-09-21 (test harness): `new Worker(blobUrl)` can throw
+      // SYNCHRONOUSLY in a real browser (CSP refusing blob:, worker quota).
+      // Throw before any state is touched, so the production cleanup path
+      // (revoke + non-poisoned cache) is what the tests observe.
+      if (o.throwOnConstruct) {
+        env.stats.constructThrows += 1;
+        throw new Error('Worker constructor refused');
+      }
       env.stats.workers += 1;
       this.onmessage = null;
       this.onerror = null;
@@ -256,6 +269,10 @@ function makeWorkerEnv(opts) {
     }
     postMessage(msg, transfer) {
       env.posted.push({ msg, transfer });
+      // FE-FIX-2026-09-21 (test harness): a worker that accepts the job and
+      // NEVER replies is how the 30 s timeout path becomes testable without
+      // waiting 30 s (pair with makeFakeTimers below).
+      if (o.silentWorker) return;
       if (o.deadWorker) { if (this.onerror) setImmediate(() => this.onerror({ message: 'dead' })); return; }
       const self = env.workerSelf;
       if (self && typeof self.onmessage === 'function') {
@@ -267,6 +284,33 @@ function makeWorkerEnv(opts) {
   env.globals = { fetch: env.fetch, Blob: env.Blob, URL: env.URL, Worker: env.Worker };
   return env;
 }
+
+// ---------------------------------------------------------------------------
+// FE-FIX-2026-09-21 (test harness): controllable timers so the 30 s worker
+// job-timeout budget is testable without waiting 30 s. minimax.js uses
+// setTimeout in exactly one place on this path (the sharpen job timer), so
+// replacing the globals lets a case fire the expiry deterministically.
+// ---------------------------------------------------------------------------
+function makeFakeTimers() {
+  const pending = new Map();
+  let seq = 0;
+  return {
+    setTimeout: (fn, ms) => { const id = ++seq; pending.set(id, { fn, ms }); return id; },
+    clearTimeout: (id) => { pending.delete(id); },
+    pending: () => pending.size,
+    fireLatest() {
+      let last = null;
+      for (const [id, t] of pending) last = { id, t };
+      if (!last) throw new Error('fake timers: nothing pending');
+      pending.delete(last.id);
+      last.t.fn();
+      return last.t.ms;
+    },
+  };
+}
+// Let every queued microtask (worker build chain, job postMessage, fake
+// worker reply) run to completion before poking the timers.
+const tick = () => new Promise((r) => setImmediate(r));
 
 // ---------------------------------------------------------------------------
 // 1-11: the pure kernel
@@ -768,7 +812,144 @@ async function workerFileTests() {
 }
 
 // ---------------------------------------------------------------------------
-// 28: performance sanity — the kernel is the same work, the thread is not
+// 29-32: FE-FIX-2026-09-21 — the per-run failure budget and the synchronous
+// `new Worker(url)` constructor-throw path (audit MED #1 and #2).
+// ---------------------------------------------------------------------------
+async function budgetAndConstructTests() {
+  // (29) constructor throws ONCE (quota / transient CSP): the rejected
+  // promise must not be cached — the next call rebuilds and succeeds, the
+  // Blob URL is revoked, and the never-rejects contract holds.
+  {
+    const env = makeWorkerEnv({ throwOnConstruct: true });
+    const m = loadMinimax(env.globals);
+    const w = 8, h = 6;
+    const pixels = makeImage(w, h, 'gray');
+    const { ctx, state } = makeFakeCtx(w, h, null, { pixels });
+    const ref = legacyUnsharp3x3(new Uint8ClampedArray(pixels), w, h, 0.4, 1);
+    const r1 = await m.rcaUnsharpMaskAsync(ctx, w, h, 0.4, 1);
+    checkEq('ctor-throw-via', r1.via, 'sync');
+    checkEq('ctor-throw-applied', r1.applied, true);
+    check('ctor-throw-pixels-parity', bytesEqual(ref, state.last.data),
+      state.last ? firstDiff(ref, state.last.data) : 'putImageData never called');
+    checkEq('ctor-throw-counted', env.stats.constructThrows, 1);
+    checkEq('ctor-throw-no-worker-live', env.stats.workers, 0);
+    checkEq('ctor-throw-revokes-blob-url', env.stats.revoked, 1);
+    // the failure clears (transient quota)…
+    env.opts.throwOnConstruct = false;
+    const r2 = await m.rcaUnsharpMaskAsync(ctx, w, h, 0.4, 1);
+    checkEq('ctor-throw-not-poisoned-via', r2.via, 'worker');
+    checkEq('ctor-throw-rebuilds', env.stats.workers, 1);
+    checkEq('ctor-throw-glue-fetched-once', env.stats.fetches, 1);
+    check('ctor-throw-worker-pixels-parity', bytesEqual(ref, state.last.data),
+      firstDiff(ref, state.last.data));
+  }
+
+  // (30) constructor throws PERSISTENTLY: build attempts stop at the budget,
+  // each throw revokes its own Blob URL, and the next run retries once.
+  {
+    const env = makeWorkerEnv({ throwOnConstruct: true });
+    const m = loadMinimax(env.globals);
+    const w = 6, h = 5;
+    const pixels = makeImage(w, h, 'ramp');
+    const { ctx, state } = makeFakeCtx(w, h, null, { pixels });
+    const ref = legacyUnsharp3x3(new Uint8ClampedArray(pixels), w, h, 0.4, 1);
+    const r1 = await m.rcaUnsharpMaskAsync(ctx, w, h, 0.4, 1);   // throw 1
+    const r2 = await m.rcaUnsharpMaskAsync(ctx, w, h, 0.4, 1);   // throw 2 -> budget spent
+    const r3 = await m.rcaUnsharpMaskAsync(ctx, w, h, 0.4, 1);   // pinned for the run
+    checkEq('ctor-throw-pin-via', r3.via, 'sync');
+    checkEq('ctor-throw-pin-applied', r3.applied, true);
+    check('ctor-throw-pin-pixels-parity', bytesEqual(ref, state.last.data));
+    checkEq('ctor-throw-budget-stops-retrying', env.stats.constructThrows, 2);
+    checkEq('ctor-throw-revokes-every-url', env.stats.revoked, 2);
+    checkEq('ctor-throw-glue-cached-across-retries', env.stats.fetches, 1);
+    m.rcaSharpenRunBegin();                                        // new run
+    const r4 = await m.rcaUnsharpMaskAsync(ctx, w, h, 0.4, 1);
+    checkEq('run-begin-retries-ctor-throw', env.stats.constructThrows, 3);
+    checkEq('run-begin-retry-still-sync-via', r4.via, 'sync');
+    checkEq('run-begin-retry-revokes-too', env.stats.revoked, 3);
+  }
+
+  // (31) REAL worker failures (onerror): 2 consecutive failures still flip
+  // the path to sync for the current run, rcaSharpenRunBegin re-arms for the
+  // next one, and a worker that recovers mid-run is adopted again.
+  {
+    const env = makeWorkerEnv({ deadWorker: true });
+    const m = loadMinimax(env.globals);
+    const { ctx } = makeFakeCtx(6, 4, 'gray');
+    await m.rcaUnsharpMaskAsync(ctx, 6, 4, 0.4, 1);   // fail 1 (rebuilds)
+    await m.rcaUnsharpMaskAsync(ctx, 6, 4, 0.4, 1);   // fail 2 -> pinned
+    await m.rcaUnsharpMaskAsync(ctx, 6, 4, 0.4, 1);   // pinned: no rebuild
+    checkEq('budget-pin-holds-at-two', env.stats.workers, 2);
+    m.rcaSharpenRunBegin();
+    const r4 = await m.rcaUnsharpMaskAsync(ctx, 6, 4, 0.4, 1);
+    checkEq('run-begin-rebuilds-dead-worker', env.stats.workers, 3);
+    checkEq('run-begin-fail-still-sync-via', r4.via, 'sync');
+    // the ONE failure so far must not condemn a worker that now behaves:
+    env.opts.deadWorker = false;
+    const r5 = await m.rcaUnsharpMaskAsync(ctx, 6, 4, 0.4, 1);
+    checkEq('recovered-worker-adopted-mid-run', r5.via, 'worker');
+    checkEq('recovered-worker-rebuilt-once-more', env.stats.workers, 4);
+  }
+
+  // (32) timeout semantics with fake timers: a worker that times out once
+  // but later WORKS is not condemned — the success clears the budget, so a
+  // second timeout much later is streak-failure #1, not the pin.
+  {
+    const timers = makeFakeTimers();
+    const env = makeWorkerEnv({ silentWorker: true });
+    const m = loadMinimax(Object.assign({}, env.globals, {
+      setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
+    }));
+    const w = 7, h = 5;
+    const pixels = makeImage(w, h, 'color');
+    const { ctx, state } = makeFakeCtx(w, h, null, { pixels });
+    const ref = legacyUnsharp3x3(new Uint8ClampedArray(pixels), w, h, 0.4, 1);
+    const p1 = m.rcaUnsharpMaskAsync(ctx, w, h, 0.4, 1);
+    await tick();                                   // let the job get posted
+    checkEq('job-arms-exactly-one-timer', timers.pending(), 1);
+    checkEq('job-timeout-is-30s', timers.fireLatest(), 30000);
+    const r1 = await p1;
+    checkEq('timeout-via', r1.via, 'sync');
+    checkEq('timeout-applied', r1.applied, true);
+    check('timeout-pixels-parity', bytesEqual(ref, state.last.data));
+    // recovered worker is adopted and SUCCEEDS (which clears the budget)…
+    env.opts.silentWorker = false;
+    const r2 = await m.rcaUnsharpMaskAsync(ctx, w, h, 0.4, 1);
+    checkEq('timeout-then-recovered-via', r2.via, 'worker');
+    check('recovered-pixel-roundtrip-parity', bytesEqual(ref, state.last.data),
+      firstDiff(ref, state.last.data));
+    checkEq('success-clears-job-timer', timers.pending(), 0);
+    // …so a SECOND timeout later is failure #1 of a new streak…
+    const p3 = m.rcaUnsharpMaskAsync(ctx, w, h, 0.4, 1);
+    env.opts.silentWorker = true;
+    await tick();
+    timers.fireLatest();
+    const r3 = await p3;
+    checkEq('second-timeout-via', r3.via, 'sync');
+    // …not the pin: without the success-clearing fix the budget (2) would
+    // already be spent here and this call would go 'sync' forever.
+    env.opts.silentWorker = false;
+    const r4 = await m.rcaUnsharpMaskAsync(ctx, w, h, 0.4, 1);
+    checkEq('not-condemned-after-later-success', r4.via, 'worker');
+    check('final-worker-pixels-parity', bytesEqual(ref, state.last.data),
+      firstDiff(ref, state.last.data));
+  }
+
+  // (33) wiring: the per-run re-arm runs where the production sharpen cycle
+  // starts — rcaLoadAndMaybeResize's enhance branch, before the sharpen.
+  {
+    const src = fs.readFileSync(MINIMAX, 'utf8');
+    const iEnh = src.indexOf('if (opts.enhance) {');
+    const iRun = src.indexOf('rcaSharpenRunBegin();', iEnh);
+    const iAwait = src.indexOf('await rcaUnsharpMaskAsync');
+    check('run-begin-wired-into-enhance-cycle',
+      iEnh !== -1 && iRun !== -1 && iRun < iAwait,
+      JSON.stringify({ iEnh, iRun, iAwait }));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 34: performance sanity — the kernel is the same work, the thread is not
 // ---------------------------------------------------------------------------
 async function perfSanity() {
   const m = loadMinimax();
@@ -786,6 +967,7 @@ async function main() {
   await syncWrapperTests();
   await asyncTests();
   await workerFileTests();
+  await budgetAndConstructTests();
   await perfSanity();
   if (failures.length) {
     for (const f of failures) console.log('FAIL', f);

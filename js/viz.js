@@ -66,6 +66,11 @@
  * FOCUS SEMANTICS (uPlot focus/setSeries discipline)
  * ---------------------------------------------------------------------------
  * `VIZ.focus` is the ONE place focus state lives; nothing else may cache it.
+ * FE-FIX-2026-09-21 split it in two: `VIZ.pinned` is the row pinned by an
+ * explicit canvas click (hover cannot move it; a second click on the pinned
+ * row, an empty-canvas click, or Esc releases it), while `VIZ.focus` is the
+ * DISPLAYED focus — the pin when there is one, otherwise the transient hover
+ * row, otherwise null.
  * The rule is expressed as a pure function (rcaVizFocusPass) so the data side
  * is testable without a canvas: the focused bar keeps full opacity + an
  * outline, every other placeable bar drops to `dim` (default 0.3, uPlot's
@@ -218,9 +223,11 @@ function rcaVizBedValue(value) {
  */
 function rcaVizMaValue(value) {
   var text = rcaVizText(value);
-  var m = /(\d+(?:\.\d+)?)\s*(?:Ma|m\.a\.|Ma\s*\()/i.exec(text);
+  // FE-FIX-2026-09-21: capture an optional [+-] sign (mirrors rcaVizNum,
+  // js/viz.js:179) — '-5 Ma' must parse as -5, not 5.
+  var m = /([+-]?\d+(?:\.\d+)?)\s*(?:Ma|m\.a\.|Ma\s*\()/i.exec(text);
   if (m) return Number(m[1]);
-  m = /(\d+(?:\.\d+)?)\s*百万年/.exec(text);
+  m = /([+-]?\d+(?:\.\d+)?)\s*百万年/.exec(text);
   return m ? Number(m[1]) : null;
 }
 
@@ -989,6 +996,16 @@ function rcaVizFocusPass(bars, focus, opts) {
 // ---------------------------------------------------------------------------
 
 /**
+ * FE-FIX-2026-09-21: is the bar part of the ACTIVE view? A row filtered out
+ * by `opts.section` (reason === 'other_section') has no geometry to show —
+ * neither the painter nor the hit test may treat it as live. Pure + exported
+ * so both rcaVizDrawBars and rcaVizHitTest share one rule.
+ */
+function rcaVizBarInView(bar) {
+  return !(bar && bar.reason === 'other_section');
+}
+
+/**
  * Which bar owns the point (u,v) of normalised image space?
  * Returns the row_index or null. Bars are padded by `opts.hit_pad_u` in x and
  * by `hit_pad_v_ratio` of the row band in y so a thin bar stays reachable; the
@@ -1008,6 +1025,8 @@ function rcaVizHitTest(layout, u, v, opts) {
   for (var i = 0; i < layout.bars.length; i++) {
     var bar = layout.bars[i];
     if (!rcaVizIsDict(bar)) continue;
+    // FE-FIX-2026-09-21: section-filtered rows are not hit-testable either.
+    if (!rcaVizBarInView(bar)) continue;
     var x0 = bar.x - padU;
     var x1 = bar.x + bar.w + padU;
     var y0 = bar.y - padV;
@@ -1092,15 +1111,22 @@ var RCA_VIZ_STATE = {
   host: null, stage: null, img: null, barsCv: null, hoverCv: null,
   summary: null,
   layout: null, result: null, opts: null, imageSrc: null,
-  focus: null,      // pinned row_index (uPlot focus)
+  focus: null,      // DISPLAYED focus row_index (uPlot focus); fed either by
+                    // a pin or by a transient hover while nothing is pinned
+  pinned: null,     // FE-FIX-2026-09-21: row_index pinned by an explicit click
+                    // (or the locate flow). Hover may not move the focus away
+                    // while this is set; Esc / re-click / empty click unpin.
   hover: null,      // transient row_index under the pointer
-  flash: null,      // {row_index, until} driven by locateTo()
+  flash: null,      // {row_index, until, token} driven by locateTo()
+  flashSeq: 0,      // FE-FIX-2026-09-21: monotonically increasing flash id —
+                    // a superseded rAF loop must not kill the newest flash
   dpr: 1,
   stretch: 1,       // v-axis stretch of the image map, see the contract header
   wired: false,
   hoverListeners: [],
   resizeTimer: null,
   flashTimer: null,
+  themeObserver: null, // FE-FIX-2026-09-21: retained so destroy() can disconnect
   tokens: null,
 };
 
@@ -1196,11 +1222,17 @@ function rcaVizSizeCanvas(canvas, cssW, cssH, dpr) {
   if (canvas.height !== h) canvas.height = h;
 }
 
-/** Stage geometry: css width from the host, height from the row count. */
+/** Stage geometry: css width from the stage box, height from the row count. */
 function rcaVizStageBox(layout) {
   var S = RCA_VIZ_STATE;
   var host = S.host;
-  var cssW = (host.clientWidth || host.offsetWidth || 640);
+  // FE-FIX-2026-09-21: measure the STAGE (the canvases' parent), not the
+  // host: #viz-host carries 12px side padding (css/viz.css), so its
+  // clientWidth is ~24px wider than the canvas box — using it stretched the
+  // normalised-u -> device-px map and squished glyphs against the image.
+  var stage = S.stage;
+  var cssW = (stage && (stage.clientWidth || stage.offsetWidth))
+    || host.clientWidth || host.offsetWidth || 640;
   var natural = null;
   if (S.img && S.img.naturalWidth && S.img.naturalHeight) {
     natural = cssW * (S.img.naturalHeight / S.img.naturalWidth);
@@ -1284,6 +1316,9 @@ function rcaVizDrawBars() {
   // bars + row labels
   for (var i = 0; i < layout.bars.length; i++) {
     var bar = layout.bars[i];
+    // FE-FIX-2026-09-21: rows outside the active section are neither drawn
+    // (no 1px sliver, no full-strength label) nor hit-tested.
+    if (!rcaVizBarInView(bar)) continue;
     var st2 = focus[i] || { alpha: 1, outline: false };
     ctx.globalAlpha = st2.alpha;
     var x0 = px(bar.x), y0 = py(bar.y), bw = px(bar.w), bh = py(bar.h);
@@ -1440,7 +1475,12 @@ function rcaVizOnPointerMove(ev) {
   var idx = pt ? rcaVizHitTest(S.layout, pt.u, pt.v, S.opts) : null;
   if (idx === S.hover) return;
   S.hover = idx;
-  rcaVizDrawHover();
+  // FE-FIX-2026-09-21: the renderer owns the TRANSIENT focus too — apply it
+  // directly (only while nothing is pinned) instead of relying on the
+  // onRowHover -> table.js -> focusRow round-trip. The callback contract
+  // (row_index | null) is unchanged.
+  if (S.pinned === null && S.focus !== idx) S.focus = idx;
+  rcaVizDraw();
   rcaVizEmitHover(idx);
 }
 
@@ -1448,7 +1488,11 @@ function rcaVizOnPointerLeave() {
   var S = RCA_VIZ_STATE;
   if (S.hover === null) return;
   S.hover = null;
-  rcaVizDrawHover();
+  // FE-FIX-2026-09-21: leaving the canvas must not leave a stale hover-driven
+  // focus behind (the table consumer deliberately does NOT clearFocus on
+  // null). Reset to the pinned row, or to no focus when nothing is pinned.
+  S.focus = S.pinned !== null ? S.pinned : null;
+  rcaVizDraw();
   rcaVizEmitHover(null);
 }
 
@@ -1456,8 +1500,49 @@ function rcaVizOnPointerDown(ev) {
   var S = RCA_VIZ_STATE;
   var pt = rcaVizPointer(ev);
   var idx = pt ? rcaVizHitTest(S.layout, pt.u, pt.v, S.opts) : null;
-  if (idx === null) { rcaVizClearFocus(); return; }
-  rcaVizFocusRow(idx === S.focus ? null : idx);
+  if (idx === null) {
+    // FE-FIX-2026-09-21: clicking empty canvas unpins (and clears focus).
+    S.pinned = null;
+    S.focus = null;
+    rcaVizDraw();
+    return;
+  }
+  // FE-FIX-2026-09-21: click-to-pin used to be dead — canvas hover already
+  // routed through table.js back into focusRow, so idx === S.focus made the
+  // toggle always UNpin. Pinning now lives in S.pinned, which hover cannot
+  // overwrite; a click pins, a click on the pinned row unpins.
+  if (S.pinned === idx) {
+    S.pinned = null;
+    S.focus = S.hover !== null ? S.hover : null;
+  } else {
+    S.pinned = idx;
+    S.focus = idx;
+  }
+  rcaVizDraw();
+}
+
+// FE-FIX-2026-09-21: named handlers (were anonymous closures) so destroy()
+// can removeEventListener every one of them — see rcaVizDestroy.
+function rcaVizOnTouchStart(ev) {
+  if (ev && ev.touches && ev.touches[0]) rcaVizOnPointerMove(ev.touches[0]);
+}
+
+function rcaVizOnDocumentKeyDown(ev) {
+  var S = RCA_VIZ_STATE;
+  if (!ev || (ev.key !== 'Escape' && ev.key !== 'Esc')) return;
+  if (S.pinned === null && S.focus === null) return;
+  // Esc releases the PIN as well as a plain focus.
+  S.pinned = null;
+  S.focus = S.hover !== null ? S.hover : null;
+  rcaVizDraw();
+  rcaVizEmitHover(S.hover);
+}
+
+function rcaVizOnWindowResize() {
+  var S = RCA_VIZ_STATE;
+  if (S.resizeTimer && typeof clearTimeout === 'function') clearTimeout(S.resizeTimer);
+  S.resizeTimer = typeof setTimeout === 'function'
+    ? setTimeout(function () { rcaVizResize(); }, 120) : null;
 }
 
 function rcaVizWire() {
@@ -1466,34 +1551,24 @@ function rcaVizWire() {
   S.hoverCv.addEventListener('mousemove', rcaVizOnPointerMove);
   S.hoverCv.addEventListener('mouseleave', rcaVizOnPointerLeave);
   S.hoverCv.addEventListener('click', rcaVizOnPointerDown);
-  S.hoverCv.addEventListener('touchstart', function (ev) {
-    if (ev && ev.touches && ev.touches[0]) rcaVizOnPointerMove(ev.touches[0]);
-  }, { passive: true });
+  S.hoverCv.addEventListener('touchstart', rcaVizOnTouchStart, { passive: true });
   S.wired = true;
   // Esc releases the pinned focus — the hint index.html prints next to the
   // title promises exactly that, so the renderer owns the key binding.
   if (typeof document !== 'undefined' && document
       && typeof document.addEventListener === 'function') {
-    document.addEventListener('keydown', function (ev) {
-      if (!ev || (ev.key !== 'Escape' && ev.key !== 'Esc')) return;
-      if (RCA_VIZ_STATE.focus === null) return;
-      rcaVizClearFocus();
-      rcaVizEmitHover(RCA_VIZ_STATE.hover);
-    });
+    document.addEventListener('keydown', rcaVizOnDocumentKeyDown);
   }
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-    window.addEventListener('resize', function () {
-      if (S.resizeTimer && typeof clearTimeout === 'function') clearTimeout(S.resizeTimer);
-      S.resizeTimer = typeof setTimeout === 'function'
-        ? setTimeout(function () { rcaVizResize(); }, 120) : null;
-    });
+    window.addEventListener('resize', rcaVizOnWindowResize);
     // Theme flips change the token values the canvas reads.
     if (typeof MutationObserver === 'function' && document.documentElement) {
       try {
-        new MutationObserver(function () {
+        S.themeObserver = new MutationObserver(function () {
           S.tokens = null;
           rcaVizDraw();
-        }).observe(document.documentElement, {
+        });
+        S.themeObserver.observe(document.documentElement, {
           attributes: true, attributeFilter: ['data-theme', 'class'],
         });
       } catch (_e) { /* no observer, no repaint on theme flip */ }
@@ -1546,8 +1621,10 @@ function rcaVizRender(hostEl, result, imageSrc, opts) {
   var layout = rcaVizLayout(result, opts);
   S.layout = layout;
   S.focus = null;
+  S.pinned = null;   // FE-FIX-2026-09-21: a new result never keeps an old pin
   S.hover = null;
   S.flash = null;
+  S.flashSeq += 1;   // FE-FIX-2026-09-21: invalidate any in-flight flash loop
   if (imageSrc) {
     // setAttribute (not the `src` property) keeps the DOM readable both ways:
     // the clear branch below checks getAttribute('src'), and stub/no-DOM
@@ -1579,7 +1656,13 @@ function rcaVizRender(hostEl, result, imageSrc, opts) {
   return layout.bars.length > 0;
 }
 
-/** Pin the uPlot-style focus on `row_index` (null === clearFocus). */
+/**
+ * Set the uPlot-style focus on `row_index` (null === clearFocus).
+ * FE-FIX-2026-09-21: while a row is PINNED (canvas click), hover-driven calls
+ * through this entry (table.js relays canvas/table hover back here) must not
+ * steal the focus — only the pinned row or null pass through unchanged.
+ * Signature + callback contract are untouched.
+ */
 function rcaVizFocusRow(row_index) {
   var S = RCA_VIZ_STATE;
   if (!S.layout) return false;
@@ -1591,6 +1674,7 @@ function rcaVizFocusRow(row_index) {
     }
     if (!found) return false;
   }
+  if (S.pinned !== null && idx !== S.pinned) return false;
   S.focus = idx;
   rcaVizDraw();
   return true;
@@ -1598,6 +1682,9 @@ function rcaVizFocusRow(row_index) {
 
 function rcaVizClearFocus() {
   var S = RCA_VIZ_STATE;
+  // FE-FIX-2026-09-21: a pin survives external clears — clearFocus only
+  // releases the TRANSIENT focus. Unpin via canvas click / empty click / Esc.
+  if (S.pinned !== null) return false;
   if (S.focus === null) return false;
   S.focus = null;
   rcaVizDraw();
@@ -1616,9 +1703,16 @@ function rcaVizLocateTo(row_index) {
     if (S.layout.bars[i].row_index === row_index) { bar = S.layout.bars[i]; break; }
   }
   if (!bar) return false;
+  if (!rcaVizBarInView(bar)) return false;
   var box = rcaVizStageBox(S.layout);
   var hostH = S.host.clientHeight || box.h;
-  var yPx = bar.y * box.h;
+  // FE-FIX-2026-09-21: bar.y is relative to the STAGE, but scrollTop counts
+  // from the top of the host's scrollable content — the .viz-head block
+  // (~40px) sits above the stage, so add the stage's offset inside the host
+  // (#viz-host is position:relative via css/viz.css, making offsetTop exact).
+  var stageTop = (S.stage && typeof S.stage.offsetTop === 'number'
+    && S.stage.offsetParent === S.host) ? S.stage.offsetTop : 0;
+  var yPx = stageTop + bar.y * box.h;
   if (typeof S.host.scrollTo === 'function') {
     try {
       S.host.scrollTo({ top: Math.max(0, yPx - hostH / 2), behavior: 'smooth' });
@@ -1631,11 +1725,17 @@ function rcaVizLocateTo(row_index) {
   if (typeof S.host.scrollIntoView === 'function' && !S.host.scrollTop) {
     try { S.host.scrollIntoView({ block: 'nearest' }); } catch (_e2) { /* older engine */ }
   }
-  S.flash = { row_index: bar.row_index, until: Date.now() + 1200 };
+  // FE-FIX-2026-09-21: each flash carries a token; a superseded rAF loop
+  // stops without nulling the NEWER flash (consecutive locateTo calls used
+  // to race on the shared S.flash and kill the second highlight early).
+  S.flashSeq += 1;
+  var token = S.flashSeq;
+  S.flash = { row_index: bar.row_index, until: Date.now() + 1200, token: token };
   var frames = 0;
   var tick = function () {
+    if (!S.flash || S.flash.token !== token) return; // superseded: stand down
     frames += 1;
-    if (!S.flash || frames > 14) { S.flash = null; rcaVizDrawHover(); return; }
+    if (frames > 14) { S.flash = null; rcaVizDrawHover(); return; }
     rcaVizDrawHover();
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(tick);
     else if (typeof setTimeout === 'function') setTimeout(tick, 80);
@@ -1667,9 +1767,16 @@ function rcaVizClear() {
   S.layout = null;
   S.result = null;
   S.focus = null;
+  S.pinned = null;   // FE-FIX-2026-09-21: a blanked panel has no pin either
   S.hover = null;
   S.flash = null;
-  if (!rcaVizHasDom()) return false;
+  S.flashSeq += 1;   // FE-FIX-2026-09-21: stop any in-flight flash loop
+  if (!rcaVizHasDom()) {
+    // FE-FIX-2026-09-21: even without a DOM the state above must count as
+    // unmounted — drop host/stage references so getState().mounted is false.
+    S.host = null;
+    return false;
+  }
   if (S.barsCv) {
     var c = rcaVizCtx(S.barsCv);
     if (c) c.clearRect(0, 0, S.barsCv.width, S.barsCv.height);
@@ -1681,16 +1788,38 @@ function rcaVizClear() {
   if (S.summary && typeof S.summary.textContent !== 'undefined') {
     S.summary.textContent = '';
   }
+  // FE-FIX-2026-09-21: clear() blanked the panel but left S.host set, so
+  // getState().mounted stayed true on an empty view. Null it consistently —
+  // render() re-acquires everything through rcaVizEnsure(hostEl).
+  S.host = null;
   return true;
 }
 
 function rcaVizDestroy() {
   var S = RCA_VIZ_STATE;
+  // FE-FIX-2026-09-21: remove EVERY handler rcaVizWire registered — the
+  // anonymous touchstart/keydown/resize closures and the theme
+  // MutationObserver used to leak and re-register on the next render
+  // (wired flag reset -> duplicate listeners observing the same document).
   if (S.hoverCv && typeof S.hoverCv.removeEventListener === 'function') {
     S.hoverCv.removeEventListener('mousemove', rcaVizOnPointerMove);
     S.hoverCv.removeEventListener('mouseleave', rcaVizOnPointerLeave);
     S.hoverCv.removeEventListener('click', rcaVizOnPointerDown);
+    S.hoverCv.removeEventListener('touchstart', rcaVizOnTouchStart);
   }
+  if (typeof document !== 'undefined' && document
+      && typeof document.removeEventListener === 'function') {
+    document.removeEventListener('keydown', rcaVizOnDocumentKeyDown);
+  }
+  if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+    window.removeEventListener('resize', rcaVizOnWindowResize);
+  }
+  if (S.resizeTimer && typeof clearTimeout === 'function') clearTimeout(S.resizeTimer);
+  S.resizeTimer = null;
+  if (S.themeObserver && typeof S.themeObserver.disconnect === 'function') {
+    S.themeObserver.disconnect();
+  }
+  S.themeObserver = null;
   S.hoverListeners = [];
   S.wired = false;
   rcaVizClear();
@@ -1711,6 +1840,7 @@ function rcaVizGetState() {
     rows: S.layout ? S.layout.axis.rows : 0,
     placed: S.layout ? S.layout.axis.placed : 0,
     focus: S.focus,
+    pinned: S.pinned,   // FE-FIX-2026-09-21: the click-pinned row (hover-immune)
     hover: S.hover,
     kind: S.layout ? S.layout.axis.kind : null,
     listeners: S.hoverListeners.length,
@@ -1739,6 +1869,9 @@ var rcaViz = {
   clearFocus: rcaVizClearFocus,
   locateTo: rcaVizLocateTo,
   getFocus: function () { return RCA_VIZ_STATE.focus; },
+  // FE-FIX-2026-09-21: read-only view of the click-pin (set via canvas click
+  // / Esc / empty-canvas click; hover never moves it).
+  getPinned: function () { return RCA_VIZ_STATE.pinned; },
   getLayout: function () { return RCA_VIZ_STATE.layout; },
   getState: rcaVizGetState,
   // events
@@ -1772,6 +1905,10 @@ if (typeof globalThis !== 'undefined') {
   globalThis.rcaVizNormalizePos = rcaVizNormalizePos;
   globalThis.rcaVizBedValue = rcaVizBedValue;
   globalThis.rcaVizStageOf = rcaVizStageOf;
+  // FE-FIX-2026-09-21: expose the sign-aware Ma parser and the section-view
+  // predicate so tests_viz.js can assert them directly (pure layer).
+  globalThis.rcaVizMaValue = rcaVizMaValue;
+  globalThis.rcaVizBarInView = rcaVizBarInView;
   globalThis.RCA_VIZ_STRINGS = RCA_VIZ_STRINGS;
   globalThis.RCA_VIZ_DEFAULTS = RCA_VIZ_DEFAULTS;
 }

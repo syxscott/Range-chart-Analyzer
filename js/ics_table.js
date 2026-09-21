@@ -8,10 +8,18 @@
 //   Wuchiapingian base 259.51 -> 259.857.
 // Used by scoreAccuracy (stage_order_reversed) and scoreConsistency
 // (biozone_order_violation). Exposed as globalThis.RCA_ICS_TABLE on load.
+// FE-FIX-2026-09-21: 11 rows present in rca_core/resources/ics_current.json
+// were missing here (Aeronian, Rhuddanian, Telychian, Homerian, Gorstian,
+// Sheinwoodian, Ludfordian, Greenlandian, Meghalayan, Northgrippian, Late
+// Pleistocene), so viz.js rcaVizStageBounds returned null for them and they
+// were unplaceable in the browser while Python placed them. Added with ages
+// copied byte-for-byte from the JSON (authority). tests_frontend.js now pins
+// full JSON<->table parity.
 'use strict';
 
 globalThis.RCA_ICS_TABLE = {
   "Aalenian": {top_ma: 170.9, base_ma: 174.7, era: "Mesozoic"},
+  "Aeronian": {top_ma: 438.6, base_ma: 440.5, era: "Paleozoic"}, // FE-FIX-2026-09-21: was missing vs ics_current.json (viz rcaVizStageBounds -> null)
   "Albian": {top_ma: 100.5, base_ma: 113.2, era: "Mesozoic"},
   "Anisian": {top_ma: 241.464, base_ma: 246.7, era: "Mesozoic"},
   "Aptian": {top_ma: 113.2, base_ma: 121.4, era: "Mesozoic"},
@@ -47,12 +55,15 @@ globalThis.RCA_ICS_TABLE = {
   "Frasnian": {top_ma: 372.15, base_ma: 382.31, era: "Paleozoic"},
   "Gelasian": {top_ma: 1.8, base_ma: 2.58, era: "Cenozoic"},
   "Givetian": {top_ma: 382.31, base_ma: 387.95, era: "Paleozoic"},
+  "Gorstian": {top_ma: 425.0, base_ma: 426.7, era: "Paleozoic"}, // FE-FIX-2026-09-21: was missing vs ics_current.json
+  "Greenlandian": {top_ma: 0.0082, base_ma: 0.0117, era: "Cenozoic"}, // FE-FIX-2026-09-21: was missing vs ics_current.json
   "Guzhangian": {top_ma: 497.0, base_ma: 500.5, era: "Paleozoic"},
   "Gzhelian": {top_ma: 298.9, base_ma: 303.7, era: "Paleozoic"},
   "Hauterivian": {top_ma: 125.77, base_ma: 132.6, era: "Mesozoic"},
   "Hettangian": {top_ma: 199.5, base_ma: 201.4, era: "Mesozoic"},
   "Hirnantian": {top_ma: 443.1, base_ma: 445.2, era: "Paleozoic"},
   "Holocene": {top_ma: 0.0, base_ma: 0.0117, era: "Cenozoic"},
+  "Homerian": {top_ma: 426.7, base_ma: 430.6, era: "Paleozoic"}, // FE-FIX-2026-09-21: was missing vs ics_current.json
   "Induan": {top_ma: 249.9, base_ma: 251.902, era: "Mesozoic"},
   "Jiangshanian": {top_ma: 491.0, base_ma: 494.2, era: "Paleozoic"},
   "Kasimovian": {top_ma: 303.7, base_ma: 307.0, era: "Paleozoic"},
@@ -60,15 +71,19 @@ globalThis.RCA_ICS_TABLE = {
   "Kimmeridgian": {top_ma: 149.2, base_ma: 154.8, era: "Mesozoic"},
   "Kungurian": {top_ma: 274.4, base_ma: 283.3, era: "Paleozoic"},
   "Ladinian": {top_ma: 237.0, base_ma: 241.464, era: "Mesozoic"},
+  "Late Pleistocene": {top_ma: 0.0117, base_ma: 0.129, era: "Cenozoic"}, // FE-FIX-2026-09-21: was missing vs ics_current.json
   "Langhian": {top_ma: 13.82, base_ma: 15.98, era: "Cenozoic"},
   "Llandovery": {top_ma: 432.9, base_ma: 443.1, era: "Paleozoic"},
   "Lochkovian": {top_ma: 413.02, base_ma: 419.62, era: "Paleozoic"},
+  "Ludfordian": {top_ma: 422.7, base_ma: 425.0, era: "Paleozoic"}, // FE-FIX-2026-09-21: was missing vs ics_current.json
   "Ludlow": {top_ma: 422.7, base_ma: 426.7, era: "Paleozoic"},
   "Lutetian": {top_ma: 41.03, base_ma: 48.07, era: "Cenozoic"},
   "Maastrichtian": {top_ma: 66.0, base_ma: 72.2, era: "Mesozoic"},
+  "Meghalayan": {top_ma: 0.0, base_ma: 0.0042, era: "Cenozoic"}, // FE-FIX-2026-09-21: was missing vs ics_current.json
   "Messinian": {top_ma: 5.333, base_ma: 7.246, era: "Cenozoic"},
   "Moscovian": {top_ma: 307.0, base_ma: 315.2, era: "Paleozoic"},
   "Norian": {top_ma: 205.7, base_ma: 227.3, era: "Mesozoic"},
+  "Northgrippian": {top_ma: 0.0042, base_ma: 0.0082, era: "Cenozoic"}, // FE-FIX-2026-09-21: was missing vs ics_current.json
   "Olenekian": {top_ma: 246.7, base_ma: 249.9, era: "Mesozoic"},
   "Oxfordian": {top_ma: 154.8, base_ma: 161.5, era: "Mesozoic"},
   "Paibian": {top_ma: 494.2, base_ma: 497.0, era: "Paleozoic"},
@@ -78,6 +93,7 @@ globalThis.RCA_ICS_TABLE = {
   "Priabonian": {top_ma: 33.9, base_ma: 37.71, era: "Cenozoic"},
   "Pridoli": {top_ma: 419.62, base_ma: 422.7, era: "Paleozoic"},
   "Rhaetian": {top_ma: 201.4, base_ma: 205.7, era: "Mesozoic"},
+  "Rhuddanian": {top_ma: 440.5, base_ma: 443.1, era: "Paleozoic"}, // FE-FIX-2026-09-21: was missing vs ics_current.json
   "Roadian": {top_ma: 266.9, base_ma: 274.4, era: "Paleozoic"},
   "Rupelian": {top_ma: 27.3, base_ma: 33.9, era: "Cenozoic"},
   "Sakmarian": {top_ma: 290.1, base_ma: 293.52, era: "Paleozoic"},
@@ -87,6 +103,7 @@ globalThis.RCA_ICS_TABLE = {
   "Series 2": {top_ma: 506.5, base_ma: 521.0, era: "Paleozoic"},
   "Serpukhovian": {top_ma: 323.4, base_ma: 330.3, era: "Paleozoic"},
   "Serravallian": {top_ma: 11.63, base_ma: 13.82, era: "Cenozoic"},
+  "Sheinwoodian": {top_ma: 430.6, base_ma: 432.9, era: "Paleozoic"}, // FE-FIX-2026-09-21: was missing vs ics_current.json
   "Sinemurian": {top_ma: 192.9, base_ma: 199.5, era: "Mesozoic"},
   "Stage 10": {top_ma: 486.85, base_ma: 491.0, era: "Paleozoic"},
   "Stage 2": {top_ma: 521.0, base_ma: 529.0, era: "Paleozoic"},
@@ -94,6 +111,7 @@ globalThis.RCA_ICS_TABLE = {
   "Stage 4": {top_ma: 506.5, base_ma: 514.5, era: "Paleozoic"},
   "Stage 5": {top_ma: 504.5, base_ma: 506.5, era: "Paleozoic"},
   "Stage 9": {top_ma: 491.0, base_ma: 494.2, era: "Paleozoic"},
+  "Telychian": {top_ma: 432.9, base_ma: 438.6, era: "Paleozoic"}, // FE-FIX-2026-09-21: was missing vs ics_current.json
   "Thanetian": {top_ma: 56.0, base_ma: 59.24, era: "Cenozoic"},
   "Tithonian": {top_ma: 143.1, base_ma: 149.2, era: "Mesozoic"},
   "Toarcian": {top_ma: 174.7, base_ma: 184.2, era: "Mesozoic"},

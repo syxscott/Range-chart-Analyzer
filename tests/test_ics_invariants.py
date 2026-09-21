@@ -224,9 +224,19 @@ class TestNumericLookups:
 
 
 class TestJsMirror:
-    """js/ics_table.js must mirror ics_2024.json exactly (dual-end parity)."""
+    """js/ics_table.js must mirror the PRODUCTION table ics_current.json
+    exactly (dual-end parity).
 
-    def test_js_table_matches_json(self, ics):
+    FE-FIX-2026-09-21: this pinned ics_2024.json (98 rows) while both ends
+    now ship ics_current.json (109 rows - the 11 added stages are the
+    authorized fix); mirroring the stale baseline would re-introduce drift
+    against the data the app actually uses."""
+
+    def test_js_table_matches_json(self):
+        ics = json.loads(
+            (_ROOT / "rca_core" / "resources" / "ics_current.json")
+            .read_text(encoding="utf-8")
+        )
         text = _JS_PATH.read_text(encoding="utf-8")
         pattern = re.compile(
             r'"([^"]+)":\s*\{top_ma:\s*([0-9.]+),\s*base_ma:\s*([0-9.]+),'
@@ -236,7 +246,7 @@ class TestJsMirror:
         for name, top, base, era in pattern.findall(text):
             js_table[name] = (float(top), float(base), era)
         assert set(js_table) == set(ics), (
-            "js/ics_table.js and ics_2024.json key sets diverged: "
+            "js/ics_table.js and ics_current.json key sets diverged: "
             f"json-only={sorted(set(ics) - set(js_table))} "
             f"js-only={sorted(set(js_table) - set(ics))}"
         )

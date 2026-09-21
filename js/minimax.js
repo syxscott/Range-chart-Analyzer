@@ -61,6 +61,12 @@ function rcaLoadAndMaybeResize(file, maxEdge, opts) {
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
         if (opts.enhance) {
+          // FE-FIX-2026-09-21 (audit MED): the sharpen request cycle starts
+          // right here (one enhance per file selection), so this is where the
+          // worker failure budget is re-armed for the new run. Before, the
+          // budget that pins the worker path OFF was page-session sticky and
+          // rcaSharpenWorkerReset had no production caller.
+          rcaSharpenRunBegin();
           // Front-end image enhancement for thin lines / small text.
           // 1) Supersample: draw into a ~2x temp canvas (capped so memory
           //    stays bounded), then downsample back to the target size. This
@@ -449,7 +455,15 @@ function rcaOnSharpenWorkerMessage(ev) {
   if (!job) return;                 // answered after a timeout-teardown: drop
   _rcaSharpenPending.delete(msg.id);
   if (job.timer) clearTimeout(job.timer);
-  if (msg.ok && msg.dst) job.resolve(msg.dst);
+  if (msg.ok && msg.dst) {
+    // FE-FIX-2026-09-21 (audit MED): a finished job is proof the worker is
+    // healthy — a single 30 s timeout (huge/slow image) must not stay on
+    // the books, or two unlucky images would condemn a perfectly good
+    // worker for the whole run. The budget now measures CONSECUTIVE
+    // failures.
+    _rcaSharpenJobFailures = 0;
+    job.resolve(msg.dst);
+  }
   else job.reject(new Error(msg.error || 'sharpen worker rejected the job'));
 }
 
@@ -485,11 +499,52 @@ function rcaSharpenWorkerReset() {
   _rcaSharpenJobFailures = 0;
 }
 
+// FE-FIX-2026-09-21 (audit MED): the job-failure budget used to be
+// page-session STICKY — once 2 failures spent it, the worker path stayed
+// pinned OFF forever and rcaSharpenWorkerReset (the only un-pinner) had no
+// production caller. The budget is now PER RUN: this is called at the start
+// of every sharpen request cycle (rcaLoadAndMaybeResize's enhance branch)
+// to re-arm it. Unlike rcaSharpenWorkerReset it deliberately does NOT tear
+// down a healthy cached worker (no needless glue re-fetch / rebuild for
+// well-behaved deployments); it only undoes the budget's own pin. A
+// capability or glue-fetch "unavailable" verdict (failures === 0, e.g. a
+// file:// deployment) is left cached exactly as before — that pin is by
+// design permanent, see tests_sharpen.js 'fetch-fail-caches-verdict'.
+function rcaSharpenRunBegin() {
+  // Only the budget-caused pin is cleared: teardown records it as
+  // failures >= MAX with the worker gone and the cached verdict already
+  // resolved to null. An in-flight build (failures < MAX) is untouched.
+  const pinnedByBudget = _rcaSharpenJobFailures >= RCA_SHARPEN_MAX_JOB_FAILURES
+    && !_rcaSharpenWorker;
+  _rcaSharpenJobFailures = 0;
+  if (pinnedByBudget) _rcaSharpenWorkerPromise = null;   // let this run rebuild
+}
+
 function rcaSharpenCreateWorker(glueText) {
   const blob = new Blob([rcaSharpenWorkerSource(glueText)], { type: 'application/javascript' });
   const url = URL.createObjectURL(blob);
   _rcaSharpenBlobUrl = url;
-  const worker = new Worker(url);
+  let worker;
+  try {
+    worker = new Worker(url);
+  } catch (e) {
+    // FE-FIX-2026-09-21 (audit MED): `new Worker(url)` can THROW
+    // SYNCHRONOUSLY (CSP refusing the blob: URL, worker quota). The throw
+    // used to escape into the .then() chain of rcaGetSharpenWorker, which
+    // cached the REJECTED promise forever: every later sharpen silently
+    // reused the broken promise, the Blob URL was never revoked, and
+    // rcaSharpenTeardown — the only revoker — never ran. Revoke the URL
+    // here, count the attempt against the (now per-run, see
+    // rcaSharpenRunBegin) failure budget so a hostile deployment stops
+    // rebuilding, and rethrow: rcaGetSharpenWorker turns this into a
+    // RETRYABLE null verdict instead of a poisoned cache.
+    if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+      try { URL.revokeObjectURL(url); } catch (_e) { /* best effort */ }
+    }
+    if (_rcaSharpenBlobUrl === url) _rcaSharpenBlobUrl = null;
+    _rcaSharpenJobFailures += 1;
+    throw e;
+  }
   worker.onmessage = rcaOnSharpenWorkerMessage;
   // A worker that dies (CSP refused the blob, a syntax error in the composed
   // script, an unhandled throw) counts against the same small budget the
@@ -510,7 +565,21 @@ function rcaGetSharpenWorker() {
   if (!rcaSharpenWorkerSupported()) return unavailable();
   if (_rcaSharpenJobFailures >= RCA_SHARPEN_MAX_JOB_FAILURES) return unavailable();
   _rcaSharpenWorkerPromise = rcaSharpenGlueText().then(
-    (glue) => rcaSharpenCreateWorker(glue),
+    (glue) => {
+      try {
+        return rcaSharpenCreateWorker(glue);
+      } catch (_e) {
+        // FE-FIX-2026-09-21 (audit MED): a synchronous `new Worker`
+        // constructor throw (cleaned up inside rcaSharpenCreateWorker) must
+        // NOT be cached as a rejected promise — that poisoned every later
+        // sharpen for the whole page session. Resolve THIS call with null
+        // (= synchronous core, the never-rejects contract holds) and leave
+        // the verdict empty, so a later call retries — until the per-run
+        // failure budget spent above pins this path OFF at the entry check.
+        _rcaSharpenWorkerPromise = null;
+        return null;
+      }
+    },
     () => unavailable()
   );
   return _rcaSharpenWorkerPromise;

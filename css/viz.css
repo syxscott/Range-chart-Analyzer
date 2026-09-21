@@ -29,10 +29,18 @@
     border-radius: var(--radius-md);
     background: var(--viz-frame-bg);
     box-shadow: var(--shadow-sm);
+    /* FE-FIX-2026-09-21: the positioning context for .rca-viz-stage makes
+       stage.offsetTop host-relative, which rcaViz.locateTo() needs to turn a
+       bar's stage-space y into a correct scrollTop (the ~40px .viz-head above
+       the stage used to be silently dropped). */
+    position: relative;
     /* Scrolling lives on the HOST, not on the stage: js/viz.js sizes the stage
        to the row count and paints its canvases at exactly that box, so any
        clamp on the stage itself would squash the backing store (and
-       rcaViz.locateTo() scrolls this element). */
+       rcaViz.locateTo() scrolls this element).
+       FE-FIX-2026-09-21: the 12px side padding is NOT part of the canvas box —
+       rcaVizStageBox() measures .rca-viz-stage.clientWidth, not this element,
+       so the normalised-u -> device-px registration stays exact. */
     max-height: 68vh;
     overflow-y: auto;
     overscroll-behavior: contain;
@@ -138,29 +146,13 @@
 
 /* ------------------------------------------- reverse highlight (table) --- */
 /* The seam js/viz.js leaves for the table side: rcaViz.onRowHover(row_index)
-   drives these two classes on the species_ranges <tr> (and app.js can call
-   rcaViz.locateTo() from a row click). Declared here because both ends of the
-   link are visual states of the same view. */
-
-tr.row-viz-hover > th,
-tr.row-viz-hover > td {
-    background: var(--primary-soft);
-}
-
-tr.row-viz-hover {
-    outline: 2px solid var(--primary-active);
-    outline-offset: -2px;
-}
-
-tr.row-viz-focus > th,
-tr.row-viz-focus > td {
-    background: var(--warning-soft);
-}
-
-/* A row the canvas could not place is greyed on both sides of the link. */
-tr.row-viz-unplaceable > td:first-of-type {
-    box-shadow: inset 3px 0 0 var(--text-light);
-}
+   drives the live row state, and app.js/table.js can call rcaViz.locateTo()
+   from a row click.
+   FE-FIX-2026-09-21: the old tr.row-viz-hover / .row-viz-focus /
+   .row-viz-unplaceable rules were DEAD — nothing in the codebase ever emits
+   those classes (the live path uses `rca-row-active` / `rca-row-hover`,
+   styled and applied by js/table.js). Deleting them here rather than forcing
+   a class-emit into table.js, which this fix round must not touch. */
 
 /* -------------------------------------------------------------- themes --- */
 

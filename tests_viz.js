@@ -503,6 +503,310 @@ function test_options(ctx) {
     .axis.ticks.length <= 5);
 }
 
+// ============================================================================
+// 10. FE-FIX-2026-09-21 (pure layer): sign-aware Ma parse + section gating
+// ============================================================================
+function test_fix20260921_pure(ctx) {
+  // item 3 — rcaVizMaValue must keep the sign (mirrors rcaVizNum).
+  const mv = ctx.rcaVizMaValue;
+  check('fix3-ma-negative', mv('-5 Ma') === -5, String(mv('-5 Ma')));
+  check('fix3-ma-plus-sign', mv('+5.5 Ma') === 5.5);
+  check('fix3-ma-bare-still-positive', mv('5 Ma') === 5);
+  check('fix3-ma-cn-negative', mv('-2 百万年') === -2);
+  check('fix3-ma-junk-null', mv('Changhsingian') === null && mv('') === null);
+  const neg = ctx.rcaVizLayout({
+    species_ranges: [
+      { species: 'N neg', range_top: '-5 Ma', range_base: '10 Ma' },
+      { species: 'N pos', range_top: '2 Ma', range_base: '8 Ma' },
+    ],
+  });
+  check('fix3-negative-ma-keeps-domain',
+    neg.axis.domain.lo === -5 && neg.axis.domain.hi === 10,
+    JSON.stringify(neg.axis.domain));
+  check('fix3-negative-ma-keeps-placement',
+    approx(neg.bars[0].t0, 0) && approx(neg.bars[0].t1, 1)
+    && neg.bars[0].value_young === -5,
+    neg.bars[0].t0 + '..' + neg.bars[0].t1);
+  // item 8 — section-filtered rows are inert for draw + hit testing.
+  const sect = ctx.rcaVizLayout(MULTI_SECTION, { section: 'S1' });
+  const b0 = sect.bars[0], b1 = sect.bars[1];
+  check('fix8-barInView-predicate', ctx.rcaVizBarInView(b0) === true
+    && ctx.rcaVizBarInView(b1) === false);
+  check('fix8-filtered-row-not-hittable',
+    ctx.rcaVizHitTest(sect, b1.x, b1.y + b1.h / 2) === null);
+  check('fix8-visible-row-still-hittable',
+    ctx.rcaVizHitTest(sect, b0.x + b0.w / 2, b0.y + b0.h / 2) === 0);
+  check('fix8-junk-bar-in-view-tolerated',
+    ctx.rcaVizBarInView(null) === true && ctx.rcaVizBarInView({}) === true);
+}
+
+// ============================================================================
+// 11. FE-FIX-2026-09-21 (render layer): minimal DOM stub so the browser half
+//     of js/viz.js — pin/hover/leave, destroy hygiene, flash tokens, stage
+//     width, locateTo offsets, clear() unmount — is actually exercised.
+// ============================================================================
+function makeStub2d(counters) {
+  const c = {};
+  const track = function (name) {
+    c[name] = function () { counters[name] = (counters[name] || 0) + 1; };
+  };
+  ['clearRect', 'fillRect', 'beginPath', 'moveTo', 'lineTo', 'stroke',
+    'fill', 'closePath', 'save', 'restore', 'translate', 'rotate',
+    'setLineDash'].forEach(track);
+  // strokeRect marks the hatched placeholder strip — exactly what a filtered
+  // row must NOT produce (item 8, draw side).
+  c.strokeRect = function () {
+    counters.strokeRect = (counters.strokeRect || 0) + 1;
+  };
+  c.fillText = function (text) {
+    counters.fillText = (counters.fillText || 0) + 1;
+    (counters.fillTextArgs = counters.fillTextArgs || []).push(String(text));
+  };
+  c.measureText = function (t) { return { width: 6 * String(t).length }; };
+  return c;
+}
+
+function buildDomContext() {
+  const base = buildContext();
+  const counters = {};
+  const stub2d = makeStub2d(counters);
+  function queryDescendant(root, cls) {
+    for (const c of root.children || []) {
+      if (!c || typeof c.className !== 'string') continue;
+      if (c.className.split(/\s+/).indexOf(cls) !== -1) return c;
+      const hit = queryDescendant(c, cls);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  function makeEl(tag) {
+    const el = {
+      tagName: String(tag).toUpperCase(), className: '', children: [],
+      attrs: {}, style: {}, listeners: {},
+      clientWidth: 0, clientHeight: 0, offsetWidth: 0, offsetHeight: 0,
+      offsetTop: 0, offsetParent: null, scrollTop: 0,
+      naturalWidth: 0, naturalHeight: 0, textContent: '',
+      appendChild(child) { this.children.push(child); return child; },
+      setAttribute(k, v) { this.attrs[k] = String(v); },
+      getAttribute(k) { return this.attrs[k] === undefined ? null : this.attrs[k]; },
+      removeAttribute(k) { delete this.attrs[k]; },
+      addEventListener(t, fn) {
+        (this.listeners[t] = this.listeners[t] || []).push(fn);
+      },
+      removeEventListener(t, fn) {
+        const a = this.listeners[t] || [];
+        const i = a.indexOf(fn);
+        if (i !== -1) a.splice(i, 1);
+      },
+      dispatch(t, ev) {
+        (this.listeners[t] || []).slice().forEach((fn) => fn(ev));
+      },
+      count(t) { return (this.listeners[t] || []).length; },
+      querySelector(sel) { return queryDescendant(this, sel.replace(/^\./, '')); },
+      getBoundingClientRect() {
+        return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight };
+      },
+    };
+    if (tag === 'canvas') {
+      el.width = 0; el.height = 0;
+      el.getContext = (kind) => (kind === '2d' ? stub2d : null);
+    }
+    return el;
+  }
+  const documentStub = {
+    createElement: makeEl,
+    documentElement: makeEl('html'),
+    listeners: {},
+  };
+  documentStub.addEventListener = function (t, fn) {
+    (this.listeners[t] = this.listeners[t] || []).push(fn);
+  };
+  documentStub.removeEventListener = function (t, fn) {
+    const a = this.listeners[t] || [];
+    const i = a.indexOf(fn);
+    if (i !== -1) a.splice(i, 1);
+  };
+  documentStub.dispatch = function (t, ev) {
+    (this.listeners[t] || []).slice().forEach((fn) => fn(ev));
+  };
+  documentStub.count = function (t) { return (this.listeners[t] || []).length; };
+  const windowStub = {
+    innerHeight: 1000, devicePixelRatio: 1, listeners: {},
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+  };
+  windowStub.addEventListener = function (t, fn) {
+    (this.listeners[t] = this.listeners[t] || []).push(fn);
+  };
+  windowStub.removeEventListener = function (t, fn) {
+    const a = this.listeners[t] || [];
+    const i = a.indexOf(fn);
+    if (i !== -1) a.splice(i, 1);
+  };
+  windowStub.count = function (t) { return (this.listeners[t] || []).length; };
+  const observers = [];
+  const rafQ = [];
+  const ctx = Object.assign(base, {
+    document: documentStub,
+    window: windowStub,
+    MutationObserver: function (cb) {
+      const o = { cb: cb, disconnected: false, observed: null,
+        observe(el, opts) { this.observed = { el: el, opts: opts }; },
+        disconnect() { this.disconnected = true; } };
+      observers.push(o);
+      return o;
+    },
+    requestAnimationFrame: (fn) => { rafQ.push(fn); return rafQ.length; },
+  });
+  ctx.globalThis = ctx;
+  return { ctx: ctx, makeEl: makeEl, counters: counters, observers: observers,
+    rafQ: rafQ, documentStub: documentStub, windowStub: windowStub };
+}
+
+function test_fix20260921_render() {
+  const dom = buildDomContext();
+  const ctx = dom.ctx;
+  loadAll(ctx);
+  const S = ctx.RCA_VIZ_STATE;
+  const VIZ = ctx.rcaViz;
+  const L = ctx.rcaVizLayout(BED_RESULT);
+  const host = dom.makeEl('div');
+  host.className = 'viz-host';
+  host.clientWidth = 600;   // the padded #viz-host box
+  host.clientHeight = 300;
+  // A consumer that mimics js/table.js EXACTLY: hover -> focusRow(idx);
+  // null -> class removal only (no clearFocus). The pinned model must work
+  // without relying on the consumer doing anything extra.
+  const seen = [];
+  VIZ.onRowHover((idx, layout) => {
+    seen.push(idx);
+    if (idx !== null && idx !== undefined) {
+      if (!layout) seen.push('no-layout'); // contract: 2nd arg is the layout
+      VIZ.focusRow(idx);
+    }
+  });
+  check('fix-render-initial', VIZ.render(host, BED_RESULT, null, {}) === true
+    && VIZ.getState().mounted === true && VIZ.getState().pinned === null);
+  // item 6: with the stage measured, canvases size to the STAGE (576), not
+  // to the padded host (600).
+  const stage = S.stage, hoverCv = S.hoverCv, barsCv = S.barsCv;
+  stage.clientWidth = 576; stage.offsetTop = 40; stage.offsetParent = host;
+  hoverCv.clientWidth = 576; hoverCv.clientHeight = 220;
+  check('fix6-stage-box', ctx.rcaViz.resize() === true
+    && barsCv.width === 576 && hoverCv.width === 576, String(barsCv.width));
+  const cssH = parseInt(stage.style.height, 10) || 220;
+  const ptOf = (bar) => ({
+    clientX: (bar.x + bar.w / 2) * 576,
+    clientY: (bar.y + bar.h / 2) * cssH,
+  });
+  // items 1+2: hover focuses transiently; a click PINS; the hover-then-click
+  // round-trip through the consumer no longer unpins.
+  hoverCv.dispatch('mousemove', ptOf(L.bars[0]));
+  check('fix1-hover-focuses-transiently', S.hover === 0 && S.focus === 0
+    && S.pinned === null);
+  hoverCv.dispatch('click', ptOf(L.bars[0]));
+  check('fix1-click-pins', S.pinned === 0 && S.focus === 0);
+  hoverCv.dispatch('mousemove', ptOf(L.bars[1]));
+  check('fix1-hover-cannot-steal-pin', S.hover === 1 && S.focus === 0
+    && S.pinned === 0);
+  hoverCv.dispatch('mouseleave');
+  check('fix2-leave-restores-pin', S.hover === null && S.focus === 0);
+  hoverCv.dispatch('click', ptOf(L.bars[1]));
+  check('fix1-click-other-row-repins', S.pinned === 1 && S.focus === 1);
+  S.hover = 1; // as if the pointer moved onto the row before the click
+  hoverCv.dispatch('click', ptOf(L.bars[1]));
+  check('fix1-reclick-unpins-stays-on-hover', S.pinned === null
+    && S.focus === 1, 'focus=' + S.focus);
+  S.hover = null;
+  hoverCv.dispatch('click', { clientX: 300, clientY: cssH - 2 });
+  check('fix1-empty-click-clears', S.pinned === null && S.focus === null);
+  // item 2: un-pinned leave clears the transient focus (no stale x0.3).
+  hoverCv.dispatch('mousemove', ptOf(L.bars[0]));
+  check('fix2-transient-focus-set', S.focus === 0);
+  hoverCv.dispatch('mouseleave');
+  check('fix2-leave-clears-focus', S.hover === null && S.focus === null);
+  // clearFocus: works unpinned, refuses to break a pin; Esc releases it.
+  VIZ.focusRow(2);
+  check('fix1-clearFocus-unpinned', VIZ.clearFocus() === true && S.focus === null);
+  hoverCv.dispatch('click', ptOf(L.bars[0]));
+  check('fix1-clearFocus-keeps-pin', VIZ.clearFocus() === false && S.focus === 0);
+  hoverCv.dispatch('mouseleave');
+  dom.documentStub.dispatch('keydown', { key: 'Escape' });
+  check('fix1-esc-unpins', S.pinned === null && S.focus === null);
+  // the hover callback contract: only numbers/null ever emitted.
+  check('fix1-cb-contract-intact', seen.length > 0
+    && seen.indexOf('no-layout') === -1
+    && seen.every((v) => v === null || typeof v === 'number'), JSON.stringify(seen));
+  check('fix1-cb-null-on-leave', seen.indexOf(null) !== -1);
+  // items 5+6: two consecutive locateTo calls — the older rAF loop must not
+  // kill the newer flash, and the scroll counts the ~40px .viz-head offset.
+  dom.rafQ.length = 0;
+  const okA = VIZ.locateTo(0);
+  const tokenA = S.flash.token;
+  host.scrollTop = 0;
+  const okB = VIZ.locateTo(3);
+  const b3 = L.bars[3];
+  const expectedTop = Math.max(0, 40 + b3.y * cssH - host.clientHeight / 2);
+  check('fix5-locate-returns-true', okA === true && okB === true);
+  check('fix5-flash-tokenised', S.flash.row_index === 3
+    && S.flash.token !== tokenA, JSON.stringify(S.flash));
+  check('fix6-scroll-uses-stage-offset', host.scrollTop === expectedTop,
+    host.scrollTop + ' vs ' + expectedTop);
+  const stale = dom.rafQ.shift(); // first queued tick belongs to locateTo(0)
+  stale();
+  check('fix5-stale-loop-harms-nothing', !!S.flash && S.flash.row_index === 3);
+  let guard = 0;
+  while (dom.rafQ.length && guard++ < 60) dom.rafQ.shift()();
+  check('fix5-current-loop-still-ends', S.flash === null && guard < 60);
+  // item 8 (draw side): a section-filtered row paints no strip and no label.
+  dom.counters.strokeRect = 0;
+  dom.counters.fillTextArgs = [];
+  VIZ.render(host, MULTI_SECTION, null, { section: 'S1' });
+  ctx.rcaViz.resize();
+  check('fix8-draw-skips-filtered-label',
+    dom.counters.fillTextArgs.indexOf('X b') === -1
+    && dom.counters.fillTextArgs.indexOf('X a') !== -1,
+    JSON.stringify(dom.counters.fillTextArgs));
+  check('fix8-draw-skips-filtered-strip', !dom.counters.strokeRect,
+    'strokeRect=' + dom.counters.strokeRect);
+  // item 7: clear() unmounts (host dropped), render() re-mounts.
+  VIZ.render(host, BED_RESULT, null, {});
+  check('fix7-clear-unmounts', VIZ.clear() === true
+    && ctx.rcaViz.getState().mounted === false && S.host === null);
+  check('fix7-render-reinit', VIZ.render(host, BED_RESULT, null, {}) === true
+    && ctx.rcaViz.getState().mounted === true);
+  // item 4: destroy removes EVERY handler + disconnects the observer, and a
+  // later render re-registers exactly one copy of each (no duplicates).
+  check('fix4-wired-before-destroy', hoverCv.count('mousemove') === 1
+    && hoverCv.count('touchstart') === 1
+    && dom.documentStub.count('keydown') === 1
+    && dom.windowStub.count('resize') === 1
+    && dom.observers.length >= 1, JSON.stringify({
+      mm: hoverCv.count('mousemove'), ts: hoverCv.count('touchstart'),
+      kd: dom.documentStub.count('keydown'), rz: dom.windowStub.count('resize'),
+      mo: dom.observers.length }));
+  const observerBefore = dom.observers.length;
+  check('fix4-destroy-ok', VIZ.destroy() === true);
+  check('fix4-destroy-removes-every-handler',
+    hoverCv.count('mousemove') === 0 && hoverCv.count('mouseleave') === 0
+    && hoverCv.count('click') === 0 && hoverCv.count('touchstart') === 0
+    && dom.documentStub.count('keydown') === 0
+    && dom.windowStub.count('resize') === 0
+    && S.themeObserver === null
+    && dom.observers[observerBefore - 1].disconnected === true
+    && VIZ.getState().listeners === 0, JSON.stringify({
+      mm: hoverCv.count('mousemove'), kd: dom.documentStub.count('keydown'),
+      rz: dom.windowStub.count('resize') }));
+  VIZ.render(host, BED_RESULT, null, {});
+  check('fix4-rerender-registers-exactly-once',
+    hoverCv.count('mousemove') === 1 && hoverCv.count('mouseleave') === 1
+    && hoverCv.count('click') === 1 && hoverCv.count('touchstart') === 1
+    && dom.documentStub.count('keydown') === 1
+    && dom.windowStub.count('resize') === 1
+    && dom.observers.length === observerBefore + 1
+    && dom.observers[observerBefore].observed !== null);
+  VIZ.destroy();
+}
+
 // ---- run -------------------------------------------------------------------
 
 const ctx = buildContext();
@@ -516,6 +820,8 @@ test_stage_axis(ctx);
 test_focus(ctx);
 test_hit_test(ctx);
 test_options(ctx);
+test_fix20260921_pure(ctx);
+test_fix20260921_render();
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

@@ -21,7 +21,9 @@ import json
 import os
 import re
 import secrets
-import shutil
+# FE-FIX-2026-09-21 (audit #3): ``shutil`` dropped together with
+# ``shutil.copyfileobj`` - static bodies are now streamed with an explicit
+# exactly-Content-Length loop in ``Handler._serve_static``.
 import socket
 import sys
 import time
@@ -1175,16 +1177,35 @@ class Handler(BaseHTTPRequestHandler):
         return super().parse_request()
 
     def _body_pending(self) -> bool:
-        """True when the request still has unread body bytes on the socket."""
-        return self._pending_body_bytes() is not None
+        """True when the request still has unread body bytes on the socket.
+
+        FE-FIX-2026-09-21 (audit #2): chunked bodies count as pending now too.
+        Their size is not knowable up front, so ``_pending_body_bytes`` cannot
+        report them, but leaving them unread on a kept-alive socket makes the
+        server parse the chunks as the *next* request (response desync), so
+        every rejection of a chunked request must announce ``close``.
+        """
+        return self._pending_body_bytes() is not None or self._chunked_pending()
+
+    def _chunked_pending(self) -> bool:
+        """True when the request declares an unconsumed ``Transfer-Encoding:
+        chunked`` body (FE-FIX-2026-09-21, audit #2)."""
+        if getattr(self, "_request_body_consumed", True):
+            return False
+        headers = getattr(self, "headers", None)
+        if headers is None:
+            return False
+        te = headers.get("Transfer-Encoding") or ""
+        return "chunked" in te.lower()
 
     def _pending_body_bytes(self) -> "int | None":
         """How many request-body bytes are known to be unread, or None.
 
         None means "nothing pending" (no body declared / everything already
         read); a number is the declared length we have not consumed. Chunked
-        bodies report None as well - their size is not knowable up front, and
-        this server rejects them with 411 before reading anything.
+        bodies report None here as well - their size is not knowable up front -
+        but they are covered by :meth:`_chunked_pending`, which feeds the same
+        "must close" decision (FE-FIX-2026-09-21, audit #2).
         """
         if getattr(self, "_request_body_consumed", True):
             return None
@@ -1221,7 +1242,13 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, ValueError):
             pass
         pending = self._pending_body_bytes()
-        if pending is not None and pending <= self._BODY_DRAIN_BYTES:
+        if pending is None and self._chunked_pending():
+            # FE-FIX-2026-09-21 (audit #2): a rejected chunked body is just as
+            # dangerous to leave in the receive buffer as a Content-Length one
+            # (Windows aborts the close with an RST that can eat our flushed
+            # response), so discard the chunk frames best-effort first.
+            self._drain_chunked_body()
+        elif pending is not None and pending <= self._BODY_DRAIN_BYTES:
             reader = getattr(self.rfile, "read1", None) or self.rfile.read
             deadline = time.monotonic() + self._BODY_DRAIN_TIMEOUT_SEC
             try:
@@ -1242,6 +1269,49 @@ class Handler(BaseHTTPRequestHandler):
                 except OSError:
                     pass
         super().finish()
+
+    def _drain_chunked_body(self) -> None:
+        """Discard a rejected chunked body, best effort (FE-FIX-2026-09-21).
+
+        Same bounded-cost contract as the Content-Length drain in
+        :meth:`finish`: at most ``_BODY_DRAIN_BYTES`` over at most
+        ``_BODY_DRAIN_TIMEOUT_SEC``, and only ever on a connection we are
+        already tearing down. Chunk framing is parsed just far enough to walk
+        payload + CRLF; anything unrecognised, a timeout or a vanished peer
+        ends the attempt silently — the socket closes either way.
+        """
+        reader = getattr(self.rfile, "read1", None) or self.rfile.read
+        deadline = time.monotonic() + self._BODY_DRAIN_TIMEOUT_SEC
+        budget = self._BODY_DRAIN_BYTES
+        try:
+            self.connection.settimeout(self._BODY_DRAIN_TIMEOUT_SEC)
+            while budget > 0:
+                if time.monotonic() >= deadline:
+                    break
+                line = self.rfile.readline(64)
+                if not line:
+                    break
+                try:
+                    size = int(line.split(b";")[0].strip(), 16)
+                except ValueError:
+                    break  # not a chunk-size line: abandon the rest
+                left = size + 2  # payload + trailing CRLF
+                while left > 0:
+                    chunk = reader(min(left, 8 * 1024))
+                    if not chunk:
+                        return
+                    left -= len(chunk)
+                budget -= size
+                if size == 0:
+                    break  # terminating chunk seen (trailers left over: fine)
+        except (OSError, ValueError):
+            # Timed out or the peer is gone: nothing left to protect.
+            pass
+        finally:
+            try:
+                self.connection.settimeout(self.timeout)
+            except OSError:
+                pass
 
     def _validate_csrf_and_origin(self) -> bool:
         """Returns True if CSRF/origin validation passes, False if request should be rejected.
@@ -1486,6 +1556,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
             self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
             self.send_header("Content-Length", str(len(body)))
+            if self._body_pending():
+                # FE-FIX-2026-09-21 (audits #2/#4): this raw-200 exit bypasses
+                # _send_json, so it needs the same "unread body (incl.
+                # chunked) => close, and say so" treatment.
+                self.close_connection = True
+                self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(body)
             return
@@ -1520,18 +1596,37 @@ class Handler(BaseHTTPRequestHandler):
         """Serve one whitelisted file from ROOT; shared by do_GET/do_HEAD."""
         # FE-BORROW-2026-09-20 (域P): a GET/HEAD that (wrongly) carries a body
         # leaves bytes on a connection we would otherwise keep alive.
-        if self._body_pending():
+        #
+        # FE-FIX-2026-09-21 (audit #4): closing without announcing it is not
+        # RFC 9112 legal (the client may keep sending into a socket we have
+        # decided to kill). The JSON error paths below all signal
+        # ``Connection: close`` through ``_send_json`` (its own pending check
+        # fires on the same condition); the 200/304 success paths now signal
+        # it too, so every decision to drop the connection is either stated in
+        # a header or implied by an immediate loss of the connection.
+        # ``_body_pending`` is now chunked-aware (audit #2), so a chunked
+        # GET/HEAD also forces the close here.
+        pending_body = self._body_pending()
+        if pending_body:
             self.close_connection = True
         target = self._safe_local_path(self.path)
+        # FE-FIX-2026-09-21 (audit #1): every error response of this method
+        # must be header-only when the request was a HEAD. These call sites
+        # used to omit ``head_only``, so e.g. ``HEAD /js/nope.js`` wrote the
+        # 404 JSON body onto the socket after the "header-only" response, and
+        # the next keep-alive request on that connection parsed those bytes as
+        # part of its response (ResponseNotReady / wrong content for a
+        # different URL).
         if target is None:
-            self._send_json(403, {"error": "forbidden"})
+            self._send_json(403, {"error": "forbidden"}, head_only=head_only)
             return
         if not os.path.isfile(target):
-            self._send_json(404, {"error": "not found"})
+            self._send_json(404, {"error": "not found"}, head_only=head_only)
             return
         ext = os.path.splitext(target)[1].lower()
         if ext not in _CONTENT_TYPES:
-            self._send_json(403, {"error": "type not allowed"})
+            self._send_json(403, {"error": "type not allowed"},
+                            head_only=head_only)
             return
         # 50 MB cap on static files so a runaway client cannot OOM the
         # server by requesting a multi-GB image.
@@ -1541,24 +1636,28 @@ class Handler(BaseHTTPRequestHandler):
         # a up-to-50 MB buffer (plus a copy in ``wfile``); the size also came
         # from a separate ``os.path.getsize()`` that could race the read. The
         # file is now opened first (size from ``os.fstat`` of that fd, so no
-        # TOCTOU) and streamed to the socket with ``shutil.copyfileobj`` in
-        # 64 KB chunks, which caps the per-request memory at the chunk size
-        # regardless of the file size.
+        # TOCTOU) and streamed to the socket in 64 KB chunks, which caps the
+        # per-request memory at the chunk size regardless of the file size.
+        # (FE-FIX-2026-09-21 audit #3: the streaming helper is now an explicit
+        # exactly-N-bytes loop rather than ``shutil.copyfileobj``, which had no
+        # way to stop at the announced Content-Length.)
         try:
             _fh = open(target, "rb")
         except OSError:
-            self._send_json(500, {"error": "read error"})
+            self._send_json(500, {"error": "read error"}, head_only=head_only)
             return
         try:
             with _fh as f:
                 try:
                     st = os.fstat(f.fileno())
                 except OSError:
-                    self._send_json(500, {"error": "read error"})
+                    self._send_json(500, {"error": "read error"},
+                                    head_only=head_only)
                     return
                 file_size = st.st_size
                 if file_size > 50 * 1024 * 1024:
-                    self._send_json(413, {"error": "file too large"})
+                    self._send_json(413, {"error": "file too large"},
+                                    head_only=head_only)
                     return
                 # FE-BORROW-2026-09-20 (域P): conditional revalidation. The tag
                 # is derived from the same ``fstat`` that sizes the response, so
@@ -1573,7 +1672,15 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_response(304)
                     self.send_header("ETag", etag)
                     self.send_header("Cache-Control", STATIC_CACHE_CONTROL)
+                    if pending_body:
+                        # FE-FIX-2026-09-21 (audit #4): state the drop we
+                        # already decided on above.
+                        self.send_header("Connection", "close")
                     self.end_headers()
+                    # FE-FIX-2026-09-21 (hardening): verified - a 304 carries
+                    # NO body for GET and HEAD alike (RFC 7232 §4.1), and no
+                    # Content-Length either; clients frame it on the empty
+                    # line, so the reused socket stays in sync.
                     return
                 self.send_response(200)
                 self.send_header("Content-Type", _CONTENT_TYPES[ext])
@@ -1610,12 +1717,42 @@ class Handler(BaseHTTPRequestHandler):
                 # Content-Length is mandatory on 1.1 keep-alive; on HEAD it
                 # advertises the size the GET would have returned, body aside.
                 self.send_header("Content-Length", str(file_size))
+                if pending_body:
+                    # FE-FIX-2026-09-21 (audit #4): state the drop we already
+                    # decided on at the top of the method.
+                    self.send_header("Connection", "close")
                 self.end_headers()
                 if not head_only:
-                    shutil.copyfileobj(f, self.wfile, _STATIC_CHUNK_BYTES)
+                    # FE-FIX-2026-09-21 (audit #3): stream EXACTLY the
+                    # announced ``file_size`` bytes, not "everything until
+                    # EOF". ``shutil.copyfileobj`` raced the disk: an asset
+                    # edited (grown) between the fstat and the read appended
+                    # surplus bytes past the declared Content-Length, which
+                    # the client then parsed as the next response on the
+                    # reused socket. The explicit count also detects the
+                    # shrink case (file truncated mid-read): the body then
+                    # falls short of the announced length, and the only
+                    # honest move left is to close the connection.
+                    remaining = file_size
+                    while remaining > 0:
+                        chunk = f.read(min(_STATIC_CHUNK_BYTES, remaining))
+                        if not chunk:
+                            break  # file shrank since the fstat
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+                    if remaining > 0:
+                        self.close_connection = True
         except (BrokenPipeError, ConnectionResetError, OSError):
             # A client that hangs up mid-download is not an error worth a
             # traceback; ``handle_one_request`` swallows the same classes.
+            #
+            # FE-FIX-2026-09-21 (audit #3): the framing decision does have to
+            # change though - a write that failed mid-body leaves a truncated
+            # response on the socket, and silently offering the connection
+            # back for reuse made the client stall waiting for bytes that
+            # would never come. Close decisively instead (EOF is something
+            # every client can act on; a short body on a live socket is not).
+            self.close_connection = True
             return
 
     def do_POST(self) -> None:
@@ -1669,6 +1806,25 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             length = 0
+        # FE-FIX-2026-09-21 (audit #2): a chunked body must be rejected
+        # explicitly, not via the missing-Content-Length branch below. The old
+        # path answered 411 while ``_pending_body_bytes`` reported nothing
+        # pending (chunked size is unknowable), so no ``Connection: close``
+        # went out and the connection stayed alive with unread chunks that the
+        # same socket then parsed as the next request. ``_body_pending`` is now
+        # chunked-aware, so this 411 closes the connection (announced) and
+        # ``finish`` drains the abandoned chunks before the hang-up. A request
+        # carrying both TE and Content-Length is rejected here too: RFC 9112
+        # §6.1 says the Transfer-Encoding wins, and reading the declared
+        # Content-Length of such a request would consume chunk framing.
+        if self._chunked_pending():
+            self._send_json(411, {
+                "ok": False,
+                "error_key": "err.badRequest",
+                "error_body": ("Transfer-Encoding: chunked is not supported; "
+                               "send a Content-Length instead."),
+            })
+            return
         # REVIEW-2026-09-10: a missing or zero Content-Length (an empty body,
         # or a chunked-encoding client that sends none) reported
         # "Content-Length 0 exceeds limit of 20971520", which is both false

@@ -1196,6 +1196,14 @@
 
     state.result = res.data;
     state.rawText = res.raw;
+    // FE-FIX-2026-09-21 (audit item 8): a brand-new extraction replaces the
+    // whole result — every action on the undo stack refers to the OLD model
+    // and must not be reachable. The table.js attach will also self-clear on
+    // the new data (contract owned by the table.js agent); clearing here
+    // covers the window before/without that attach and the double-clear is
+    // harmless.
+    if (typeof rcaHistory !== 'undefined' && rcaHistory
+      && typeof rcaHistory.clear === 'function') rcaHistory.clear();
     // Phase K fix: invoke the quality scorer on direct-mode results.
     // Backend mode already attaches `data.quality` server-side (via
     // score_range_chart). UI-REVIEW-2026-09-05: only fill the gap when the
@@ -1285,8 +1293,10 @@
       p.textContent = formatBusyLabel(arg.i18nKey, arg.params || {});
       // FE-BORROW-2026-09-20 (domain U): every ({done}/{total}) label we
       // already draw for multi-run direct transport now ALSO drives the
-      // determinate progress bar in the loading slot (markup lives in
-      // index.html inside #loading-slot). Labels without the counters
+      // determinate progress bar (markup lives in index.html — FE-FIX-2026-
+      // 09-21 audit item 7: it moved OUT of the #loading-slot aria-live
+      // region, right after it, so progressbar updates are no longer double-
+      // announced; it is still found by id). Labels without the counters
       // (single run, aggregating, classifying) leave the bar untouched.
       const prm = arg.params;
       if (prm && prm.done != null && prm.total != null && prm.total > 0) {
@@ -1295,7 +1305,9 @@
     }
   }
 
-  // Draw the #loading-slot determinate run-progress bar. Both nodes live in
+  // Draw the determinate run-progress bar (#run-progress; FE-FIX-2026-09-21
+  // audit item 7: now a sibling of #loading-slot, not inside its live
+  // region). Both nodes live in
   // index.html; `.hidden` is toggled by updateActionButtons when the bar
   // must disappear. Stub environments without style support degrade to a
   // width-less div — the aria-valuenow still narrates progress.
@@ -1325,12 +1337,15 @@
   function renderCurrentResult(opts) {
     if (!state.result) return;
     const content = $('results-content');
-    // FIX (viz-host-preserve): capture any existing #viz-host before we
-    // overwrite innerHTML, then re-append it after rendering so the
-    // future-ECharts mount point survives every render. The previous
-    // behavior wiped #viz-host on every render and forced future code
-    // to recreate the container each time — and any cached state inside
-    // an initialized chart instance would be lost.
+    // FE-FIX-2026-09-21 (audit item 3): THE ORDER MATTERS — this capture
+    // must stay BEFORE the `content.innerHTML =` swap below. The swap
+    // destroys the ORIGINAL static #viz-host that js/viz.js painted into;
+    // only a node captured beforehand still points at that same object and
+    // can be re-appended. (If this line ever moves after the assignment,
+    // `querySelector` returns null — the old node is gone — and the
+    // re-append becomes a no-op while rcaViz.render mounts into a DIFFERENT
+    // node than the one holding the painted layers.) The final guard below
+    // re-checks the mount so a render never targets a detached node.
     const vizHost = content.querySelector('#viz-host');
     // FE-BORROW-2026-09-20 (integration): the web panel becomes an editing
     // surface - {editable:true} makes rcaRenderResults emit the select/
@@ -1360,8 +1375,16 @@
     // subscription finds a live rcaViz (canvas -> row highlight). The table
     // -> canvas direction (hover/locate) is wired inside table.js against
     // window.rcaViz and degrades silently when viz is absent.
-    if (typeof rcaViz !== 'undefined' && rcaViz && vizHost) {
-      rcaViz.render(vizHost, state.result, state.dataUrl);
+    // FE-FIX-2026-09-21 (audit item 3): guard rcaViz.render against a host
+    // that is NOT the node currently in the document. vizHost was captured
+    // before the innerHTML swap and re-appended above, so in a browser it
+    // is mounted again; but if the re-append ever fails (stub DOM, or the
+    // node was evicted elsewhere) rendering into the detached object would
+    // paint a layer nobody can see — and a stale duplicate #viz-host must
+    // never win. Re-query after the swap when the captured node is gone.
+    const vizMount = _rcaVizMountHost(content, vizHost);
+    if (typeof rcaViz !== 'undefined' && rcaViz && vizMount) {
+      rcaViz.render(vizMount, state.result, state.dataUrl);
     }
     if (typeof rcaTableEditAttach === 'function') {
       rcaTableEditAttach(content, state.result, {
@@ -1431,6 +1454,25 @@
     // from a user's table-cell edit (node whose live text differs from the
     // snapshot is left untouched).
     state._resultTexts = _rcaResultTextNodes(content);
+    // FE-FIX-2026-09-21 (audit item 4): the attribute twin of the text-node
+    // snapshot — harvested from the same tree with the same skip rule so
+    // rcaRetranslateResult can align the two lists.
+    state._resultAttrs = _rcaAttrNodes(content, null, true);
+  }
+
+  // FE-FIX-2026-09-21 (audit item 3): the node rcaViz.render may be given —
+  // the captured original #viz-host ONLY while it is actually mounted again
+  // under #results-content (parentNode check first, contains as fallback);
+  // otherwise whatever #viz-host the live tree happens to hold now, or null
+  // (render skipped) rather than a detached node viz would paint into
+  // invisibly.
+  function _rcaVizMountHost(content, captured) {
+    if (captured && (captured.parentNode === content
+      || (typeof content.contains === 'function' && content.contains(captured)))) {
+      return captured;
+    }
+    return (content && typeof content.querySelector === 'function')
+      ? content.querySelector('#viz-host') : null;
   }
 
   // Containers inside #results-content that rcaRenderResults() does NOT
@@ -1443,8 +1485,47 @@
   // in-place path exists to avoid.
   const _RCA_FOREIGN_RESULT_SLOTS = { 'viz-host': 1, 'names-verify-slot': 1 };
 
+  // FE-FIX-2026-09-21 (audit item 4): rcaRenderResults emits translated
+  // strings into ATTRIBUTES too — title= on the undo/redo buttons
+  // (js/table.js:828/831), the auto-mode chip (:815) and the locate /
+  // add-row buttons (:1001/:2251), aria-label= on the tables and the select
+  // checkboxes (:894/:898/:935). The in-place re-translation path used to
+  // swap only text nodes, so those attributes (and documentElement.lang)
+  // stayed in the previous language after a switch that took the fast
+  // path. The snapshot therefore carries one record per (element,
+  // whitelisted attribute) pair, harvested in the SAME depth-first order
+  // (and with the same foreign-slot skip) as the text nodes, so the live
+  // list and the freshly rendered template list line up index by index.
+  const _RCA_RESULT_ATTRS = ['title', 'aria-label', 'placeholder'];
+
   function _rcaResultTextNodes(root) {
     return _rcaTextNodes(root, null, true).map((n) => ({ node: n, text: n.textContent }));
+  }
+
+  // Depth-first (element, attr, value) records over the same subtree walk
+  // as _rcaTextNodes. An element contributes one record per whitelisted
+  // attribute it carries, in _RCA_RESULT_ATTRS order — deterministic on
+  // both sides of the swap, which is what keeps the two lists aligned.
+  function _rcaAttrNodes(root, out, skipSlots) {
+    const acc = out || [];
+    const kids = (root && root.childNodes) || [];
+    for (let i = 0; i < kids.length; i++) {
+      const n = kids[i];
+      if (skipSlots && n.nodeType === 1 && n.id && _RCA_FOREIGN_RESULT_SLOTS[n.id]) continue;
+      if (n.nodeType === 1) {
+        if (typeof n.getAttribute === 'function') {
+          for (let a = 0; a < _RCA_RESULT_ATTRS.length; a++) {
+            const attr = _RCA_RESULT_ATTRS[a];
+            const val = n.getAttribute(attr);
+            if (val !== null && val !== undefined) acc.push({ node: n, attr: attr, text: val });
+          }
+        }
+        _rcaAttrNodes(n, acc, skipSlots);
+      } else if (n.nodeType === 11) {
+        _rcaAttrNodes(n, acc, skipSlots);
+      }
+    }
+    return acc;
   }
 
   // Depth-first text nodes of a subtree. Plain recursion (no TreeWalker) so
@@ -1504,7 +1585,14 @@
     // take the fallback rebuild.
     const fresh = _rcaTextNodes(tpl, null, true);
     const snap = state._resultTexts;
-    if (fresh.length !== snap.length) {
+    // FE-FIX-2026-09-21 (audit item 4): the attribute lists must align with
+    // their snapshots too; any structural disagreement (or a snapshot taken
+    // before the attribute harvest existed) takes the full rebuild, which
+    // regenerates both.
+    const attrFresh = _rcaAttrNodes(tpl, null, true);
+    const attrSnap = state._resultAttrs;
+    if (fresh.length !== snap.length
+      || !Array.isArray(attrSnap) || attrFresh.length !== attrSnap.length) {
       renderCurrentResult();
       return;
     }
@@ -1514,6 +1602,30 @@
       const want = fresh[i].textContent;
       if (want !== rec.text) rec.node.textContent = want;
     }
+    // FE-FIX-2026-09-21 (audit item 4): swap the whitelisted attributes the
+    // same conservative way as the text nodes — same index pairing, skip any
+    // (node, attr) whose live value drifted from the snapshot (a user edit,
+    // or table.js repainting a title after a cell change), and bail to the
+    // rebuild path when the two lists disagree on which attribute sits at
+    // index i (a real structural mismatch, not a wording change).
+    for (let i = 0; i < attrSnap.length; i++) {
+      const rec = attrSnap[i];
+      if (!rec.node || typeof rec.node.getAttribute !== 'function'
+        || typeof rec.node.setAttribute !== 'function'
+        || attrFresh[i].attr !== rec.attr) {
+        renderCurrentResult();
+        return;
+      }
+      if (rec.node.getAttribute(rec.attr) !== rec.text) continue; // edited — keep
+      const want = attrFresh[i].text;
+      if (want !== rec.text) rec.node.setAttribute(rec.attr, want);
+    }
+    // FE-FIX-2026-09-21 (audit item 4): the in-place path used to leave
+    // document.documentElement.lang stale when it skipped the rebuild —
+    // chrome-level language application (rcaApplyI18n + applyDocLangAttr in
+    // switchLang) covers the static page, but this path is also reached
+    // without those callers, so mirror what rcaApplyI18n's chrome pass does.
+    if (typeof applyDocLangAttr === 'function') applyDocLangAttr();
     // The GBIF hints live in #results-content but are not part of
     // rcaRenderResults' output — re-render that small block (it holds no
     // editable state) so its wording follows the new language too.
@@ -1521,6 +1633,7 @@
       rcaRenderNameIssues(state._nameIssues);
     }
     state._resultTexts = _rcaResultTextNodes(content);
+    state._resultAttrs = _rcaAttrNodes(content, null, true);
   }
 
   // ---- result action buttons (event delegation) ----
@@ -1607,6 +1720,14 @@
     // FE-BORROW-2026-09-20 (domain U): the in-place re-translation snapshot
     // refers to nodes we are about to drop — invalidate it.
     state._resultTexts = null;
+    state._resultAttrs = null;   // FE-FIX-2026-09-21: attribute twin too
+    // FE-FIX-2026-09-21 (audit item 8): reset drops the result WITHOUT any
+    // new attach happening, so js/table.js's attach-time self-clear never
+    // runs here — the undo stack would keep actions pointing at a detached
+    // model. Clear the page singleton explicitly (double-clear elsewhere is
+    // harmless: clear() only empties two arrays + notifies).
+    if (typeof rcaHistory !== 'undefined' && rcaHistory
+      && typeof rcaHistory.clear === 'function') rcaHistory.clear();
     $('file-input').value = '';
     $('caption').value = '';
     $('preview-wrap').classList.add('hidden');
