@@ -318,7 +318,7 @@ class TestFluentExtractWorkerTimeout:
                         "media_type": "image/png", "timeout_sec": -9.9},
                 mode="range_chart", runs=2)
             results = []
-            w.finished_ok.connect(lambda r: results.append(r))
+            w.finished_ok.connect(lambda _w, r: results.append(r))
             w.start()
             deadline = time.time() + 5
             while not results and time.time() < deadline:
@@ -360,7 +360,7 @@ class TestFluentExtractWorkerCancel:
                 mode="range_chart", runs=2)
             w.request_cancel()  # cancel BEFORE start -> before any submit
             results = []
-            w.finished_ok.connect(lambda r: results.append(r))
+            w.finished_ok.connect(lambda _w, r: results.append(r))
             w.start()
             deadline = time.time() + 5
             while not results and time.time() < deadline:

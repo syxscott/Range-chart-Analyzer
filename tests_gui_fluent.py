@@ -68,7 +68,7 @@ def test_extract_worker_emits_on_success():
             params={"api_key": "k", "image_b64": "QUFB", "media_type": "image/png"},
             mode="range_chart", runs=1)
         results = []
-        w.finished_ok.connect(lambda r: results.append(r))
+        w.finished_ok.connect(lambda _w, r: results.append(r))
         w.start()
         # Wait for thread to finish (max 5s) AND pump Qt event loop so the
         # cross-thread queued signal gets delivered to the main thread.
@@ -107,7 +107,7 @@ def test_extract_worker_emits_on_failure():
             params={"api_key": "k", "image_b64": "QUFB", "media_type": "image/png"},
             mode="range_chart", runs=1)
         results = []
-        w.finished_ok.connect(lambda r: results.append(r))
+        w.finished_ok.connect(lambda _w, r: results.append(r))
         w.start()
         # Pump the Qt event loop so the queued signal is delivered.
         deadline = time.time() + 5
