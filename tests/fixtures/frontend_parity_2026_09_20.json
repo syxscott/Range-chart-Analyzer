@@ -628,6 +628,7 @@
     "other_fossils": [
      "Ammonite",
      "Brachiopod",
+     "{\"x\": 1}",
      "Crinoid"
     ],
     "confidence": 0.0

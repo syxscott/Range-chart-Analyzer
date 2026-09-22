@@ -1329,6 +1329,27 @@ function rcaExtractedAny(out) {
 // readable label out of a dict-shaped fossil entry, else keep a scalar's text,
 // else drop the record (a dict with real content but no label is noise the
 // table cannot render).
+// Mirror of Python json.dumps(value, sort_keys=True, ensure_ascii=True)
+// for the flat/nested dict+list+scalar shapes the lift contract needs.
+function rcaPyDumps(value) {
+  const BS = String.fromCharCode(92);
+  if (value === null) return 'null';
+  if (Array.isArray(value)) {
+    return '[' + value.map(rcaPyDumps).join(', ') + ']';
+  }
+  if (typeof value === 'object') {
+    const keys = Object.keys(value).sort();
+    const parts = keys.map((k) => rcaPyDumps(String(k)) + ': ' + rcaPyDumps(value[k]));
+    return '{' + parts.join(', ') + '}';
+  }
+  let out = JSON.stringify(value);
+  // ensure_ascii: escape every non-ASCII char as \uXXXX
+  out = out.replace(new RegExp('[^' + BS + 'x00-' + BS + 'x7F]', 'g'),
+    (ch) => BS + 'u' + ch.charCodeAt(0).toString(16).padStart(4, '0'));
+  return out;
+}
+
+
 function rcaOtherFossilLabel(item) {
   if (item === null || item === undefined) return '';
   if (typeof item === 'string') return item.trim();
@@ -1338,9 +1359,15 @@ function rcaOtherFossilLabel(item) {
       const value = item[key];
       if (typeof value === 'string' && value.trim()) return value.trim();
     }
-    const extras = Object.keys(item).filter(
-      (k) => ['label', 'species', 'taxon', 'name'].indexOf(k) === -1);
-    return extras.length ? '' : rcaStringifyScalar(item);
+    // UI-REVIEW-2026-09-22 (py parity): a label-less dict record is kept
+    // as JSON text - rca_core/extractor.py:_other_fossils_from lifts it
+    // the same way, so both engines now surface the row instead of
+    // dropping it.
+    try {
+      return rcaPyDumps(item);
+    } catch (_e) {
+      return rcaStringifyScalar(item);
+    }
   }
   return rcaStringifyScalar(item);
 }
