@@ -363,9 +363,18 @@ def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE,
         if deskew:
             try:
                 from .deskew import deskew_image
+                # FIX-2026-09-22 (audit item 9): ``deskew_image`` returns the
+                # SAME object (angle 0.0) when the detected skew is below
+                # ``min_angle`` — setting ``modified = True`` unconditionally
+                # defeated the original-bytes fast path below and re-encoded
+                # every deskew-enabled screenshot lossy-PNG at ~+40% size.
+                # The identity check is robust to a future rotation that
+                # expands the canvas (it then always returns a new object).
+                _pre_deskew = img
                 img, _angle = deskew_image(img)
-                w, h = img.size
-                modified = True
+                if img is not _pre_deskew:
+                    w, h = img.size
+                    modified = True
             except Exception:
                 pass
         if enhance:
@@ -1092,6 +1101,13 @@ _GEOMETRY_SEMANTIC_KEYS = {
     "depth_pos_0_999": ("depth", "depth_m"),
     "age_pos_0_999": ("age_ma", "age"),
     "level_pos_0_999": ("level", "depth", "depth_m"),
+    # FIX-2026-09-22 (audit item 5): the chemical-stratigraphy interval rows
+    # use top_pos_0_999 / base_pos_0_999 (both are in _GEOMETRY_VERTICAL_FIELDS)
+    # against top_depth_m/top_age_ma and base_depth_m/base_age_ma.  Without the
+    # pairing the anti-self-echo contradiction test silently never ran for that
+    # mode, so a geometry block contradicting the transcribed interval was kept.
+    "top_pos_0_999": ("top_depth_m", "top_age_ma"),
+    "base_pos_0_999": ("base_depth_m", "base_age_ma"),
 }
 
 
@@ -1197,6 +1213,25 @@ def _axis_domain(raw: Any) -> dict[str, Any] | None:
             "unit": str(unit).strip() if isinstance(unit, (str, int, float)) else ""}
 
 
+def _axis_calibration_blocks(payload: Any) -> list[dict[str, Any]]:
+    """Every raw ``axis_calibration`` block a payload carries, in match order.
+
+    Root, then ``metadata``, then ``_extras`` — models put figure-level blocks
+    in whichever of the three they prefer. Non-dict / empty blocks are dropped
+    (there is nothing to read out of them).
+    """
+    blocks: list[dict[str, Any]] = []
+    if not isinstance(payload, dict):
+        return blocks
+    for holder in (payload, payload.get("metadata"), payload.get("_extras")):
+        if not isinstance(holder, dict):
+            continue
+        candidate = holder.get("axis_calibration")
+        if isinstance(candidate, dict) and candidate:
+            blocks.append(candidate)
+    return blocks
+
+
 def axis_domains_from(payload: Any) -> dict[str, dict[str, Any]]:
     """Collect the optional ``axis_calibration`` block from a parsed result.
 
@@ -1205,16 +1240,7 @@ def axis_domains_from(payload: Any) -> dict[str, dict[str, Any]]:
     verbatim so a future axis (``"thickness"``) needs no code change here.
     """
     out: dict[str, dict[str, Any]] = {}
-    if not isinstance(payload, dict):
-        return out
-    candidates = [payload.get("axis_calibration")]
-    for container_key in ("metadata", "_extras"):
-        container = payload.get(container_key)
-        if isinstance(container, dict):
-            candidates.append(container.get("axis_calibration"))
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
-            continue
+    for candidate in _axis_calibration_blocks(payload):
         for name, raw in candidate.items():
             domain = _axis_domain(raw)
             if domain and str(name) not in out:
@@ -1222,11 +1248,73 @@ def axis_domains_from(payload: Any) -> dict[str, dict[str, Any]]:
     return out
 
 
+def axis_calibration_unusable(payload: Any,
+                              axes: dict[str, dict[str, Any]] | None = None,
+                              ) -> bool:
+    """True when the model claimed an axis calibration that cannot be honoured.
+
+    FIX-2026-09-22 (audit item 7): two shapes used to vanish without a trace —
+    the raw block was swallowed by the mode root-key whitelist (so it never
+    reached ``_extras``) and no warning said why the geometry stayed raw:
+
+    * a block exists but no axis survives :func:`_axis_domain`, e.g.
+      ``{"vertical": {"at_0": 1}}`` where only one end is numeric;
+    * every surviving axis is degenerate (``at_0 == at_999``), where the linear
+      map would collapse the whole plot onto a single value (see
+      :func:`_geometry_point`).
+    """
+    if not _axis_calibration_blocks(payload):
+        return False
+    if axes is None:
+        axes = axis_domains_from(payload)
+    if not axes:
+        return True
+    try:
+        return all(float(d["at_0"]) == float(d["at_999"]) for d in axes.values())
+    except (TypeError, KeyError, ValueError):
+        return True
+
+
+def _fold_axis_calibration(parsed: Any,
+                           axes: dict[str, dict[str, Any]],
+                           out: dict[str, Any],
+                           extras_src: dict[str, Any],
+                           warnings: list[str],
+                           ) -> None:
+    """Hoist a usable calibration; warn + keep the raw block when it is not.
+
+    Shared by the four contract modes (range chart, abundance, chemical
+    stratigraphy, scatter) so the root shape is defined once:
+
+    * usable  -> ``out["axis_calibration"] = axes``;
+    * unusable -> no hoist, an ``axis_calibration_unusable`` root warning and
+      the raw block preserved under ``extras_src["axis_calibration"]`` so the
+      operator still sees what the model claimed (audit item 7).
+    """
+    if axis_calibration_unusable(parsed, axes):
+        if "axis_calibration_unusable" not in warnings:
+            warnings.append("axis_calibration_unusable")
+        raw = parsed.get("axis_calibration") if isinstance(parsed, dict) else None
+        if isinstance(raw, dict) and raw:
+            extras_src["axis_calibration"] = raw
+        return
+    if axes:
+        out["axis_calibration"] = axes
+
+
 def pos_to_axis_value(pos: int, domain: dict[str, Any] | None) -> float | None:
     """Linearly map a 0-999 frame position onto a calibrated axis."""
     if not domain or pos is None:
         return None
+    # FIX-2026-09-22 (audit item 8): ``bool`` is an ``int`` subclass, so a
+    # model-emitted ``true`` used to map as position 1 (and ``false`` as 0)
+    # and produced a plausible-looking calibrated value.  A boolean is not a
+    # position; same rejection as :func:`normalize_pos_0_999`.
+    if isinstance(pos, bool) or not isinstance(pos, (int, float)):
+        return None
     low, high = domain.get("at_0"), domain.get("at_999")
+    if isinstance(low, bool) or isinstance(high, bool):
+        return None
     if not isinstance(low, (int, float)) or not isinstance(high, (int, float)):
         return None
     return low + (float(pos) / float(POS_MAX)) * (float(high) - float(low))
@@ -1264,14 +1352,24 @@ def _geometry_point(field: str,
     lo = min(float(domain["at_0"]), float(domain["at_999"]))
     hi = max(float(domain["at_0"]), float(domain["at_999"]))
     span = hi - lo
+    if span <= 0:
+        # FIX-2026-09-22 (audit item 4): ``{at_0: 0, at_999: 0}`` is a legal
+        # shape for _axis_domain but the linear map degenerates — every
+        # position became 0.0 with ``calibrated: true``, and the contradiction
+        # guards below (both keyed on ``span > 0``) never ran, so a row whose
+        # transcribed depth said otherwise was accepted silently.  A
+        # zero-span calibration carries no information: keep the raw 0-999
+        # integer as evidence, mark the point rejected (=> low_confidence code)
+        # and never write a value.
+        return entry, True, None
     tol = GEOMETRY_TOLERANCE * span
-    if span > 0 and not (lo - tol <= value <= hi + tol):
+    if not (lo - tol <= value <= hi + tol):
         return None, True, None
     for sem_key in _GEOMETRY_SEMANTIC_KEYS.get(field, ()):
         sem = _to_float_opt(src_row.get(sem_key))
         if sem is None or not (lo <= sem <= hi):
             continue
-        if span > 0 and abs(value - sem) > tol:
+        if abs(value - sem) > tol:
             return None, True, None
         break
     entry["value"] = round(value, 6)
@@ -1456,7 +1554,11 @@ def _normalize_species_into(sp: dict[str, Any],
     if _idx_warnings:
         # Same single-string / list convention the block rows use, so
         # rcaWarningFlags / _warning_flags consumers read it uniformly.
-        row["_warning"] = _idx_warnings[0] if len(_idx_warnings) == 1 else _idx_warnings
+        # FIX-2026-09-22 (audit item 2 family): additive, because
+        # attach_row_contract above may already have flagged this very row
+        # (response_kind_conflict) and a plain assignment destroyed it.
+        for _w in _idx_warnings:
+            _add_row_flag(row, _w)
     target.append(row)
 
 
@@ -1665,7 +1767,10 @@ def normalize_result(parsed):
     for sp in out["species_ranges"]:
         name = (sp.get("species") or "").strip()
         if name and _IRON_RULE_ZONE_RE.search(name):
-            sp["_warning"] = "iron_rule_zone_label"
+            # FIX-2026-09-22 (audit item 2 family): additive — the row can
+            # already carry index_order_swap / response_kind_conflict and a
+            # plain assignment wiped both on the server.
+            _add_row_flag(sp, "iron_rule_zone_label")
             if "iron_rule_zone_label" not in root_warnings:
                 root_warnings.append("iron_rule_zone_label")
 
@@ -1685,11 +1790,6 @@ def normalize_result(parsed):
     except (TypeError, ValueError):
         conf = 0.0
     out["confidence"] = max(0.0, min(1.0, conf))
-    # BORROW-2026-09-20 (B): hoist the optional calibration to a root key so
-    # the geometry sidecars' numbers are re-derivable downstream. Absent when
-    # the model emitted none — legacy results keep their exact old key set.
-    if axes:
-        out["axis_calibration"] = axes
     # LOW fix: drop _array_root (and its _note companion) from top-level
     # extras - the per-item rows are already distributed, so the raw
     # payload would be a duplicate.
@@ -1697,6 +1797,12 @@ def normalize_result(parsed):
                   if k not in _KNOWN_RANGE_CHART_KEYS}
     extras_src.pop("_array_root", None)
     extras_src.pop("_note", None)
+    # BORROW-2026-09-20 (B): hoist the optional calibration to a root key so
+    # the geometry sidecars' numbers are re-derivable downstream. Absent when
+    # the model emitted none — legacy results keep their exact old key set.
+    # FIX-2026-09-22 (audit item 7): an unusable block now warns instead of
+    # disappearing, and its raw text is kept under ``_extras``.
+    _fold_axis_calibration(parsed, axes, out, extras_src, root_warnings)
     if extras_src:
         out["_extras"] = extras_src
     if root_warnings:
@@ -2439,11 +2545,11 @@ def normalize_abundance_result(parsed: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         conf = 0.0
     out["confidence"] = max(0.0, min(1.0, conf))
-    # BORROW-2026-09-20 (B): hoist the calibration; absent -> no new key.
-    if axes:
-        out["axis_calibration"] = axes
     top_extras = _pop_array_root_extras(
         {k: v for k, v in parsed.items() if k not in _KNOWN_ABUNDANCE_ROOT_KEYS})
+    # BORROW-2026-09-20 (B): hoist the calibration; absent -> no new key.
+    # FIX-2026-09-22 (audit item 7): unusable -> warn + keep the raw block.
+    _fold_axis_calibration(parsed, axes, out, top_extras, warnings)
     if top_extras:
         out["_extras"] = top_extras
     if warnings:
@@ -3168,13 +3274,12 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
     except (TypeError, ValueError):
         conf = 0.0
     out["confidence"] = max(0.0, min(1.0, conf))
-    # BORROW-2026-09-20 (B): hoist the calibration; absent -> no new key.
-    if _chem_axes:
-        out["axis_calibration"] = _chem_axes
-
     extras_src = _pop_array_root_extras(
         {k: v for k, v in parsed.items()
          if k not in _KNOWN_CHEMICAL_STRAT_ROOT_KEYS})
+    # BORROW-2026-09-20 (B): hoist the calibration; absent -> no new key.
+    # FIX-2026-09-22 (audit item 7): unusable -> warn + keep the raw block.
+    _fold_axis_calibration(parsed, _chem_axes, out, extras_src, _chem_warnings)
     if extras_src:
         out["_extras"] = extras_src
     if _chem_warnings:
@@ -3693,12 +3798,11 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         conf = 0.0
     out["confidence"] = max(0.0, min(1.0, conf))
-    # BORROW-2026-09-20 (B): hoist the calibration; absent -> no new key.
-    if _scatter_axes:
-        out["axis_calibration"] = _scatter_axes
-
     extras_src = _pop_array_root_extras(
         {k: v for k, v in parsed.items() if k not in _KNOWN_SCATTER_PLOT_ROOT_KEYS})
+    # BORROW-2026-09-20 (B): hoist the calibration; absent -> no new key.
+    # FIX-2026-09-22 (audit item 7): unusable -> warn + keep the raw block.
+    _fold_axis_calibration(parsed, _scatter_axes, out, extras_src, scatter_warnings)
     if extras_src:
         out["_extras"] = extras_src
     if scatter_warnings:

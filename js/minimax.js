@@ -855,6 +855,346 @@ function rcaSetRowWarning(row, flags) {
   row._warning = list.length === 1 ? list[0] : list;
 }
 
+// ---------------------------------------------------------------------------
+// FIX-2026-09-22 (A2): browser mirror of the extractor's coverage contract +
+// geometry sidecar (rca_core/extractor.py attach_row_contract /
+// geometry_from_row / _fold_axis_calibration). js/prompt.js marks
+// response_kind / reason_codes / *pos_0_999 REQUIRED, yet minimax.js knew
+// none of these keys, so rcaNormalizeResult swept every contract field into
+// `_extras`: aggregate.js's priority-vote / union merge never fired and
+// quality.js saw row.response_kind === undefined (no frontend ledger ever).
+// The helpers below mirror the CURRENT Python behavior (source of truth),
+// including the FIX-2026-09-22 backend items: zero-span axis_calibration ->
+// unusable (no calibrated:true, contradiction guards still apply), chemical
+// top/base_pos_0_999 semantic pairing (15% contradiction check), and bool
+// rejection in the position / calibration parsers.
+// ---------------------------------------------------------------------------
+
+// Mirror of _add_row_flag (extractor.py): same single-string / list convention
+// as rcaSetRowWarning but ADDITIVE — the contract can flag a row
+// (response_kind_conflict) before the order repair flags it, and a plain
+// assignment destroys the first fact (FIX-2026-09-22 audit item 2 family).
+function rcaAddRowFlag(row, tag) {
+  const existing = row._warning;
+  if (existing === null || existing === undefined || existing === '') {
+    row._warning = tag;
+    return;
+  }
+  const flags = Array.isArray(existing) ? existing.slice() : [existing];
+  if (flags.indexOf(tag) === -1) flags.push(tag);
+  row._warning = flags.length === 1 ? flags[0] : flags;
+}
+
+const RCA_POS_SCALE_KEY = 'pos_0_999';
+const RCA_POS_SUFFIX = '_pos_0_999';
+const RCA_POS_MIN = 0;
+const RCA_POS_MAX = 999;
+const RCA_GEOMETRY_VERSION = 1;
+const RCA_GEOMETRY_SCALE = 'pos_0_999';
+const RCA_GEOMETRY_TOLERANCE = 0.15;
+// Mirror of _GEOMETRY_AXIS_BY_FIELD / _GEOMETRY_VERTICAL_FIELDS.
+const RCA_GEOMETRY_AXIS_BY_FIELD = { x_pos_0_999: 'x', y_pos_0_999: 'y' };
+const RCA_GEOMETRY_VERTICAL_FIELDS = [
+  'pos_0_999', 'depth_pos_0_999', 'level_pos_0_999', 'age_pos_0_999',
+  'range_top_pos_0_999', 'range_base_pos_0_999',
+  'top_pos_0_999', 'base_pos_0_999',
+];
+// Mirror of _GEOMETRY_SEMANTIC_KEYS, INCLUDING the FIX-2026-09-22 (audit
+// item 5) chemical pairs: without top/base_pos_0_999 the anti-self-echo
+// contradiction test silently never ran for that mode.
+const RCA_GEOMETRY_SEMANTIC_KEYS = {
+  pos_0_999: ['depth', 'depth_m', 'age_ma', 'y', 'level'],
+  y_pos_0_999: ['y'],
+  x_pos_0_999: ['x'],
+  range_top_pos_0_999: ['range_top_idx', 'range_top'],
+  range_base_pos_0_999: ['range_base_idx', 'range_base'],
+  depth_pos_0_999: ['depth', 'depth_m'],
+  age_pos_0_999: ['age_ma', 'age'],
+  level_pos_0_999: ['level', 'depth', 'depth_m'],
+  top_pos_0_999: ['top_depth_m', 'top_age_ma'],
+  base_pos_0_999: ['base_depth_m', 'base_age_ma'],
+};
+// Mirror of _CONTRACT_SOURCE_KEYS: the row-level source keys the contract
+// consumes; handed to rcaCarryExtras beside the consumed pos fields.
+const RCA_CONTRACT_SOURCE_KEYS = ['response_kind', 'reason_codes', 'reason_code'];
+
+// Mirror of _to_float_opt. NOT rcaPyFloatOrNull: Python rejects a bool here
+// (bool is an int subclass and `True` is not a scientific value), and maps
+// European decimal commas before float().
+function rcaToFloatOpt(value) {
+  if (value === null || value === undefined || typeof value === 'boolean') return null;
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'string') return null;
+  const text = value.trim().replace(/,/g, '.');
+  if (!text) return null;
+  return rcaPyFloatOrNull(text);
+}
+
+// Mirror of normalize_pos_0_999: strictly an INTEGER in [0, 999] ("712" is
+// fine; 712.5 / 1000 / -1 / true are not — FIX-2026-09-22 audit item 8: a
+// bool is never a position).
+function rcaNormalizePos0999(value) {
+  if (value === null || value === undefined || typeof value === 'boolean') return null;
+  let parsed = null;
+  if (typeof value === 'number') {
+    parsed = value;
+  } else if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return null;
+    parsed = rcaPyFloatOrNull(text);
+  } else {
+    return null;
+  }
+  if (parsed === null || !Number.isFinite(parsed) || !Number.isInteger(parsed)) return null;
+  if (parsed < RCA_POS_MIN || parsed > RCA_POS_MAX) return null;
+  return parsed;
+}
+
+// Mirror of _axis_domain: {at_0, at_999, unit} or null unless BOTH ends are
+// numeric. Accepted shapes: [lo, hi], {at_0|bottom|base|oldest|min|start|0},
+// {at_999|top|ceiling|youngest|max|end|999}.
+function rcaAxisDomain(raw) {
+  if (Array.isArray(raw) && raw.length === 2) {
+    const low = rcaToFloatOpt(raw[0]);
+    const high = rcaToFloatOpt(raw[1]);
+    return (low !== null && high !== null) ? { at_0: low, at_999: high, unit: '' } : null;
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  let low = null;
+  let high = null;
+  for (const key of ['at_0', 'bottom', 'base', 'oldest', 'min', 'start', '0']) {
+    if (key in raw) {
+      low = rcaToFloatOpt(raw[key]);
+      if (low !== null) break;
+    }
+  }
+  for (const key of ['at_999', 'top', 'ceiling', 'youngest', 'max', 'end', '999']) {
+    if (key in raw) {
+      high = rcaToFloatOpt(raw[key]);
+      if (high !== null) break;
+    }
+  }
+  if (low === null || high === null) return null;
+  const unit = raw.unit;
+  return {
+    at_0: low, at_999: high,
+    unit: (typeof unit === 'string' || typeof unit === 'number') ? String(unit).trim() : '',
+  };
+}
+
+// Mirror of _axis_calibration_blocks: root, then metadata, then _extras.
+function rcaAxisCalibrationBlocks(payload) {
+  const blocks = [];
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return blocks;
+  for (const holder of [payload, payload.metadata, payload._extras]) {
+    if (!holder || typeof holder !== 'object' || Array.isArray(holder)) continue;
+    const candidate = holder.axis_calibration;
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)
+        && Object.keys(candidate).length) {
+      blocks.push(candidate);
+    }
+  }
+  return blocks;
+}
+
+// Mirror of axis_domains_from: first definition of an axis name wins; unknown
+// names survive verbatim.
+function rcaAxisDomainsFrom(payload) {
+  const out = {};
+  for (const candidate of rcaAxisCalibrationBlocks(payload)) {
+    for (const name of Object.keys(candidate)) {
+      const domain = rcaAxisDomain(candidate[name]);
+      if (domain && !(name in out)) out[name] = domain;
+    }
+  }
+  return out;
+}
+
+// Mirror of _geometry_axis_for: an unknown `<prefix>_pos_0_999` maps to the
+// axis named <prefix> ONLY when the result actually calibrates it, so a
+// bar-length read can never silently borrow the vertical axis.
+function rcaGeometryAxisFor(field, axes) {
+  if (Object.prototype.hasOwnProperty.call(RCA_GEOMETRY_AXIS_BY_FIELD, field)) {
+    return RCA_GEOMETRY_AXIS_BY_FIELD[field];
+  }
+  if (RCA_GEOMETRY_VERTICAL_FIELDS.indexOf(field) !== -1 || field === RCA_POS_SCALE_KEY) {
+    return 'vertical';
+  }
+  if (field.endsWith(RCA_POS_SUFFIX)) {
+    const prefix = field.slice(0, -RCA_POS_SUFFIX.length);
+    // Own-property check only: model data must never resolve inherited keys
+    // like "constructor" / "toString" through the prototype chain (Python
+    // dicts only ever see their own keys).
+    if (prefix && axes && Object.prototype.hasOwnProperty.call(axes, prefix)) {
+      return prefix;
+    }
+  }
+  return null;
+}
+
+// Mirror of pos_to_axis_value (with the FIX-2026-09-22 audit item 8 bool
+// rejection: a model-emitted `true` must not map as position 1).
+function rcaPosToAxisValue(pos, domain) {
+  if (!domain || pos === null || pos === undefined) return null;
+  if (typeof pos === 'boolean' || typeof pos !== 'number') return null;
+  const low = domain.at_0;
+  const high = domain.at_999;
+  if (typeof low === 'boolean' || typeof high === 'boolean') return null;
+  if (typeof low !== 'number' || typeof high !== 'number') return null;
+  return low + (pos / RCA_POS_MAX) * (high - low);
+}
+
+// Mirror of _geometry_point -> {entry, rejected, axis}. Rejected means the
+// position cannot be trusted (bad int, out of scale, zero-span calibration
+// (audit item 4: keep raw pos as evidence, NEVER calibrated:true via a
+// value), off-domain, or contradicting the row's own transcribed boundary by
+// more than GEOMETRY_TOLERANCE of the axis span (audit item 5 covers the
+// chemical top/base pairing)).
+function rcaGeometryPoint(field, raw, srcRow, axes) {
+  const pos = rcaNormalizePos0999(raw);
+  if (pos === null) return { entry: null, rejected: true, axis: null };
+  const axis = rcaGeometryAxisFor(field, axes);
+  let domain = (axis && axes && Object.prototype.hasOwnProperty.call(axes, axis))
+    ? axes[axis] : null;
+  if ((domain === null || domain === undefined) && axes
+      && Object.prototype.hasOwnProperty.call(axes, field)) domain = axes[field];
+  if (domain === undefined) domain = null;
+  const entry = { pos: pos, axis: axis || 'uncalibrated' };
+  if (!domain) {
+    // No calibration: the 0-999 integer survives as evidence, nothing more.
+    return { entry: entry, rejected: false, axis: null };
+  }
+  const value = rcaPosToAxisValue(pos, domain);
+  if (value === null) return { entry: null, rejected: true, axis: null };
+  const lo = Math.min(Number(domain.at_0), Number(domain.at_999));
+  const hi = Math.max(Number(domain.at_0), Number(domain.at_999));
+  const span = hi - lo;
+  if (span <= 0) {
+    // FIX-2026-09-22 (audit item 4): zero-span carries no information — the
+    // raw integer stays, the point is rejected (=> low_confidence) and no
+    // `value` (hence never `calibrated: true`) is written.
+    return { entry: entry, rejected: true, axis: null };
+  }
+  const tol = RCA_GEOMETRY_TOLERANCE * span;
+  if (!(lo - tol <= value && value <= hi + tol)) {
+    return { entry: null, rejected: true, axis: null };
+  }
+  const semKeys = Object.prototype.hasOwnProperty.call(RCA_GEOMETRY_SEMANTIC_KEYS, field)
+    ? RCA_GEOMETRY_SEMANTIC_KEYS[field] : [];
+  for (const semKey of semKeys) {
+    const sem = rcaToFloatOpt(srcRow ? srcRow[semKey] : null);
+    if (sem === null || !(lo <= sem && sem <= hi)) continue;
+    if (Math.abs(value - sem) > tol) {
+      return { entry: null, rejected: true, axis: null };
+    }
+    break;
+  }
+  entry.value = (typeof rcaPyRound === 'function') ? rcaPyRound(value, 6) : value;
+  if (domain.unit) entry.unit = domain.unit;
+  return { entry: entry, rejected: false, axis: axis };
+}
+
+// Mirror of geometry_from_row -> {geometry, rejected, consumed}. A bad point
+// is dropped, the good ones survive; nothing survives -> no geometry key.
+function rcaGeometryFromRow(src, axes, row) {
+  const srcRow = (row && typeof row === 'object' && !Array.isArray(row))
+    ? row : ((src && typeof src === 'object' && !Array.isArray(src)) ? src : {});
+  const points = {};
+  const usedAxes = {};
+  const consumed = [];
+  let rejected = false;
+  if (!src || typeof src !== 'object' || Array.isArray(src)) {
+    return { geometry: null, rejected: false, consumed: consumed };
+  }
+  for (const field of Object.keys(src)) {
+    if (!(field === RCA_POS_SCALE_KEY || field.endsWith(RCA_POS_SUFFIX))) continue;
+    consumed.push(field);
+    const r = rcaGeometryPoint(field, src[field], srcRow, axes);
+    if (r.rejected) rejected = true;
+    if (r.entry === null) continue;
+    if (r.axis && r.entry.value !== undefined && !(r.axis in usedAxes)) {
+      let domain = (axes && axes[r.axis]) || (axes && axes[field]) || null;
+      if (domain) usedAxes[r.axis] = domain;
+    }
+    points[field] = r.entry;
+  }
+  if (!Object.keys(points).length) {
+    return { geometry: null, rejected: rejected, consumed: consumed };
+  }
+  const usedAxisNames = Object.keys(usedAxes);
+  const geometry = {
+    version: RCA_GEOMETRY_VERSION,
+    scale: RCA_GEOMETRY_SCALE,
+    calibrated: usedAxisNames.length > 0,
+    points: points,
+  };
+  if (usedAxisNames.length) {
+    for (const name of usedAxisNames) geometry.axes = geometry.axes || {}, geometry.axes[name] = usedAxes[name];
+  }
+  return { geometry: geometry, rejected: rejected, consumed: consumed };
+}
+
+// Mirror of apply_coverage_contract. Depends on the reason-codes.js globals
+// (rcaNormalizeResponseKind / rcaNormalizeReasonCodes / rcaRowHasValue /
+// RCA_RESPONSE_*), loaded before any extraction runs (index.html script
+// order; the node suites load the same set).
+function rcaApplyCoverageContract(src, row, extraCodes) {
+  if (!src || typeof src !== 'object' || Array.isArray(src)) return;
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return;
+  const kind = rcaNormalizeResponseKind(src.response_kind);
+  const codes = rcaNormalizeReasonCodes(rcaPyOr(src.reason_codes, src.reason_code));
+  for (const code of (extraCodes || [])) {
+    const slugList = rcaNormalizeReasonCodes([code]);
+    const slug = slugList.length ? slugList[0] : null;
+    if (slug && codes.indexOf(slug) === -1) codes.push(slug);
+  }
+  if (kind === RCA_RESPONSE_NOT_DRAWN && rcaRowHasValue(row)) {
+    // "not drawn" plus a value = it WAS drawn. extracted wins; flag the lie.
+    row.response_kind = RCA_RESPONSE_EXTRACTED;
+    rcaAddRowFlag(row, 'response_kind_conflict');
+  } else if (kind) {
+    row.response_kind = kind;
+  }
+  if (codes.length) row.reason_codes = codes;
+}
+
+// Mirror of attach_row_contract: returns the consumed pos keys so the caller
+// keeps them out of _extras.
+function rcaAttachRowContract(src, row, axes) {
+  const g = rcaGeometryFromRow(src, axes, row);
+  if (g.geometry !== null) row.geometry = g.geometry;
+  rcaApplyCoverageContract(src, row, g.rejected ? [RCA_LOW_CONFIDENCE_CODE] : []);
+  return g.consumed;
+}
+
+// Mirror of axis_calibration_unusable (FIX-2026-09-22 audit item 7): a block
+// exists but nothing survives _axis_domain, or every surviving axis is
+// degenerate (at_0 == at_999 — the zero-span shape of audit item 4).
+function rcaAxisCalibrationUnusable(parsed, axesIn) {
+  if (!rcaAxisCalibrationBlocks(parsed).length) return false;
+  const axes = (axesIn === null || axesIn === undefined) ? rcaAxisDomainsFrom(parsed) : axesIn;
+  const names = Object.keys(axes);
+  if (!names.length) return true;
+  return names.every((k) => Number(axes[k].at_0) === Number(axes[k].at_999));
+}
+
+// Mirror of _fold_axis_calibration: usable -> hoist; unusable -> no hoist, an
+// `axis_calibration_unusable` root warning and the raw block kept under the
+// extras source so the operator still sees what the model claimed.
+function rcaFoldAxisCalibration(parsed, axes, out, extrasSrc, warnings) {
+  if (rcaAxisCalibrationUnusable(parsed, axes)) {
+    rcaPushWarning(warnings, 'axis_calibration_unusable');
+    const raw = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+      ? parsed.axis_calibration : null;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && Object.keys(raw).length) {
+      extrasSrc.axis_calibration = raw;
+    }
+    return;
+  }
+  if (axes && Object.keys(axes).length) out.axis_calibration = axes;
+}
+
+
 // Python's bare `str()` — used where the oracle calls str() directly instead of
 // _stringify_scalar (phylogenetic `root_ids` / node id normalisation). The two
 // spellings differ on containers (repr vs "") and on booleans ("True" vs
@@ -1090,16 +1430,24 @@ function rcaIterRows(raw, kind, warnings) {
 // normalizer and came back ok=true with an empty table. The lists below are
 // verbatim so the guard is honest for a mode the browser cannot serve.
 const RCA_MODE_ROOT_KEYS = {
-  range_chart:        ['sections', 'species_ranges', 'biozones', 'other_fossils', 'confidence'],
+  // FIX-2026-09-22 (A2): the four contract modes carry the optional root
+  // `axis_calibration` in their documented root-key set (mirror of Python
+  // _mode_root_keys -> _KNOWN_*_ROOT_KEYS, which gained it under
+  // BORROW-2026-09-20 (B)), so a calibration-only payload is not mistaken
+  // for an unrelated root by rcaRootUnrelated.
+  range_chart:        ['sections', 'species_ranges', 'biozones', 'other_fossils', 'confidence',
+                       'axis_calibration'],
   columnar_section:   ['sections', 'fossil_legend', 'lithology_legend', 'cross_beds',
                        'overall_confidence', 'confidence'],
-  abundance_diagram:  ['sites', 'abundances', 'zones', 'confidence'],
+  abundance_diagram:  ['sites', 'abundances', 'zones', 'confidence', 'axis_calibration'],
   phylogenetic_tree:  ['metadata', 'nodes', 'root_ids', 'legend', 'confidence'],
-  chemical_stratigraphy: ['metadata', 'data_points', 'events', 'intervals', 'confidence'],
+  chemical_stratigraphy: ['metadata', 'data_points', 'events', 'intervals', 'confidence',
+                          'axis_calibration'],
   paleomap:           ['metadata', 'continents', 'oceans_seas', 'tectonic_features',
                        'biogeographic_realms', 'fossil_sites', 'paleolatitude_indicators',
                        'confidence'],
-  scatter_plot:       ['metadata', 'groups', 'points', 'outliers', 'statistics', 'confidence'],
+  scatter_plot:       ['metadata', 'groups', 'points', 'outliers', 'statistics', 'confidence',
+                       'axis_calibration'],
   zonation_chart:     ['zonations', 'zones', 'correlations', 'confidence'],
 };
 
@@ -1115,8 +1463,15 @@ function rcaTruncatedWarningIfForeign(parsed, mode) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return ['normalize_non_dict_input'];
   }
-  const roots = RCA_MODE_ROOT_KEYS[mode];
-  if (!roots || !Object.keys(parsed).length) return null;
+  const roots0 = RCA_MODE_ROOT_KEYS[mode];
+  if (!roots0 || !Object.keys(parsed).length) return null;
+  // FIX-2026-09-22 (A2): normalize_result's inline foreign check mirrors
+  // Python's hardcoded RANGE_CHART_ROOTS (5 keys, WITHOUT axis_calibration),
+  // which is deliberately narrower than _KNOWN_RANGE_CHART_KEYS used by the
+  // _ok_result root-unrelated guard below (rcaRootUnrelated). A payload that
+  // carries only a calibration block still answers nothing.
+  const roots = (mode === 'range_chart')
+    ? roots0.filter((k) => k !== 'axis_calibration') : roots0;
   const keys = Object.keys(parsed);
   const matched = keys.some((k) => roots.indexOf(k) !== -1);
   if (matched) return null;
@@ -1191,7 +1546,7 @@ function rcaUnusablePayloadReason(parsed, data, mode, truncated) {
 // pushing the raw dict left string-where-list-was-expected fields such as
 // `formations` uncoerced), and unclassifiable dicts survive under
 // `_unclassified` instead of vanishing.
-function rcaArrayRootIntoRangeChart(parsed, out, rootWarnings) {
+function rcaArrayRootIntoRangeChart(parsed, out, rootWarnings, axes) {
   const items = parsed && parsed._array_root;
   if (!Array.isArray(items)) return;
   for (const item of items) {
@@ -1204,7 +1559,7 @@ function rcaArrayRootIntoRangeChart(parsed, out, rootWarnings) {
     }
     const key = rcaClassifyArrayItem(item);
     if (key === 'sections') rcaNormalizeSectionInto(item, out.sections, rootWarnings);
-    else if (key === 'species_ranges') rcaNormalizeSpeciesInto(item, out.species_ranges, rootWarnings);
+    else if (key === 'species_ranges') rcaNormalizeSpeciesInto(item, out.species_ranges, rootWarnings, axes);
     else if (key === 'biozones') rcaNormalizeBiozoneInto(item, out.biozones, rootWarnings);
     else if (key) (out[key] = out[key] || []).push(item);
     else (out._unclassified = out._unclassified || []).push(item);
@@ -1274,8 +1629,12 @@ const _RCA_KNOWN_SPECIES_KEYS = ['species', 'section', 'range_top', 'range_base'
 const _RCA_KNOWN_BIOZONE_KEYS = ['name', 'section', 'age', 'thickness_m', 'zone_type'];
 // Verbatim mirror of _KNOWN_RANGE_CHART_KEYS — the root keys whose leftovers
 // become the result's `_extras`.
+// FIX-2026-09-22 (A2): `axis_calibration` joins the whitelist (mirror of the
+// BORROW-2026-09-20 (B) Python key): it is a hoisted root key, not an
+// _extras leftover — the fold below decides hoist vs warn-and-keep-raw.
 const _RCA_KNOWN_RANGE_CHART_KEYS = ['sections', 'species_ranges', 'biozones',
-                                     'other_fossils', 'confidence'];
+                                     'other_fossils', 'confidence',
+                                     'axis_calibration'];
 const _RCA_VALID_OCCURRENCE_MODES = ['unknown', 'in_situ', 'reworked', 'transported',
                                      'cavity_fill', 'bioturbated', 'derived', 'lag_deposit'];
 const _RCA_VALID_ENDPOINT_KINDS = ['unknown', 'observed', 'projected', 'truncated'];
@@ -1331,7 +1690,12 @@ function rcaNormalizeSectionInto(sec, target, warnings) {
 // pair used to be exported as a valid range and nothing downstream caught it —
 // quality.py's FAD/LAD check reads the STRING fields, not the index fields — so
 // the pair is swapped and the row carries `index_order_swap`.
-function rcaNormalizeSpeciesInto(sp, target, warnings) {
+// FIX-2026-09-22 (A2): takes the figure-level `axes` and runs the row through
+// rcaAttachRowContract (mirror of Python attach_row_contract), so
+// response_kind / reason_codes / *pos_0_999 land as FIRST-CLASS row fields
+// (geometry sidecar + coverage contract) instead of sinking into `_extras`,
+// where the merge priority-vote and the coverage ledger could never see them.
+function rcaNormalizeSpeciesInto(sp, target, warnings, axes) {
   let topIdx = rcaOptionalInt(sp ? sp.range_top_idx : null);
   let baseIdx = rcaOptionalInt(sp ? sp.range_base_idx : null);
   const idxWarnings = [];
@@ -1357,7 +1721,13 @@ function rcaNormalizeSpeciesInto(sp, target, warnings) {
     confidence: rcaOptionalConfidence(sp ? sp.confidence : null),
     note: rcaStringifyScalar(sp ? sp.note : ''),
   };
-  rcaCarryExtras(sp, _RCA_KNOWN_SPECIES_KEYS, row);
+  // FIX-2026-09-22 (A2): geometry + coverage contract, additively — mirror of
+  // `consumed = attach_row_contract(sp, row, axes=axes)`; the consumed pos
+  // keys plus the contract source keys join the known list so _carry_extras
+  // never duplicates them under _extras (Python: _KNOWN_SPECIES_KEYS +
+  // _CONTRACT_SOURCE_KEYS + consumed).
+  const consumed = rcaAttachRowContract(sp, row, axes);
+  rcaCarryExtras(sp, _RCA_KNOWN_SPECIES_KEYS.concat(RCA_CONTRACT_SOURCE_KEYS, consumed), row);
   // P0-4: defensive — if the species name reads like a zone, flag & annotate.
   const spName = row.species;
   if (spName && _RCA_IRON_RULE_ZONE_RE.test(spName)) {
@@ -1365,7 +1735,10 @@ function rcaNormalizeSpeciesInto(sp, target, warnings) {
   }
   // Same single-string / list convention as the columnar block rows, so
   // rcaWarningFlags reads every `_warning` the same way.
-  rcaSetRowWarning(row, idxWarnings);
+  // FIX-2026-09-22 (audit item 2 family, mirror of extractor.py): ADDITIVE —
+  // rcaAttachRowContract above may already have flagged this very row
+  // (response_kind_conflict) and a plain assignment destroyed it.
+  for (const w of idxWarnings) rcaAddRowFlag(row, w);
   target.push(row);
   return row;
 }
@@ -1419,10 +1792,10 @@ function rcaNormalizeBiozoneInto(bz, target, warnings) {
 //   * list-shaped: dicts pass through; a bare string coerces to a one-field row
 //     and the repair is flagged `string_row_coerced` (both engines used to
 //     discard those entries in silence).
-function rcaCoerceRangeChartList(raw, kind, out, rootWarnings) {
+function rcaCoerceRangeChartList(raw, kind, out, rootWarnings, axes) {
   const append = (row) => {
     if (kind === 'sections') rcaNormalizeSectionInto(row, out.sections, rootWarnings);
-    else if (kind === 'species_ranges') rcaNormalizeSpeciesInto(row, out.species_ranges, rootWarnings);
+    else if (kind === 'species_ranges') rcaNormalizeSpeciesInto(row, out.species_ranges, rootWarnings, axes);
     else if (kind === 'biozones') rcaNormalizeBiozoneInto(row, out.biozones, rootWarnings);
   };
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -1479,6 +1852,12 @@ function rcaNormalizeResult(parsed) {
   };
   const rootWarnings = [];
 
+  // FIX-2026-09-22 (A2): BORROW-2026-09-20 (B) mirror — one figure-level axis
+  // calibration per result; the rows' *pos_0_999 reads convert against it,
+  // absent it they stay raw evidence. Read once so every row builder shares
+  // the same domains.
+  const axes = rcaAxisDomainsFrom(parsed);
+
   // MEDIUM fix (truncated rescue): a rescued partial / inner object that matches
   // none of the documented range-chart root keys is flagged so the operator is
   // not silently handed an empty ok=True result.
@@ -1489,11 +1868,11 @@ function rcaNormalizeResult(parsed) {
   // APPENDING to the same buckets the named arrays feed, never by replacing
   // them (REVIEW-2026-09-20 #12: the old pre-pass dropped a payload's real
   // `sections` list because the wrapper keys shadowed it).
-  rcaArrayRootIntoRangeChart(parsed, out, rootWarnings);
+  rcaArrayRootIntoRangeChart(parsed, out, rootWarnings, axes);
 
-  rcaCoerceRangeChartList(parsed.sections, 'sections', out, rootWarnings);
-  rcaCoerceRangeChartList(parsed.species_ranges, 'species_ranges', out, rootWarnings);
-  rcaCoerceRangeChartList(parsed.biozones, 'biozones', out, rootWarnings);
+  rcaCoerceRangeChartList(parsed.sections, 'sections', out, rootWarnings, axes);
+  rcaCoerceRangeChartList(parsed.species_ranges, 'species_ranges', out, rootWarnings, axes);
+  rcaCoerceRangeChartList(parsed.biozones, 'biozones', out, rootWarnings, axes);
   if (Array.isArray(parsed._unclassified)) {
     (out._unclassified = out._unclassified || []).push(...parsed._unclassified);
   }
@@ -1504,7 +1883,10 @@ function rcaNormalizeResult(parsed) {
   for (const sp of out.species_ranges) {
     const name = rcaNameStr(sp, 'species');
     if (name && _RCA_IRON_RULE_ZONE_RE.test(name)) {
-      sp._warning = 'iron_rule_zone_label';
+      // FIX-2026-09-22 (audit item 2 family, mirror of extractor.py):
+      // additive — the row can already carry index_order_swap /
+      // response_kind_conflict and a plain assignment wiped both.
+      rcaAddRowFlag(sp, 'iron_rule_zone_label');
       rcaPushWarning(rootWarnings, 'iron_rule_zone_label');
     }
   }
@@ -1518,8 +1900,12 @@ function rcaNormalizeResult(parsed) {
   out.confidence = rcaConfidenceClamped('confidence' in parsed ? parsed.confidence : 0.0);
 
   // LOW fix: `_array_root` / `_note` are diagnostics, not data.
-  const extras = rcaTopExtras(parsed, _RCA_KNOWN_RANGE_CHART_KEYS, false);
-  if (extras) out._extras = extras;
+  // FIX-2026-09-22 (A2): hoist a usable axis_calibration to a root key; an
+  // unusable one warns (`axis_calibration_unusable`) and its raw block stays
+  // under `_extras` (mirror of _fold_axis_calibration, audit item 7).
+  const extras = rcaTopExtras(parsed, _RCA_KNOWN_RANGE_CHART_KEYS, false) || {};
+  rcaFoldAxisCalibration(parsed, axes, out, extras, rootWarnings);
+  if (Object.keys(extras).length) out._extras = extras;
   if (rootWarnings.length) out._warnings = rootWarnings;
   return out;
 }
@@ -1816,7 +2202,10 @@ const _RCA_KNOWN_ABUNDANCE_SITE_KEYS = ['name', 'location', 'age_range', 'depth_
 const _RCA_KNOWN_ABUNDANCE_ABUNDANCE_KEYS = ['taxon', 'site', 'level', 'depth',
                                              'abundance', 'abundance_unit'];
 const _RCA_KNOWN_ABUNDANCE_ZONE_KEYS = ['name', 'age', 'level_range'];
-const _RCA_KNOWN_ABUNDANCE_ROOT_KEYS = ['sites', 'abundances', 'zones', 'confidence'];
+// FIX-2026-09-22 (A2): mirror of _KNOWN_ABUNDANCE_ROOT_KEYS — `axis_calibration`
+// is a hoisted root key, not an _extras leftover.
+const _RCA_KNOWN_ABUNDANCE_ROOT_KEYS = ['sites', 'abundances', 'zones', 'confidence',
+                                        'axis_calibration'];
 
 function rcaNormalizeAbundanceResult(parsed) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) parsed = {};
@@ -1843,6 +2232,9 @@ function rcaNormalizeAbundanceResult(parsed) {
   }
   const warnings = [];
   const out = { sites: [], abundances: [], zones: [], confidence: 0.0 };
+  // FIX-2026-09-22 (A2): BORROW-2026-09-20 (B) mirror — the optional
+  // figure-level calibration for the continuous axis, read once for all rows.
+  const axes = rcaAxisDomainsFrom(parsed);
   for (const site of rcaIterRows(parsed.sites, 'sites', warnings)) {
     const row = {
       name: rcaStringifyScalar(site.name),
@@ -1862,7 +2254,12 @@ function rcaNormalizeAbundanceResult(parsed) {
       abundance: rcaStringifyScalar(ab.abundance),
       abundance_unit: rcaStringifyScalar(ab.abundance_unit),
     };
-    rcaCarryExtras(ab, _RCA_KNOWN_ABUNDANCE_ABUNDANCE_KEYS, row);
+    // FIX-2026-09-22 (A2): coverage contract + geometry sidecar, mirror of
+    // `consumed = attach_row_contract(ab, row, axes=axes)` followed by the
+    // extended _carry_extras known list.
+    const consumed = rcaAttachRowContract(ab, row, axes);
+    rcaCarryExtras(ab, _RCA_KNOWN_ABUNDANCE_ABUNDANCE_KEYS
+      .concat(RCA_CONTRACT_SOURCE_KEYS, consumed), row);
     out.abundances.push(row);
   }
   for (const z of rcaIterRows(parsed.zones, 'zones', warnings)) {
@@ -1881,8 +2278,12 @@ function rcaNormalizeAbundanceResult(parsed) {
   // Root extras = every undocumented key, `_array_root`/`_note` stripped, and
   // `_unclassified` deliberately INCLUDED (it is not a root key), which is how
   // the unclassifiable records stay visible to the reviewer.
-  const rootEx = rcaTopExtras(parsed, _RCA_KNOWN_ABUNDANCE_ROOT_KEYS, false);
-  if (rootEx) out._extras = rootEx;
+  // FIX-2026-09-22 (A2): then fold the calibration — hoist when usable,
+  // warn + keep the raw block under _extras when not (mirror of
+  // _fold_axis_calibration / audit item 7).
+  const rootEx = rcaTopExtras(parsed, _RCA_KNOWN_ABUNDANCE_ROOT_KEYS, false) || {};
+  rcaFoldAxisCalibration(parsed, axes, out, rootEx, warnings);
+  if (Object.keys(rootEx).length) out._extras = rootEx;
   if (warnings.length) out._warnings = warnings;
   return out;
 }

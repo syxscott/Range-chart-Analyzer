@@ -6,7 +6,7 @@ genus names (radiolarians in particular) frequently come back as
 ``matchType: "NONE"`` or ``"Multiple equal matches"`` (the same name across
 kingdoms/phyla). The module must therefore
 
-1. pre-parse the cleaned string through ``/v1/parsers/name`` and carry the
+1. pre-parse the cleaned string through ``/v1/parser/name`` and carry the
    structured genus / specificEpithet / infraspecificEpithet / authorship
    into the backbone stage (genus-only follow-up query), keeping the raw
    input string;
@@ -40,20 +40,27 @@ BASE = "mock://gbif"
 
 def _parser_body(genus="Ptereoconus", species=None, infra=None,
                  authorship="Hoenes, 1891", parsed=True, name=""):
-    body = {
-        "parsed": parsed,
-        "genus": genus,
-        "authorship": authorship,
+    """FIX-2026-09-22 (item 1): mock the REAL contract of
+    ``GET /v1/parser/name?name=...`` - an ARRAY of parsed-name records whose
+    fields are ``genusOrAbove`` / ``canonicalName`` (not a dict with
+    ``genus`` / ``canonical``; the old mock mirrored the same wrong shape as
+    the code and masked a permanent 404)."""
+    if parsed is False:
+        # What the live parser returns for an unparsable string: one record
+        # carrying only the verbatim, no taxon fields.
+        return json.dumps([{"verbatim": name, "count": 1}])
+    rec = {
+        "verbatim": name,
         "type": "Species" if species else "Genus",
-        "canonical": name,
+        "genusOrAbove": genus,
+        "canonicalName": name or genus,
+        "authorship": authorship,
     }
     if species:
-        body["specificEpithet"] = species
+        rec["specificEpithet"] = species
     if infra:
-        body["infraspecificEpithet"] = infra
-    if parsed is False:
-        body = {"parsed": False, "verbatim": name}
-    return json.dumps(body)
+        rec["infraspecificEpithet"] = infra
+    return json.dumps([rec])
 
 
 def _match_body(match_type="EXACT", confidence=100, canonical="Clarkina yini",
@@ -89,7 +96,12 @@ class GbifMock:
     def __call__(self, url: str) -> str:
         self.calls.append(url)
         q = self._q(url)
-        if "/v1/parsers/name" in url:
+        # FIX-2026-09-22 (item 1): singular /v1/parser/name — the real
+        # GBIF path. (The PLURAL "/v1/parsers/name" used to live HERE too:
+        # the mock and the code shared the same wrong string, so the 404 in
+        # production was invisible to the suite.)
+        assert "/v1/parsers/" not in url, f"plural parser path is a 404: {url!r}"
+        if "/v1/parser/name" in url:
             target = self.parser
         elif "/v1/species/match" in url:
             target = self.match
@@ -113,7 +125,7 @@ def test_base_url_injection_hits_both_endpoints_under_base():
     mock = GbifMock(parser=_parser_body(), match=_match_body())
     v = verify_name_gbif("Clarkina yini", fetch=mock, base_url=BASE)
     assert v["status"] == "ok"
-    assert mock.calls[0].startswith(BASE + "/v1/parsers/name?name=")
+    assert mock.calls[0].startswith(BASE + "/v1/parser/name?name=")
     assert mock.calls[1].startswith(BASE + "/v1/species/match?verbose=true&name=")
     # The legacy default host must NOT leak into an injected-base call.
     assert all(DEFAULT_GBIF_BASE_URL not in u for u in mock.calls)
@@ -136,7 +148,7 @@ def test_parse_name_gbif_extracts_structured_fields():
     assert out["specific_epithet"] == "longispinus"
     assert out["infraspecific_epithet"] == "minor"
     assert out["authorship"] == "Hoenes, 1891"
-    assert "/v1/parsers/name" in mock.calls[0]
+    assert "/v1/parser/name" in mock.calls[0]
 
 
 def test_parse_name_gbif_fail_open_on_network_error():
@@ -152,7 +164,7 @@ def test_parser_runs_before_match_and_is_kept_in_result():
                     match=_match_body())
     v = verify_name_gbif("Clarkina yini (Meitek, 1970)", fetch=mock,
                          base_url=BASE)
-    assert mock.calls[0].startswith(BASE + "/v1/parsers/name")
+    assert mock.calls[0].startswith(BASE + "/v1/parser/name")
     assert v["status"] == "ok"
     assert v["parsed"]["genus"] == "Ptereoconus"  # parser verdict recorded
     # the ORIGINAL input string is preserved alongside the queried one

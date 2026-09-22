@@ -273,18 +273,36 @@ class TestRenameAndDiff:
 
 
 class TestNetworkLayerIsMocked:
-    def test_documented_ages_endpoint_is_tried_before_the_intervals_fallback(self):
+    # FIX-2026-09-22 (audit item 5): the working intervals endpoint leads;
+    # the documented-but-404ing ages alias is the fallback. These offline
+    # tests pin the ORDER so the refresh never pays a guaranteed 404 again.
+
+    def test_working_intervals_endpoint_is_tried_first(self):
         tried = []
 
         def fetch(url):
             tried.append(url)
-            if "defs/ages" in url:
-                raise update_ics.IcsUpdateError("HTTP 404")
             return FIXTURE_JSON.read_text(encoding="utf-8")
 
         result = update_ics.acquire("macrostrat", fetch=fetch)
-        assert "defs/ages" in tried[0] and "timescale_id=1" in tried[1]
+        assert "timescale_id=1" in tried[0]
+        assert not any("/defs/ages?" in url for url in tried), \
+            "the 404-ing ages endpoint must not be hit when intervals works"
         assert result["channel"] == "macrostrat"
+        assert len(result["rows"]) >= 14
+
+    def test_ages_endpoint_is_kept_as_fallback(self):
+        tried = []
+
+        def fetch(url):
+            tried.append(url)
+            if "timescale_id=1" in url:
+                raise update_ics.IcsUpdateError("HTTP 410 gone")
+            return FIXTURE_JSON.read_text(encoding="utf-8")
+
+        result = update_ics.acquire("macrostrat", fetch=fetch)
+        assert "timescale_id=1" in tried[0]
+        assert any("/defs/ages?" in url for url in tried[1:])
         assert len(result["rows"]) >= 14
 
     def test_auto_falls_through_to_the_ics_chart(self):
@@ -318,13 +336,21 @@ class TestNetworkLayerIsMocked:
 
 class TestCanonicalPromotion:
     def test_write_canonical_backs_up_first(self, tmp_path, mini_baseline):
+        # FIX-2026-09-22 (audit item 2): --offline-fixture + --write-canonical
+        # is now REFUSED unless --force is passed (fixture data is toy data
+        # and must not silently become the authority source). The test keeps
+        # its intent - the pre-write backup survives - but opts in with
+        # --force, which additionally trips the loud fixture warning.
+        lines = []
         summary = update_ics.run(out=tmp_path / "ics_current.json",
                                  canonical=mini_baseline, fixture=FIXTURE_JSON,
                                  retrieved_at="2026-09-19T21:00:00Z",
-                                 write_canonical=True,
-                                 reporter=lambda _line: None)
+                                 write_canonical=True, force=True,
+                                 reporter=lines.append)
         backup = mini_baseline.with_name(mini_baseline.name + ".bak")
         assert summary["promoted"] and backup.exists()
+        assert any("LOUD WARNING" in ln and "offline-fixture" in ln.lower()
+                   for ln in lines)
         assert json.loads(backup.read_text(encoding="utf-8"))["Gelasian"]["base_ma"] == 2.58
         promoted = json.loads(mini_baseline.read_text(encoding="utf-8"))
         assert BASELINE_FIELDS <= set(promoted["Rhuddanian"])

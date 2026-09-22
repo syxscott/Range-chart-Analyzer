@@ -215,12 +215,19 @@ def normalize_codes(values: Any) -> list[str]:
     Accepts a list, a comma/space separated string, a single slug, a dict
     (``{"not_drawn": true}``) or ``None``.  Order of first appearance is
     preserved so the UI shows the codes in the order they were claimed.
+
+    FIX-2026-09-22 (audit item 8): in the dict shape a boolean value is an
+    assertion, so ``{"obscured": false}`` denies the code instead of claiming
+    it — the key is dropped when its value is exactly ``False`` (and only then:
+    ``0``, ``""`` and ``null`` are not claims either way, so they stay
+    untouched and the legacy behaviour of non-boolean values is preserved).
+    ``js/reason-codes.js#rcaNormalizeReasonCodes`` mirrors the rule.
     """
     if values is None:
         return []
     items: Iterable[Any]
     if isinstance(values, dict):
-        items = list(values.keys())
+        items = [k for k, v in values.items() if v is not False]
     elif isinstance(values, (list, tuple, set, frozenset)):
         items = list(values)
     elif isinstance(values, str):
@@ -405,10 +412,38 @@ def _blank_counts() -> dict[str, int]:
             RESPONSE_UNCERTAIN: 0, SILENT_MISSING: 0}
 
 
+def _coerce_expected_units(value: Any) -> int | None:
+    """Validate an ``expected_units`` denominator; anything unusable -> ``None``.
+
+    Called with provenance from outside the row set (how many cells the request
+    actually asked for).  Non-numeric, negative, zero and ``bool`` inputs are
+    ignored so a caller can pass whatever the UI happened to hold without
+    breaking the ledger.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    try:
+        units = int(value)
+    except (TypeError, ValueError):
+        return None
+    return units if units > 0 else None
+
+
 def _finalize(counts: dict[str, int]) -> dict[str, Any]:
     # Every cell lands in exactly one of the four buckets, so the cell count
     # is the bucket sum - correct for the grid view and for the emitted-only
     # fallback below the :data:`_MAX_LEDGER_CELLS` guard.
+    #
+    # FIX-2026-09-22 (audit item 3) note: this makes ``cells`` a property of
+    # the rows that SURVIVED, which an upstream filter can shrink — deleting
+    # ``not_drawn``/``uncertain``/``silent_missing`` rows therefore RAISES both
+    # coverage ratios (a perverse incentive). The ratios below stay exactly as
+    # published (they are the frozen parity-contract shape), but a caller that
+    # knows how many units were actually requested can pin the denominator via
+    # ``coverage_ledger(expected_units=...)``, which recomputes them over a
+    # number that dropping rows cannot shrink.
     cells = sum(counts.values())
     answered = (counts[RESPONSE_EXTRACTED] + counts[RESPONSE_NOT_DRAWN]
                 + counts[RESPONSE_UNCERTAIN])
@@ -430,7 +465,8 @@ def coverage_ledger(rows: Any,
                     *,
                     column_keys: Iterable[str] = DEFAULT_COLUMN_KEYS,
                     stratum_keys: Iterable[str] = DEFAULT_STRATUM_KEYS,
-                    cross_product: bool = True) -> dict[str, Any]:
+                    cross_product: bool = True,
+                    expected_units: Any = None) -> dict[str, Any]:
     """Summarise which cells were answered, which were declared not drawn,
     and which were silently skipped.
 
@@ -449,6 +485,21 @@ def coverage_ledger(rows: Any,
     model never emits a stratum (single-section charts) the stratum set is
     ``{""}`` and the grid degenerates to the emitted rows, so no phantom gaps
     appear.
+
+    ``expected_units`` (FIX-2026-09-22, audit item 3) is an OPTIONAL
+    denominator for callers that hold provenance the rows cannot carry: how
+    many cells the request itself covered (beds x taxa asked for, a table the
+    operator can count from the figure, ...).  Because every other number here
+    is derived from the rows that survived upstream filtering, dropping
+    ``not_drawn`` / ``uncertain`` / ``silent_missing`` rows used to make the
+    coverage look better — a denominator the model controls cannot be a
+    coverage base.  When ``expected_units`` is a positive count and exceeds the
+    observed cell count, ``totals`` additionally reports ``observed_units``,
+    ``expected_units``, ``unreported_units`` and ``coverage_basis``, and the
+    two ratio fields are recomputed over that larger denominator.  Omit it (or
+    pass something unusable) and the output is exactly the historical shape,
+    byte for byte — the key set is part of the frozen frontend/Python parity
+    fixtures, so nothing may appear there by default.
     """
     column_keys = tuple(column_keys)
     stratum_keys = tuple(stratum_keys)
@@ -512,6 +563,19 @@ def coverage_ledger(rows: Any,
         _bump(per_stratum, key[1], state)
 
     totals = _finalize(emitted_counts)
+    # FIX-2026-09-22 (audit item 3): optional row-independent denominator.
+    expected = _coerce_expected_units(expected_units)
+    if expected is not None:
+        observed = totals["cells"]
+        basis = max(observed, expected)
+        totals["observed_units"] = observed
+        totals["expected_units"] = expected
+        totals["unreported_units"] = basis - observed
+        totals["coverage_basis"] = "expected" if expected >= observed else "observed"
+        totals["honest_coverage"] = (round(totals["answered"] / basis, 4)
+                                      if basis else 0.0)
+        totals["strict_coverage"] = (round(totals["extracted"] / basis, 4)
+                                     if basis else 0.0)
     totals["explicit_responses"] = explicit
     totals["row_count"] = row_count
     totals["unattributed_rows"] = unattributed

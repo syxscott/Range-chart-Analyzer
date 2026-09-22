@@ -284,6 +284,43 @@ def _add_row_warning(row: dict, flag: str) -> None:
     row["_warning"] = flags[0] if len(flags) == 1 else flags
 
 
+def _merge_row_warnings(target: dict, values: list) -> None:
+    """Union every run's ``_warning`` into ``target``.
+
+    FIX-2026-09-22 (audit item 2). Warnings are independent facts, not
+    alternative measurements of one field, so the generic scalar merger is the
+    wrong tool for ``_warning`` in two ways:
+
+    * it kept exactly ONE run's flag and deleted the others' — and because the
+      contract merge writes ``response_kind_divergent`` into the row while the
+      loop runs, whether the source row's own flag or the merge-stage flag
+      survived depended on key order;
+    * a row that already carried several flags arrives as a list, which the
+      mode merger cannot hash, so the whole warning was dropped.
+
+    Every flag from the existing target value and from every run therefore
+    survives, in first-seen order, de-duplicated, re-written with the
+    single-string / list convention of :func:`_add_row_warning`.
+    ``js/aggregate.js#rcaMergeRowWarnings`` mirrors this.
+    """
+    flags: list[str] = []
+
+    def _push(value):
+        if value in (None, ""):
+            return
+        parts = value if isinstance(value, list) else [value]
+        for part in parts:
+            if isinstance(part, str) and part and part not in flags:
+                flags.append(part)
+
+    _push(target.get("_warning"))
+    for value in values or []:
+        _push(value)
+    if not flags:
+        return
+    target["_warning"] = flags[0] if len(flags) == 1 else flags
+
+
 def _merge_contract_field(key: str, values: list, target: dict) -> bool:
     """Merge one coverage/geometry field across runs into ``target``.
 
@@ -787,6 +824,10 @@ def _merge_primary_list(runs, schema, n):
             # merged by their own rules, never by the generic field merger.
             if _merge_contract_field(k, per_run_values, aggr):
                 continue
+            if k == "_warning":
+                # FIX-2026-09-22 (audit item 2): union, never overwrite.
+                _merge_row_warnings(aggr, per_run_values)
+                continue
             if schema.primary_list_key == "species_ranges" and k in {
                 "range_top_idx", "range_base_idx",
             }:
@@ -1009,6 +1050,10 @@ def _merge_named_lists(runs, schema):
                 # BORROW-2026-09-20 (A+B): same contract rules as the primary
                 # path, so a biozone / site / point row merges identically.
                 if _merge_contract_field(k, per_run_values, rep):
+                    continue
+                if k == "_warning":
+                    # FIX-2026-09-22 (audit item 2): union, never overwrite.
+                    _merge_row_warnings(rep, per_run_values)
                     continue
                 merged_v = _merge_field_across_runs(per_run_values)
                 if merged_v is _NO_MERGE:

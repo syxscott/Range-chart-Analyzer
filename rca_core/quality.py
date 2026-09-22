@@ -1207,7 +1207,8 @@ def score_range_chart(data: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-#: Primary per-mode row tables the coverage ledger can be computed over.
+#: Primary per-mode row tables the coverage ledger can be computed over, with
+#: the key that names a "column" (the taxon / sample / point) inside that table.
 _COVERAGE_TABLES: tuple[tuple[str, str], ...] = (
     ("species_ranges", "species"),
     ("abundances", "taxon"),
@@ -1215,35 +1216,89 @@ _COVERAGE_TABLES: tuple[tuple[str, str], ...] = (
     ("points", "label"),
 )
 
+#: Column keys tried after a table's own identifier, so rows of one mode still
+#: land in the same ledger column when a result carries several tables.
+#: :func:`coverage_column_keys` is the ONLY producer of this ladder — the
+#: evidence report used to keep its own table list and its own ledger call,
+#: which is how the two audits drifted apart (FIX-2026-09-22, audit item 6).
+_COVERAGE_EXTRA_COLUMN_KEYS: tuple[str, ...] = (
+    "taxon", "species", "sample_id", "label", "name",
+)
 
-def coverage_for(data: dict[str, Any]) -> dict[str, Any] | None:
-    """Ledger for the largest contracted row table of a result, or None.
 
-    Returns None when no row anywhere carries a ``response_kind`` /
-    ``reason_codes`` field: a pre-contract result has nothing to account for,
-    and inventing a grid of "silent gaps" for it would be noise.
+def coverage_column_keys(primary_column: str) -> tuple[str, ...]:
+    """The column-key ladder for one coverage table (shared with report.py)."""
+    return ((primary_column,)
+            + tuple(k for k in _COVERAGE_EXTRA_COLUMN_KEYS
+                    if k != primary_column))
+
+
+def is_contracted_row(row: Any) -> bool:
+    """True when a row carries any part of the coverage contract.
+
+    A ``geometry`` block alone deliberately does NOT qualify: it records where
+    a boundary was read, not whether the cell was answered, so counting it here
+    would move silent omissions into the "answered under the contract" side of
+    the ledger — report.py used to accept it (audit item 6).
+    """
+    return bool(isinstance(row, dict)
+                and (row.get("response_kind") or row.get("reason_codes")))
+
+
+def coverage_table_names() -> tuple[str, ...]:
+    """The tables a coverage audit may be built over, in preference order."""
+    return tuple(key for key, _column in _COVERAGE_TABLES)
+
+
+def coverage_column_key(table_key: str) -> str:
+    """The naming key of one coverage table (``"species"`` for species_ranges)."""
+    return dict(_COVERAGE_TABLES).get(table_key, "")
+
+
+def select_coverage_table(data: Any) -> tuple[str, str] | None:
+    """Locate the table to audit: the LARGEST one carrying contract fields.
+
+    Returns ``(table_key, primary_column)`` or None when nothing answered
+    under the contract, so callers skip the block instead of reporting a ledger
+    full of invented gaps for a pre-contract result.
     """
     if not isinstance(data, dict):
         return None
     best: tuple[int, str] | None = None
-    for key, column_key in _COVERAGE_TABLES:
+    for key, _column_key in _COVERAGE_TABLES:
         rows = data.get(key)
         if not isinstance(rows, list) or not rows:
             continue
-        contracted = sum(1 for r in rows
-                         if isinstance(r, dict)
-                         and (r.get("response_kind") or r.get("reason_codes")))
-        if not contracted:
+        if not any(is_contracted_row(r) for r in rows):
             continue
         if best is None or len(rows) > best[0]:
             best = (len(rows), key)
     if best is None:
         return None
-    row_count, table_key = best
+    return best[1], coverage_column_key(best[1])
+
+
+def coverage_for(data: dict[str, Any],
+                 *,
+                 expected_units: Any = None) -> dict[str, Any] | None:
+    """Ledger for the largest contracted row table of a result, or None.
+
+    Returns None when no row anywhere carries a ``response_kind`` /
+    ``reason_codes`` field: a pre-contract result has nothing to account for,
+    and inventing a grid of "silent gaps" for it would be noise.
+
+    ``expected_units`` is passed straight to :func:`coverage_ledger` (see its
+    docstring for why a caller that knows how many cells the request covered can
+    pin the coverage denominator there). Omitted, the ledger keeps exactly the
+    row-derived shape it always had.
+    """
+    picked = select_coverage_table(data)
+    if picked is None:
+        return None
+    table_key, primary_column = picked
     rows = data.get(table_key)
-    primary_column = dict(_COVERAGE_TABLES)[table_key]
     return coverage_ledger(
         [r for r in rows if isinstance(r, dict)],
-        column_keys=(primary_column, "taxon", "species", "sample_id",
-                     "label", "name"),
+        column_keys=coverage_column_keys(primary_column),
+        expected_units=expected_units,
     )

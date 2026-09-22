@@ -44,8 +44,10 @@ from .reason_codes import (
 # abundance_diagram v3->v4 (legacy alias "abundance" with it),
 # chemical_stratigraphy v1->v2, scatter_plot v1->v2. The modes without a
 # parser-side contract consumer keep their versions.
-# NOTE: js/prompt.js still carries the old versions and the old prompt text -
-# see the parity note at the bottom of this file.
+# FIX-2026-09-22 (audit): the old "js/prompt.js still carries the old
+# versions" note below was stale - js/prompt.js mirrors these versions
+# (range_chart v5 / abundance_diagram v4 / chemical_stratigraphy v2 /
+# scatter_plot v2) and the parity is pinned by tests/test_prompt_fixes.py.
 PROMPT_VERSION = {
     "range_chart": "v5",
     "columnar_section": "v3",
@@ -68,8 +70,58 @@ def prompt_version_for_mode(mode: str) -> str:
 
     P1-7: each mode has its own version string so upgrading one mode's
     prompt doesn't invalidate the cache for other modes.
+
+    lenient by design: an unknown mode falls back to "v3" so history /
+    report stamping never crashes on a mode this file does not know.
+    CACHE KEYS MUST NOT USE THIS for unresolved modes — see
+    :func:`prompt_version_for_cache_key`.
     """
     return PROMPT_VERSION.get(mode, "v3")
+
+
+#: Modes that are REQUESTS for a mode rather than an answer.  ``"auto"`` is
+#: resolved (caption heuristic, then vision classifier) to one concrete
+#: chart type BEFORE any prompt runs, so it deliberately has no entry in
+#: :data:`PROMPT_VERSION` — a cache key must carry the RESOLVED mode and its
+#: resolved version, never a fake "auto" stamp that hides which prompt
+#: actually ran (FIX-2026-09-22, audit item 1: the v4->v5 contract bump
+#: never invalidated the auto path's cached results because the requested
+#: mode "auto" silently received the "v3" fallback below).
+UNRESOLVED_MODES = frozenset({"auto"})
+
+
+def resolve_prompt_mode(mode: str) -> str:
+    """Validate *mode* as a concrete, versioned extraction mode.
+
+    Returns the mode unchanged when it names an entry of
+    :data:`PROMPT_VERSION`; raises ``ValueError`` for unresolved request
+    modes (``"auto"`` — the caller must run auto-resolution FIRST and pass
+    the resolved mode) and for any mode with no version entry.  Used by the
+    cache-key builders so an unresolved mode can never masquerade as the
+    "v3" fallback version in a result cache key.
+    """
+    key = str(mode or "").strip()
+    if key.lower() in UNRESOLVED_MODES:
+        raise ValueError(
+            f"mode {mode!r} is unresolved: resolve it to a concrete chart "
+            "mode (e.g. via resolve_auto_mode) before building a cache key; "
+            "it must never fall back to the default prompt version")
+    if key not in PROMPT_VERSION:
+        raise ValueError(
+            f"unknown extraction mode {mode!r}; known modes: "
+            + ", ".join(sorted(PROMPT_VERSION)))
+    return key
+
+
+def prompt_version_for_cache_key(mode: str) -> str:
+    """Strict companion of :func:`prompt_version_for_mode` for cache keys.
+
+    Same lookup, but raises instead of returning the "v3" fallback, so a
+    cache key can never be built from an unresolved or unknown mode and
+    then serve stale pre-contract results under a plausible-looking version
+    stamp (FIX-2026-09-22, audit item 1).
+    """
+    return PROMPT_VERSION[resolve_prompt_mode(mode)]
 
 
 # ---------------------------------------------------------------------------
@@ -1066,27 +1118,17 @@ CHART_CLASSIFY_SYSTEM_PROMPT = "\n".join([
 
 
 # ---------------------------------------------------------------------------
-# BORROW-2026-09-20 (A+B) — JS PARITY NOTE (js/prompt.js is NOT touched here).
+# BORROW-2026-09-20 (A+B) — JS PARITY NOTE.
 #
 # ``tests/test_prompt_fixes.py`` pins two Python<->JS invariants: the range-chart
-# prompts compared byte-identical, and PROMPT_VERSION compared per mode (its
-# check() helper only prints under pytest, so this drift is currently silent).
-# The four prompts below changed on the Python side and need the same text and
-# the same version bump mirrored in js/prompt.js:
-#
-#   * RANGE_CHART_SYSTEM_PROMPT  -> v5 (response_kind / reason_codes /
-#     range_top_pos_0_999 / range_base_pos_0_999 / axis_calibration)
-#   * ABUNDANCE_DIAGRAM_SYSTEM_PROMPT (and the "abundance" alias key) -> v4
-#     (response_kind / reason_codes / pos_0_999 / axis_calibration)
-#   * CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT -> v2
-#     (response_kind / reason_codes / pos_0_999 / top_pos_0_999 /
-#     base_pos_0_999 / axis_calibration)
-#   * SCATTER_PLOT_SYSTEM_PROMPT -> v2
-#     (response_kind / reason_codes / x_pos_0_999 / y_pos_0_999 /
-#     axis_calibration)
-#
-# js/reason-codes.js additionally has to mirror rca_core/reason_codes.py, and
-# the JS prompts must list the SAME closed vocabulary — the web pipeline has no
-# other way to learn the codes.  COLUMNAR_SECTION / PHYLOGENETIC_TREE /
-# PALEOMAP / ZONATION_CHART / CHART_CLASSIFY are unchanged on both sides.
+# prompts compared byte-identical, and PROMPT_VERSION compared per mode.
+# FIXED 2026-09-21 (round 5e724aa, FE-FIX-2026-09-21): js/prompt.js now
+# mirrors the contract text and the bumped versions (range_chart v5,
+# abundance_diagram/"abundance" v4, chemical_stratigraphy v2, scatter_plot
+# v2), and js/reason-codes.js mirrors rca_core/reason_codes.py's closed
+# vocabulary — both sides verified identical, so this note is kept only as
+# the pointer for future bumps: whenever a contract-carrying prompt changes
+# here, mirror the text AND the PROMPT_VERSION entry in js/prompt.js in the
+# same commit.  COLUMNAR_SECTION / PHYLOGENETIC_TREE / PALEOMAP /
+# ZONATION_CHART / CHART_CLASSIFY carry no contract on either side.
 # ---------------------------------------------------------------------------

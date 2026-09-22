@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 import re
 from pathlib import Path
 from typing import Any, Optional
@@ -42,24 +43,29 @@ except Exception:  # pragma: no cover - import fallback
 # ---------------------------------------------------------------------------
 # BORROW-2026-09-20: chronostratigraphic resolution qualifiers (``*_reso``)
 # ---------------------------------------------------------------------------
-# The pbdbUpload-api upload template pairs every chronostratigraphic VALUE
-# with a resolution qualifier column (``early_interval`` ↔ ``early_*_reso``,
-# ``max_ma``/``min_ma`` ↔ ``max_ma_reso``/``min_ma_reso``, and the same idea on
-# the taxon-side ``first_tma``/``last_tma`` fields). The qualifier says HOW
-# well constrained the value is — "the plate printed 252.4 Ma" and "the plate
-# said Wuchiapingian, so the number is a table lookup" are NOT equally strong
-# ages, and a validator (and the next human) needs to know which one landed in
-# the cell. Our export used to collapse both into the same bare number.
+# FIX-2026-09-22 (item 4), correcting what this block used to claim: the
+# pbdbUpload-api template does NOT pair every chronostratigraphic value with a
+# resolution column. ``occurrence.schema.js`` knows resolution ONLY for the
+# four name ranks (``genus_reso`` … ``subspecies_reso``, closed enums), and the
+# collection schema has no ``max_ma`` / ``min_ma`` / ``*_reso`` properties at
+# all. The qualifier below is therefore OURS — an extension vocabulary that
+# says HOW well constrained a value is ("the plate printed 252.4 Ma" and "the
+# plate said Wuchiapingian, so the number is a table lookup" are NOT equally
+# strong ages), which is exactly why it is written to
+# ``pbdb_occurrence_extensions.csv`` and never into an upload sheet, where
+# ``additionalProperties: false`` would reject it.
 #
-# Vocabulary (documented in README, section "导出格式"):
+# Vocabulary (documented in README, section "提取字段" → PBDB 导出行):
 #   "measured"  an absolute age literally printed on the plate ("252.4 Ma")
 #   "stage"     an ICS stage name (the Ma is that stage's boundary)
 #   "series"    an ICS series / epoch ("Lopingian", "Late Permian")
 #   "system"    a period / system ("Permian")
 #   "era"       an era ("Paleozoic")
-#   "zone"      a local biozone label — weakest chronostratigraphic constraint
+#   "zone"      a local biozone label - weakest chronostratigraphic constraint
 #   "informal"  a name the ICS table does not know
 #   ""          no value at all (the paired column is empty too)
+#
+# Of these, only "informal" is also a member of an upstream rank enum.
 _TIME_RESO_VOCAB = (
     "measured", "stage", "series", "system", "era", "zone", "informal", "",
 )
@@ -129,27 +135,94 @@ def _text_age_reso(text: Any, prefer: str = "older") -> str:
 
 # ---------------------------------------------------------------------------
 # BORROW-2026-09-20: three-part (trinomial) name split
+# FIX-2026-09-22 (items 4 + 5), verified against the upstream schema:
+#
+#   pbdbUpload-api routes/api/v1/occurrence/occurrence.schema.js declares
+#       collection_no, taxon_name, genus_reso, genus_name, subgenus_reso,
+#       subgenus_name, species_reso, species_name, subspecies_reso,
+#       subspecies_name, abund_value, abund_unit, reference_no, comments,
+#       upload, plant_organ, plant_organ2
+#   with ``additionalProperties: false``, ``required: [collection_no,
+#   reference_no]`` and ``dependentRequired: {subgenus_name: [genus_name],
+#   species_name: [genus_name], subspecies_name: [species_name, genus_name],
+#   abund_value: [abund_unit]}``. Each rank has its OWN resolution column, and
+#   the resolution vocabulary is the closed enum below — so the qualifier is a
+#   FIELD, never glue inside the epithet (the old
+#   ``species="cf. postwenti"`` would have been rejected, and reading it back
+#   as "cf. postwenti" invents a species that the plate never named).
+#
+#   The parse below therefore never FABRICATES a determination
+#   (module header: "never say what the chart didn't"). The forms it used to
+#   get wrong, now pinned by tests/test_export_wpd_pbdb_2026_09_20.py:
+#       "Neospiniferites? gen. nov."  -> genus + genus_reso, NO species
+#       "Fusulina sp. nov. 3"         -> genus + species_reso "n. sp."; the
+#                                        specimen number is not an epithet
+#       "P. asiaticus Zheng"          -> genus + species; "Zheng" is an
+#                                        authority WITHOUT a year, not a subspecies
+#       "cf. Pseudotirolites panigoniensis"
+#                                     -> genus "Pseudotirolites" + genus_reso
+#                                        "cf.", species "panigoniensis"
+#       "Costa sp. 1"                 -> genus "Costa" + species_reso
+#                                        "informal"; "1" is not an epithet,
+#                                        but "sp. 1" IS the informal taxon
+#                                        the plate cited (FIX-2026-09-22 C2)
 # ---------------------------------------------------------------------------
-# The upload template wants ``genus`` / ``species`` / ``subspecies`` as three
-# separate columns; we only ever shipped the concatenated ``taxon_name`` and
-# buried the authority in ``notes``. ``rca_core/names.py`` has a
-# ``clean_name_for_lookup`` (it strips the authorship and the open-nomenclature
-# markers for a GBIF query) but it deliberately DISCARDS an abbreviated genus
-# ("P. asiaticus" -> "asiaticus"), which is exactly what a taxonomic column
-# must not do — so the split below keeps every token it can attribute to a
-# rank and leaves the row's own text in ``taxon_name`` untouched.
-_AUTHOR_PAREN_RE = re.compile(r"\([^()]*\)")
-# A trailing authorship: an optional "ex"/"in" citation, the surname(s)
-# (accented and initial-form included, "et al." allowed), then a 4-digit
-# year. The year is the ANCHOR — without it a legitimate trinomial
-# ("Genus species subspecies") could be eaten, so a name with no year is left
-# exactly as the plate wrote it.
-_AUTHOR_TAIL_RE = re.compile(
-    r"\s+(?:(?:ex|in)\s+)?[A-Z][A-Za-z.\u00c0-\u2fff]*"
-    r"(?:[,\s\-]+(?:et\s+al\.?|&\s*[A-Z][A-Za-z.]*|[A-Z][A-Za-z.]*))*"
-    r"[,\s]+\d{4}[a-z]?\s*$"
+_PBDB_GENUS_RESO_VOCAB = (
+    "", "aff.", "cf.", "ex gr.", "n. gen.", "sensu lato", "?", '"', "informal",
 )
-_YEAR_TAIL_RE = re.compile(r"[,\s]*\d{4}[a-z]?\s*$")
+_PBDB_SUBGENUS_RESO_VOCAB = (
+    "", "aff.", "cf.", "ex gr.", "n. subgen.", "sensu lato", "?", '"', "informal",
+)
+_PBDB_SPECIES_RESO_VOCAB = (
+    "", "aff.", "cf.", "ex gr.", "n. sp.", "sensu lato", "?", '"', "informal",
+)
+_PBDB_SUBSPECIES_RESO_VOCAB = _PBDB_SPECIES_RESO_VOCAB
+_PBDB_RANK_RESO_VOCAB = {
+    "genus": _PBDB_GENUS_RESO_VOCAB,
+    "subgenus": _PBDB_SUBGENUS_RESO_VOCAB,
+    "species": _PBDB_SPECIES_RESO_VOCAB,
+    "subspecies": _PBDB_SUBSPECIES_RESO_VOCAB,
+}
+
+# Nomenclatural abbreviations that NAME A RANK ("this is a new genus"), i.e.
+# they are resolution information and never an epithet. Two tokens each, so
+# they must be matched before the single-token tables below.
+_NOMENCLATURAL_PHRASES = {
+    ("gen.", "nov."): ("genus", "n. gen."),
+    ("gener.", "nov."): ("genus", "n. gen."),
+    ("gen. nov"): ("genus", "n. gen."),
+    ("subgen.", "nov."): ("subgenus", "n. subgen."),
+    ("sp.", "nov."): ("species", "n. sp."),
+    ("sp. nov"): ("species", "n. sp."),
+    ("spp.", "nov."): ("species", "n. sp."),
+    ("subsp.", "nov."): ("subspecies", "n. sp."),
+    ("ssp.", "nov."): ("subspecies", "n. sp."),
+    ("var.", "nov."): ("subspecies", "n. sp."),
+    ("forma", "nov."): ("subspecies", "n. sp."),
+    ("f.", "nov."): ("subspecies", "n. sp."),
+    ("n.", "gen."): ("genus", "n. gen."),
+    ("n.", "subgen."): ("subgenus", "n. subgen."),
+    ("n.", "sp."): ("species", "n. sp."),
+    ("n.", "subsp."): ("subspecies", "n. sp."),
+}
+# Qualifiers that attach to the NEXT name token ("cf. magnus" = compare with
+# magnus). They are reported through the resolution column of that rank, which
+# is exactly what PBDB's schema carries them in — the epithet itself stays the
+# epithet, so neither the doubt nor the name is invented.
+_QUALIFIER_PHRASES = {
+    ("ex", "gr."): ("next", "ex gr."),
+    ("sensu", "lato"): ("next", "sensu lato"),
+    ("sec", "lato"): ("next", "sensu lato"),
+}
+_QUALIFIER_TOKENS = {
+    "cf.": ("next", "cf."), "cf": ("next", "cf."),
+    "aff.": ("next", "aff."), "aff": ("next", "aff."),
+    "s.l.": ("next", "sensu lato"),
+    "?": ("next", "?"),
+    '"': ("next", '"'),
+    "informal": ("next", "informal"),
+}
+# Rank words that DO introduce a lower-rank epithet.
 _RANK_MARKERS = {
     "subsp.": "subspecies", "subsp": "subspecies", "ssp.": "subspecies",
     "subspecies": "subspecies", "var.": "subspecies", "var": "subspecies",
@@ -157,37 +230,100 @@ _RANK_MARKERS = {
 }
 # Markers that mean "no lower rank is determined at all" — the species column
 # stays empty rather than being filled with a word.
-_INDETERMINATE = {"sp.", "sp", "spp.", "spp", "gen.", "gen", "indet."}
-# Open-nomenclature markers that DO attach to the following epithet. The
-# qualifier is kept IN the cell: stripping it would turn "cf. magnus"
-# ("compare with magnus", not identified) into a positive determination of
-# magnus, which is a scientific misstatement rather than a tidy column.
-_COMPARE_MARKERS = {"cf.", "cf", "aff.", "aff", "?cf.", "?aff."}
+_INDETERMINATE = {"sp.", "sp", "spp.", "spp", "gen.", "gen", "indet.", "indet"}
+# Words that belong to an authority citation, never to an epithet.
+_AUTHOR_WORDS = {"in", "ex", "pro", "non", "emend.", "emend", "sensu", "sec"}
+# FIX-2026-09-22 (item 5): the nobiliary particles inside those citations
+# ("d Orbigny", "de Lamarck", "von Buch", "van der Brixl"). A one-letter token
+# is not a species-group name either, but the particle list is what lets
+# "Genus b" keep its (abbreviated) epithet while "bulloides d Orbigny" loses
+# the stray "d" the year-anchored strip left behind.
+_AUTHOR_PARTICLES = {
+    "d", "l", "de", "du", "des", "di", "da", "del", "della", "der", "den",
+    "el", "la", "le", "les", "van", "von", "ten", "ter", "bin", "ibn",
+}
+_EMPTY_NAME_PARTS = {
+    "genus_name": "", "genus_reso": "",
+    "subgenus_name": "", "subgenus_reso": "",
+    "species_name": "", "species_reso": "",
+    "subspecies_name": "", "subspecies_reso": "",
+}
+_YEAR_IN_TEXT_RE = re.compile(r"\b\d{4}\b")
+# A trailing authorship: an optional "ex"/"in" citation, the surname(s)
+# (accented and initial-form included, "et al." allowed), then a 4-digit
+# year. The year is the ANCHOR — without it a legitimate trinomial
+# ("Genus species subspecies") could be eaten, so a name with no year is left
+# exactly as the plate wrote it (and the capitalised surname is dropped by
+# ``_split_taxon_name`` rather than promoted to a subspecies).
+_AUTHOR_TAIL_RE = re.compile(
+    r"\s+(?:(?:ex|in)\s+)?[A-Z][A-Za-z.\u00c0-\u2fff]*"
+    r"(?:[,\s\-]+(?:et\s+al\.?|&\s*[A-Z][A-Za-z.]*|[A-Z][A-Za-z.]*))*"
+    r"[,\s]+\d{4}[a-z]?\s*$"
+)
+_YEAR_TAIL_RE = re.compile(r"[,\s]*\d{4}[a-z]?\s*$")
 
 
-def _split_taxon_name(name: Any) -> tuple[str, str, str]:
-    """``(genus, species, subspecies)`` for a binomial or trinomial string.
+def _clamp_reso(rank: str, value: str) -> str:
+    """``value`` only when the RANK's own enum allows it (schema-valid by
+    construction: 'n. gen.' can never leak into ``species_reso``)."""
+    vocab = _PBDB_RANK_RESO_VOCAB.get(rank, ("",))
+    text = str(value or "")
+    return text if text in vocab else ""
 
-    The forms that actually occur on range charts::
 
-        "Pseudotirolites panigoniensis"      -> ("Pseudotirolites", "panigoniensis", "")
-        "P. asiaticus (Zheng, 1979)"         -> ("P.", "asiaticus", "")
-        "Palaeopascichnus sp."               -> ("Palaeopascichnus", "", "")
-        "Costa cf. postwenti"                -> ("Costa", "cf. postwenti", "")
-        "Genus species subsp. subspecies"    -> ("Genus", "species", "subspecies")
-        "Clarkina? carli in Yang 1978"       -> ("Clarkina?", "carli", "")
+def _split_taxon_name(name: Any) -> dict[str, str]:
+    """Upstream name columns for a binomial / trinomial string.
+
+    Returns the eight ``*_name`` / ``*_reso`` fields of the PBDB occurrence
+    schema (all ``""`` when nothing could be attributed to that rank)::
+
+        "Pseudotirolites panigoniensis"   genus "Pseudotirolites" + species
+        "P. asiaticus (Zheng, 1979)"      genus "P.", species "asiaticus"
+        "Palaeopascichnus sp."            genus only — nothing determined below
+        "Costa cf. postwenti"             genus "Costa", species "postwenti",
+                                          species_reso "cf."
+        "Clarkina (Parkinsonina) carli"   genus + subgenus + species
+        "Genus species subsp. subspecies" three ranks
+        "Neospiniferites? gen. nov."      genus + genus_reso "?" (an
+                                          occurrence-level doubt outranks the
+                                          name-level "new genus"; both stay in
+                                          ``taxon_name``)
 
     Every retained token is written VERBATIM (including an abbreviated genus
-    like ``"P."`` and a doubt ``"?"``): a taxonomic column that quietly
-    expanded or cleaned a name would state something the plate did not, and
-    the un-split source string stays available in ``taxon_name`` regardless.
+    like ``"P."``): a taxonomic column that quietly expanded or cleaned a name
+    would state something the plate did not, and the un-split source string
+    stays available in ``taxon_name`` regardless. The only transformation is
+    that a doubt / nomenclatural marker MOVES from the name into its
+    resolution column — which is where PBDB says it belongs. Each rank has ONE
+    resolution slot, so the first marker met wins and the others are not lost:
+    they remain in ``taxon_name``.
     """
     text = str(name or "").strip()
     if not text:
-        return "", "", ""
-    # Drop the authorship first: "(Smith, 1979)" and a trailing "Smith 1979"
-    # are not part of the name.
-    text = _AUTHOR_PAREN_RE.sub(" ", text)
+        return dict(_EMPTY_NAME_PARTS)
+
+    genus = subgenus = species = subspecies = ""
+    resos = {"genus": "", "subgenus": "", "species": "", "subspecies": ""}
+
+    # Parenthesised groups are AMBIGUOUS by content — "(Parkinsonina)" is a
+    # subgenus, "(Zheng, 1979)" and the year-less zoological "(Ehrenberg)" are
+    # authorships — so they are marked here and resolved POSITIONALLY while the
+    # tokens are walked (see the sentinel branch below): ICZN places a subgenus
+    # in parentheses BETWEEN the genus and the specific epithet, and an
+    # original-authority parenthesis AFTER the species-group name. Content
+    # alone cannot tell those apart; order can.
+    def _paren(m: "re.Match[str]") -> str:
+        inner = m.group(1).strip()
+        if _YEAR_IN_TEXT_RE.search(inner) or "," in inner or " " in inner:
+            return " "                      # authority citation
+        if re.match(r"^[A-Z][a-z]{2,}$", inner):
+            # FIX-2026-09-22 (item 5): keep the group in place as a marker
+            # instead of consuming it immediately. Reading "(Ehrenberg)" at the
+            # end of a binomial as a subgenus invented a rank nobody stated.
+            return " \x00%s\x00 " % inner
+        return " "
+
+    text = re.sub(r"\(([^()]*)\)", _paren, text)
     # Compound citations ("... Yang 1978 ex Smith 1982") strip one authorship
     # at a time: the regex anchors on the LAST year, so the outer "ex Smith
     # 1982" goes first and the exposed "Yang 1978" on the next pass. Without
@@ -198,49 +334,205 @@ def _split_taxon_name(name: Any) -> tuple[str, str, str]:
             break
         text = stripped
     text = _YEAR_TAIL_RE.sub("", text).strip()
+
     tokens = [t for t in re.split(r"\s+", text) if t]
-    if not tokens:
-        return "", "", ""
-    genus = tokens[0]
-    rest = tokens[1:]
-    species = ""
-    subspecies = ""
+    pending = ""          # qualifier waiting for the next NAME token
+    expect_subspecies = False
     i = 0
-    while i < len(rest):
-        tok = rest[i]
-        key = tok.lower().strip()
-        if key in _RANK_MARKERS:
-            # The NEXT token is the sub-specific epithet.
-            if i + 1 < len(rest):
-                subspecies = rest[i + 1]
-                i += 2
-                continue
+
+    def _phrase_key(tok: str) -> str:
+        # FIX-2026-09-22 (item 5): a doubt mark glued to the SECOND word of a
+        # two-token phrase ("ex gr.?", "sp. nov.?") must not hide the phrase —
+        # otherwise "gr." is left over and lands in ``species_name``, naming a
+        # species the plate never wrote.
+        return tok[:-1] if tok.endswith("?") and len(tok) > 1 else tok
+
+    while i < len(tokens):
+        tok = tokens[i]
+        low = tok.lower()
+        # 0) a parenthesised single capitalised word (see ``_paren`` above).
+        # ICZN puts a subgenus in parentheses BETWEEN the genus and the
+        # specific epithet; the SAME shape after the species-group name
+        # ("Neogloboboquadrina pachyderma (Ehrenberg) Cushman") is the
+        # original-authority parenthesis. Only the first is a rank, so the
+        # positional test decides it and the second is dropped.
+        if tok.startswith("\x00") and tok.endswith("\x00") and len(tok) > 2:
+            if genus and not species and not subgenus:
+                subgenus = tok.strip("\x00")
+                resos["subgenus"] = resos["subgenus"] or _clamp_reso(
+                    "subgenus", pending)
+            pending, expect_subspecies = "", False
             i += 1
             continue
-        if key in _INDETERMINATE:
-            # "Genus sp." / "Genus spp." — nothing determined below genus.
-            i += 1
-            continue
-        if key in _COMPARE_MARKERS and i + 1 < len(rest):
-            qualified = "%s %s" % (
-                key if key.endswith(".") else key + ".", rest[i + 1])
-            if not species:
-                species = qualified
-            elif not subspecies:
-                subspecies = qualified
+        nxt = tokens[i + 1].lower() if i + 1 < len(tokens) else ""
+        pair = (low, _phrase_key(nxt))
+        # 1) two-token nomenclatural abbreviations: rank information only.
+        if pair in _NOMENCLATURAL_PHRASES:
+            rank, reso = _NOMENCLATURAL_PHRASES[pair]
+            resos[rank] = resos[rank] or _clamp_reso(rank, reso)
+            pending, expect_subspecies = "", False
             i += 2
             continue
-        if not species:
-            species = tok
+        # 2) two-token qualifiers ("ex gr.", "sensu lato").
+        if pair in _QUALIFIER_PHRASES:
+            _, reso = _QUALIFIER_PHRASES[pair]
+            pending = reso
+            i += 2
+            continue
+        # 3) single-token qualifiers and the indeterminate / rank words.
+        if low in _QUALIFIER_TOKENS:
+            _, reso = _QUALIFIER_TOKENS[low]
+            pending = reso
+            i += 1
+            continue
+        if low == "?" and tok == "?":
+            pending = "?"
+            i += 1
+            continue
+        if low in _INDETERMINATE:
+            # "Genus sp." / "Genus spp." — nothing determined below genus.
+            # FIX-2026-09-22 (item 5): the tokens AFTER such a marker are a
+            # specimen / figure number ("Costa sp. 1"), not an epithet.
+            # FIX-2026-09-22 (C2, item 1): but "sp. 1" as a WHOLE is the
+            # cited informal morphospecies the plate wrote — dropping it
+            # entirely made the split answer LESS than the plate said. The
+            # number is still not an epithet (no species_name is invented);
+            # the hint survives in the one slot that admits it honestly,
+            # species_reso = "informal" (upstream closed enum member).
+            numbered = low in ("sp.", "sp", "spp.", "spp") and genus != ""
+            pending, expect_subspecies = "", False
+            i += 1
+            if i < len(tokens) and re.fullmatch(r"\d+[a-z]?", tokens[i]):
+                if numbered:
+                    resos["species"] = resos["species"] or _clamp_reso(
+                        "species", "informal")
+                i += 1
+            continue
+        if low in _RANK_MARKERS:
+            expect_subspecies = True
+            i += 1
+            continue
+        if low in _AUTHOR_WORDS:
+            pending, expect_subspecies = "", False
+            i += 1
+            continue
+        # 4) a name token. A trailing "?" ("Clarkina?") is the doubt marker
+        # the schema carries as genus_reso "?", so it is not part of the name.
+        doubt = ""
+        if tok.endswith("?") and len(tok) > 1:
+            tok, doubt = tok[:-1], "?"
+        # Which rank does this token fill?
+        if not genus:
+            rank = "genus"
+        elif expect_subspecies:
+            rank = "subspecies"
+        elif not species:
+            rank = "species"
         elif not subspecies:
-            subspecies = tok
+            rank = "subspecies"
+        else:
+            rank = ""
+        # FIX-2026-09-22 (item 5): a bare number ("Fusulina sp. nov. 3",
+        # "Costa cf. 1") is a specimen / figure label, not an epithet — the
+        # ICZN requires a word for a species-group name. It must not be
+        # promoted to a determination; ``taxon_name`` still carries it. The
+        # same holds for an authority particle left behind by a stripped
+        # citation ("bulloides d Orbigny" -> the stray "d").
+        if rank and rank != "genus" and (
+                not re.search(r"[^\W\d_]", tok) or low in _AUTHOR_PARTICLES):
+            rank = ""
+        if rank == "subspecies" and not expect_subspecies \
+                and tok[:1].isupper() and tok.isascii():
+            # "P. asiaticus Zheng": a CAPITALISED leftover after a full
+            # binomial is an authority whose year the plate did not print.
+            # Calling it a subspecies fabricates a trinomial nobody stated,
+            # so it is dropped (``taxon_name`` still carries it).
+            rank = ""
+        if rank:
+            if rank == "genus":
+                genus = tok
+            elif rank == "subgenus":
+                subgenus = tok
+            elif rank == "species":
+                species = tok
+            else:
+                subspecies = tok
+            reso = pending or doubt
+            if reso:
+                resos[rank] = resos[rank] or _clamp_reso(rank, reso)
+            expect_subspecies = False
+        pending = ""
         i += 1
-    return genus, species, subspecies
 
+    return {
+        "genus_name": genus,
+        "genus_reso": resos["genus"],
+        "subgenus_name": subgenus,
+        "subgenus_reso": resos["subgenus"] if subgenus else "",
+        "species_name": species,
+        "species_reso": resos["species"],
+        "subspecies_name": subspecies,
+        "subspecies_reso": resos["subspecies"],
+    }
 
 # ---------------------------------------------------------------------------
 # BORROW-2026-09-20: abundance columns
 # ---------------------------------------------------------------------------
+# FIX-2026-09-22 (item 10): what may be called a NUMBER here.
+#
+# ``float()`` is far too generous for text that came off a plate through a
+# vision model:
+#   float("nan") / float("inf")  -> NaN / Infinity   (poison a numeric column,
+#                                                     invalid in strict JSON)
+#   float("1_000")               -> 1000.0           (PEP 515 underscores are a
+#                                                     literal syntax, not data)
+#   float("２３")                 -> 23.0             (Unicode digits)
+#   float("\u00a035")            -> 35.0             (NBSP, not a space)
+# The WPD side of the export already refuses all of these
+# (``exporter._wpd_num``); the PBDB side now uses the same ASCII-only literal
+# grammar, so "1_0" reaches a spreadsheet as the TEXT it is instead of a
+# number the plate never printed.
+_PBDB_NUM_RE = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
+
+
+def _pbdb_number(value: Any) -> Optional[float]:
+    """Finite ASCII float for *value*, else ``None`` (see above)."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    raw = str(value)
+    # ASCII is checked on the WHOLE cell, before stripping: str.strip() also
+    # removes NBSP and the Unicode spaces, which is exactly the smuggling
+    # rule this check exists to refuse.
+    if not raw.isascii():
+        return None
+    text = raw.strip()
+    if text.endswith("%"):
+        text = text[:-1].strip()
+    if not text or not _PBDB_NUM_RE.match(text):
+        return None
+    try:
+        number = float(text)
+    except ValueError:  # pragma: no cover - the regex admits only parseables
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _pbdb_number_text(value: float) -> str:
+    """Shortest round-trip text for a peak value.
+
+    FIX-2026-09-22 (item 10): ``"%g" % 35.123456`` is ``"35.1235"`` — the
+    export used to silently round every abundance to six significant digits
+    while the abundance table itself kept full precision, so the two files
+    disagreed about the same number. ``repr`` of a Python float is the
+    shortest string that reads back as the SAME value.
+    """
+    if float(value).is_integer() and abs(value) < 1e16:
+        return "%d" % value
+    return repr(float(value))
+
 
 def _norm_taxon_key(text: Any) -> str:
     return " ".join(str(text or "").strip().lower().split())
@@ -269,8 +561,13 @@ def _abundance_lookup(result: Any) -> dict[str, list[dict[str, Any]]]:
     return out
 
 
-def _abundance_for(row: dict[str, Any], lookup: dict[str, list[dict[str, Any]]]) -> tuple[str, str]:
-    """``(abund_value, abund_unit)`` for one occurrence row.
+_NONFINITE_TEXT_RE = re.compile(r"^[-+]?(?:nan|inf(?:inity)?|na|n/?a)$",
+                               re.IGNORECASE)
+
+
+def _abundance_for(row: dict[str, Any],
+                   lookup: dict[str, list[dict[str, Any]]]) -> tuple[str, str, str]:
+    """``(abund_value, abund_unit, note)`` for one occurrence row.
 
     Priority: a value ON the species row (the model read it as a per-range
     annotation, possibly under ``_extras``) beats a join onto the abundance
@@ -279,6 +576,16 @@ def _abundance_for(row: dict[str, Any], lookup: dict[str, list[dict[str, Any]]])
     while a maximum is a defensible summary of "how abundant in this range".
     Values are written verbatim: a relative scale ("common") is data, and
     silently dropping it would be worse than a non-numeric cell.
+
+    FIX-2026-09-22 (item 10), three ways this used to corrupt the number:
+
+      * ``nan`` / ``inf`` (or the words) are dropped and reported through
+        ``note`` instead of landing in a numeric column;
+      * the peak is taken per UNIT — ``max(5 % , 200 indiv/g)`` is not an
+        abundance, it is a category error, so the dominant unit wins and the
+        foreign-unit rows are reported in ``note`` rather than folded in;
+      * the text is the shortest round-trip form (``_pbdb_number_text``), not
+        ``%g``'s six significant digits.
     """
     direct_value = row.get("abundance")
     direct_unit = row.get("abundance_unit")
@@ -287,6 +594,25 @@ def _abundance_for(row: dict[str, Any], lookup: dict[str, list[dict[str, Any]]])
         direct_value = extras.get("abundance")
     if direct_unit in (None, ""):
         direct_unit = extras.get("abundance_unit")
+    note = ""
+    if direct_value not in (None, ""):
+        number = _pbdb_number(direct_value)
+        text = str(direct_value).strip()
+        if number is None and (not isinstance(direct_value, str)
+                               or _NONFINITE_TEXT_RE.match(text)):
+            # float("nan") / float("inf") / the words spelled out — a numeric
+            # column must not receive them, and neither may the TEXT "nan",
+            # which reads back as a name rather than as a missing value.
+            return "", "", "row abundance %r is not a finite number - dropped" % (
+                direct_value,)
+        if number is not None:
+            # normalise "35%" on the row itself the same way the join below
+            # does: number in the value column, unit in the unit column.
+            unit = str(direct_unit or "").strip()
+            if not unit and str(direct_value).strip().endswith("%"):
+                unit = "%"
+            return _pbdb_number_text(number), unit, ""
+        return text, str(direct_unit or "").strip(), ""
 
     candidates: list[dict[str, Any]] = []
     if lookup:
@@ -302,30 +628,61 @@ def _abundance_for(row: dict[str, Any], lookup: dict[str, list[dict[str, Any]]])
             ]
             if on_site:
                 candidates = on_site
-    if direct_value not in (None, ""):
-        return str(direct_value), str(direct_unit or "")
     if not candidates:
-        return "", ""
-    numeric: list[float] = []
+        return "", "", ""
+
+    by_unit: dict[str, list[float]] = {}
     texts: list[str] = []
-    units: list[str] = []
+    seen_units: list[str] = []
+    skipped = 0
     for c in candidates:
         v = c.get("abundance")
         if v in (None, ""):
             continue
         unit = str(c.get("abundance_unit") or "").strip()
+        # FIX-2026-09-22 (C2, item 10 follow-up): the join path must normalise
+        # "35%" exactly like the direct path above — number in the value
+        # column, unit in the unit column — or the same cell says one thing in
+        # ``abund_value`` and another in ``abund_unit`` depending on which
+        # table it was read from. A DECLARED unit still wins: the column is
+        # the curator's statement, the suffix is the plate's, and the two
+        # engines of this export agree on that precedence.
+        if not unit and str(v).strip().endswith("%"):
+            unit = "%"
+        number = _pbdb_number(v)
+        if number is None:
+            text = str(v).strip()
+            if _NONFINITE_TEXT_RE.match(text):
+                skipped += 1
+                continue
+            texts.append(text)
+            if unit:
+                by_unit.setdefault(unit, [])
+                seen_units.append(unit)
+            continue
         if unit:
-            units.append(unit)
-        try:
-            # "35%" is the same measurement as 35 with unit "%" — keep the
-            # number in the value column and the unit in the unit column.
-            numeric.append(float(str(v).strip().rstrip("%")))
-        except (TypeError, ValueError):
-            texts.append(str(v).strip())
-    top_unit = max(set(units), key=units.count) if units else ""
-    if numeric:
-        peak = max(numeric)
-        return (("%d" % peak) if float(peak).is_integer() else ("%g" % peak)), top_unit
+            seen_units.append(unit)
+        by_unit.setdefault(unit, []).append(number)
+
+    # Dominant unit = the one carrying the most VALUES (ties resolve to the
+    # first seen, i.e. the plate's own bottom-to-top order).
+    top_unit = ""
+    if seen_units:
+        top_unit = max(dict.fromkeys(seen_units),
+                       key=lambda u: seen_units.count(u))
+    values = by_unit.get(top_unit) or []
+    foreign = sorted({u for u, nums in by_unit.items() if u and u != top_unit
+                      and nums})
+    if foreign:
+        note = ("abundance units mixed (%s): peak taken within %s only, the "
+                "%s values are not comparable"
+                % ("/".join([top_unit or "(none)", *foreign]),
+                   top_unit or "(no unit)", ", ".join(foreign)))
+    if values:
+        peak = max(values)
+        return _pbdb_number_text(peak), top_unit, note
+    if skipped:
+        note = note or "abundance is nan/inf on %d row(s) - no value exported" % skipped
     if texts:
         # A relative / categorical scale ("rare", "common"): the distinct
         # labels are joined rather than ranked, because we have no ordered
@@ -334,8 +691,8 @@ def _abundance_for(row: dict[str, Any], lookup: dict[str, list[dict[str, Any]]])
         for t in texts:
             if t not in seen:
                 seen.append(t)
-        return "; ".join(seen), top_unit
-    return "", ""
+        return "; ".join(seen), top_unit, note
+    return "", "", note
 
 
 
@@ -612,8 +969,12 @@ def to_pbdb_occurrences(result):
         )
         # BORROW-2026-09-20: three-part name split + abundance columns (see
         # the module header). taxon_name stays the verbatim source string.
-        genus, specific_epithet, subspecies = _split_taxon_name(species)
-        abund_value, abund_unit = _abundance_for(row, abundance_lookup)
+        # FIX-2026-09-22 (item 4): the split now lands in the columns PBDB
+        # actually declares (genus_name / genus_reso / subgenus_* / species_* /
+        # subspecies_*), not in "genus" / "species" / "subspecies", which the
+        # occurrence schema does not know.
+        name_parts = _split_taxon_name(species)
+        abund_value, abund_unit, abund_note = _abundance_for(row, abundance_lookup)
         occurrence = {
             "occurrence_id": f"RC_{species.replace(' ', '_')}_{section}_{idx}",
             "taxon_name": species,
@@ -633,23 +994,38 @@ def to_pbdb_occurrences(result):
             "latitude": str(lat) if lat is not None else "",
             "longitude": str(lon) if lon is not None else "",
             "biostratigraphic_zone": biozone,
-            "notes": f"author_year: {author_year}",
+            "notes": f"author_year: {author_year}" if author_year else "",
             # ----------------------------------------------------------------
             # BORROW-2026-09-20 (PBDB pbdbUpload-api upload-schema gaps). These
             # are APPENDED after the historical columns: the first 13 columns
             # keep their exact order so an existing download, the tests that
             # pin them and the js/export.js mirror all stay valid.
             # ----------------------------------------------------------------
-            "genus": genus,
-            "species": specific_epithet,
-            "subspecies": subspecies,
+            "genus_name": name_parts["genus_name"],
+            "genus_reso": name_parts["genus_reso"],
+            "subgenus_name": name_parts["subgenus_name"],
+            "subgenus_reso": name_parts["subgenus_reso"],
+            "species_name": name_parts["species_name"],
+            "species_reso": name_parts["species_reso"],
+            "subspecies_name": name_parts["subspecies_name"],
+            "subspecies_reso": name_parts["subspecies_reso"],
             "early_interval_reso": early_interval_reso,
             "late_interval_reso": late_interval_reso,
             "max_ma_reso": max_ma_reso,
             "min_ma_reso": min_ma_reso,
             "abund_value": abund_value,
             "abund_unit": abund_unit,
+            "comments": "",
         }
+        # FIX-2026-09-22 (item 4): ``comments`` is the ONLY free-text slot the
+        # occurrence schema has, so it is where every curation decision the
+        # upload sheet is forced to make is recorded — a cell that disappears
+        # silently is worse than a cell that says why.
+        _row, upload_notes = _pbdb_upload_projection(occurrence)
+        if abund_note:
+            upload_notes.insert(0, abund_note)
+        occurrence["comments"] = "; ".join(
+            [s for s in [occurrence["notes"]] + upload_notes if s])
         occurrences.append(occurrence)
     return occurrences
 
@@ -718,24 +1094,173 @@ def to_pbdb_collections(result):
     return collections
 
 
-# BORROW-2026-09-20: the PBDB upload column lists. The historical columns keep
-# their original ORDER (a download users already have, tests/test_pbdb.py and
-# tests/test_review_2026_07_31_domain.py, and the js mirror all read them by
-# position as well as by name); the upload-schema additions are appended.
+# ---------------------------------------------------------------------------
+# The PBDB column lists — TWO sheets, because one file cannot be both
+# ---------------------------------------------------------------------------
+# FIX-2026-09-22 (item 4). ``occurrence.schema.js`` is declared with
+# ``additionalProperties: false``, so the historical 13-column sheet
+# (occurrence_id / collection_name / latitude / notes / ...) could never be a
+# VALID upload: the validator rejects the very columns that made it readable.
+# Rather than choose between "uploads" and "documents the chart", the export
+# now writes both, each under the columns it is allowed to carry:
+#
+#   pbdb_occurrences.csv          ONLY the properties below, in the upstream
+#                                 order, every ``*_reso`` from the rank's own
+#                                 enum, and the ``dependentRequired`` rules
+#                                 enforced by dropping the orphan (the note
+#                                 goes to ``comments``, never silently)
+#   pbdb_occurrence_extensions.csv  the historical sheet, unchanged order, plus
+#                                 the chronostratigraphic ``*_reso`` columns
+#                                 that have no upstream slot
+#
+# The historical columns keep their original ORDER (a download users already
+# have, tests/test_pbdb.py and tests/test_review_2026_07_31_domain.py all read
+# them by position as well as by name); the additions are appended.
 PBDB_OCCURRENCE_FIELDS = [
     "occurrence_id", "taxon_name", "identified_by", "collection_name",
     "formation", "early_interval", "late_interval", "max_ma", "min_ma",
     "latitude", "longitude", "biostratigraphic_zone", "notes",
-    # three-part name split / chronostratigraphic resolution / abundance
-    "genus", "species", "subspecies",
+    # three-part name split (upstream column names) / chronostratigraphic
+    # resolution / abundance
+    "genus_name", "genus_reso", "subgenus_name", "subgenus_reso",
+    "species_name", "species_reso", "subspecies_name", "subspecies_reso",
     "early_interval_reso", "late_interval_reso", "max_ma_reso", "min_ma_reso",
-    "abund_value", "abund_unit",
+    "abund_value", "abund_unit", "comments",
 ]
+# The upstream property list, verbatim order, restricted to what this project
+# can fill: ``upload`` / ``plant_organ`` / ``plant_organ2`` are OMITTED because
+# a chart never states an upload flag or a plant part, and an absent optional
+# property is schema-valid while a guessed one is not.
+PBDB_UPLOAD_OCCURRENCE_FIELDS = [
+    "collection_no", "taxon_name",
+    "genus_reso", "genus_name",
+    "subgenus_reso", "subgenus_name",
+    "species_reso", "species_name",
+    "subspecies_reso", "subspecies_name",
+    "abund_value", "abund_unit",
+    "reference_no", "comments",
+]
+# ``dependentRequired`` of occurrence.schema.js, as "rank -> ranks that must
+# also carry a name for this rank's name to be uploadable".
+_PBDB_RANK_DEPENDENCIES = {
+    "genus": (),
+    "subgenus": ("genus",),
+    "species": ("genus",),
+    "subspecies": ("genus", "species"),
+}
+_PBDB_RANKS = ("genus", "subgenus", "species", "subspecies")
 PBDB_COLLECTION_FIELDS = [
     "collection_name", "latitude", "longitude", "formation",
     "early_interval", "late_interval", "max_ma", "min_ma",
     "early_interval_reso", "late_interval_reso", "max_ma_reso", "min_ma_reso",
 ]
+
+
+def _pbdb_safe_quote(value: Any, limit: int = 60) -> str:
+    """A cell value quoted INSIDE a note: whitespace collapsed, leading
+    formula triggers removed, length bounded.
+
+    FIX-2026-09-22 (item 9): a note is itself free text, so pasting
+    ``abund_value '=HYPERLINK(...)' dropped`` would move the payload from a
+    column the validator checks into one it does not. The note names the
+    problem; it does not reproduce the attack.
+    """
+    text = " ".join(str(value if value is not None else "").split())
+    text = text.lstrip("=+-@\t\r\n'\"")
+    if len(text) > limit:
+        text = text[:limit] + "..."
+    return text
+
+
+def _pbdb_upload_projection(occ: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
+    """One occurrence dict -> (schema-valid upload row, curation notes).
+
+    The row carries EXACTLY ``PBDB_UPLOAD_OCCURRENCE_FIELDS`` (so
+    ``additionalProperties: false`` is satisfied), both ``required`` properties
+    (``collection_no`` / ``reference_no`` — PBDB assigns the real numbers, so
+    until then ``collection_no`` carries the LOCAL collection name, which is
+    the only key that joins this sheet to ``pbdb_collections.csv`` /
+    ``pbdb_occurrence_extensions.csv`` (FIX-2026-09-22, C2: an empty id column
+    made the upload sheet unlinkable AND let an unguarded free-text value
+    bypass the CSV formula guard on its way out), and ``reference_no`` stays
+    the empty placeholder), and honours every ``dependentRequired`` pair by
+    dropping the orphan rather than shipping a row a validator bounces.
+    """
+    row: dict[str, str] = {key: "" for key in PBDB_UPLOAD_OCCURRENCE_FIELDS}
+    notes: list[str] = []
+    row["collection_no"] = str(occ.get("collection_no")
+                               or occ.get("collection_name") or "")
+    row["reference_no"] = str(occ.get("reference_no") or "")
+    row["taxon_name"] = str(occ.get("taxon_name") or "")
+    for rank in _PBDB_RANKS:
+        # The rank enums are closed; re-clamping here means a hand-edited
+        # dict cannot smuggle e.g. "n. gen." into species_reso.
+        row["%s_reso" % rank] = _clamp_reso(rank, str(
+            occ.get("%s_reso" % rank) or ""))
+        name = str(occ.get("%s_name" % rank) or "").strip()
+        if name:
+            # Dependencies are checked against the PROJECTED row, in rank
+            # order, so a missing genus cascades to species and subspecies.
+            missing = [dep for dep in _PBDB_RANK_DEPENDENCIES[rank]
+                       if not row["%s_name" % dep]]
+            if missing:
+                notes.append(
+                    "%s_name %r dropped in the upload sheet: the schema "
+                    "requires %s" % (rank, _pbdb_safe_quote(name),
+                                      " and ".join(
+                                          "%s_name" % m for m in missing)))
+                name = ""
+        row["%s_name" % rank] = name
+    value = str(occ.get("abund_value") or "")
+    unit = str(occ.get("abund_unit") or "")
+    if value and not unit:
+        notes.append(
+            "abund_value %r dropped: the schema pairs it with abund_unit "
+            "(dependentRequired) and the plate states no unit"
+            % _pbdb_safe_quote(value),)
+        value = ""
+    row["abund_value"] = value
+    row["abund_unit"] = unit
+    if not row["collection_no"] or not row["reference_no"]:
+        notes.append(
+            "collection_no/reference_no are assigned by PBDB and are the "
+            "schema's only required properties - fill them before uploading")
+    comments = str(occ.get("comments") or "")
+    if not comments:
+        comments = "; ".join(
+            [s for s in [str(occ.get("notes") or "")] + notes if s])
+    row["comments"] = comments
+    return row, notes
+
+
+def _pbdb_csv_text(fields: list[str], rows: list[dict[str, Any]],
+                   numeric: tuple[str, ...] = ()) -> str:
+    """CSV text for *fields*, OWASP-formula-guarded (FIX-2026-09-22, item 9).
+
+    ``exporter._sanitize_formula_cell`` prefixes a cell whose first character
+    is ``= + - @`` or a tab/CR/LF with a single quote, and every other sheet of
+    this project goes through it — the PBDB CSVs used to be written with a bare
+    ``DictWriter``, so a model-injected ``=CMD(...)`` in a taxon name or a
+    formation opened as a live formula in Excel. The numeric columns are
+    exempt: ``-31.0`` is a latitude, not an attack, and prefixing it would
+    turn a number into text.
+    """
+    def cell(value: Any, field: str) -> str:
+        text = "" if value is None else str(value)
+        if field in numeric:
+            return text
+        if text[:1] in ("=", "+", "-", "@", "\t", "\r", "\n"):
+            return "'" + text
+        return text
+
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output, fieldnames=fields, lineterminator=chr(10),
+        extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({f: cell(row.get(f, ""), f) for f in fields})
+    return output.getvalue()
 
 
 def _write_lf(path, text):
@@ -752,9 +1277,22 @@ def _write_lf(path, text):
 
 
 def to_pbdb_csv(result, output_path):
+    """Write the PBDB sheets into *output_path* and return their paths.
+
+    FIX-2026-09-22 (item 4): three files instead of two — the upload sheet
+    (``pbdb_occurrences.csv``, strictly ``occurrence.schema.js``-valid), the
+    local superset it was cut from (``pbdb_occurrence_extensions.csv``, the
+    historical 13 columns plus the extras PBDB has no property for), and the
+    collection sheet as before. ``pbdb_collections.csv`` keeps its own column
+    list: it is a working locality sheet keyed by ``collection_name``, and the
+    upstream collection template joins on the numbers PBDB assigns, which this
+    project does not have — hence the ``collection_no`` caveat that each
+    occurrence row repeats in ``comments``.
+    """
     output_path = Path(output_path)
     if output_path.is_file(): output_path = output_path.parent
     occ_path = output_path / "pbdb_occurrences.csv"
+    ext_path = output_path / "pbdb_occurrence_extensions.csv"
     col_path = output_path / "pbdb_collections.csv"
     # BORROW-2026-09-20: exporting to a fresh "outputs/<run>/" died with
     # FileNotFoundError because the two writes below assumed the directory
@@ -765,15 +1303,17 @@ def to_pbdb_csv(result, output_path):
     # ``PBDB_*_FIELDS`` are the single source of truth: a key a builder adds
     # without being listed here would make DictWriter raise
     # "dict contains fields not in fieldnames" and the whole export die.
-    occ_fields = PBDB_OCCURRENCE_FIELDS
-    col_fields = PBDB_COLLECTION_FIELDS
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=occ_fields, lineterminator=chr(10))
-    writer.writeheader()
-    for occ in occurrences: writer.writerow(occ)
-    _write_lf(occ_path, output.getvalue())
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=col_fields, lineterminator=chr(10))
-    writer.writeheader()
-    for col in collections: writer.writerow(col)
-    _write_lf(col_path, output.getvalue())
+    upload_rows = [_pbdb_upload_projection(occ)[0] for occ in occurrences]
+    _write_lf(occ_path, _pbdb_csv_text(
+        PBDB_UPLOAD_OCCURRENCE_FIELDS, upload_rows))
+    _write_lf(ext_path, _pbdb_csv_text(
+        PBDB_OCCURRENCE_FIELDS, occurrences,
+        numeric=("max_ma", "min_ma", "latitude", "longitude")))
+    _write_lf(col_path, _pbdb_csv_text(
+        PBDB_COLLECTION_FIELDS, collections,
+        numeric=("max_ma", "min_ma", "latitude", "longitude")))
+    return {
+        "occurrences": occ_path,
+        "extensions": ext_path,
+        "collections": col_path,
+    }

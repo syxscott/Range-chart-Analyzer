@@ -1163,6 +1163,14 @@ function rcaRenderNameIssues(issues) {
       label.textContent = t('names.fuzzy')
         .split('{name}').join(iss.name || '')
         .split('{suggestion}').join(iss.suggestion || '');
+    } else if (iss.msg_key === 'names.ambiguous') {
+      // FIX-2026-09-22 (A2, carry-over from agent B): `names.ambiguous`
+      // (rca_core/names.py:647 — several equal-strength GBIF matches, manual
+      // disambiguation needed) used to fall into the else branch and render
+      // the "not matched in the reference database" wording — the exact
+      // opposite claim. The key exists in all three locales of js/i18n.js.
+      label.textContent = t('names.ambiguous')
+        .split('{name}').join(iss.name || '');
     } else {
       label.textContent = t('names.unmatched')
         .split('{name}').join(iss.name || '');

@@ -127,6 +127,10 @@ TRANSLATIONS["zh"] = {
     "status.classifying": "正在识别图表类型…",
     "names.fuzzy": "学名模糊匹配：{name} → 可能是 {suggestion}（请人工核对）",
     "names.unmatched": "学名 {name} 未在参考数据库中匹配到（地方性或罕见种属常见，非必然错误）",
+    # FIX-2026-09-22 (item 4): names.py:name_issues emits this msg_key for
+    # "Multiple equal matches" but the key existed in no locale, so the UI
+    # rendered the raw key (and the JS mirror stayed silent).
+    "names.ambiguous": "学名 {name} 在参考数据库中存在多个同等强度的匹配，需人工消歧",
     "status.uploading": "正在上传图像……",
     "status.thinking": "正在分析图像，请稍候……",
     "status.parsing": "正在解析结果……",
@@ -426,6 +430,9 @@ TRANSLATIONS["zh"] = {
     # BORROW-2026-09-20 (A): 覆盖台账——把"图上画了破折号"记为已回答，
     # 把"模型什么都没写"记为缺口。仅作信息提示，不参与加权评分。
     "quality.coverage_ledger": "覆盖台账：{cells} 个请求单元中 {answered} 个已作答（其中 {not_drawn} 个为图上明确未画），{gaps} 个静默缺失",
+    # FIX-2026-09-22 (item 5): display-side wrapper consumed by js/app.js
+    # (rcaCoverageReasonIssues) so the reason_code.* catalog reaches the UI.
+    "quality.coverage_reasons": "覆盖理由码：{reasons}",
     # BORROW-2026-09-20 (A): 12 个理由码。slug 稳定，供 UI 与导出使用。
     "reason_code.not_drawn": "图上该列存在但此分类单元未画出（破折号/空格）：明确的缺失记录，不是漏抽",
     "reason_code.uncertain": "读数不确定：边界、标签或图例无法可靠判读",
@@ -556,6 +563,8 @@ TRANSLATIONS["en"] = {
     "status.classifying": "Detecting chart type…",
     "names.fuzzy": "Fuzzy name match: {name} → possibly {suggestion} (please verify)",
     "names.unmatched": "Name {name} not matched in the reference database (common for endemic taxa; not necessarily an error)",
+    # FIX-2026-09-22 (item 4): see the zh entry.
+    "names.ambiguous": "Name {name} has several equal-strength matches in the reference database (manual disambiguation needed)",
     "status.uploading": "Uploading image...",
     "status.thinking": "Analyzing image...",
     "status.parsing": "Parsing result...",
@@ -843,6 +852,27 @@ TRANSLATIONS["en"] = {
     # H2 fix (REVIEW-2026-11-07): see zh entry — key was emitted but
     # undefined in all three locales.
     "quality.scoring_failed": "Quality scoring failed; this result is unscored",
+    # FIX-2026-09-22 (item 5): the BORROW-2026-09-20 coverage-ledger /
+    # reason-code catalog was authored zh-only, so the fallback chain
+    # (lang -> en -> raw key) rendered "quality.coverage_ledger" and
+    # "reason_code.*" verbatim for en/ja users. Full en + ja glosses below,
+    # mirrored in js/i18n.js.
+    "quality.coverage_ledger": "Coverage ledger: {answered} of {cells} requested cells answered ({not_drawn} explicitly not drawn on the chart), {gaps} silently missing",
+    # FIX-2026-09-22 (item 5): display-side wrapper consumed by js/app.js
+    # (rcaCoverageReasonIssues) so the reason_code.* catalog reaches the UI.
+    "quality.coverage_reasons": "Coverage reason codes: {reasons}",
+    "reason_code.not_drawn": "The column exists on the chart but this taxon is deliberately not drawn (dash/blank): an explicit absence record, not a missed extraction",
+    "reason_code.uncertain": "Uncertain reading: boundary, label or legend could not be interpreted reliably",
+    "reason_code.obscured": "The mark or its label is covered by other elements, a caption, a fold or print bleed",
+    "reason_code.inferred": "Inferred from the legend, text description or range zone; there is no such mark on the chart itself",
+    "reason_code.legend_only": "The name appears only in the legend/index; no range mark inside the figure",
+    "reason_code.crosses_top": "The range runs off the top edge of the frame, so the last appearance is undetermined",
+    "reason_code.crosses_base": "The range runs off the bottom edge of the frame, so the first appearance is undetermined",
+    "reason_code.truncated": "The mark, label or whole column is cut off by the frame edge, a panel split or a page break",
+    "reason_code.no_label": "The mark is readable but its vertical-axis/level label is missing",
+    "reason_code.abbreviated": "The label is an abbreviated or truncated name that cannot be uniquely restored",
+    "reason_code.low_confidence": "Low confidence: this row carries dropped or conflicting evidence",
+    "reason_code.out_of_scope": "The unit is outside the requested scope (lithology, age or non-biotic element)",
 }
 
 TRANSLATIONS["ja"] = {
@@ -960,6 +990,8 @@ TRANSLATIONS["ja"] = {
     "status.classifying": "図表タイプを判定中…",
     "names.fuzzy": "学名ファジーマッチ: {name} → {suggestion} の可能性（要確認）",
     "names.unmatched": "学名 {name} は参照データベースに一致なし（固有種ではよくあること。必ずしも誤りではない）",
+    # FIX-2026-09-22 (item 4): 中国語版の項を参照。
+    "names.ambiguous": "学名 {name} に対して同等の一致が複数あります（人手による解消が必要）",
     "status.uploading": "画像をアップロード中……",
     "status.thinking": "画像を分析中……",
     "status.parsing": "結果を解析中……",
@@ -1247,6 +1279,24 @@ TRANSLATIONS["ja"] = {
     # H2 fix (REVIEW-2026-11-07): see zh entry — key was emitted but
     # undefined in all three locales.
     "quality.scoring_failed": "品質スコアリング中にエラーが発生しました。この結果は未採点です",
+    # FIX-2026-09-22 (item 5): see the en block — the coverage-ledger /
+    # reason-code catalog was zh-only and rendered raw keys for ja users.
+    "quality.coverage_ledger": "カバレッジ台帳：要求された {cells} セル中 {answered} 個が回答済み（うち {not_drawn} 個は図上で意図的に未描写）、{gaps} 個が沉默的欠落",
+    # FIX-2026-09-22 (item 5): display-side wrapper consumed by js/app.js
+    # (rcaCoverageReasonIssues) so the reason_code.* catalog reaches the UI.
+    "quality.coverage_reasons": "カバレッジ理由コード：{reasons}",
+    "reason_code.not_drawn": "列は図上に存在するがこの分類群は意図的に描かれていない（ダッシュ/空白）：明確な欠如記録であり、抽出漏れではない",
+    "reason_code.uncertain": "読み取り不確実：境界、ラベルまたは凡例を確実に判読できない",
+    "reason_code.obscured": "マークまたはそのラベルが他の要素、キャプション、折り目、印刷のかすれに隠されている",
+    "reason_code.inferred": "凡例、テキスト記述または延帯からの推定；図自体に該当マークはない",
+    "reason_code.legend_only": "名称は凡例/索引のみに出現し、図内に延帯マークがない",
+    "reason_code.crosses_top": "延帯が枠の上辺を越えており、末出現を確定できない",
+    "reason_code.crosses_base": "延帯が枠の下辺を越えており、初出現を確定できない",
+    "reason_code.truncated": "マーク、ラベルまたは列全体が枠の縁、パネル分割または改ページで切断されている",
+    "reason_code.no_label": "マークは読めるが、その縦軸/層位ラベルが存在しない",
+    "reason_code.abbreviated": "ラベルは略記または切断された名称で、一意に復元できない",
+    "reason_code.low_confidence": "低信頼度：この行には欠落または矛盾する証拠がある",
+    "reason_code.out_of_scope": "このユニットは今回の要求範囲外（岩性、年代または非生物要素）",
 }
 
 

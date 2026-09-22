@@ -14,6 +14,8 @@ Layered data flow:
 * ``history`` + ``usage`` + ``db`` — SQLite-backed persistence of
   past extractions and per-call token usage; provider configuration
   still lives in JSON for atomic-write / portability.
+* ``deskew`` + ``geometry`` — whole-page skew correction and the
+  pixel ↔ data-value axis calibration built on top of it.
 """
 
 from __future__ import annotations
@@ -91,6 +93,27 @@ from .editable import (
     is_dirty,
     new_row_template,
 )
+# BORROW-2026-09-20 modules.  Both import on stdlib alone (Pillow / cv2 are
+# lazily required only when the image helpers are actually called), so
+# exporting them here keeps the "rca_core imports anywhere" contract.
+# FIX-2026-09-22: the deskew + geometry public API was only reachable via
+# submodule imports; surface it next to the rest of the core.
+from .deskew import (
+    MIN_USEFUL_ANGLE,
+    DeskewError,
+    deskew_image,
+    estimate_skew_angle,
+    hough_skew_angle,
+)
+from .geometry import (
+    RESIDUAL_FRACTION,
+    SCHEMA_VERSION,
+    Anchor,
+    AxisCalibration,
+    Calibration,
+    CalibrationError,
+    fit_linear,
+)
 
 __all__ = [
     # tables / export
@@ -131,4 +154,9 @@ __all__ = [
     "estimate_tokens", "parse_usage",
     # editing
     "apply_edits", "capture_edits", "is_dirty", "new_row_template",
+    # deskew / geometry (FIX-2026-09-22: was only reachable via submodules)
+    "MIN_USEFUL_ANGLE", "DeskewError", "deskew_image", "estimate_skew_angle",
+    "hough_skew_angle",
+    "SCHEMA_VERSION", "RESIDUAL_FRACTION", "CalibrationError", "Anchor",
+    "AxisCalibration", "Calibration", "fit_linear",
 ]

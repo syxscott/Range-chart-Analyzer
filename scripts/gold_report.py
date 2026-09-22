@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -50,42 +50,68 @@ def main(results_path: Path, output_path: Path, title: str = "VLM Accuracy Repor
     print(f"Report written to: {output_path}")
 
 
+def _fmt(value: Any, digits: int = 2) -> str:
+    """Render one metric number: FIX-2026-09-22 — None means "not measured".
+
+    ``rca_core.eval_metrics`` reports an undefined ratio (zero denominator)
+    as None instead of a fake 0.0, so the renderer must show "n/a" there —
+    mirroring the deliberate refusal=n/a path below — rather than a
+    flattering or penalizing 0.00 for something that was never measured.
+    """
+    return "n/a" if value is None else f"{float(value):.{digits}f}"
+
+
 def _borrow_metric_lines(metrics: dict) -> list[str]:
     """BORROW-2026-09-20: one HTML line per new eval_metrics layer.
 
     Reads the additive blocks ``rca_core.eval_metrics.tiered_eval_report``
     emits (tiered boundaries, error typology, split tracks, refusal rate) and
     returns nothing at all for a legacy results file, so old and new reports
-    share this renderer.
+    share this renderer. Undefined ratios (None) render as "n/a".
     """
     lines: list[str] = []
     tiers = (metrics.get("boundary_tiers") or {}).get("row") or {}
     if tiers:
         rates = tiers.get("rates") or {}
-        rendered = " ".join(f"{tier}={rates[tier]:.2f}" for tier in
-                            ("strict", "adjacent", "coarse", "wrong") if tier in rates)
-        lines.append(f"tiers {rendered} weighted={tiers.get('weighted_score', 0):.2f}")
+        rendered = " ".join(
+            f"{tier}={_fmt(rates[tier])}" for tier in
+            ("strict", "adjacent", "coarse", "wrong") if tier in rates
+        )
+        lines.append(f"tiers {rendered} weighted={_fmt(tiers.get('weighted_score', 0))}")
     typology = metrics.get("error_typology") or {}
     counts = typology.get("counts") or {}
     if counts:
         errors = {k: v for k, v in counts.items() if v and k != "correct"}
         rendered = " ".join(f"{k}={v}" for k, v in sorted(errors.items())) or "none"
         lines.append(f"errors {rendered}")
+        # FIX-2026-09-22 (audit item 1): duplicated ground-truth keys are
+        # listed by eval_metrics; surface them instead of hiding first-wins.
+        duplicates = typology.get("duplicate_ground_truth") or []
+        for dup in duplicates:
+            lines.append(
+                f"duplicate gt rows section={dup.get('section') or '—'}"
+                f" species={dup.get('species') or '—'} rows={dup.get('rows')}"
+                " (first row kept)"
+            )
     tracks = metrics.get("tracks") or {}
     if tracks.get("descriptive") or tracks.get("reasoning"):
         lines.append(
-            f"descriptive={(tracks['descriptive'] or {}).get('score', 0):.2f}"
-            f" reasoning={(tracks['reasoning'] or {}).get('score', 0):.2f}"
+            f"descriptive={_fmt((tracks['descriptive'] or {}).get('score'))}"
+            f" reasoning={_fmt((tracks['reasoning'] or {}).get('score'))}"
         )
     refusals = metrics.get("refusals") or {}
     if refusals:
         if refusals.get("refusal_field_present"):
+            # FIX-2026-09-22 (audit item 5, A-6): when EVERY row was declined
+            # the headline species trio is a label-only optic; say so loudly.
+            suffix = " [all rows refused: P/R/F1 label-only]" if refusals.get("all_rows_refused") else ""
             lines.append(
-                f"refusal={refusals.get('refusal_rate', 0):.2f}"
-                f" (not_drawn={refusals.get('not_drawn_rate', 0):.2f}"
-                f" uncertain={refusals.get('uncertain_rate', 0):.2f})"
-                f" P_answered={refusals.get('precision_on_answered', 0):.2f}"
-                f" R_answered={refusals.get('recall_on_answered', 0):.2f}"
+                f"refusal={_fmt(refusals.get('refusal_rate', 0))}"
+                f" (not_drawn={_fmt(refusals.get('not_drawn_rate', 0))}"
+                f" uncertain={_fmt(refusals.get('uncertain_rate', 0))})"
+                f" P_answered={_fmt(refusals.get('precision_on_answered', 0))}"
+                f" R_answered={_fmt(refusals.get('recall_on_answered', 0))}"
+                + suffix
             )
         else:
             # BORROW-2026-09-20: be explicit that the refusal rate is UNKNOWN
@@ -97,7 +123,11 @@ def _borrow_metric_lines(metrics: dict) -> list[str]:
 def generate_html(results: dict[str, Any], title: str = "VLM Accuracy Report") -> str:
     cases = results.get("cases", [])
     summary = results.get("summary", {})
-    timestamp = results.get("timestamp", datetime.utcnow().isoformat() + "Z")
+    # FIX-2026-09-22 (audit item 5): datetime.utcnow() is deprecated and naive;
+    # stamp a timezone-aware UTC time and keep the trailing-Z wire format.
+    timestamp = results.get(
+        "timestamp", datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    )
 
     # Aggregate metrics by type
     by_type: dict[str, list[dict[str, Any]]] = {}

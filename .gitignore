@@ -19,6 +19,13 @@ _*.json
 .pytest_cache/
 _pytest_tmp/
 _tmpwin/
+# FIX-2026-09-22 (audit item 3): promote backups + atomic-write temp files are
+# runtime byproducts of scripts/update_ics.py and must never be committed.
+# The canonical table keeps a .bak/.bak.N rotation (newest = .bak); the atomic
+# writer stages bytes in a sibling .tmp before os.replace.
+*.bak
+*.bak.[0-9]*
+*.json.tmp
 # Node (no package.json manifest — deps are not reproducible; the JS
 # tests in tests_frontend.js are dependency-free Node scripts)
 node_modules/

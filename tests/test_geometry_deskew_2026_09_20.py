@@ -114,7 +114,10 @@ def test_mis_clicked_anchor_is_flagged_as_outlier_and_untrusted():
     assert wider.slope == pytest.approx(0.6)
     assert wider.intercept == pytest.approx(40.0)
     assert wider.residuals == pytest.approx([-40.0, 0.0, 40.0, 80.0, -80.0])
-    assert wider.outlier_indices == (0, 2, 3, 4)
+    # FIX-2026-09-22 (audit bug 5-4): the old plain-residual rule flagged
+    # (0, 2, 3, 4) - four anchors for one mis-click, guilt by smear.  The
+    # leave-one-out consensus names the single culprit instead.
+    assert wider.outlier_indices == (4,)
     assert wider.max_abs_residual == pytest.approx(80.0)
 
 
@@ -348,6 +351,28 @@ def _longest_flat_run(img) -> int:
     return best
 
 
+def _dark_count(img) -> int:
+    """Number of visibly-inked pixels (L < 200) - a rotation must not lose them."""
+    data = img.convert("L").tobytes()
+    return sum(1 for v in data if v < 200)
+
+
+def _assert_frame_preserved(out, src) -> None:
+    """FIX-2026-09-22 (audit bug 2): deskew rotates with expand=True.
+
+    The canvas grows so the WHOLE plate survives - size invariance is gone
+    on purpose (border rows / calibration anchors used to be cropped into
+    white wedges) - so the stable contract is content preservation:
+    a bigger canvas plus nearly all of the source ink still present.
+    """
+    assert out.size[0] >= src.size[0] and out.size[1] >= src.size[1], (
+        out.size, src.size
+    )
+    assert _dark_count(out) >= 0.75 * _dark_count(src), (
+        _dark_count(out), _dark_count(src)
+    )
+
+
 @needs_pillow
 def test_straight_plate_is_returned_untouched():
     img = _grid()
@@ -365,7 +390,7 @@ def test_projection_finds_the_known_skew(true_rotation: float):
     # a -2 deg correction; the magnitude is what the operator cares about.
     assert abs(abs(angle) - abs(true_rotation)) < 0.2, (angle, true_rotation)
     assert abs(angle - (-true_rotation)) < 0.2
-    assert out.size == skewed.size
+    _assert_frame_preserved(out, skewed)
     # correcting with the returned angle must level the ruling lines
     from PIL import Image
 
@@ -384,7 +409,7 @@ def test_corrected_lines_really_are_horizontal():
     out, angle = deskew_image(skewed, method="projection")
     after = _longest_flat_run(out)
     assert after > 400, (angle, after)  # lines lie on whole pixel rows again
-    assert out.size == skewed.size
+    _assert_frame_preserved(out, skewed)
 
 
 @needs_pillow
@@ -399,7 +424,8 @@ def test_vertical_ruling_lines_also_drive_the_estimate():
     skewed = img.rotate(2.5, expand=False, fillcolor=(255, 255, 255))
     out, angle = deskew_image(skewed, method="projection")
     assert abs(angle - (-2.5)) < 0.25, angle
-    assert out.mode == "RGB" and out.size == skewed.size
+    assert out.mode == "RGB"
+    _assert_frame_preserved(out, skewed)
 
 
 @needs_pillow
@@ -438,7 +464,7 @@ def test_palette_and_small_images_are_handled():
     img = _grid(w=300, h=200).convert("P")
     skewed = img.rotate(1.5, expand=False)
     out, angle = deskew_image(skewed, method="projection")
-    assert out.size == skewed.size
+    _assert_frame_preserved(out, skewed)
     assert out.mode in ("RGB", "RGBA", "P")
     assert angle < 0  # the correction goes the way that levels the lines
     assert abs(angle - (-1.5)) < 0.75, angle
@@ -478,7 +504,7 @@ def test_noisy_yellowed_scan_is_still_corrected():
     out, angle = deskew_image(skewed, method="projection")
     assert abs(angle - 1.5) < 0.3, angle
     assert _longest_flat_run(out) > _longest_flat_run(skewed)
-    assert out.size == skewed.size
+    _assert_frame_preserved(out, skewed)
 
 
 def test_hough_path_reports_none_without_opencv():
@@ -544,5 +570,5 @@ def test_downsample_cap_bounds_the_work():
     big = _grid(w=2400, h=1600, step=25)
     skewed = big.rotate(1.0, expand=False, fillcolor=255)
     out, angle = deskew_image(skewed, downsample=8, max_side=320, method="projection")
-    assert out.size == skewed.size  # full resolution in, full resolution out
+    _assert_frame_preserved(out, skewed)  # full resolution in, whole frame out
     assert abs(angle - (-1.0)) < 0.25, angle

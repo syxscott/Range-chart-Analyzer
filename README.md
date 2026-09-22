@@ -285,7 +285,7 @@ runs — the agreement column flags rows needing review on dense italic names.*
 | Species Ranges 种属延限 | species, section, range_base（老）, range_top（新）, biozone, (+author_year / occurrence_mode / note 等可选列) |
 | Biozones 生物带 | name, section, age, thickness_m |
 | Other Fossils 其他化石 | free-text 记录 |
-| PBDB 上传扩展列（`to_pbdb_csv`，追加在历史列之后） | 三名法拆分 genus / species / subspecies（含 cf./aff. 等开放命名限定词原样保留）；年代分辨率限定符 early_interval_reso / late_interval_reso / max_ma_reso / min_ma_reso（stage/series/system/era/measured/zone/informal）；丰度列 abund_value / abund_unit |
+| PBDB 导出（`to_pbdb_csv`，三份 CSV） | ① `pbdb_occurrences.csv` 上传表：列严格按上游 `occurrence.schema.js` 声明（collection_no、taxon_name、各 rank 的 `*_reso`+`*_name` 对、abund_value/abund_unit、reference_no、comments；`additionalProperties:false`），`dependentRequired` 级联丢弃孤儿并把原因写进 comments，`collection_no` 暂载本地剖面名作三表连接键（上传前替换为 PBDB 编号）；② `pbdb_occurrence_extensions.csv`：历史 13 列原序保留，后接三名法拆分列 genus_name / species_name / subspecies_name 等（cf./aff. 限定词归入其所限定 rank 的 `*_reso` 闭枚举，"Costa sp. 1" 记 species_reso=informal、不造种名）、年代分辨率限定符 early_interval_reso / late_interval_reso / max_ma_reso / min_ma_reso（measured/stage/series/system/era/zone/informal，本地词表）、丰度列；③ `pbdb_collections.csv` 剖面表。三份文件均过 OWASP 公式护栏（数字列除外） |
 
 整体附带 `confidence`（0–1）。任何语言的图表统一输出**标准拉丁学名**与英文地质字段；
 模型附加的未知字段按 H8 契约保留于行级 `_extras`，不丢弃。
@@ -297,9 +297,13 @@ runs — the agreement column flags rows needing review on dense italic names.*
 尚未接导出按钮）：
 
 - **数据集 CSV**：一个数据集一份纯两列 `x,y` 文件（LF、无 BOM、表头 `x,y`），命名
-  `wpd_<图版>__<剖面>__<种名>.csv`——延限图每个种属延限一份、丰度图每条曲线一份、
-  带对比图每个生物带一份；端点数值先经共享 bed 解析器与 ICS 标尺（`y_axis` 取
-  `level` 层位索引或 `age` 年代，`auto` 按多数行可解析者选定）；
+  `wpd_<图版>__<剖面>__<种名>.csv`——文件名对任意文字可读（CJK/西里尔等字母原样保留，
+  路径分隔符、控制字符与点号序列一律折叠为 `_`，见 `_wpd_slug`）；延限图每个种属延限一份、
+  丰度图每条曲线一份、带对比图每个生物带一份；端点数值先经共享 bed 解析器与 ICS 标尺
+  （`y_axis` 取 `level` 层位索引或 `age` 年代，`auto` 按多数行可解析者选定，zonation
+  先于 abundance 判型、被模式排除的表逐条 `mode_excludes_rows` 告警）；丰度值轴的
+  单位混用与单元格内联单位冲突同样进 `warnings`；同一 `output_dir` 二次导出不再静默
+  覆盖——磁盘同名文件确定性追加 `_2` 后缀并告警，清单始终描述盘上实际文件名；
 - **`wpd_axes.json`**：两轴的 name/unit/min/max、两个标定点（scale point）的值、
   数据集清单与使用说明，并附一份按 WPD 自身 JSON 交换书写的兼容块。
 

@@ -1777,12 +1777,23 @@ def to_newick_file(tree: dict[str, Any], path: str) -> None:
 # user the min/max values to anchor as WPD's two scale points. Pretending we
 # ship pixel calibration is the overclaim this section replaces.
 #
-# Determinism: no clock, no randomness, no locale formatting. The browser
-# mirror ``rcaToWpd`` in js/export.js must byte-for-byte reproduce ``files``,
-# so every number goes through ``_wpd_num`` (integral floats collapse to int
-# — JSON.stringify has no ``2.0`` spelling) and every text cell through
-# ``_wpd_num_text`` (no trailing ".0", mirrors the ``_str_for_merge`` rule in
-# aggregate.py).
+# Determinism: no clock, no randomness, no locale formatting. Every number
+# goes through ``_wpd_num`` (integral floats collapse to int — JSON.stringify
+# has no ``2.0`` spelling) and every text cell through ``_wpd_num_text`` (no
+# trailing ".0", mirrors the ``_str_for_merge`` rule in aggregate.py).
+#
+# FIX-2026-09-22 (item 11, was: an aspirational comment): the BROWSER MIRROR
+# IS ONLY THE THREE SCALAR HELPERS. ``js/export.js`` exports
+# ``rcaWpdNum`` / ``rcaWpdNumText`` / ``rcaWpdSlug`` — there is deliberately NO
+# ``rcaToWpd`` bundle builder there yet, because index.html / js/app.js have no
+# WPD entry point, and tests/test_export_js_mirror_smoke_2026_09_20.py PINS
+# that absence ("function rcaToWpd(" must not appear). The scalar helpers are
+# kept byte-compatible by the ONE shared case table in
+# ``tests_export_parity.js`` (``__RCA_WPD_CASES_BEGIN__``), which that pytest
+# module replays against these Python functions, so neither engine can drift
+# silently. When a browser entry point lands, the builder joins the
+# differential fixture (tests/gen_frontend_parity_fixtures.py) — it does not
+# get an ad-hoc JS copy.
 # ---------------------------------------------------------------------------
 
 WPD_EXPORT_FORMAT = "rca-wpd/1"
@@ -1791,7 +1802,13 @@ WPD_AXIS_JSON_FILENAME = "wpd_axes.json"
 # Bed subscripts (23a, 23b, …) are ORDERED but not measured. Spreading them
 # over the unit interval keeps "23a < 23b < 24" true on a numeric axis without
 # pretending the subscript is a depth. Documented in the axis JSON.
-_WPD_SUBSCRIPT_SPAN = 26.0
+#
+# FIX-2026-09-22 (item 2): the divisor is 27, not 26. With 26 the LAST letter
+# of the alphabet lands on the whole interval — ``Bed 23z`` became
+# ``23 + 26/26 == 24.0``, i.e. exactly ``Bed 24``, so a real range from
+# "Bed 23z" to "Bed 24" collapsed to ONE point and the top of the range was
+# destroyed silently. 27 keeps 23a < 23b < … < 23z < 24 strictly.
+_WPD_SUBSCRIPT_SPAN = 27.0
 
 # WPD's own default dataset palette (it renders one colour per dataset, so
 # giving each range its own colour makes the imported bundle look like the
@@ -1817,8 +1834,23 @@ def _wpd_num(value: Any) -> int | float | None:
     the same JSON text (``2`` vs ``2.0`` used to be enough to break a parity
     assertion). Non-integral floats are rounded to 6 decimals — the same text
     ``toFixed(6)`` + trailing-zero strip produces in the browser.
+
+    FIX-2026-09-22 (item 8, both halves of the parity contract):
+
+    * a STRING must be ASCII. ``float("２３")`` (FULLWIDTH DIGIT TWO/THREE) and
+      ``float("١٢٣")`` (ARABIC-INDIC) are 23.0 and 123.0 in Python but ``NaN``
+      in the JS mirror, and the mirror's own header promises "nothing Python's
+      float() would reject becomes a number". Stratigraphic text is OCR'd from
+      plates, so a Unicode-digit spelling IS reachable — and the safe answer
+      for both engines is the same: NOT a number. (Reproduced by the shared
+      case table in ``tests_export_parity.js``.)
+    * negative zero is normalised to ``0``. ``round(-1e-07, 6)`` is ``-0.0``,
+      which Python serialises as ``-0.0`` while the JS mirror and the CSV text
+      said ``0`` — the axis MIN and the CSV for the same point disagreed.
     """
     if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str) and not value.isascii():
         return None
     try:
         f = float(value)
@@ -1828,35 +1860,79 @@ def _wpd_num(value: Any) -> int | float | None:
         return None
     if f.is_integer():
         return int(f)
-    return round(f, 6)
+    f = round(f, 6)
+    if f == 0:
+        return 0                      # -0.0 -> 0 (int), one spelling everywhere
+    return f
 
 
 _WPD_PERCENT_RE = re.compile(r"^([+]?\d+(?:\.\d+)?)\s*%\s*$")
+# FIX-2026-09-22 (C2, item 6): a cell may write its unit outright —
+# "12 indiv/g". Before this the percent case was the ONLY inline unit the
+# exchange understood, so such a row died as ``abundance_points_unresolved``
+# and the horizontal_units_mixed machinery never saw the second unit: the
+# audit's own probe (12 indiv/g + 35 %) still exported a single-unit axis
+# with no warning about the mix. The grammar is deliberately narrow — an
+# ASCII number, whitespace, then a unit that must START with a letter (so
+# "12 000" is a thousand separators typo, not "12 with unit 000", and
+# "common" is nothing) — and the unit is stored verbatim beside the number,
+# never expanded or guessed at.
+_WPD_INLINE_UNIT_RE = re.compile(
+    r"^([+]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s+([A-Za-z][A-Za-z0-9/%.*-]*)$"
+)
 
 
 def _wpd_abscissa(value: Any) -> tuple[int | float | None, str]:
     """``(number, implied_unit)`` for an abundance cell.
 
     A percentage diagram writes ``"35%"`` in the cell while its unit column
-    says ``%`` — the SAME measurement, and WPD can only use the number. This
-    is the only coercion the exchange performs: ``"common"`` stays
-    non-numeric and is reported as an unresolved point, never guessed at.
+    says ``%`` — the SAME measurement, and WPD can only use the number. A
+    cell that writes its unit outright (``"12 indiv/g"``) states the same
+    pair in one string. These are the only coercions the exchange performs:
+    ``"common"`` stays non-numeric and is reported as an unresolved point,
+    never guessed at.
+
+    FIX-2026-09-22 (item 6): when the cell carries its own unit, the INLINE
+    spelling wins over the declared column — ``abundance="35%"`` with
+    ``abundance_unit="indiv/g"`` is stored as ``35`` under ``%``, not under
+    ``indiv/g``, because the unit written next to the number is the more
+    specific evidence and the alternative (35 indiv/g) is a false statement
+    about a measurement nobody made. The disagreement is never silent:
+    ``abundance_unit_conflict:<declared>≠<inline>`` lands in the manifest.
+    ``js/export.js`` has no abundance builder yet (see the header comment), so
+    there is nothing to mirror there beyond the scalar helpers.
     """
     text = str(value if value is not None else "").strip()
     m = _WPD_PERCENT_RE.match(text)
     if m:
         return _wpd_num(m.group(1)), "%"
+    if text.isascii():
+        m = _WPD_INLINE_UNIT_RE.match(text)
+        if m:
+            n = _wpd_num(m.group(1))
+            if n is not None:
+                return n, m.group(2)
     return _wpd_num(value), ""
 
 
 def _wpd_num_text(value: Any) -> str:
-    """CSV text for one numeric point — never ``2.0``, never ``nan``."""
+    """CSV text for one numeric point — never ``2.0``, never ``nan``.
+
+    Integral values print as the FULL decimal expansion of the integer
+    (``str(int)``), so ``1e21`` becomes ``1000000000000000000000`` rather than
+    ``1e+21``; the JS mirror expands with ``BigInt`` to stay byte-identical
+    (FIX-2026-09-22 item 8 — the old comment there waved this away as
+    unreachable, which is exactly how mirrors drift).
+    """
     n = _wpd_num(value)
     if n is None:
         return ""
     if isinstance(n, int):
         return str(n)
     return ("%f" % n).rstrip("0").rstrip(".")
+
+
+_WPD_LETTER_SUBSCRIPT_RE = re.compile(r"^[a-z]$")
 
 
 def _wpd_bed_value(text: Any) -> float | None:
@@ -1866,14 +1942,25 @@ def _wpd_bed_value(text: Any) -> float | None:
     the GUI invariants and eval_metrics agree on (the M-1 fix); parsing ages
     or thicknesses here would reintroduce the "253 Ma is bed 253" bug it
     closed, so anything it rejects we reject.
+
+    FIX-2026-09-22 (item 2): ONLY a single ASCII letter (``23a`` … ``23z``)
+    gets a subscript increment. ``parse_bed`` accepts a multi-letter suffix
+    whenever the "Bed" keyword is present — ``"Bed 12 top"`` / ``"Bed 12
+    base"`` both parse (sub ``"top"`` / ``"base"``) — and scoring the FIRST
+    letter of such a suffix made ``"Bed 12 top"`` (12.77) plot BELOW nothing
+    and ``"Bed 12 base"`` (12.08) below it, i.e. base ABOVE top, while the
+    range-chart invariant at the top of this module compares the two strings
+    LEXICALLY ("base" < "top"): two engines, opposite orders. A multi-letter
+    suffix is therefore an ORDER-UNKNOWN label: the bed number is kept and the
+    suffix contributes nothing, which cannot invert anything.
     """
     info = _parse_bed(text)
     if info is None:
         return None
     value = float(info["bed_num"])
     sub = str(info.get("bed_sub") or "")
-    if sub:
-        value += (ord(sub[0].lower()) - 96) / _WPD_SUBSCRIPT_SPAN
+    if _WPD_LETTER_SUBSCRIPT_RE.match(sub):
+        value += (ord(sub) - 96) / _WPD_SUBSCRIPT_SPAN
     return value
 
 
@@ -1917,10 +2004,34 @@ def _wpd_age_value(text: Any, prefer: str, *, bare_numeric: bool = False) -> int
 
 
 def _wpd_slug(text: Any, fallback: str = "dataset") -> str:
-    """Filename/dataset token: letters, digits, dot, dash, underscore."""
-    s = re.sub(r"[^A-Za-z0-9._\-]+", "_", str(text or "").strip())
-    s = s.strip("._-")
+    """Filename/dataset token: LETTERS AND DIGITS of any script, dot, dash,
+    underscore; every other run collapses to a single ``_``.
+
+    FIX-2026-09-22 (item 11): the class used to be ``[^A-Za-z0-9._-]+``, i.e.
+    ASCII-only, so EVERY non-Latin plate name collapsed to the same useless
+    token — ``图版3`` became ``3``, ``Разрез 1`` became ``_1``, and a folder of
+    ``wpd_3__…`` / ``nopanel`` files matched neither the README's promise of
+    readable filenames in the four supported chart languages nor the point of a
+    self-describing export. "Readable" is kept SAFE by construction rather than
+    by an allowlist of scripts: a character survives only when ``str.isalnum``
+    says it is a letter or a digit, so every path separator (``/``, ``\\``,
+    ``:``, and their Unicode look-alikes), every control / format character
+    (NUL, CR/LF, RTL override), every quote and shell metacharacter, and every
+    space still collapses to ``_``. Leading/trailing ``. _ -`` are stripped
+    afterwards, which is what keeps ``..`` and ``...`` from ever reaching a
+    path. ``js/export.js`` mirrors the same rule with
+    ``/[^\\p{L}\\p{N}_.\\-]+/gu``, pinned by the shared case table.
+    """
+    src = str(text or "").strip()
+    out: list[str] = []
+    for ch in src:
+        if ch.isalnum() or ch in "._-":
+            out.append(ch)
+        elif not out or out[-1] != "_":
+            out.append("_")
+    s = "".join(out).strip("._-")
     return s or fallback
+
 
 
 def _rca_version() -> str:
@@ -2077,8 +2188,11 @@ def _wpd_range_chart_datasets(
         })
     if skipped:
         warnings.append(
+            # FIX-2026-09-22 (item 11): the sentence used to read "no numeric
+            # level level" for y_kind == "level" — the mode token was glued to
+            # the literal word "level".
             f"range_endpoints_unresolved:{skipped} (row(s) carry no numeric "
-            f"{y_kind} level on either endpoint)"
+            f"{y_kind} value on either endpoint)"
         )
     if not out and not warnings:
         warnings.append("no_species_ranges")
@@ -2090,11 +2204,24 @@ def _wpd_abundance_datasets(data: dict[str, Any]) -> tuple[list[dict[str, Any]],
 
     An abundance diagram is the mode WPD was built for: depth on the vertical
     axis and one curve per taxon. Each sampled level becomes a point.
+
+    FIX-2026-09-22 (item 6): the units of the VALUE axis (the abundance axis,
+    which is ``x`` here — see the CSV column order) are collected per curve
+    and reported, exactly like the vertical axis always was. Two curves on one
+    plate counted in ``indiv/g`` and in ``%`` used to share an axis labelled
+    with the FIRST row's unit while the axis spanned both measurements and
+    the bundle carried no warning at all.
     """
+    all_rows = [r for r in (data.get("abundances") or []) if isinstance(r, dict)]
     rows = [
-        r for r in (data.get("abundances") or [])
+        r for r in all_rows
         if isinstance(r, dict) and str(r.get("taxon") or "").strip()
     ]
+    # FIX-2026-09-22 (item 1): rows keyed by "species" (a range-chart spelling)
+    # carry no ``taxon``, so they used to vanish WITHOUT a word — one of the
+    # ways an all-invalid plate ended up with an empty manifest and an
+    # IndexError. Say which rows were dropped and why.
+    no_taxon = len(all_rows) - len(rows)
     depth_units = {
         str(s.get("name") or "").strip(): str(s.get("depth_unit") or "").strip()
         for s in (data.get("sites") or []) if isinstance(s, dict)
@@ -2102,6 +2229,7 @@ def _wpd_abundance_datasets(data: dict[str, Any]) -> tuple[list[dict[str, Any]],
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     order: list[tuple[str, str]] = []
     skipped = 0
+    unit_conflicts: dict[str, int] = {}
     for row in rows:
         taxon = str(row.get("taxon") or "").strip()
         site = str(row.get("site") or "").strip()
@@ -2118,6 +2246,15 @@ def _wpd_abundance_datasets(data: dict[str, Any]) -> tuple[list[dict[str, Any]],
         else:
             y, level_kind = None, ""
         x, implied_unit = _wpd_abscissa(row.get("abundance"))
+        declared_unit = str(row.get("abundance_unit") or "").strip()
+        # The inline spelling wins (see ``_wpd_abscissa``); the disagreement is
+        # counted so the manifest can name it instead of quietly relabelling
+        # 35 % as 35 indiv/g.
+        unit = implied_unit or declared_unit
+        if x is not None and implied_unit and declared_unit \
+                and implied_unit != declared_unit:
+            key = "%s!=%s" % (declared_unit, implied_unit)
+            unit_conflicts[key] = unit_conflicts.get(key, 0) + 1
         if x is None or y is None:
             # "common"/"present" style categorical abundances and bed-only
             # levels without an index are not point data; say so, don't
@@ -2128,16 +2265,27 @@ def _wpd_abundance_datasets(data: dict[str, Any]) -> tuple[list[dict[str, Any]],
         if key not in grouped:
             grouped[key] = {
                 "taxon": taxon, "panel": site, "points": [],
-                "unit": str(row.get("abundance_unit") or "").strip() or implied_unit,
+                "unit": unit, "units": [],
                 "level_kind": level_kind,
             }
             order.append(key)
         grouped[key]["points"].append([x, y])
+        if unit and unit not in grouped[key]["units"]:
+            grouped[key]["units"].append(unit)
     warnings: list[str] = []
+    if no_taxon:
+        warnings.append(
+            f"abundance_rows_without_taxon:{no_taxon} (row(s) with no "
+            "\"taxon\" key - a range-chart spelling? nothing was exported "
+            "from them)")
     if skipped:
         warnings.append(
             f"abundance_points_unresolved:{skipped} (non-numeric abundance or "
             "no sampled level on that row)")
+    for pair in sorted(unit_conflicts):
+        warnings.append(
+            f"abundance_unit_conflict:{pair}:x{unit_conflicts[pair]} (the "
+            "inline unit of the cell is used for those points)")
     out: list[dict[str, Any]] = []
     for key in order:
         g = grouped[key]
@@ -2157,6 +2305,22 @@ def _wpd_abundance_datasets(data: dict[str, Any]) -> tuple[list[dict[str, Any]],
         # Depths in metres and levels in bed indices on one plate: the curves
         # cannot share an axis, so the bundle says so instead of hiding it.
         warnings.append("vertical_units_mixed:" + "/".join(level_units))
+    # FIX-2026-09-22 (item 6): the same honesty for the axis that actually
+    # carries the measurement. The vertical mixed-unit case above has existed
+    # all along; its horizontal twin did not, so a plate mixing 12 indiv/g
+    # with 35 % exported an x axis labelled "indiv/g", spanning 12..35, with
+    # warnings == [].
+    value_units = sorted({u for g in out for u in g.get("units") or [] if u})
+    if len(value_units) > 1:
+        warnings.append("horizontal_units_mixed:" + "/".join(value_units))
+    for g in out:
+        # A single curve that mixes units is worse than two curves that do: its
+        # own points are not comparable.
+        if len(g.get("units") or []) > 1:
+            warnings.append(
+                "curve_units_mixed:%s@%s:%s" % (
+                    g["taxon"], g["panel"] or "-", "/".join(g["units"])))
+            g["unit"] = "mixed"
     if not out and not warnings:
         warnings.append("no_abundances")
     return out, warnings
@@ -2202,6 +2366,94 @@ def _wpd_zonation_datasets(
     if not out and not warnings:
         warnings.append("no_zones")
     return out, warnings
+
+
+# Which result tables carry the point geometry of each mode (FIX-2026-09-22,
+# item 3). ``to_wpd`` can only draw one geometry per bundle, so any OTHER table
+# that still has rows is data the user extracted and will NOT find in the
+# files — that has to be said out loud instead of being dropped silently.
+_WPD_MODE_TABLES: dict[str, tuple[str, ...]] = {
+    "range_chart": ("species_ranges",),
+    "abundance_diagram": ("abundances", "sites"),
+    "zonation_chart": ("zonations", "zones", "correlations"),
+}
+
+
+def _wpd_excluded_table_warnings(data: dict[str, Any], mode: str) -> list[str]:
+    """Warnings for tables that carry rows but cannot appear in ``mode``."""
+    kept = _WPD_MODE_TABLES.get(mode)
+    if not kept:
+        # columnar_section / unsupported export their own honest
+        # ``mode_unsupported`` warning already.
+        return []
+    out: list[str] = []
+    for other_mode, tables in _WPD_MODE_TABLES.items():
+        if other_mode == mode:
+            continue
+        for key in tables:
+            if key in kept:
+                continue
+            rows = data.get(key)
+            if not isinstance(rows, list):
+                continue
+            n = sum(1 for r in rows if isinstance(r, dict))
+            if n:
+                out.append(
+                    f"mode_excludes_rows:{key}({n}): mode={mode} draws "
+                    f"{'+'.join(kept)} only; export the rest as a table")
+    return out
+
+
+def _wpd_suffixed_name(name: str, n: int) -> str:
+    """``wpd_a__S__T.csv`` + 2 → ``wpd_a__S__T_2.csv`` (suffix before the dot)."""
+    for ext in (".csv", ".json"):
+        if name.endswith(ext):
+            return "%s_%d%s" % (name[: -len(ext)], n, ext)
+    return "%s_%d" % (name, n)
+
+
+def _wpd_disk_name_plan(
+    output_dir: str | None,
+    names: list[str],
+    warnings: list[str],
+) -> dict[str, str]:
+    """``{wanted name: name actually written}`` for one bundle.
+
+    FIX-2026-09-22 (item 7): the in-bundle collision set used to live only
+    inside ONE call, so exporting two different results to the same
+    ``output_dir`` — the natural workflow, one plate per figure — made the
+    second call rewrite ``wpd_plate__S__A.csv`` and ``wpd_axes.json``
+    underneath the first: the user ended up with a folder whose CSVs and whose
+    axis manifest came from two different charts, with nothing in the manifest
+    saying so (without a ``source_file`` even the plate token is the constant
+    ``plate``, so EVERY export of that run collided). A wanted name that
+    already exists on disk now gets a deterministic ``_2`` / ``_3`` … suffix
+    and the rename is reported. Without ``output_dir`` nothing is consulted and
+    the names stay byte-for-byte what the JS mirror would produce.
+    """
+    if not output_dir:
+        return {n: n for n in names}
+    from pathlib import Path
+    root = Path(str(output_dir))
+    try:
+        existing = {p.name for p in root.iterdir() if p.is_file()} if root.is_dir() else set()
+    except OSError:  # unreadable directory: the write below reports the real error
+        existing = set()
+    plan: dict[str, str] = {}
+    taken: set[str] = set()
+    for name in sorted(names):
+        final, n = name, 1
+        while final in existing or final in taken:
+            n += 1
+            final = _wpd_suffixed_name(name, n)
+        taken.add(final)
+        plan[name] = final
+        if final != name:
+            warnings.append(
+                f"wpd_avoided_overwrite:{name}->{final} ({name} already exists "
+                "in output_dir from an earlier export; both bundles are kept - "
+                "delete the older one or use a fresh directory)")
+    return plan
 
 
 def to_wpd(
@@ -2251,10 +2503,18 @@ def to_wpd(
     data = data if isinstance(data, dict) else {}
 
     # ---- which geometry does this result carry? -------------------------
-    if _looks_abundance(data):
-        mode = "abundance_diagram"
-    elif _looks_zonation_chart(data):
+    # FIX-2026-09-22 (item 3): the precedence is now the one
+    # ``get_configs_for_result`` uses (zonation BEFORE abundance), which is what
+    # this function's own docstring has always claimed ("the shape is detected
+    # the same way"). It used to check abundance first, so a payload carrying
+    # both tables got zonation/correlation TABLES from the shared config path
+    # while the bundle exported the abundance curves and silently dropped every
+    # zone span — the GUI table and the exported file described different
+    # charts. The exclusion is now also reported (``mode_excludes_rows``).
+    if _looks_zonation_chart(data):
         mode = "zonation_chart"
+    elif _looks_abundance(data):
+        mode = "abundance_diagram"
     elif data.get("species_ranges"):
         mode = "range_chart"
     elif _looks_columnar(data):
@@ -2263,6 +2523,7 @@ def to_wpd(
         mode = "unsupported"
 
     warnings: list[str] = []
+    warnings.extend(_wpd_excluded_table_warnings(data, mode))
     plate = _wpd_slug(Path(str(source_file or "")).stem if source_file else "", "plate")
     y_kind = ""
     entries: list[dict[str, Any]] = []
@@ -2285,8 +2546,11 @@ def to_wpd(
                 orientation="inverted",
                 ends=("top of the plate (youngest bed)", "base of the plate (oldest bed)"),
                 note="Bed subscripts (23a, 23b) are spread over the unit "
-                     "interval as bed_num + letter/26 so their ORDER survives; "
-                     "the fraction is not a measured depth.",
+                     "interval as bed_num + letter/27 so their ORDER survives "
+                     "(27, not 26, so that 23z stays below 24); only a "
+                     "SINGLE-letter subscript is scored — 'Bed 12 top' has no "
+                     "ordered relation to 'Bed 12 base' and is plotted as "
+                     "bed 12. The fraction is not a measured depth.",
             )
         x_axis_desc = _wpd_axis(
             "taxon slot", "index", [r["x"] for r in rows],
@@ -2298,22 +2562,42 @@ def to_wpd(
     elif mode == "abundance_diagram":
         rows, w = _wpd_abundance_datasets(data)
         warnings.extend(w)
-        units = [r["unit"] for r in rows if r.get("unit")]
+        units = sorted({u for r in rows for u in (r.get("units") or []) if u})
+        mixed_values = len(units) > 1
         level_units = sorted({r["level_unit"] for r in rows if r.get("level_unit")})
         mixed_levels = len(level_units) > 1
-        y_kind = "abundance"
+        # FIX-2026-09-22 (item 11): this manifest key names the VERTICAL axis,
+        # and the vertical axis of an abundance bundle is the sampled level
+        # (axes.y below) — "abundance" contradicted both ``axes`` and the
+        # range / zonation branches, which say "level" / "age".
+        y_kind = "level"
         # The CSV columns decide which descriptor is which axis: an abundance
         # point is written [abundance, level], so ABUNDANCE is x (even though
         # the diagram draws it horizontally) and the sampled level is y.
         x_axis_desc = _wpd_axis(
-            "abundance", units[0] if units else "",
+            "abundance",
+            (units[0] if units else "") if not mixed_values else "mixed",
             [p[0] for r in rows for p in r["points"]],
             orientation="normal",
             ends=("left of the plot", "right of the plot"),
+            # FIX-2026-09-22 (items 1 + 6): the note for the axis that carries
+            # the measurement, mirroring the vertical one.
+            note=("Curves on this plate mix %s on one abundance axis; the "
+                  "horizontal_units_mixed warning lists them, and a point's own "
+                  "unit is in its dataset entry. Anchor the axis on the subset "
+                  "you intend to digitise." % "/".join(units)
+                  if mixed_values else ""),
         )
         y_axis_desc = _wpd_axis(
             "sampled level",
-            level_units[0] if not mixed_levels else "mixed",
+            # FIX-2026-09-22 (item 1): ``level_units[0]`` on an EMPTY list —
+            # which is what every plate with no usable numeric point produces
+            # ("common"-only abundances, rows without a depth/level, rows keyed
+            # by "species" instead of "taxon") — raised IndexError and killed
+            # the whole export instead of shipping the warnings + manifest the
+            # other modes ship. Same guard the units line above already used.
+            (level_units[0] if level_units else "") if not mixed_levels
+            else "mixed",
             [p[1] for r in rows for p in r["points"]],
             orientation="inverted",
             ends=("top of the diagram (shallowest)", "base of the diagram (deepest)"),
@@ -2383,6 +2667,16 @@ def to_wpd(
         })
 
     axes = {"x": x_axis_desc, "y": y_axis_desc}
+    # FIX-2026-09-22 (item 7): settle every name against the directory BEFORE
+    # the manifest is serialised, so ``datasets[].file``, ``files`` and
+    # ``written`` all describe the file that is actually on disk.
+    plan = _wpd_disk_name_plan(output_dir, [WPD_AXIS_JSON_FILENAME] + list(files),
+                               warnings)
+    axis_json_name = plan.get(WPD_AXIS_JSON_FILENAME, WPD_AXIS_JSON_FILENAME)
+    if any(name != final for name, final in plan.items()):
+        files = {plan[name]: body for name, body in files.items()}
+        for entry in entries:
+            entry["file"] = plan.get(entry["file"], entry["file"])
     # What one dataset IS, per mode: instructions that name the wrong unit
     # ("one dataset per taxon range" on a pollen diagram) teach the user a
     # falsehood, so the wording follows the detected mode.
@@ -2410,7 +2704,7 @@ def to_wpd(
         ],
         "datasets": entries,
         "n_datasets": len(entries),
-        "files": [WPD_AXIS_JSON_FILENAME] + sorted(files),
+        "files": [axis_json_name] + sorted(files),
         "warnings": warnings,
         # WPD's own exchange shape, so the file is at least glance-compatible
         # with what WPD writes on "Export data -> JSON".
@@ -2432,7 +2726,7 @@ def to_wpd(
     }
     text = json.dumps(_strip_nonfinite(document), ensure_ascii=False, indent=2,
                       allow_nan=False)
-    files[WPD_AXIS_JSON_FILENAME] = text + "\n"
+    files[axis_json_name] = text + "\n"
 
     written: list[str] = []
     if output_dir:

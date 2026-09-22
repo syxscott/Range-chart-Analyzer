@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass, field
+from itertools import combinations
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 __all__ = [
@@ -57,6 +58,18 @@ SCHEMA_VERSION = 1
 # under 2 % of the axis' data span (the tick-spacing scale an operator
 # mis-click would show up on).
 RESIDUAL_FRACTION = 0.02
+
+# FIX-2026-09-22 (audit bug 5-3): a stored ``residual_tolerance`` wider than
+# half the axis' data span is not a judgement, it launders any misfit into
+# "trusted" (measured: tolerance 1e9 -> is_trusted True with residual 33).
+# Such payloads fall back to the auto fraction instead of being taken verbatim.
+_TOLERANCE_SPAN_FRACTION = 0.5
+
+# FIX-2026-09-22 (audit bug 5-4): leave-one-out consensus for
+# :attr:`AxisCalibration.outlier_indices` is exhaustive over the small
+# deletion sets, which is cheap up to roughly a dozen anchors; beyond that
+# the (cheap but guilt-by-proximity) plain-residual rule takes over.
+_MAX_CONSENSUS_ANCHORS = 12
 
 _DIRECTIONS = ("direct", "reversed")
 _EPS = 1e-12
@@ -171,7 +184,12 @@ def fit_linear(
         mean_d = sum(values) / n
         sxx = sum((p - mean_p) ** 2 for p in pixels)
         sxy = sum((a.pixel - mean_p) * (a.data_value - mean_d) for a in anchors)
-        if sxx <= _EPS:  # pragma: no cover - guarded by the span checks above
+        # FIX-2026-09-22 (audit bug 5-6): the two- and three-point paths now
+        # share ONE degeneracy test, the pixel-span check above.  This guard
+        # used to be ``sxx <= _EPS`` - a span-squared quantity compared to a
+        # span threshold - so a (tiny but legal) 1e-7-pixel triple that the
+        # two-point path accepted was rejected here as "zero pixel variance".
+        if sxx <= _EPS * _EPS:  # pragma: no cover - guarded by the span check
             raise CalibrationError("degenerate anchor set (zero pixel variance)")
         slope = sxy / sxx
         intercept = mean_d - slope * mean_p
@@ -200,6 +218,27 @@ class AxisCalibration:
     residual_tolerance: float = 0.0
 
     # -- construction ----------------------------------------------------
+    def __post_init__(self) -> None:
+        # FIX-2026-09-22 (audit bug 5-7): one invariant gate for every route
+        # into the dataclass (``fit``, ``from_json``, direct construction).
+        # Non-finite coefficients / residuals raise HERE instead of emitting
+        # invalid JSON (bare ``NaN``) later, and the field coercion is
+        # idempotent for the validated paths above.
+        object.__setattr__(self, "axis", _check_axis(self.axis))
+        object.__setattr__(self, "direction", _check_direction(self.direction))
+        object.__setattr__(self, "slope", _as_float(self.slope, "slope"))
+        object.__setattr__(self, "intercept", _as_float(self.intercept, "intercept"))
+        object.__setattr__(
+            self,
+            "residual_tolerance",
+            abs(_as_float(self.residual_tolerance, "residual_tolerance")),
+        )
+        object.__setattr__(
+            self,
+            "residuals",
+            tuple(_as_float(r, "residuals[i]") for r in self.residuals),
+        )
+
     @classmethod
     def fit(
         cls,
@@ -246,7 +285,21 @@ class AxisCalibration:
         return self.slope * _as_float(pixel, "pixel") + self.intercept
 
     def to_pixel(self, data_value: Any) -> float:
-        """Data value -> pixel position (inverse of :meth:`to_data`)."""
+        """Data value -> pixel position (inverse of :meth:`to_data`).
+
+        Raises:
+            CalibrationError: a zero slope maps every pixel to ONE data
+                value, so the inverse is undefined.  A least-squares fit can
+                legitimately return slope 0 (e.g. anchors (0,0)/(100,100)/
+                (200,0)), and this used to surface as a bare ZeroDivisionError
+                (FIX-2026-09-22, audit bug 5-1) - mirror of the
+                :attr:`pixels_per_unit` guard below.
+        """
+        if not self.slope:
+            raise CalibrationError(
+                f"{self.axis}-axis slope is zero: data -> pixel conversion is "
+                "undefined (every pixel maps to one data value)"
+            )
         return (_as_float(data_value, "data_value") - self.intercept) / self.slope
 
     # callable aliases - the extractor reads a chart in one direction only,
@@ -282,17 +335,54 @@ class AxisCalibration:
 
     @property
     def outlier_indices(self) -> Tuple[int, ...]:
-        """Anchor positions whose residual breaks the tolerance.
+        """Anchor positions the fit actually blames for a misfit.
 
-        With 3+ anchors the worst offender is almost always a single
-        mis-clicked tick; surfacing its index lets the UI highlight exactly
-        that anchor instead of rejecting the whole axis.
+        The plain "residual > tolerance" rule is guilt by smear: a least-
+        squares fit drags its neighbours along, so one +80 mis-click among
+        six collinear ticks used to flag FOUR innocent anchors (and "3 bad
+        -> all 6 flagged"; FIX-2026-09-22, audit bug 5-4).
+
+        Leave-one-out consensus replaces it wherever the anchor set has the
+        redundancy to identify culprits: an anchor set is consistent when
+        the anchors LEFT after removing a candidate set fit within the
+        tolerance, and the smallest such removals are the answer.  Anchor
+        counts are tiny (ticks on one axis), so trying every removal set of
+        size 1..3 over at most :data:`_MAX_CONSENSUS_ANCHORS` anchors is
+        cheap and exact; below 4 anchors no removal explains anything
+        uniquely, and an ambiguous / oversized set keeps the conservative
+        plain-residual report.
         """
-        return tuple(
+        basic = tuple(
             i
             for i, r in enumerate(self.residuals)
             if abs(r) > self.residual_tolerance
         )
+        n = len(self.anchors)
+        if not basic or n < 4 or n > _MAX_CONSENSUS_ANCHORS:
+            return basic
+        for k in (1, 2, 3):
+            if n - k < 3:
+                continue
+            explanations: List[Tuple[int, ...]] = []
+            for combo in combinations(range(n), k):
+                dropped = set(combo)
+                rest = [a for i, a in enumerate(self.anchors) if i not in dropped]
+                try:
+                    _s, _b, residuals = fit_linear(rest)
+                except CalibrationError:
+                    continue
+                if all(
+                    abs(r) <= self.residual_tolerance for r in residuals
+                ):
+                    explanations.append(combo)
+            if explanations:
+                if len(explanations) == 1:
+                    return explanations[0]
+                common = set(explanations[0])
+                for combo in explanations[1:]:
+                    common &= set(combo)
+                return tuple(sorted(common)) if common else basic
+        return basic
 
     @property
     def issues(self) -> Tuple[str, ...]:
@@ -330,12 +420,22 @@ class AxisCalibration:
         }
 
     @classmethod
-    def from_json(cls, obj: Any) -> "AxisCalibration":
+    def from_json(
+        cls, obj: Any, *, expected_axis: Optional[str] = None
+    ) -> "AxisCalibration":
         """Rebuild an axis from :meth:`to_json` output.
 
         The fit is *re-derived* from the anchors when they are present (so a
         hand-edited ``slope`` cannot smuggle itself into a result), and the
         stored coefficients are used only for an anchor-less payload.
+
+        ``expected_axis`` is the slot this payload is being loaded into (set
+        by :meth:`Calibration.from_json`).  FIX-2026-09-22 (audit bug 4): a
+        missing ``axis`` key now takes the slot's letter instead of silently
+        defaulting to ``"x"`` - a y payload filed under x duplicated its
+        issue codes, collided in ``worst_residual`` and round-tripped the
+        wrong label into exports - and an ``axis`` that contradicts the slot
+        is rejected outright.
         """
         if isinstance(obj, AxisCalibration):
             return obj
@@ -344,11 +444,20 @@ class AxisCalibration:
         for key in ("slope", "intercept"):
             if key not in obj:
                 raise CalibrationError(f"axis calibration is missing {key!r}")
+        declared = obj.get("axis")
+        if expected_axis is not None:
+            if declared is not None and _check_axis(declared) != expected_axis:
+                raise CalibrationError(
+                    f"the {expected_axis!r} calibration slot holds a payload "
+                    f"declared as axis {declared!r}; refusing to guess which "
+                    "one is right"
+                )
+            declared = expected_axis
         slope = _as_float(obj["slope"], "slope")
         intercept = _as_float(obj["intercept"], "intercept")
         anchors = _coerce_anchors(obj.get("anchors") or ())
         raw_residuals = obj.get("residuals")
-        direction = obj.get("direction") or _direction_for(slope)
+        raw_direction = obj.get("direction")  # checked AFTER the refit below
         tolerance = obj.get("residual_tolerance")
 
         if len(anchors) >= 2:
@@ -357,8 +466,17 @@ class AxisCalibration:
                 a.data_value for a in anchors
             )
             slope, intercept = fit_slope, fit_intercept
+            auto = max(1e-9, RESIDUAL_FRACTION * abs(span))
             if tolerance is None:
-                tolerance = max(1e-9, RESIDUAL_FRACTION * abs(span))
+                tolerance = auto
+            else:
+                tolerance = abs(_as_float(tolerance, "residual_tolerance"))
+                # FIX-2026-09-22 (audit bug 5-3): never trust a payload
+                # tolerance so wide that any misfit sails through - a
+                # tolerance above half the data span is laundered, so it
+                # falls back to the auto fraction recomputed from anchors.
+                if tolerance > _TOLERANCE_SPAN_FRACTION * abs(span):
+                    tolerance = auto
         else:
             # Anchor-less payload (a fit handed over as bare coefficients):
             # trust the stored residuals, and if there is no tolerance to
@@ -369,11 +487,23 @@ class AxisCalibration:
             if tolerance is None:
                 tolerance = 0.0
 
+        # FIX-2026-09-22 (audit bug 5-2): the direction must follow the
+        # REFITTED slope when the payload declares none - deriving it from
+        # the (untrusted) stored slope let an anchor fit of -0.3 report
+        # "direct" while the anchors are authoritative.  An EXPLICITly
+        # declared direction is still kept as declared so the disagreement
+        # surfaces as the "direction_conflict" issue, not a silent rewrite.
+        direction = (
+            _check_direction(raw_direction)
+            if raw_direction
+            else _direction_for(slope)
+        )
+
         return cls(
-            axis=_check_axis(obj.get("axis", "x")),
-            name=str(obj.get("name") or obj.get("axis") or "x"),
+            axis=_check_axis(declared if declared is not None else "x"),
+            name=str(obj.get("name") or declared or "x"),
             unit=str(obj.get("unit") or ""),
-            direction=_check_direction(direction),
+            direction=direction,
             slope=slope,
             intercept=intercept,
             anchors=anchors,
@@ -507,11 +637,15 @@ class Calibration:
     # -- diagnostics -----------------------------------------------------
     @property
     def issues(self) -> Tuple[str, ...]:
+        # FIX-2026-09-22 (audit bug 4): prefixed by the SLOT the axis lives
+        # in, not by part.axis - a mislabelled payload used to file y's
+        # complaints twice under "x".  Calibration.from_json now also rejects
+        # slot/axis mismatches, so the two agree by construction.
         found: List[str] = []
-        for part in (self.x, self.y):
+        for slot, part in (("x", self.x), ("y", self.y)):
             if part is None:
                 continue
-            found.extend(f"{part.axis}.{code}" for code in part.issues)
+            found.extend(f"{slot}.{code}" for code in part.issues)
         return tuple(found)
 
     @property
@@ -524,9 +658,9 @@ class Calibration:
     def worst_residual(self) -> Dict[str, float]:
         """``{"x": .., "y": ..}`` worst absolute residuals, for trust display."""
         out: Dict[str, float] = {}
-        for part in (self.x, self.y):
+        for slot, part in (("x", self.x), ("y", self.y)):
             if part is not None:
-                out[part.axis] = part.max_abs_residual
+                out[slot] = part.max_abs_residual
         return out
 
     # -- serialisation ---------------------------------------------------
@@ -542,8 +676,22 @@ class Calibration:
         }
 
     def to_json_string(self, *, indent: Optional[int] = None) -> str:
-        return json.dumps(self.to_json(), ensure_ascii=False, indent=indent,
-                          sort_keys=True)
+        # FIX-2026-09-22 (audit bug 5-7): emit VALID JSON only.  allow_nan=False
+        # refuses the NaN/Infinity tokens json.loads would reject downstream,
+        # and a non-serialisable provenance value becomes a CalibrationError
+        # naming the problem instead of a bare TypeError from deep inside dumps.
+        try:
+            return json.dumps(
+                self.to_json(),
+                ensure_ascii=False,
+                indent=indent,
+                sort_keys=True,
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise CalibrationError(
+                f"calibration cannot be serialised to JSON: {exc}"
+            ) from exc
 
     @classmethod
     def from_json(cls, payload: Any) -> "Calibration":
@@ -565,9 +713,23 @@ class Calibration:
                 f"calibration must be an object, got {type(payload).__name__}"
             )
         version = payload.get("schema_version", SCHEMA_VERSION)
+        # FIX-2026-09-22 (audit bug 5-5): ``int(inf)`` raises OverflowError,
+        # which used to escape uncaught (json.dumps happily emits the bare
+        # ``Infinity`` token this round-trips through), and int(1.9) silently
+        # truncated - reject both instead of guessing.
+        if isinstance(version, bool) or version is None:
+            raise CalibrationError(
+                f"schema_version must be an integer, got {version!r}"
+            )
+        if isinstance(version, float) and (
+            not math.isfinite(version) or not version.is_integer()
+        ):
+            raise CalibrationError(
+                f"schema_version must be an integer, got {version!r}"
+            )
         try:
             version = int(version)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             raise CalibrationError(
                 f"schema_version must be an integer, got {version!r}"
             ) from None
@@ -580,8 +742,12 @@ class Calibration:
         if not isinstance(prov, dict):
             raise CalibrationError("provenance must be an object")
         return cls(
-            x=AxisCalibration.from_json(payload["x"]) if payload.get("x") else None,
-            y=AxisCalibration.from_json(payload["y"]) if payload.get("y") else None,
+            x=AxisCalibration.from_json(
+                payload["x"], expected_axis="x"
+            ) if payload.get("x") else None,
+            y=AxisCalibration.from_json(
+                payload["y"], expected_axis="y"
+            ) if payload.get("y") else None,
             schema_version=version,
             provenance=dict(prov),
         )

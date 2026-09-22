@@ -36,12 +36,41 @@ ICS_VERSION = "ICS v2024/12"
 # the whole module import, which took down every consumer (quality.py,
 # darwin_core.py, pbdb.py). We now surface a warning and fall back to an
 # empty table so age lookups simply no-op instead of breaking the app.
+#
+# FIX-2026-09-22 (audit item 3d): the degradation was too quiet. A
+# half-written canonical file (the promote path used to truncate without a
+# temp file) or a payload that parses but is not a stage -> row object lands
+# in the {} fallback and EVERY age lookup in the app silently returns None
+# forever. The fallback now:
+#   * validates the SHAPE, not just the JSON syntax (a dict of dicts), so a
+#     corrupt-but-parseable file is caught here instead of at first use;
+#   * raises a RuntimeWarning (louder default filter than UserWarning) and
+#     sets the module-level ``ICS_TABLE_DEGRADED`` flag so consumers, tests
+#     and the update script (scripts/update_ics.py validates against this
+#     exact import path before promoting) can assert the table loaded.
+ICS_TABLE_DEGRADED = False
 try:
     _ICS_PATH = Path(__file__).parent.parent / "resources" / "ics_2024.json"
-    ICS_2024: dict[str, dict] = json.loads(_ICS_PATH.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError) as _exc:  # pragma: no cover - resource integrity
-    warnings.warn(f"ICS 2024 table unavailable; age lookups disabled: {_exc}")
+    _ICS_RAW = json.loads(_ICS_PATH.read_text(encoding="utf-8"))
+    if not isinstance(_ICS_RAW, dict) or not _ICS_RAW:
+        raise ValueError(
+            "expected a non-empty object of stage -> row, got "
+            f"{type(_ICS_RAW).__name__} with {len(_ICS_RAW)} keys")
+    _ICS_NON_ROWS = [str(k) for k, v in _ICS_RAW.items() if not isinstance(v, dict)]
+    if _ICS_NON_ROWS:
+        raise ValueError(
+            f"{len(_ICS_NON_ROWS)} row(s) are not objects, e.g. {_ICS_NON_ROWS[:3]}")
+    ICS_2024: dict[str, dict] = _ICS_RAW
+except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as _exc:  # pragma: no cover - resource integrity
+    warnings.warn(
+        f"ICS 2024 table unavailable; age lookups disabled: {_exc} -- "
+        "THE ENTIRE CHRONOSTRATIGRAPHY LOOKUP TABLE IS EMPTY, every stage/age "
+        "resolution in quality.py, darwin_core.py, pbdb.py and the exporters "
+        "now silently returns None. Restore rca_core/resources/ics_2024.json "
+        "(a timestamped .bak* sibling is kept by scripts/update_ics.py).",
+        RuntimeWarning, stacklevel=2)
     ICS_2024 = {}
+    ICS_TABLE_DEGRADED = True
 
 
 # REVIEW-2026-09-20: the bundled table carries the Cambrian intervals that

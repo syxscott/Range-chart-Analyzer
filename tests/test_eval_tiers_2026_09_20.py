@@ -131,11 +131,26 @@ class TestNumericAgeMode:
         assert classify_boundary_tier("253 Ma", "253000 ka", mode="numeric")["tier"] == TIER_STRICT
         assert classify_boundary_tier("0.253 Ma", "253 ka", mode="numeric")["tier"] == TIER_STRICT
 
-    def test_auto_mode_never_reads_a_bare_bed_index_as_an_age(self):
-        # A bare number is a bin, not an age: mode="auto" keeps the two spaces
-        # apart instead of scoring "13" against "8" in Myr.
-        assert classify_boundary_tier("13", "8")["mode"] == "bed"
-        assert classify_boundary_tier("253 Ma", "8") is None
+    def test_auto_reads_bare_numbers_as_ages_not_bed_bins(self):
+        # FIX-2026-09-22 (audit item 2): a bare number in mode="auto" is an
+        # AGE, so auto agrees with the explicit numeric reading instead of
+        # reinterpreting ages as bed indices (which inverted the direction
+        # semantics against mode="age"). Only bed-SHAPED patterns — the
+        # "Bed" keyword or a letter subscript — take the bin space.
+        assert classify_boundary_tier("34", "36") == classify_boundary_tier(
+            "34", "36", mode="age",
+        )
+        assert classify_boundary_tier(34, 36)["mode"] == "age"
+        assert classify_boundary_tier(34, 36)["direction"] == "up"  # younger = higher
+        assert classify_boundary_tier("34", "35")["tier"] == TIER_COARSE  # 1 Myr > adjacent 0.5
+        assert classify_boundary_tier("Bed 12", "Bed 10")["mode"] == "bed"
+        assert classify_boundary_tier("12a", "12")["mode"] == "bed"
+        assert classify_boundary_tier("23z", "23z")["mode"] == "bed"
+        assert classify_boundary_tier("34 Ma", "36")["mode"] == "age"
+        # Text that is neither a bed label nor a number stays unguessed.
+        assert classify_boundary_tier("top of the cliff", "Bed 4") is None
+        # Explicit bed mode keeps accepting bare bed indices (legacy columns).
+        assert classify_boundary_tier("13", "8", mode="bed")["mode"] == "bed"
 
     def test_custom_myr_tolerances(self):
         assert classify_boundary_tier(
@@ -145,19 +160,21 @@ class TestNumericAgeMode:
 
 
 class TestBoundaryTierAccuracy:
+    # FIX-2026-09-22 (audit item 2): these fixtures intend BED space, so they
+    # now spell it bed-shaped — mode="auto" reads a bare "8" as an age.
     GT = [
-        _row("A", "8", "3"),
-        _row("B", "13", "8"),
-        _row("C", "20", "15"),
-        _row("D", "30", "25"),
+        _row("A", "Bed 8", "Bed 3"),
+        _row("B", "Bed 13", "Bed 8"),
+        _row("C", "Bed 20", "Bed 15"),
+        _row("D", "Bed 30", "Bed 25"),
     ]
 
     def test_four_tier_proportions_and_weighted_score(self):
         pred = [
-            _row("A", "8", "3"),    # strict
-            _row("B", "14", "8"),   # adjacent
-            _row("C", "18", "15"),  # coarse
-            _row("D", "10", "25"),  # wrong
+            _row("A", "Bed 8", "Bed 3"),    # strict
+            _row("B", "Bed 14", "Bed 8"),   # adjacent
+            _row("C", "Bed 18", "Bed 15"),  # coarse
+            _row("D", "Bed 10", "Bed 25"),  # wrong
         ]
         m = boundary_tier_accuracy(pred, self.GT, field="range_top")
         assert m["scored"] == 4
@@ -169,7 +186,7 @@ class TestBoundaryTierAccuracy:
         ]
 
     def test_weights_are_configurable(self):
-        pred = [_row("A", "9", "3")]  # one adjacent bin
+        pred = [_row("A", "Bed 9", "Bed 3")]  # one adjacent bin
         m = boundary_tier_accuracy(
             pred, self.GT, field="range_top", weights={TIER_ADJACENT: 1.0},
         )
@@ -177,16 +194,19 @@ class TestBoundaryTierAccuracy:
         assert m["weights"][TIER_WRONG] == 0.0  # wrong never earns credit
 
     def test_unmatched_species_and_unparseable_cells_are_skipped(self):
-        pred = [_row("A", "8", "3"), _row("Z", "8", "3"), _row("B", "see text", "8")]
+        pred = [_row("A", "Bed 8", "Bed 3"), _row("Z", "8", "3"), _row("B", "see text", "8")]
         m = boundary_tier_accuracy(pred, self.GT, field="range_top")
         assert m["scored"] == 1
         assert m["unscorable"] == 1
 
-    def test_empty_ground_truth_yields_zeroed_structure(self):
-        m = boundary_tier_accuracy([_row("A", "8", "3")], [], field="range_top")
+    def test_empty_ground_truth_yields_not_measured_structure(self):
+        # FIX-2026-09-22 (audit item 3): "no denominator" is None ("n/a"),
+        # not a 0.0 that pretends the run was measured and scored zero.
+        m = boundary_tier_accuracy([_row("A", "Bed 8", "Bed 3")], [], field="range_top")
         assert m["scored"] == 0
-        assert m["rates"] == {t: 0.0 for t in BOUNDARY_TIERS}
-        assert m["weighted_score"] == 0.0
+        assert m["rates"] == {t: None for t in BOUNDARY_TIERS}
+        assert m["weighted_score"] is None
+        assert m["counts"] == {t: 0 for t in BOUNDARY_TIERS}
 
     def test_numeric_field_scores_in_myr(self):
         gt = [_row("A", "253.1 Ma", "254.5 Ma")]
@@ -198,8 +218,8 @@ class TestBoundaryTierAccuracy:
 
 class TestRangeTierAccuracy:
     def test_row_tier_is_the_worst_endpoint(self):
-        gt = [_row("A", "8", "3")]
-        pred = [_row("A", "8", "20")]  # top nailed, base far away
+        gt = [_row("A", "Bed 8", "Bed 3")]
+        pred = [_row("A", "Bed 8", "Bed 20")]  # top nailed, base far away
         m = range_tier_accuracy(pred, gt)
         assert m["fields"]["range_top"]["counts"][TIER_STRICT] == 1
         assert m["fields"]["range_base"]["counts"][TIER_WRONG] == 1
@@ -208,8 +228,8 @@ class TestRangeTierAccuracy:
         assert m["row"]["weighted_score"] == 0.0
 
     def test_both_fields_are_reported_per_species(self):
-        gt = [_row("A", "8", "3"), _row("B", "13", "8")]
-        pred = [_row("A", "9", "4"), _row("B", "13", "8")]
+        gt = [_row("A", "Bed 8", "Bed 3"), _row("B", "Bed 13", "Bed 8")]
+        pred = [_row("A", "Bed 9", "Bed 4"), _row("B", "Bed 13", "Bed 8")]
         m = range_tier_accuracy(pred, gt)
         assert set(ENDPOINT_FIELDS) == {"range_top", "range_base"}
         assert m["row"]["scored"] == 2
@@ -228,19 +248,22 @@ def _labels_by_species(result: dict[str, Any]) -> dict[str, str]:
 
 class TestErrorTypology:
     def test_every_label_in_the_closed_set_is_reachable(self):
+        # FIX-2026-09-22 (audit item 2): bed space is spelled bed-shaped now;
+        # the "koslovensis" line keeps BARE numbers on purpose — there the
+        # 6 -> 60 slip must read as a numeric unit/scale error (age space).
         gt = [
-            _row("Gryphaea arcuata", "13", "8"),
-            _row("Dactylioceras commune", "10", "3"),
+            _row("Gryphaea arcuata", "Bed 13", "Bed 8"),
+            _row("Dactylioceras commune", "Bed 10", "Bed 3"),
             _row("Ammonites koslovensis", "6", "2"),
-            _row("Inoceramus elongatus", "20", "15"),
-            _row("Belemnitella mucronata", "30", "25"),
+            _row("Inoceramus elongatus", "Bed 20", "Bed 15"),
+            _row("Belemnitella mucronata", "Bed 30", "Bed 25"),
         ]
         pred = [
-            _row("Gryphaea arcuata", "13", "8"),        # correct
-            _row("Dactylioceras communis", "10", "3"),  # taxon_misid (fuzzy name)
-            _row("Ammonites koslovensis", "60", "2"),   # value_scale_error (10x)
-            _row("Belemnitella mucronata", "31", "26"), # range_shift_up (both +1)
-            _row("Trilobites inventus", "4", "2"),      # hallucination
+            _row("Gryphaea arcuata", "Bed 13", "Bed 8"),        # correct
+            _row("Dactylioceras communis", "Bed 10", "Bed 3"),  # taxon_misid (fuzzy name)
+            _row("Ammonites koslovensis", "60", "2"),           # value_scale_error (10x)
+            _row("Belemnitella mucronata", "Bed 31", "Bed 26"), # range_shift_up (both +1)
+            _row("Trilobites inventus", "Bed 4", "Bed 2"),      # hallucination
             # "Inoceramus elongatus" is neither answered nor refused ->
             # omission.
         ]
@@ -263,8 +286,8 @@ class TestErrorTypology:
         assert result["n_rows"] == 6  # 5 ground-truth rows + 1 invented row
 
     def test_boundary_misread_is_a_single_endpoint_miss(self):
-        gt = [_row("A", "8", "3")]
-        pred = [_row("A", "14", "3")]  # top wrong, base exact
+        gt = [_row("A", "Bed 8", "Bed 3")]
+        pred = [_row("A", "Bed 14", "Bed 3")]  # top wrong, base exact
         result = error_typology(pred, gt)
         assert _labels_by_species(result) == {"A": "boundary_misread"}
         assert result["rows"][0]["detail"]["directions"]["range_top"] == "up"
@@ -273,15 +296,15 @@ class TestErrorTypology:
     def test_stretched_range_is_not_reported_as_a_directional_shift(self):
         # Top pushed too high AND base pulled too low: the range was stretched,
         # not slid, so a "shifted up/down" label would describe it wrongly.
-        gt = [_row("A", "8", "3")]
-        pred = [_row("A", "12", "1")]
+        gt = [_row("A", "Bed 8", "Bed 3")]
+        pred = [_row("A", "Bed 12", "Bed 1")]
         result = error_typology(pred, gt)
         assert _labels_by_species(result) == {"A": "boundary_misread"}
         assert set(result["rows"][0]["detail"]["directions"].values()) == {"up", "down"}
 
     def test_range_shift_down_label(self):
-        gt = [_row("A", "8", "3")]
-        pred = [_row("A", "6", "1")]  # whole range slid down-section
+        gt = [_row("A", "Bed 8", "Bed 3")]
+        pred = [_row("A", "Bed 6", "Bed 1")]  # whole range slid down-section
         assert _labels_by_species(error_typology(pred, gt)) == {"A": "range_shift_down"}
 
     def test_abundance_unit_slip_is_a_scale_error(self):

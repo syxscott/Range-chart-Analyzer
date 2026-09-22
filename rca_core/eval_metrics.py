@@ -27,6 +27,7 @@ import re
 from typing import Any
 
 from .bed_parser import parse_bed as _parse_bed_info
+from .reason_codes import normalize_response_kind
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -665,6 +666,94 @@ def _sub_token(sub: Any) -> str:
     return str(sub or "").strip().lower()
 
 
+# --- Row identity: the compound (section, species) key ---------------------
+#
+# FIX-2026-09-22 (audit item 1): every ground-truth consumer in the BORROW
+# layer (tier lookup build, boundary matching, row aggregation, error
+# typology, pair indices) now keys rows on the SAME compound
+# ``(section, species)`` identity and applies the SAME duplicate policy:
+# the FIRST ground-truth row for a key wins (``setdefault`` semantics, as the
+# typology and the pair indices always did) and duplicated keys are listed
+# deterministically under ``duplicate_ground_truth`` instead of being silently
+# overwritten (``boundary_tier_accuracy`` used to last-write-win on a
+# species-only key, so the same species in two sections contradicted itself
+# across the headline numbers of one report).
+# The LEGACY species-only scorers (``range_top_accuracy`` /
+# ``range_base_accuracy``) deliberately keep their documented pre-BORROW
+# contract unchanged.
+
+
+def _normalize_section(value: Any) -> str:
+    """Case/whitespace-folded section label ("" when the row carries none)."""
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _row_match_key(row: dict[str, Any]) -> tuple[str, str]:
+    """The compound ``(section, species)`` identity used by every BORROW matcher."""
+    return (
+        _normalize_section(row.get("section")),
+        _normalize_taxon(row.get("species", "")),
+    )
+
+
+def _build_gt_index(
+    rows: list[dict[str, Any]],
+) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[tuple[str, str], list[int]], list[dict[str, Any]]]:
+    """Index ground-truth rows by compound key: first row wins, duplicates listed.
+
+    Returns ``(first_by_key, positions_by_key, duplicate_entries)``; the
+    duplicate entries are ``{"section", "species", "rows": [gt row indices]}``
+    in first-appearance order, so the report names the collision instead of
+    letting one section silently erase another.
+    """
+    first_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    positions: dict[tuple[str, str], list[int]] = {}
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        key = _row_match_key(row)
+        if not key[1]:  # unnameable row: nothing to match on
+            continue
+        positions.setdefault(key, []).append(idx)
+        first_by_key.setdefault(key, row)  # FIX-2026-09-22: first row wins, everywhere
+    duplicates = [
+        {
+            "section": rows[idxs[0]].get("section", ""),
+            "species": rows[idxs[0]].get("species", ""),
+            "rows": list(idxs),
+        }
+        for key, idxs in positions.items()
+        if len(idxs) > 1
+    ]
+    return first_by_key, positions, duplicates
+
+
+_BED_KEYWORD_PREFIX = "bed"
+
+
+def _is_bed_shaped(value: Any, parsed: dict[str, Any]) -> str | bool:
+    """Why ``value`` reads as a BED label rather than a bare number ("").
+
+    FIX-2026-09-22 (audit item 2): ``_parse_bed`` accepts a bare integer
+    ("30" → bed 30) because legacy bed-index columns really do store plain
+    numbers — but in ``mode="auto"`` that silently reinterpreted numeric
+    AGES as bed numbers, inverting the direction semantics against explicit
+    ``mode="age"``. The auto heuristic therefore demands bed-shape evidence:
+    the explicit ``Bed`` keyword ("Bed 12") or a letter subscript ("12a",
+    "23z"). A bare number (with or without a unit — units never reach this
+    check, they fail the bed parse) is an age.
+    """
+    text = str(value if value is not None else "").strip()
+    # A value that PARSED as a bed and still spells the keyword ("Bed 12",
+    # "Bed12") is bed evidence; digits-only or a letter subscript is judged
+    # by the subscript test below ("12a" yes, "30" no).
+    if text.lower().startswith(_BED_KEYWORD_PREFIX):
+        return "keyword"
+    if _sub_token(_bed_sub(parsed)):
+        return "subscript"
+    return False
+
+
 def _bin_distance(pred: dict[str, Any], gt: dict[str, Any]) -> float:
     """Distance between two parsed beds in BINS.
 
@@ -744,12 +833,24 @@ def classify_boundary_tier(
     Args:
         predicted: predicted boundary value (bed label, index or age).
         ground_truth: expert boundary value in the same space.
-        mode: ``"auto"`` (default: bin space when both sides parse as beds,
-            else unit-bearing ages), ``"bed"`` to force bin space,
-            ``"age"``/``"numeric"`` to force absolute age in Myr where bare
-            numbers are allowed — this is the existing numeric mode, kept.
+        mode: ``"auto"`` (default) — see the resolution rule below; ``"bed"``
+            to force bin space (bare numbers stay bed indices, the legacy
+            contract), ``"age"``/``"numeric"`` to force absolute age in Myr
+            where bare numbers are allowed — this is the existing numeric
+            mode, kept.
         bin_widths: ``{"adjacent": .., "coarse": ..}`` in BINS.
         myr_tolerances: the same, in Myr.
+
+    Auto resolution (FIX-2026-09-22, audit item 2): the pair is scored in
+    BIN space only when at least one side is BED-SHAPED — the ``Bed``
+    keyword ("Bed 12") or a letter subscript ("12a", "23z") — and both
+    parse as beds. A BARE number (optionally with an age unit: "34", "34
+    Ma") is an absolute age, never a bed number: auto must not reinterpret
+    it, because bed indices grow upward while ages grow downward and the
+    direction semantics of the two spaces are inverted. A bed-shaped value
+    compared against a bare number still resolves to "bed" (mixed spellings
+    of one bed column, "Bed 12" vs "12a" style), and anything left over is
+    attempted as an age (bare numbers included).
 
     Returns:
         ``{"tier", "distance", "signed_distance", "direction", "mode"}`` or
@@ -765,13 +866,24 @@ def classify_boundary_tier(
     if kind in ("auto", "bed"):
         pred_bed, gt_bed = _parse_bed(predicted), _parse_bed(ground_truth)
         if pred_bed is not None and gt_bed is not None:
-            distance = _bin_distance(pred_bed, gt_bed)
-            direction = _bin_direction(pred_bed, gt_bed)
-            resolved = "bed"
+            # FIX-2026-09-22: in auto mode, bed space needs bed-SHAPED
+            # evidence on at least one side; two bare numbers are ages.
+            if kind == "bed" or (
+                _is_bed_shaped(predicted, pred_bed)
+                or _is_bed_shaped(ground_truth, gt_bed)
+            ):
+                distance = _bin_distance(pred_bed, gt_bed)
+                direction = _bin_direction(pred_bed, gt_bed)
+                resolved = "bed"
 
     if distance is None:
-        pred_age = _age_in_myr(predicted, require_unit=(kind != "age"))
-        gt_age = _age_in_myr(ground_truth, require_unit=(kind != "age"))
+        # FIX-2026-09-22: "auto" accepts bare numbers as AGES now (that is
+        # the whole point of the bed-shape gate above); explicit "age"
+        # always did. Explicit "bed" keeps requiring a unit so a stray
+        # number cannot masquerade as an age when the caller forced bins.
+        bare_ok = kind in ("age", "auto")
+        pred_age = _age_in_myr(predicted, require_unit=not bare_ok)
+        gt_age = _age_in_myr(ground_truth, require_unit=not bare_ok)
         if pred_age is None or gt_age is None:
             return None
         distance = abs(pred_age - gt_age)
@@ -799,12 +911,25 @@ def _row_is_refusal(row: Any) -> str | None:
     extraction contract may not carry it yet) and non-dict rows are ignored,
     so callers without the field keep the pre-BORROW behaviour of counting
     every unanswered cell as a miss. Spellings are normalized ("not drawn",
-    "Not-Drawn" both read as ``not_drawn``) because the marker comes from a
-    model-facing contract, not from a database enum.
+    "Not-Drawn", "undrawn", "blank", "dash" all read as ``not_drawn``)
+    because the marker comes from a model-facing contract, not from a
+    database enum.
+
+    FIX-2026-09-22 (audit item 4): the alias table lives in
+    ``rca_core.reason_codes.normalize_response_kind`` — the one canonical
+    implementation — instead of a private copy that drifted behind it
+    (missed blank/dash/undrawn/unclear). A spelling the canonical table
+    does not know still gets the historical whitespace/dash → underscore
+    fold before it is given up on.
     """
     if not isinstance(row, dict):
         return None
-    kind = re.sub(r"[\s-]+", "_", str(row.get("response_kind") or "").strip().lower())
+    raw = row.get("response_kind")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    kind = normalize_response_kind(raw)
+    if kind is None:
+        kind = normalize_response_kind(re.sub(r"[\s-]+", "_", raw.strip().lower()))
     return kind if kind in REFUSAL_KINDS else None
 
 
@@ -855,13 +980,17 @@ def _tier_summary(
             directions[direction] += 1
         modes[verdict.get("mode", "?")] = modes.get(verdict.get("mode", "?"), 0) + 1
     scored = len(verdicts)
-    rates = {tier: (round(counts[tier] / scored, 4) if scored else 0.0) for tier in BOUNDARY_TIERS}
+    # FIX-2026-09-22 (audit item 3): an undefined ratio (0 denominator) is
+    # "not measured" — None — never a flattering/penalizing 0.0. The counts
+    # stay ints; every per-row weight sum is reported as None here so a
+    # consumer (scripts/gold_report.py) can print "n/a" honestly.
+    rates = {tier: (round(counts[tier] / scored, 4) if scored else None) for tier in BOUNDARY_TIERS}
     credit = sum(counts[tier] * float(merged_weights.get(tier, 0.0)) for tier in BOUNDARY_TIERS)
     result: dict[str, Any] = {
         "scored": scored,
         "counts": counts,
         "rates": rates,
-        "weighted_score": round(credit / scored, 4) if scored else 0.0,
+        "weighted_score": round(credit / scored, 4) if scored else None,
         "directions": directions,
         "modes": modes,
         "weights": {tier: float(merged_weights.get(tier, 0.0)) for tier in BOUNDARY_TIERS},
@@ -883,23 +1012,25 @@ def boundary_tier_accuracy(
 ) -> dict[str, Any]:
     """BORROW-2026-09-20 (SCRM): tiered accuracy for ONE boundary field.
 
-    Only species present on both sides are scored, exactly like the legacy
-    ``range_top_accuracy``; a refused cell (``response_kind`` =
-    "not_drawn"/"uncertain") is excluded from the denominator and reported
-    under ``refused`` instead of being charged as an error.
+    Only rows whose compound ``(section, species)`` identity is present on
+    both sides are scored, exactly like the other BORROW consumers
+    (FIX-2026-09-22, audit item 1: the lookup used to key on species alone
+    and last-write-win, so one species in two sections made the perfectly
+    right predictions contradict the typology); a refused cell
+    (``response_kind`` = "not_drawn"/"uncertain") is excluded from the
+    denominator and reported under ``refused`` instead of being charged as
+    an error. Duplicated ground-truth keys keep the FIRST row and are listed
+    under ``duplicate_ground_truth`` rather than silently overwritten.
 
     Returns:
         ``{scored, unscorable, refused, counts{4}, rates{4}, weighted_score,
-        directions, modes, weights, per_row[]}`` — proportions of all four
-        tiers plus the weighted score; 0.0 rates when nothing was scorable.
+        directions, modes, weights, per_row[], duplicate_ground_truth[]}`` —
+        proportions of all four tiers plus the weighted score; ``rates`` and
+        ``weighted_score`` are None ("not measured") when nothing was
+        scorable (FIX-2026-09-22, audit item 3).
     """
-    gt_lookup: dict[str, Any] = {}
-    for row in ground_truth:
-        if not isinstance(row, dict):
-            continue
-        key = _normalize_taxon(row.get("species", ""))
-        if key:
-            gt_lookup[key] = row
+    gt_rows = [row for row in ground_truth if isinstance(row, dict)]
+    gt_lookup, _gt_positions, duplicates = _build_gt_index(gt_rows)
 
     verdicts: list[dict[str, Any]] = []
     skipped = 0
@@ -907,8 +1038,8 @@ def boundary_tier_accuracy(
     for row in predicted:
         if not isinstance(row, dict):
             continue
-        key = _normalize_taxon(row.get("species", ""))
-        if not key or key not in gt_lookup:
+        key = _row_match_key(row)
+        if not key[1] or key not in gt_lookup:
             continue
         if _row_is_refusal(row):
             refused += 1
@@ -920,7 +1051,10 @@ def boundary_tier_accuracy(
         if verdict is None:
             skipped += 1  # unparseable either side: never guessed
             continue
-        verdicts.append({"species": row.get("species"), "field": field, **verdict})
+        verdicts.append({
+            "species": row.get("species"), "section": row.get("section"),
+            "field": field, **verdict,
+        })
 
     return _tier_summary(
         verdicts, weights,
@@ -929,6 +1063,7 @@ def boundary_tier_accuracy(
             "unscorable": skipped,
             "refused": refused,
             "refusal_field_present": _refusal_field_present(predicted),
+            "duplicate_ground_truth": duplicates,
             "per_row": verdicts,
         },
     )
@@ -949,6 +1084,15 @@ def range_tier_accuracy(
     A row's own tier is its WORST endpoint (a range is only as good as its
     sloppiest boundary), so ``row.weighted_score`` cannot be padded by nailing
     one boundary while missing the other.
+
+    Rows are aggregated by the compound ``(section, species)`` identity
+    (FIX-2026-09-22, audit item 1: keyed on species alone, one taxon in two
+    sections collapsed into a single "row" and the surviving endpoint tier
+    contradicted the per-field blocks). The row summary carries its own
+    ``refused`` / ``unscorable`` counts (FIX-2026-09-22, audit item 4: the
+    per-field extras were invisible at row level, so a row whose every
+    endpoint failed to parse, or that declined, silently vanished from the
+    report's denominators).
     """
     per_field = {
         field: boundary_tier_accuracy(
@@ -958,11 +1102,18 @@ def range_tier_accuracy(
         for field in fields
     }
 
-    by_species: dict[str, dict[str, Any]] = {}
+    by_species: dict[tuple[str, str], dict[str, Any]] = {}
     for field, summary in per_field.items():
         for verdict in summary["per_row"]:
-            key = _normalize_taxon(verdict.get("species", ""))
-            entry = by_species.setdefault(key, {"species": verdict.get("species"), "tiers": {}})
+            key = (
+                _normalize_section(verdict.get("section")),
+                _normalize_taxon(verdict.get("species", "")),
+            )
+            entry = by_species.setdefault(key, {
+                "species": verdict.get("species"),
+                "section": verdict.get("section"),
+                "tiers": {},
+            })
             entry["tiers"][field] = verdict["tier"]
             entry["tiers"][f"{field}_direction"] = verdict.get("direction", "none")
 
@@ -972,7 +1123,37 @@ def range_tier_accuracy(
         if not tiers:
             continue
         worst = max(tiers, key=lambda t: BOUNDARY_TIERS.index(t))
-        row_verdicts.append({"species": entry["species"], "tier": worst, "mode": "row"})
+        row_verdicts.append({
+            "species": entry["species"], "section": entry["section"],
+            "tier": worst, "mode": "row",
+        })
+
+    # Row-level refused / unscorable, counted per matched PREDICTED row so
+    # they are not inflated by the number of fields (a refusal refuses the
+    # whole row). Re-running the cheap per-field classification here is
+    # deliberate: the per-field summaries only expose their own aggregates.
+    gt_rows = [row for row in ground_truth if isinstance(row, dict)]
+    gt_first, _positions, row_duplicates = _build_gt_index(gt_rows)
+    refused_rows = 0
+    unscorable_rows = 0
+    for row in predicted:
+        if not isinstance(row, dict):
+            continue
+        key = _row_match_key(row)
+        if not key[1] or key not in gt_first:
+            continue
+        if _row_is_refusal(row):
+            refused_rows += 1
+            continue
+        matched_gt = gt_first[key]
+        if not any(
+            classify_boundary_tier(
+                row.get(f), matched_gt.get(f),
+                mode=mode, bin_widths=bin_widths, myr_tolerances=myr_tolerances,
+            ) is not None
+            for f in fields
+        ):
+            unscorable_rows += 1
 
     return {
         "fields": {
@@ -980,7 +1161,12 @@ def range_tier_accuracy(
             for field, summary in per_field.items()
         },
         "per_field": {f: per_field[f]["per_row"] for f in fields},
-        "row": _tier_summary(row_verdicts, weights, extra={"unit": "species_row"}),
+        "row": _tier_summary(row_verdicts, weights, extra={
+            "unit": "species_row",
+            "refused": refused_rows,
+            "unscorable": unscorable_rows,
+            "duplicate_ground_truth": row_duplicates,
+        }),
     }
 
 
@@ -1128,33 +1314,53 @@ def error_typology(
 ) -> dict[str, Any]:
     """BORROW-2026-09-20 (CHOCOLATE): label every row with ONE error type.
 
-    Pairing is deterministic and single-pass: strict-normalized name first,
-    then qualifier-insensitive, then a same-genus fuzzy near-miss; each GT row
-    is claimed by at most one predicted row (later duplicates read as
-    hallucinations). GT rows nobody claimed become ``omission`` — unless the
-    model had explicitly refused them via ``response_kind``, in which case the
-    refusal claims the cell so it is not double-counted as an omission; the
-    coverage cost of that declination is reported by ``refusal_metrics``
-    (``refusal_rate`` up, ``recall_on_answered`` down) instead.
+    Pairing is deterministic and single-pass: compound ``(section, species)``
+    identity first (FIX-2026-09-22, audit item 1: the strict stage keyed on
+    species alone, so the same taxon annotated in two sections could only
+    ever claim one of them), then qualifier-insensitive, then a same-genus,
+    same-section fuzzy near-miss; each GT row is claimed by at most one
+    predicted row (later duplicates read as hallucinations). GT rows nobody
+    claimed become ``omission`` — unless the model had explicitly refused them
+    via ``response_kind``, in which case the refusal claims the cell so it is
+    not double-counted as an omission; the coverage cost of that declination
+    is reported by ``refusal_metrics`` (``refusal_rate`` up,
+    ``recall_on_answered`` down) instead. Ground-truth rows sharing one
+    compound key keep the FIRST occurrence and are listed under
+    ``duplicate_ground_truth``.
 
     Returns:
         ``{labels, counts, rates, n_rows, n_predicted, n_ground_truth,
         n_errors, error_rate, refused_rows, aux_counts, reason_code_counts,
-        refusal_field_present, rows[]}`` with ``rates`` over labelled rows.
+        refusal_field_present, duplicate_ground_truth[], rows[]}`` with
+        ``rates`` over labelled rows; ``rates`` and ``error_rate`` are None
+        ("not measured", FIX-2026-09-22 audit item 3) when nothing was
+        labelled — an empty run no longer reports a flattering-looking 0.0
+        error rate.
     """
     pred_rows = [row for row in predicted if isinstance(row, dict)]
     gt_rows = [row for row in ground_truth if isinstance(row, dict)]
 
-    gt_by_key: dict[str, int] = {}
-    gt_by_lenient: dict[str, list[int]] = {}
+    gt_by_key: dict[tuple[str, str], int] = {}
+    gt_by_lenient: dict[tuple[str, str], list[int]] = {}
+    gt_positions: dict[tuple[str, str], list[int]] = {}
     for idx, row in enumerate(gt_rows):
-        key = _normalize_taxon(row.get("species", ""))
-        if not key:
+        key = _row_match_key(row)
+        if not key[1]:
             continue
+        gt_positions.setdefault(key, []).append(idx)
         gt_by_key.setdefault(key, idx)
         lenient = _normalize_taxon(row.get("species", ""), preserve_qualifiers=False)
         if lenient:
-            gt_by_lenient.setdefault(lenient, []).append(idx)
+            gt_by_lenient.setdefault((key[0], lenient), []).append(idx)
+    type_duplicates = [
+        {
+            "section": gt_rows[idxs[0]].get("section", ""),
+            "species": gt_rows[idxs[0]].get("species", ""),
+            "rows": list(idxs),
+        }
+        for idxs in gt_positions.values()
+        if len(idxs) > 1
+    ]
 
     claimed: set[int] = set()
     rows: list[dict[str, Any]] = []
@@ -1170,7 +1376,7 @@ def error_typology(
 
     for pred_row in pred_rows:
         species = pred_row.get("species", "")
-        key = _normalize_taxon(species)
+        key = _row_match_key(pred_row)
         refusal = _row_is_refusal(pred_row)
         codes = _reason_codes(pred_row)
         for code in codes:
@@ -1178,24 +1384,29 @@ def error_typology(
 
         match_idx: int | None = None
         similarity = NAME_EXACT
-        if key and key in gt_by_key and gt_by_key[key] not in claimed:
+        if key[1] and key in gt_by_key and gt_by_key[key] not in claimed:
             match_idx = gt_by_key[key]
         else:
             lenient_key = _normalize_taxon(species, preserve_qualifiers=False)
-            candidates = [i for i in gt_by_lenient.get(lenient_key or "", []) if i not in claimed]
+            lenient_bucket = gt_by_lenient.get((key[0], lenient_key), []) if lenient_key else []
+            candidates = [i for i in lenient_bucket if i not in claimed]
             if candidates:
                 match_idx, similarity = candidates[0], NAME_QUALIFIER
             else:
-                # Same-genus fuzzy near-miss against the still-unclaimed rows.
+                # Same-genus, same-section fuzzy near-miss against the
+                # still-unclaimed rows (FIX-2026-09-22: the section gate
+                # keeps a fuzzy rescue inside the section being read).
                 best: tuple[float, int] | None = None
                 for idx, gt_row in enumerate(gt_rows):
                     if idx in claimed:
                         continue
-                    similarity_name = _name_similarity(key, _normalize_taxon(gt_row.get("species", "")))
+                    if _normalize_section(gt_row.get("section")) != key[0]:
+                        continue
+                    similarity_name = _name_similarity(key[1], _normalize_taxon(gt_row.get("species", "")))
                     if similarity_name != NAME_FUZZY:
                         continue
                     ratio = difflib.SequenceMatcher(
-                        None, key, _normalize_taxon(gt_row.get("species", "")),
+                        None, key[1], _normalize_taxon(gt_row.get("species", "")),
                     ).ratio()
                     if best is None or ratio > best[0]:
                         best = (ratio, idx)
@@ -1261,8 +1472,10 @@ def error_typology(
             continue
         counts[entry["label"]] = counts.get(entry["label"], 0) + 1
     labelled = len(rows) - refused_rows
+    # FIX-2026-09-22 (audit item 3): no labelled row -> "not measured" (None),
+    # never a 0.0 that reads as "zero errors" on a run that scored nothing.
     rates = {
-        label: (round(counts[label] / labelled, 4) if labelled else 0.0)
+        label: (round(counts[label] / labelled, 4) if labelled else None)
         for label in ERROR_LABELS
     }
     error_total = labelled - counts[ERROR_CORRECT]
@@ -1274,13 +1487,16 @@ def error_typology(
         "n_predicted": len(pred_rows),
         "n_ground_truth": len(gt_rows),
         "n_errors": error_total,
-        "error_rate": round(error_total / labelled, 4) if labelled else 0.0,
+        "error_rate": round(error_total / labelled, 4) if labelled else None,
         "refused_rows": refused_rows,
         "aux_counts": aux_counts,
         "reason_code_counts": reason_code_counts,
         # Degradation flag: no response_kind anywhere -> refusals are invisible
         # and every unanswered cell stayed an omission (pre-BORROW behaviour).
         "refusal_field_present": _refusal_field_present(pred_rows),
+        # FIX-2026-09-22 (audit item 1): duplicated ground-truth keys are
+        # named deterministically instead of silently erased by first-wins.
+        "duplicate_ground_truth": type_duplicates,
     }
     if include_rows:
         result["rows"] = rows
@@ -1323,10 +1539,17 @@ def refusal_metrics(
     metrics = species_metrics or species_precision_recall(pred_rows, [
         row for row in ground_truth if isinstance(row, dict)
     ])
+    # FIX-2026-09-22 (audit items 3 + 5/A-6): with nothing answered there is
+    # NO denominator, so the *_on_answered trio is None ("not measured"), not
+    # a 0.0 that would read as "answered everything wrongly". The
+    # ``all_rows_refused`` flag additionally exposes the optic that the
+    # kept-verbatim headline trio is then label-only: a run that declined
+    # every cell can still show f1 = 1.0 because it named the taxa right.
+    all_rows_refused = n_predicted > 0 and answered == 0
     answered_metrics = species_precision_recall(
         [row for row in pred_rows if not _row_is_refusal(row)],
         [row for row in ground_truth if isinstance(row, dict)],
-    ) if answered else {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+    ) if answered else {"precision": None, "recall": None, "f1": None}
 
     n_gt = len([row for row in ground_truth if isinstance(row, dict)])
     reason_code_counts: dict[str, int] = {}
@@ -1334,10 +1557,11 @@ def refusal_metrics(
         for code in _reason_codes(row):
             reason_code_counts[code] = reason_code_counts.get(code, 0) + 1
 
-    def _rate(count: int) -> float:
-        return round(count / n_predicted, 4) if n_predicted else 0.0
+    def _rate(count: int) -> float | None:
+        # FIX-2026-09-22 (audit item 3): 0 predicted rows -> None, "n/a".
+        return round(count / n_predicted, 4) if n_predicted else None
 
-    return {
+    result: dict[str, Any] = {
         "refusal_field_present": present,
         "n_predicted": n_predicted,
         "n_ground_truth": n_gt,
@@ -1354,14 +1578,23 @@ def refusal_metrics(
         "f1": metrics.get("f1", 0.0),
         # BORROW-2026-09-20: the same trio computed over committed answers only,
         # so declination costs coverage (recall) instead of buying precision.
-        "precision_on_answered": answered_metrics.get("precision", 0.0),
-        "recall_on_answered": answered_metrics.get("recall", 0.0),
-        "f1_on_answered": answered_metrics.get("f1", 0.0),
+        "precision_on_answered": answered_metrics.get("precision"),
+        "recall_on_answered": answered_metrics.get("recall"),
+        "f1_on_answered": answered_metrics.get("f1"),
         "reason_code_counts": reason_code_counts,
         # Honest degradation note (BORROW-2026-09-20): without response_kind a
         # refusal cannot be distinguished from a miss.
         "recall_as_omission": not present,
+        # FIX-2026-09-22 (audit item 5, A-6 annotation): all rows declined —
+        # flag it so the headline trio is read as label-only, not as accuracy.
+        "all_rows_refused": all_rows_refused,
     }
+    if all_rows_refused:
+        result["note"] = (
+            "every predicted row refused; headline precision/recall/f1 reflect "
+            "taxon labels only and are not an accuracy claim"
+        )
+    return result
 
 
 def _matched_pair_indices(
@@ -1373,20 +1606,23 @@ def _matched_pair_indices(
     Strict matching on purpose: the reasoning track measures what the model
     read at a place it named identically to the annotation, so a mis-identified
     column cannot leak into the pairwise comparisons (typology owns that case).
+    Matching is on the compound ``(section, species)`` identity with the same
+    first-row-wins duplicate policy as every other BORROW consumer
+    (FIX-2026-09-22, audit item 1).
     """
-    gt_by_key: dict[str, dict[str, Any]] = {}
+    gt_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for row in ground_truth:
         if not isinstance(row, dict):
             continue
-        key = _normalize_taxon(row.get("species", ""))
-        if key:
+        key = _row_match_key(row)
+        if key[1]:
             gt_by_key.setdefault(key, row)
     pairs = []
     for row in predicted:
         if not isinstance(row, dict) or _row_is_refusal(row):
             continue
-        key = _normalize_taxon(row.get("species", ""))
-        gt_row = gt_by_key.get(key)
+        key = _row_match_key(row)
+        gt_row = gt_by_key.get(key) if key[1] else None
         if gt_row is not None:
             pairs.append((row, gt_row))
     return pairs
@@ -1491,7 +1727,9 @@ def descriptive_track(
     usable = [c["score"] for c in components.values() if c["score"] is not None]
     return {
         "track": "descriptive",
-        "score": round(sum(usable) / len(usable), 4) if usable else 0.0,
+        # FIX-2026-09-22 (audit item 3): no measurable component is "not
+        # measured" (None / printed "n/a"), not a fake 0.0.
+        "score": round(sum(usable) / len(usable), 4) if usable else None,
         "components": components,
     }
 
@@ -1518,12 +1756,14 @@ def reasoning_track(
     """
     widths = {**DEFAULT_BIN_WIDTHS, **(bin_widths or {})}
     pairs = _matched_pair_indices(predicted, ground_truth)
-    # One comparison per distinct species column, in input order.
-    seen: set[str] = set()
+    # One comparison per distinct species column, in input order. A column is
+    # the compound (section, species) identity — the same taxon read in two
+    # sections is two columns (FIX-2026-09-22, audit item 1).
+    seen: set[tuple[str, str]] = set()
     named: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for row, gt_row in pairs:
-        key = _normalize_taxon(row.get("species", ""))
-        if not key or key in seen:
+        key = _row_match_key(row)
+        if not key[1] or key in seen:
             continue
         seen.add(key)
         named.append((row, gt_row))
@@ -1589,7 +1829,8 @@ def reasoning_track(
     usable = [c["score"] for c in components.values() if c["score"] is not None]
     return {
         "track": "reasoning",
-        "score": round(sum(usable) / len(usable), 4) if usable else 0.0,
+        # FIX-2026-09-22 (audit item 3): nothing comparable -> None, "n/a".
+        "score": round(sum(usable) / len(usable), 4) if usable else None,
         "components": components,
         "n_columns_compared": len(named),
     }

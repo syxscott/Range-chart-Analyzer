@@ -437,17 +437,22 @@ def make_pinning_opener():
     Both https (since Sprint B) and http (REVIEW-2026-09-20, item 17) are
     pinned.
 
-    NOTE (REVIEW-2026-09-20): ``install_opener`` at the bottom of this module
-    is a PROCESS-WIDE side effect, not scoped to rca_core: every
-    ``urllib.request.urlopen`` in the interpreter — including the GBIF /
-    mindat lookups in ``rca_core/names.py`` — now goes through this handler,
-    so those calls are pinned and no-redirect too. That is deliberate (they
-    fetch https URLs from public hosts, and pinning protects them from the
-    same rebinding attack), but it means a name that resolves to a
-    private/loopback address will now fail with ``URLError("SSRF: ...")``
-    there as well, and a server that answers with a 3xx will fail instead of
-    following. Keep that in mind before adding a new outbound caller — or pass
-    an explicit opener built by ``build_opener()`` if a call must opt out.
+    NOTE (REVIEW-2026-09-20, corrected FIX-2026-09-22 item 3):
+    ``install_opener`` at the bottom of this module is a PROCESS-WIDE side
+    effect, not scoped to rca_core: every ``urllib.request.urlopen`` in the
+    interpreter — including any GBIF / mindat lookup that still uses the
+    global opener — goes through this handler, so those calls are pinned and
+    no-redirect too. It used to claim pinning "protects" those public-host
+    lookups; the 2026-09-22 audit MEASURED the opposite: dialling the pinned
+    IP for ``api.gbif.org`` keeps the CDN edge guessing and it answers
+    ``404 "This server hosts..."``, silently degrading name validation to
+    ``unavailable``. It means a name that resolves to a private/loopback
+    address will also fail with ``URLError("SSRF: ...")``, and a 3xx answer
+    fails instead of being followed. Any outbound caller to a shared-hosting
+    / CDN API MUST build a private ``urllib.request.build_opener()`` (as
+    ``rca_core/names.py::_private_open`` and ``scripts/update_ics.py`` now
+    do); only callers that genuinely want the pin should ride the global
+    ``urlopen``.
     """
 
     def _pin(req, scheme: str):

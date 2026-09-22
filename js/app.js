@@ -851,6 +851,13 @@
     let s = String(species || '').trim();
     if (!s) return '';
     s = s.replace(/\([^)]*\)/g, ' ');                    // author/year
+    // FIX-2026-09-22 (item 2): strip the NON-parenthesised author + year
+    // tail too ("Ptereoconus hoenesi Hoenes, 1891"). Exact mirror of
+    // rca_core/names.py::_AUTHOR_TAIL_RE / _ET_AL_TAIL_RE — the comma before
+    // the year stays REQUIRED so bare "Genus 1979" junk keeps failing
+    // closed on the malformed gate (parity with looks_malformed_name).
+    s = s.replace(/\s+[A-Z][A-Za-z.'\-]+(?:\s*(?:,|&|\band\b|\bet\b|\bin\b)\s*[A-Za-z][A-Za-z.'\-]+)*(?:\s*,\s*(?:et\s+al\.?\s*)?\d{4}[a-z]?|\s+et\s+al\.?\s*\d{4}[a-z]?)\s*$/, ' ');
+    s = s.replace(/\s+et\s+al\.?\s*$/i, ' ');
     s = s.replace(/\b(cf|aff|cf\.|aff\.)\s+/gi, '');      // qualifiers
     s = s.replace(/\b(ex\s+gr\.?|gr\.?|s\.\s?l\.?|s\.\s?s\.?|sensu|near)(?![a-z])/gi, ' ');
     s = s.replace(/\bsp\.?$/i, '');                       // trailing sp.
@@ -868,11 +875,107 @@
       return [{ msg_key: 'names.fuzzy', name: payload.query || canonical,
                 suggestion: canonical, confidence: conf }];
     }
+    // FIX-2026-09-22 (item 4): "Multiple equal matches" used to fall through
+    // to [] - the browser stayed completely silent on answers that
+    // rca_core/names.py:name_issues flags with names.ambiguous (a py/js
+    // behavior fork). Mirror the Python ambiguity rule (literal verdict, or
+    // a genus-rank hit whose alternatives are just as strong) incl. the
+    // candidate list.
+    const rank = String((payload && payload.rank) || '');
+    const alts = Array.isArray(payload && payload.alternatives)
+      ? payload.alternatives.filter((a) => a && typeof a === 'object') : [];
+    const equalAlt = alts.some((a) =>
+      (parseFloat(a.confidence) || 0) >= conf && a.matchType);
+    const ambiguous = mt === 'Multiple equal matches'
+      || (('EXACT HIGHERRANK SYNONYM DOUBTFUL'.split(' ').indexOf(mt) >= 0)
+          && rank.toUpperCase() === 'GENUS' && equalAlt);
+    if (ambiguous) {
+      let candidates = alts.map((a) => ({
+        usage_key: a.usageKey,
+        canonical: String(a.canonicalName || ''),
+        scientific_name: String(a.scientificName || ''),
+        rank: String(a.rank || ''),
+        kingdom: String(a.kingdom || ''),
+        phylum: String(a.phylum || ''),
+        match_type: String(a.matchType || ''),
+        confidence: parseFloat(a.confidence) || 0,
+        status: String(a.status || ''),
+      }));
+      if (!candidates.length && payload && payload.usageKey) {
+        candidates = [rcaGbifCandidate(payload)];
+      }
+      return [{ msg_key: 'names.ambiguous',
+                name: (payload && payload.query) || canonical || '',
+                suggestion: canonical, candidates }];
+    }
     if (mt === 'NONE') {
       return [{ msg_key: 'names.unmatched',
                 name: (payload && payload.query) || canonical || '' }];
     }
     return [];
+  }
+
+  // One GBIF usage record -> the candidate shape name_issues()/reports use
+  // (mirror of rca_core/names.py::_candidate).
+  function rcaGbifCandidate(usage) {
+    return {
+      usage_key: usage.usageKey,
+      canonical: String(usage.canonicalName || ''),
+      scientific_name: String(usage.scientificName || ''),
+      rank: String(usage.rank || ''),
+      kingdom: String(usage.kingdom || ''),
+      phylum: String(usage.phylum || ''),
+      match_type: String(usage.matchType || ''),
+      confidence: parseFloat(usage.confidence) || 0,
+      status: String(usage.status || ''),
+    };
+  }
+
+  // FIX-2026-09-22 (item 5): the reason_code.* i18n catalog had ZERO
+  // consumers repo-wide — the ledger rows only ever surfaced the English
+  // slugs (rca_core/reason_codes.py code_summary / js/reason-codes.js
+  // glosses), so a zh/ja UI showed untranslated reason text. Wire it up:
+  // every rendered result carrying a coverage ledger gets ONE derived info
+  // issue whose {reasons} placeholder lists each slug through
+  // reason-code glosses from the i18n catalog (key = "reason_code." + slug)
+  // with its count. Idempotent (rebuilt per render) and
+  // never throws - display is strictly best-effort.
+  function rcaCoverageReasonIssues(coverage) {
+    const counts = coverage && coverage.reason_code_counts;
+    if (!counts || typeof counts !== 'object') return [];
+    const parts = [];
+    for (const slug of Object.keys(counts)) {
+      const n = Number(counts[slug]);
+      if (!isFinite(n) || n <= 0) continue;
+      // t() answers a missing key with "[?key]" (js/i18n.js); unknown slugs
+      // then degrade to the raw slug instead of placeholder noise. The key
+      // is built dynamically through a variable so the static-key harvest
+      // in tests_contrast.js does not mistake the "reason_code." PREFIX for
+      // a literal key.
+      const labelKey = 'reason_code.' + slug;
+      const label = t(labelKey);
+      parts.push((label.indexOf('[?') === 0 ? slug : label) + ' ×' + n);
+    }
+    if (!parts.length) return [];
+    return [{
+      severity: 'info',
+      msg_key: 'quality.coverage_reasons',
+      params: { reasons: parts.join(' · ') },
+    }];
+  }
+
+  function rcaAttachCoverageReasonHints(data) {
+    try {
+      const q = data && data.quality;
+      if (!q || typeof q !== 'object') return;
+      // Rebuilt on EVERY render (filter + push, so it is idempotent): a
+      // language switch re-renders and the {reasons} glosses must follow
+      // the new language, not stay frozen at first render.
+      const extra = rcaCoverageReasonIssues(q.coverage);
+      q.issues = (Array.isArray(q.issues) ? q.issues : [])
+        .filter((iss) => !iss || iss.msg_key !== 'quality.coverage_reasons')
+        .concat(extra);
+    } catch (_e) { /* display helper: never break the render */ }
   }
 
   // M3 (REVIEW-2026-09-20): cancel the in-flight GBIF round. Called from
@@ -1337,6 +1440,10 @@
   function renderCurrentResult(opts) {
     if (!state.result) return;
     const content = $('results-content');
+    // FIX-2026-09-22 (item 5): refresh the localized coverage reason-code
+    // hint BEFORE the badge is rendered, so the quality badge's issue list
+    // carries the reason_code.* glosses in the ACTIVE language.
+    rcaAttachCoverageReasonHints(state.result);
     // FE-FIX-2026-09-21 (audit item 3): THE ORDER MATTERS — this capture
     // must stay BEFORE the `content.innerHTML =` swap below. The swap
     // destroys the ORIGINAL static #viz-host that js/viz.js painted into;
@@ -1575,6 +1682,11 @@
       return;
     }
     const tpl = document.createElement('div');
+    // FIX-2026-09-22 (item 5): refresh the client-side coverage reason hint
+    // in the NEW language before rendering the template — the badge title
+    // counts as a (whitelisted) attribute node in both the live snapshot and
+    // this template, so the lists stay index-aligned.
+    rcaAttachCoverageReasonHints(state.result);
     // FE-BORROW-2026-09-20 (integration): SAME opts as renderCurrentResult -
     // a template rendered read-only would have fewer text nodes than the
     // editable snapshot and force the fallback rebuild on every switch.

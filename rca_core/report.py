@@ -46,50 +46,48 @@ _TRACKED_LIST_KEYS = (
 )
 
 
-#: Tables the coverage ledger can be built over, with the key that names the
-#: "column" (the taxon / sample the range belongs to) in that table.
-_COVERAGE_TABLES: tuple[tuple[str, str], ...] = (
-    ("species_ranges", "species"),
-    ("abundances", "taxon"),
-    ("data_points", "sample_id"),
-    ("points", "label"),
-    ("cross_beds", "name"),
-    ("samples", "name"),
+# FIX-2026-09-22 (audit item 6): the ledger input used to be resolved here by a
+# private copy of quality.py's table list plus a looser "is this row under the
+# contract" test — three tables and two predicates that had quietly drifted
+# apart, so the evidence report graded a DIFFERENT table than the quality score
+# printed two sections above it (a chemical payload reported the 2-row
+# ``events`` rollup while quality reported the 6-row ``data_points`` grid).
+# Everything now comes from rca_core/quality.py, the single source of truth.
+from .quality import (  # noqa: E402
+    coverage_column_keys,
+    select_coverage_table,
 )
 
 
-def _is_contracted(row: Any) -> bool:
-    """True when a row carries any part of the coverage contract."""
-    return bool(isinstance(row, dict)
-                and (row.get("response_kind") or row.get("reason_codes")
-                     or row.get("geometry")))
-
-
 def _coverage_source(data: dict[str, Any]
-                     ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+                     ) -> tuple[str, list[dict[str, Any]], dict[str, Any],
+                                tuple[str, ...]]:
     """Locate the table to audit: the LARGEST one carrying contract fields.
 
-    Returns ``("", [], empty_rollup)`` when nothing answered under the
-    contract, so the caller can skip the block instead of reporting a ledger
-    full of invented gaps for a pre-contract result.
+    Returns ``(table_key, rows, reason_code_rollup, ledger_column_keys)``;
+    ``("", [], empty_rollup, ())`` when nothing answered under the contract, so
+    the caller skips the block instead of reporting a ledger full of invented
+    gaps for a pre-contract result.
+
+    FIX-2026-09-22 (audit item 6): the pick and the column ladder come from
+    :mod:`rca_core.quality` now, so the report audits the SAME table with the
+    SAME column naming as the quality score it prints next to. It used to keep
+    a private table list (three extra entries) and a looser "contracted" test
+    that also accepted a bare ``geometry`` block, and it then called
+    ``coverage_ledger`` with the DEFAULT column keys — so a payload whose
+    primary rows are keyed by ``sample_id`` / ``label`` lost every stratum and
+    reported ``cells: 0``: a grid of one column per sample, no taxon columns at
+    all.
     """
     empty = reason_code_rollup([])
-    best: tuple[int, str] | None = None
-    for key, _column in _COVERAGE_TABLES:
-        rows = data.get(key)
-        if not isinstance(rows, list):
-            continue
-        contracted = sum(1 for r in rows if _is_contracted(r))
-        if not contracted:
-            continue
-        if best is None or len(rows) > best[0]:
-            best = (len(rows), key)
-    if best is None:
-        return "", [], empty
-    _count, key = best
-    rows = [r for r in data.get(key) if isinstance(r, dict)]
-    column_key = dict(_COVERAGE_TABLES)[key]
-    return key, rows, reason_code_rollup(rows, column_keys=(column_key,))
+    picked = select_coverage_table(data)
+    if picked is None:
+        return "", [], empty, ()
+    key, column_key = picked
+    rows = [r for r in (data.get(key) or []) if isinstance(r, dict)]
+    return (key, rows,
+            reason_code_rollup(rows, column_keys=(column_key,)),
+            coverage_column_keys(column_key))
 
 
 def _ics_version() -> str:
@@ -100,6 +98,40 @@ def _ics_version() -> str:
         return ICS_VERSION
     except Exception:
         return "unknown"
+
+
+def _localize_decisions(entries: list[dict[str, Any]], lang: str) -> None:
+    """Translate each decision entry's ``code_summaries`` in place.
+
+    FIX-2026-09-22 (A2, audit carry-over): the rollup emitted by
+    :func:`rca_core.reason_codes.reason_code_rollup` carries the English
+    :func:`code_summary` gloss, so a zh/ja audit report printed English text
+    inside an otherwise-localized document. The ``reason_code.<slug>`` keys
+    exist in all three catalogs of rca_core/i18n.py; the machine-readable
+    slug list (``reason_codes``) is untouched, and an unknown slug falls back
+    to English then to the slug itself (``Translator.t`` semantics). Called
+    only when the caller passed a non-empty ``lang``; server.py callers keep
+    the historical English shape.
+    """
+    if not lang or lang == "en":
+        return
+    try:
+        from .i18n import Translator
+        tr = Translator(lang)
+    except Exception:  # i18n unavailable: stay English (the report is total)
+        return
+    for entry in entries:
+        codes = entry.get("reason_codes")
+        if not codes:
+            continue
+        glosses: list[str] = []
+        for c in codes:
+            key = "reason_code." + str(c)
+            text = tr.t(key)
+            if text == key:  # unknown slug: Translator hands the key back
+                text = str(c)  # ... while code_summary() glosses it verbatim
+            glosses.append(text)
+        entry["code_summaries"] = glosses
 
 
 def build_extraction_report(
@@ -114,12 +146,19 @@ def build_extraction_report(
     request_meta: Optional[dict[str, Any]] = None,
     runs: int = 1,
     extra_warnings: Optional[list[str]] = None,
+    lang: str = "",
 ) -> dict[str, Any]:
     """Build the evidence-chain report dict for one extraction result.
 
     Pure and total: never raises, always returns at least the schema
     version and mode identity so the report itself is diagnostic even for
     degenerate payloads.
+
+    ``lang`` (FIX-2026-09-22 A2): optional BCP-47 tag ("zh" / "en" / "ja").
+    When a non-English value is given, the human-readable glosses of the
+    coverage decisions are routed through rca_core/i18n.py so the audit
+    report localizes; the machine-readable slugs never change, and callers
+    that omit ``lang`` keep the historical English shape verbatim.
     """
     data = data if isinstance(data, dict) else {}
 
@@ -212,7 +251,14 @@ def build_extraction_report(
     # instead of pretending every omission was a gap.
     coverage: dict[str, Any] = {}
     try:
-        primary_key, primary_rows, rollup = _coverage_source(data)
+        # FIX-2026-09-22 (A2): _coverage_source grew a 4th return value
+        # (ledger_column_keys) in the quality-shared refactor, but this call
+        # site still unpacked three — the ValueError was swallowed by the
+        # blanket `except Exception` below, so the audit report emitted an
+        # empty coverage block ('{}') instead of the evidence chain. Unpack
+        # all four and feed the SAME column ladder to the ledger that
+        # quality.coverage_for uses (the old bug: cells:0 vs cells:2).
+        primary_key, primary_rows, rollup, ledger_columns = _coverage_source(data)
         if primary_key:
             coverage = {
                 "table": primary_key,
@@ -221,8 +267,13 @@ def build_extraction_report(
                 "by_response_kind": rollup["by_kind"],
                 "by_reason_code": rollup["by_code"],
                 "decisions": rollup["entries"],
-                "ledger": coverage_ledger(primary_rows),
+                "ledger": coverage_ledger(primary_rows,
+                                         column_keys=ledger_columns),
             }
+        # FIX-2026-09-22 (A2): localize the decision glosses when the caller
+        # declared a report language (no-op for "" / "en", see helper).
+        if coverage.get("decisions"):
+            _localize_decisions(coverage["decisions"], lang)
     except Exception:  # the report is total: never fail on a new field shape
         coverage = {}
 

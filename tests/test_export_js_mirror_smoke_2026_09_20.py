@@ -38,10 +38,16 @@ README = ROOT / "README.md"
 
 
 def _node_cases() -> dict:
-    """The same marker-extracted table the Node smoke replays."""
+    """The same marker-extracted table the Node smoke replays.
+
+    FIX-2026-09-22 (item 8): the extractor now tolerates comment lines
+    between the ``__RCA_WPD_CASES_BEGIN__`` marker and the literal — the
+    table's own documentation used to be part of the marker's syntax, so
+    adding a note there broke the drift guard with a confusing message.
+    """
     src = NODE_SMOKE.read_text(encoding="utf-8")
     m = re.search(
-        r"__RCA_WPD_CASES_BEGIN__\s*\nconst CASES_SOURCE = `(.*?)`",
+        r"__RCA_WPD_CASES_BEGIN__\s*(?://[^\n]*\n)*const CASES_SOURCE = `(.*?)`",
         src, re.S)
     assert m, "tests_export_parity.js lost the case-table markers"
     return json.loads(m.group(1))

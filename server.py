@@ -2177,7 +2177,12 @@ class Handler(BaseHTTPRequestHandler):
             # degrades to "always miss".
             cache = None if force_rerun else _cache_singleton_safe()
             if not force_rerun:
-                from rca_core.prompt import prompt_version_for_mode
+                # FIX-2026-09-22 (audit item 1): the cache-key prompt version
+                # must come from the RESOLVED mode (auto was resolved above,
+                # before this block) and via the STRICT helper — an unresolved
+                # "auto" must never silently key results under the "v3"
+                # fallback while the audit line stamps the resolved v5.
+                from rca_core.prompt import prompt_version_for_cache_key
                 if cache is not None:
                     # C1 fix: use stable business fields only — never repr(provider)
                     # (repr includes uuid4 id + time.time() which change on every
@@ -2190,7 +2195,7 @@ class Handler(BaseHTTPRequestHandler):
                             api_format=prov.api_format.value if prov else "",
                             extra_headers=_stable_extra_headers(prov),
                             extra_body=_stable_extra_body(prov),
-                            prompt_version=prompt_version_for_mode(mode),
+                            prompt_version=prompt_version_for_cache_key(mode),
                             max_tokens=common["max_tokens"],
                             chart_lang=common["chart_lang"],
                             mode=mode,
@@ -2409,7 +2414,10 @@ class Handler(BaseHTTPRequestHandler):
         # key building, prefill and write-back; ``cache is None`` (or a failed
         # ``make_key``) leaves the slot key as None, which means "no cache for
         # this slot", never "failed request".
-        from rca_core.prompt import prompt_version_for_mode
+        # FIX-2026-09-22 (audit item 1): strict cache-key prompt version from
+        # the RESOLVED mode — "auto" must never key results under the silent
+        # "v3" fallback (see the single-run key site above).
+        from rca_core.prompt import prompt_version_for_cache_key
         prov = common["provider"]
         cache = _cache_singleton_safe()
         slot_keys: list = []
@@ -2423,7 +2431,7 @@ class Handler(BaseHTTPRequestHandler):
                         api_format=prov.api_format.value if prov else "",
                         extra_headers=_stable_extra_headers(prov),
                         extra_body=_stable_extra_body(prov),
-                        prompt_version=prompt_version_for_mode(mode),
+                        prompt_version=prompt_version_for_cache_key(mode),
                         max_tokens=common["max_tokens"],
                         chart_lang=common["chart_lang"],
                         mode=mode,

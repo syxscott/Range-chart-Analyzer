@@ -356,6 +356,11 @@ function loadAllScripts(ctx) {
           'globalThis.$ = $;\n' +
           'globalThis.showAlert = showAlert;\n' +
           'globalThis.rcaCleanNameForLookup = rcaCleanNameForLookup;\n' +
+          // FIX-2026-09-22 (items 4/5): the GBIF issue builder (names.ambiguous
+          // branch) and the coverage reason-code consumer need to be reachable.
+          'globalThis.rcaNameIssuesFromGbif = rcaNameIssuesFromGbif;\n' +
+          'globalThis.rcaCoverageReasonIssues = rcaCoverageReasonIssues;\n' +
+          'globalThis.rcaAttachCoverageReasonHints = rcaAttachCoverageReasonHints;\n' +
           // REVIEW-2026-09-20 parity tests: the chart-mode detectors and the
           // GBIF name-verification round need to be reachable from the test.
           'globalThis.rcaAutoDetectChartMode = rcaAutoDetectChartMode;\n' +
@@ -600,18 +605,13 @@ function test_agreement_pill() {
 }
 
 // ---- Phase B: i18n key parity across zh/en/ja ----
-// 2026-09-20 (BORROW-2026-09-20 A): ONE exemption, derived — not hard-coded.
-// Two invariants hold over the same catalog and can contradict each other when
-// the Python oracle is asymmetric:
-//   * i18n-shared-parity:<lang> (test_i18n_shared_namespace_parity below)
-//     requires js/<lang> and TRANSLATIONS[<lang>] to agree key-for-key.
-//   * i18n-zh-{en,ja}-parity (here) requires the three JS locales to agree.
-// rca_core/i18n.py currently authors `quality.coverage_ledger` and the whole
-// `reason_code.*` block for ZH ONLY, so the mirror is forced to be zh-only too
-// — adding en/ja glosses here would flip the shared-parity check red instead.
-// The exemption therefore lists exactly the keys the ORACLE itself carries in
-// a single locale: it empties the moment rca_core gains the en/ja strings, and
-// until then every other key stays locked to strict three-way parity.
+// FIX-2026-09-22 (audit item 5): the OLD version of this block FROZE the
+// zh-only gap of the BORROW-2026-09-20 coverage-ledger / reason_code.*
+// catalog as a derived "exemption" - the test itself was part of the bug.
+// The en + ja glosses have now landed on BOTH transports (rca_core/i18n.py
+// and js/i18n.js), so the exemption is gone: STRICT three-way parity is
+// asserted on both sides, and a completeness check forbids ANY key that the
+// Python oracle carries in fewer than all three locales.
 function _pyI18nKeysByLocale() {
   const pySrc = fs.readFileSync(
     path.join(__dirname, 'rca_core', 'i18n.py'), 'utf8');
@@ -635,19 +635,29 @@ function test_i18n_parity() {
   const ctx = buildContext();
   loadAllScripts(ctx);
   const py = _pyI18nKeysByLocale();
-  const exempt = new Set(
-    [...py.zh].filter((k) => !py.en.has(k) && !py.ja.has(k)));
-  const zh = Object.keys(ctx.RCA_I18N.zh).filter((k) => !exempt.has(k)).sort();
+  // 1. Completeness on the ORACLE side: every col/sec/quality/names/
+  //    reason_code key must exist in zh AND en AND ja. (The fallback chain
+  //    in rca_core/i18n.py is lang -> en -> raw key, so a zh-only key
+  //    renders as a raw dotted key for en/ja users.)
+  const pyLangs = ['zh', 'en', 'ja'];
+  const allPy = new Set([...py.zh, ...py.en, ...py.ja]);
+  const incomplete = [...allPy].filter(
+    (k) => pyLangs.some((l) => !py[l].has(k)));
+  check('i18n-py-all-locales-complete', incomplete.length === 0,
+    incomplete.join(','));
+  // 2. STRICT three-way parity on the JS side (no exemption set any more).
+  const zh = Object.keys(ctx.RCA_I18N.zh).sort();
   const en = Object.keys(ctx.RCA_I18N.en).sort();
   const ja = Object.keys(ctx.RCA_I18N.ja).sort();
-  check('i18n-zh-en-parity', JSON.stringify(zh) === JSON.stringify(en));
-  check('i18n-zh-ja-parity', JSON.stringify(zh) === JSON.stringify(ja));
-  // The exemption must not be a hole: a single-locale Python key may only ever
-  // appear in the JS locale the oracle itself uses.
-  const leaked = [...exempt].filter(
-    (k) => !(k in ctx.RCA_I18N.zh)
-    || (k in ctx.RCA_I18N.en) || (k in ctx.RCA_I18N.ja));
-  check('i18n-single-locale-keys-stay-single', leaked.length === 0, leaked.join(','));
+  check('i18n-zh-en-parity', JSON.stringify(zh) === JSON.stringify(en),
+    'zh=' + zh.length + ' en=' + en.length);
+  check('i18n-zh-ja-parity', JSON.stringify(zh) === JSON.stringify(ja),
+    'zh=' + zh.length + ' ja=' + ja.length);
+  // 3. The keys the oracle carries must not be MISSING from the JS zh
+  //    catalog either (shared-parity covers both directions per locale, but
+  //    this pins the oracle-catalogue relationship for all namespaces).
+  const missing = [...allPy].filter((k) => !(k in ctx.RCA_I18N.zh));
+  check('i18n-js-covers-py-catalog', missing.length === 0, missing.join(','));
 }
 
 // ---- Phase B: theme.js contract ----
@@ -3314,11 +3324,14 @@ function test_i18n_shared_namespace_parity() {
     const body = pySrc.slice(start, end);
     const keys = new Set();
     let m;
-    const rx = /^    "((?:col|sec|quality|names)\.[A-Za-z0-9_]+)":/gm;
+    const rx = /^    "((?:col|sec|quality|names|reason_code)\.[A-Za-z0-9_]+)":/gm;
     while ((m = rx.exec(body)) !== null) keys.add(m[1]);
     return keys;
   };
-  const SHARED = ['col.', 'sec.', 'quality.', 'names.'];
+  // FIX-2026-09-22 (item 5): reason_code.* joins the locked namespaces —
+  // the catalog now has en/ja glosses on both transports, so key-for-key
+  // py↔js parity holds for it too.
+  const SHARED = ['col.', 'sec.', 'quality.', 'names.', 'reason_code.'];
   for (const lang of ['zh', 'en', 'ja']) {
     const py = pyLocale(lang);
     check('i18n-py-locale-block:' + lang, py !== null);

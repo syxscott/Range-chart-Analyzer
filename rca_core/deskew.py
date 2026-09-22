@@ -14,6 +14,14 @@ Two estimators, one contract:
   and the ink is voted into row / column histograms for a grid of candidate
   angles; the angle whose profile is peakiest is the one where the ruling
   lines sit on whole pixel rows.  Works everywhere Pillow works, no numpy.
+  FIX-2026-09-22: the downsampled estimate is cross-checked against one or
+  two NATIVE-resolution patches before it is trusted - a heavy downsample
+  aliases dense ruling grids (line period below ~2 working pixels) and the
+  comb could otherwise lock onto an aliased peak whose SIGN was inverted,
+  making the "correction" double the skew.  Ink detection is likewise
+  FIX-2026-09-22: polarity-robust (light ink on dark paper votes too) and
+  scale-adaptive (a 1-pixel line thinned by the BOX downsample is no longer
+  priced out by a fixed contrast floor).
 * :func:`hough_skew_angle` - optional OpenCV fast path (same guarded-import
   contract as ``extractor._enhance_image_cv2``): Canny + HoughLinesP, keep
   the near-horizontal / near-vertical segments, length-weighted estimate.
@@ -26,6 +34,14 @@ counter-clockwise *as displayed* - and it is the rotation that REMOVES the
 skew, so the returned image is ``original.rotate(angle_deg)``.  In pixel
 coordinates (y grows downward) ruling lines that fall to the right have
 ``dy/dx = tan(angle) > 0`` and need ``angle > 0`` to be lifted level again.
+
+FIX-2026-09-22: the correction rotates with ``expand=True``.  With
+``expand=False`` a 5-degree turn whitened ~30k corner pixels of a
+4000x3000 plate and left 37 of 4000 border pixels on the top row - and the
+calibration anchors live exactly on that outer frame.  The canvas therefore
+grows to hold the whole plate; callers re-read ``image.size`` after deskew
+(``extractor.load_image_b64`` does), and the no-op path (angle ``0.0``)
+still returns the ORIGINAL object, so "nothing was changed" stays cheap.
 
 Pillow stays a lazy dependency: importing this module without it works
 (everything is stdlib at import time), and only a call raises
@@ -51,10 +67,20 @@ MIN_USEFUL_ANGLE = 0.15
 
 # Fewer ink pixels than this and a projection profile is meaningless.
 _MIN_INK_POINTS = 32
-# A pixel must be at least this much darker than the paper to vote at all.
-# Small on purpose: with contrast-weighted votes a faint vote is harmless,
-# while dropping a faint line is what makes a small skew go undetected.
+# A pixel must be at least this much away from the paper level (either side,
+# FIX-2026-09-22) to vote at all.  Small on purpose: with contrast-weighted
+# votes a faint vote is harmless, while dropping a faint line is what makes
+# a small skew go undetected.  This is the NATIVE-resolution floor; the
+# projection path scales it down by the effective downsample factor, because
+# a BOX shrink averages a 1-pixel line away (see :func:`_min_contrast_for`).
 _MIN_CONTRAST = 6
+# FIX-2026-09-22: anti-aliasing verification of the downsampled estimate.
+# The estimate is re-derived on native-resolution patch(es) of at most this
+# many pixels per side; an estimate that only exists on the downsampled copy
+# is treated as aliasing and rejected (return 0.0, a safe no-op).
+_VERIFY_PATCH_SIDE = 512
+_VERIFY_PATCH_TOL = 0.4  # degrees; agreement window between the two tiers
+_VERIFY_PATCH_MIN_SIDE = 64  # below this a patch is too small to judge
 # Vote-bin width of the projection profile, in working-image pixels.  Hard
 # 1-pixel bins make the peakiness peak lock onto the bin grid instead of onto
 # the ruling lines, which biases the angle by a few tenths of a degree;
@@ -137,8 +163,15 @@ def _check_params(
 # Pillow / stdlib projection path
 # ---------------------------------------------------------------------------
 
-def _working_gray(pil_img: Any, downsample: int, max_side: int, Image: Any) -> Any:
-    """Grayscale, downsampled (BOX filter) and capped at ``max_side`` pixels."""
+def _working_gray(
+    pil_img: Any, downsample: int, max_side: int, Image: Any
+) -> Tuple[Any, int]:
+    """Grayscale, downsampled (BOX filter) and capped at ``max_side`` pixels.
+
+    Returns ``(gray, factor)``; FIX-2026-09-22 the effective factor travels
+    with the image so the ink detector can undo the contrast the BOX average
+    takes away from hairline rulings.
+    """
     gray = pil_img.convert("L")
     w, h = gray.size
     if w < 8 or h < 8:
@@ -156,7 +189,7 @@ def _working_gray(pil_img: Any, downsample: int, max_side: int, Image: Any) -> A
     if (nw, nh) != (w, h):
         resample = getattr(Image, "BOX", None) or getattr(Image, "BILINEAR", 2)
         gray = gray.resize((nw, nh), resample)  # type: ignore[arg-type]
-    return gray
+    return gray, factor
 
 
 def _paper_level(gray: Any) -> int:
@@ -166,31 +199,61 @@ def _paper_level(gray: Any) -> int:
     drawing has paper at 255 and a ruling line at ~201 with antialiasing in
     between, and a two-class cut then lands *inside* the line, dropping the
     faint half of it - which is exactly the small-skew case that still needs
-    correcting.  Everything darker than the paper by ``_MIN_CONTRAST`` votes
-    instead, weighted by how much darker (see :func:`_ink_votes`), so a
-    borderline pixel contributes a small vote rather than silently vanishing.
+    correcting.  Everything that differs from the paper by enough votes
+    instead, weighted by how far (see :func:`_ink_votes`), so a borderline
+    pixel contributes a small vote rather than silently vanishing.
+
+    FIX-2026-09-22: the paper is simply the global mode, for dark AND light
+    plates.  The old "prefer the bright mode" rule called a dark-ground /
+    light-ink plate's INK its paper, which inverted the cut and left such
+    plates with zero votes.
     """
     hist = list(gray.histogram())[:256]
     if sum(hist) <= 0:
         return 255
-    if sum(hist[128:]):  # dominant bright value = paper
-        return max(range(128, 256), key=lambda v: hist[v])
-    return max(range(256), key=lambda v: hist[v])  # a dark plate: its mode
+    return max(range(256), key=lambda v: hist[v])
+
+
+def _min_contrast_for(factor: int) -> int:
+    """Contrast floor at a given effective downsample factor.
+
+    A BOX shrink of ``factor`` averages a 1-pixel line's contrast down to
+    roughly ``delta / factor``, so a fixed floor of 6 silently deletes every
+    hairline from a factor-4+ working plate (a paper-250 / line-235 plate
+    voted 0 pixels).  Scaling the floor with the factor keeps faint ink in
+    play at the price of a few noise votes - which is what the contrast
+    *weights* are for: they keep noise contributions small.
+    """
+    return max(1, int(math.ceil(_MIN_CONTRAST / max(1, int(factor)))))
 
 
 def _ink_votes(
-    gray: Any, threshold: Optional[int] = None
+    gray: Any,
+    threshold: Optional[int] = None,
+    *,
+    factor: int = 1,
 ) -> Tuple[List[Tuple[int, int, int]], int]:
     """``((x, y, weight), ...)`` of ink pixels plus the cut that was used.
 
     ``weight`` is the pixel's contrast against the paper, so faint
-    antialiasing still votes.  Plain byte scanning with no numpy: the working
-    plate is bounded by ``max_side``, so this one pass stays cheap.
+    antialiasing still votes.  FIX-2026-09-22: pixels vote on BOTH sides of
+    the paper level (light ink on a dark plate is ink), and the default
+    floor adapts to ``factor`` (see :func:`_min_contrast_for`).  An explicit
+    ``threshold`` keeps the historic meaning - "grey values below this are
+    ink" - for callers that want a hard dark cut.  Plain byte scanning with
+    no numpy: the working plate is bounded by ``max_side``, so this one pass
+    stays cheap.
     """
     w, h = gray.size
     paper = _paper_level(gray)
-    cut = paper - _MIN_CONTRAST if threshold is None else int(threshold)
-    cut = max(0, min(256, cut))
+    if threshold is not None:
+        cut = max(0, min(256, int(threshold)))
+        one_sided = True
+        floor = 1
+    else:
+        floor = _min_contrast_for(factor)
+        cut = paper - floor
+        one_sided = False
     data = gray.tobytes()
     votes: List[Tuple[int, int, int]] = []
     append = votes.append
@@ -198,9 +261,15 @@ def _ink_votes(
     for y in range(h):
         row = data[row_start:row_start + w]
         row_start += w
-        for x, v in enumerate(row):
-            if v < cut:
-                append((x, y, max(1, paper - v)))
+        if one_sided:
+            for x, v in enumerate(row):
+                if v < cut:
+                    append((x, y, max(1, paper - v)))
+        else:
+            for x, v in enumerate(row):
+                diff = v - paper
+                if diff >= floor or diff <= -floor:
+                    append((x, y, diff if diff > 0 else -diff))
     return votes, cut
 
 
@@ -338,6 +407,81 @@ def _search_angle(
     return best_angle
 
 
+def _angle_from_gray(
+    gray: Any,
+    max_angle: float,
+    axis: str,
+    threshold: Optional[int],
+    max_ink_points: int,
+    factor: int = 1,
+) -> Optional[float]:
+    """Projection-profile angle of one prepared L image; ``None`` = no signal."""
+    w, h = gray.size
+    votes, _cut = _ink_votes(gray, threshold, factor=factor)
+    if len(votes) < _MIN_INK_POINTS:
+        return None  # blank / unreadably faint plate: do not invent a rotation
+    cap = max(_MIN_INK_POINTS, int(max_ink_points or 0))
+    fine = _stride_sample(votes, cap)
+    coarse = _stride_sample(votes, max(2000, cap // 5))
+    return _search_angle(fine, coarse, w, h, max_angle, axis)
+
+
+def _alias_checked_angle(
+    pil_img: Any,
+    primary: float,
+    *,
+    max_angle: float,
+    axis: str,
+    threshold: Optional[int],
+    max_ink_points: int,
+) -> float:
+    """Re-estimate the downsampled ``primary`` angle on native-resolution patches.
+
+    FIX-2026-09-22 (audit bug 1): a factor-4..9 BOX downsample of a dense
+    ruling grid (line period below ~2 working pixels) aliases the row
+    profile, and the comb can lock onto a false peak whose sign is
+    INVERTED - measured: a 2400x1800 step-8 plate skewed -3.0 degrees was
+    "corrected" by -1.075, worsening it to 4.08.  The same grid at native
+    resolution cannot alias (no rendered plate has a line period below two
+    full pixels), so the native patches act as the referee:
+
+    * primary agrees with the centre patch  -> trust primary (global view);
+    * they disagree but two native patches agree -> trust the patches;
+    * a single patch that sees >= ~70 % of the plate is a full native rerun
+      and simply wins over its aliased downsampled twin;
+    * anything else -> 0.0, a safe no-op.  A wrong-signed angle is far worse
+      than no correction at all.
+    """
+    limg = pil_img.convert("L")
+    w, h = limg.size
+    side = min(_VERIFY_PATCH_SIDE, w, h)
+    if side < _VERIFY_PATCH_MIN_SIDE:
+        return primary
+    covers = (side * side) / float(w * h)
+    boxes: List[Tuple[int, int]] = [((w - side) // 2, (h - side) // 2), (0, 0)]
+    patch_angles: List[float] = []
+    seen = set()
+    for box in boxes:
+        if box in seen:
+            continue
+        seen.add(box)
+        patch = limg.crop((box[0], box[1], box[0] + side, box[1] + side))
+        found = _angle_from_gray(patch, max_angle, axis, threshold, max_ink_points, 1)
+        if found is not None and math.isfinite(found):
+            patch_angles.append(found)
+    if not patch_angles:
+        return primary  # patches are blank margins: nothing to re-derive from
+    first = patch_angles[0]
+    if abs(first - primary) <= _VERIFY_PATCH_TOL:
+        return primary
+    if len(patch_angles) >= 2:
+        if abs(patch_angles[0] - patch_angles[1]) <= _VERIFY_PATCH_TOL:
+            return first
+    elif covers >= 0.7:
+        return first  # the patch IS (nearly) the whole plate at native size
+    return 0.0
+
+
 def _projection_angle(
     pil_img: Any,
     *,
@@ -350,15 +494,22 @@ def _projection_angle(
 ) -> float:
     """Skew estimate from the pure-Pillow projection profile."""
     Image = _require_pillow()
-    gray = _working_gray(pil_img, downsample, max_side, Image)
-    w, h = gray.size
-    votes, _cut = _ink_votes(gray, threshold)
-    if len(votes) < _MIN_INK_POINTS:
-        return 0.0  # blank / unreadably faint plate: do not invent a rotation
-    cap = max(_MIN_INK_POINTS, int(max_ink_points or 0))
-    fine = _stride_sample(votes, cap)
-    coarse = _stride_sample(votes, max(2000, cap // 5))
-    return _search_angle(fine, coarse, w, h, max_angle, axis)
+    gray, factor = _working_gray(pil_img, downsample, max_side, Image)
+    primary = _angle_from_gray(
+        gray, max_angle, axis, threshold, max_ink_points, factor
+    )
+    if primary is None:
+        return 0.0
+    if factor <= 1:
+        return primary  # already native resolution: nothing can have aliased
+    return _alias_checked_angle(
+        pil_img,
+        primary,
+        max_angle=max_angle,
+        axis=axis,
+        threshold=threshold,
+        max_ink_points=max_ink_points,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -513,10 +664,17 @@ def _rotate_copy(pil_img: Any, angle: float, fill: Any) -> Any:
     elif src.mode == "1":
         src = src.convert("L")
     resample = getattr(Image, "BILINEAR", None) or 2
-    # expand=False on purpose: the canvas must keep its size and origin, or
-    # pixel anchors picked on the unrotated plate stop meaning anything.
+    # FIX-2026-09-22 (audit bug 2): expand=True.  With expand=False the
+    # corners were silently whitened away - a 5-degree turn of a 4000x3000
+    # framed plate kept 37 of its 4000 top-border black pixels and erased
+    # ~30k corner pixels - and the calibration anchors / axis ticks live on
+    # exactly that outer frame, so the loss was undetectable downstream.
+    # The canvas now grows to hold the whole plate; callers re-read
+    # ``image.size`` after deskewing (extractor does), and the no-op path
+    # still returns the original object untouched, so the identity contract
+    # ("angle 0.0 => same object, nothing resampled") is kept.
     return src.rotate(
-        angle, resample=resample, expand=False, fillcolor=fill  # type: ignore[arg-type]
+        angle, resample=resample, expand=True, fillcolor=fill  # type: ignore[arg-type]
     )
 
 
@@ -555,9 +713,12 @@ def deskew_image(
 
     Returns:
         ``(image, angle_deg)``.  ``angle_deg`` is the angle already applied,
-        i.e. the returned image equals ``pil_img.rotate(angle_deg)``; it is
-        ``0.0`` - and the ORIGINAL object (not a copy) is returned - when the
-        detected skew is smaller than ``min_angle``.
+        i.e. the returned image equals ``pil_img.rotate(angle_deg,
+        expand=True)`` (FIX-2026-09-22: the canvas grows so no border /
+        calibration-anchor pixels are cropped away); it is ``0.0`` - and the
+        ORIGINAL object (not a copy) is returned - when the detected skew is
+        smaller than ``min_angle``.  Callers must re-read ``image.size``
+        after deskewing.
     """
     max_angle, downsample, min_angle, axis, method = _check_params(
         max_angle, downsample, min_angle, axis, method

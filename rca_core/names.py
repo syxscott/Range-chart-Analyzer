@@ -46,6 +46,26 @@ DEFAULT_GBIF_BASE_URL = "https://api.gbif.org"
 
 _AUTHOR_PAREN = re.compile(r"\([^)]*\)")
 
+# FIX-2026-09-22 (item 2, live-network verified): extracted rows frequently
+# carry the authorship WITHOUT parentheses - "Ptereoconus hoenesi Hoenes,
+# 1891", "Genus species Smith and Krotov, 1934", "Genus species Smith et
+# al., 1990". The paren-stripper above only covers "(...)"; the un-parenthesised
+# tail used to die on the malformed gate (comma / digits) with zero network.
+# This strips a trailing "surname[, co-authors][, et al.], YEAR" block. The
+# comma before the year is REQUIRED so bare junk like "Hindeodus 1979" (no
+# authorship) still fails closed on the gate below.
+_AUTHOR_TAIL_RE = re.compile(
+    r"\s+[A-Z][A-Za-z.'\-]+"                       # surname, capitalised
+    r"(?:\s*(?:,|&|\band\b|\bet\b|\bin\b)\s*"      # co-author separators
+    r"[A-Za-z][A-Za-z.'\-]+)*"
+    r"(?:\s*,\s*(?:et\s+al\.?\s*)?\d{4}[a-z]?"     # ", 1891" / ", et al. 1891"
+    r"|\s+et\s+al\.?\s*\d{4}[a-z]?)"               # " et al. 1891" (no comma)
+    r"\s*$"
+)
+
+# Bare trailing "et al." with no year (common OCR tail).
+_ET_AL_TAIL_RE = re.compile(r"\s+et\s+al\.?\s*$", re.IGNORECASE)
+
 # BORROW-2026-09-20 (3): GBIF practice for palaeontology (radiolarians,
 # conodonts...) shows two very different NONE stories:
 #   * the string is not a name at all (OCR prose, digits, stray glyphs) -
@@ -54,7 +74,12 @@ _AUTHOR_PAREN = re.compile(r"\([^)]*\)")
 #   * the parser parses it but the backbone simply does not carry it.
 # The first is an extraction-quality signal, the second is normal science,
 # and the error message must keep them apart.
-_MALFORMED_RESIDUE_RE = re.compile(r"[^A-Za-z .\-'×]+")
+# FIX-2026-09-22 (item 2): commas and parentheses are legitimate in the
+# raw extracted string (author tails survive even after cleaning attempts);
+# they are no longer a malformed signal. Digits / non-Latin glyphs / stray
+# punctuation remain rejected - deliberately conservative, see
+# looks_malformed_name.
+_MALFORMED_RESIDUE_RE = re.compile(r"[^A-Za-z .\-'×,()]+")
 
 # BORROW-2026-09-20 (2): the literal matchType the GBIF backbone checker
 # returns when one string resolves to several equally-good usages (same
@@ -128,7 +153,31 @@ def _match_endpoint(base_url: str, query: str) -> str:
 
 
 def _parser_endpoint(base_url: str, query: str) -> str:
-    return f"{base_url}/v1/parsers/name?name=" + urllib.parse.quote(query)
+    # FIX-2026-09-22 (item 1, live-network verified): the real GBIF parser
+    # path is SINGULAR - /v1/parsers/name (plural) is a permanent 404, which
+    # silently degraded every pre-parse to "unavailable" and killed the
+    # genus-fallback queries.
+    return f"{base_url}/v1/parser/name?name=" + urllib.parse.quote(query)
+
+
+# FIX-2026-09-22 (item 3, live A/B verified): urllib.request.urlopen routes
+# through the PROCESS-GLOBAL opener, and importing rca_core (-> llm -> ssrf)
+# installs the pinned-IP SSRF opener there. api.gbif.org behind that pinning
+# answers 404 from the edge ("This server hosts..."), so production GBIF
+# validation silently degraded to "unavailable". scripts/update_ics.py
+# already dodged this with a private build_opener(); names.py now does the
+# same. Tests monkeypatch _private_open (offline).
+def _private_open(url: str, timeout: float) -> str:
+    """GET ``url`` through a PRIVATE default opener; returns the body text.
+
+    Never installs or consults the global opener, so the SSRF pinning
+    side effect cannot hijack the GBIF transport. Raises on network
+    failures - :func:`_http_json` is the fail-open boundary.
+    """
+    opener = urllib.request.build_opener()
+    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with opener.open(request, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", "replace")
 
 
 def _http_json(
@@ -139,11 +188,7 @@ def _http_json(
     """GET ``url`` and decode JSON. Returns ``(payload, "")`` or
     ``(None, error_reason)`` - never raises (BORROW-2026-09-20)."""
     try:
-        if fetch is None:
-            with urllib.request.urlopen(url, timeout=timeout) as resp:
-                body = resp.read().decode("utf-8", "replace")
-        else:
-            body = fetch(url)
+        body = fetch(url) if fetch is not None else _private_open(url, timeout)
         return json.loads(body), ""
     except Exception as exc:  # network / DNS / rate limit / bad JSON
         return None, type(exc).__name__
@@ -155,10 +200,17 @@ def looks_malformed_name(query: str) -> bool:
     quartet of tokens). Deliberately conservative - anything name-like
     passes so the real decision stays with the parser; a false PASS only
     costs one round-trip, a false REJECT would silence a real taxon.
+
+    FIX-2026-09-22 (item 2): the token-count step now ignores an author +
+    year tail ("Ptereoconus hoenesi Hoenes, 1891" is a binomen + a citation,
+    not five name words), so the gate no longer rejects cited names that the
+    parser handles fine.
     """
     s = str(query or "").strip()
     if not s:
         return True
+    # FIX-2026-09-22 (item 2): count tokens of the name, not of the citation.
+    s = _ET_AL_TAIL_RE.sub("", _AUTHOR_TAIL_RE.sub("", s))
     if len(s.split()) > 4:
         return True
     return bool(_MALFORMED_RESIDUE_RE.search(s))
@@ -185,8 +237,16 @@ def parse_name_gbif(
     base_url: Optional[str] = None,
 ) -> dict[str, Any]:
     """BORROW-2026-09-20 (1): pre-parse one (cleaned) name with the GBIF
-    name parser (``GET /v1/parsers/name?name=...``, the same endpoint the
+    name parser (``GET /v1/parser/name?name=...``, the same endpoint the
     checker layer uses internally).
+
+    FIX-2026-09-22 (item 1, live-network verified): the real contract is an
+    ARRAY of parsed-name records whose fields are ``genusOrAbove`` /
+    ``canonicalName`` (plus specificEpithet / infraspecificEpithet /
+    authorship / type). The old code read a DICT with keys ``genus`` /
+    ``canonical`` - a shape this API never returns - so even after the URL
+    fix it would have parsed nothing. A single object is still accepted
+    (offline mocks / mirrors), and either legacy or real field name is read.
 
     Returns the parser verdict decomposed into reviewable fields::
 
@@ -208,19 +268,45 @@ def parse_name_gbif(
         if err:
             out["error"] = err
             return out
-        if not isinstance(payload, dict):
+        entry: Optional[dict[str, Any]] = None
+        if isinstance(payload, dict):
+            entry = payload
+        elif isinstance(payload, (list, tuple)):
+            records = [e for e in payload if isinstance(e, dict)]
+            if not records:
+                # The parser refused the string outright (empty array).
+                out["error"] = "empty_parse_result"
+                return out
+            want = s.lower()
+            # Best/exact match: prefer the record whose canonical name IS
+            # the query (multi-name strings can parse into several records),
+            # else the first record that found a genus, else the first.
+            for rec in records:
+                canon = str(rec.get("canonicalName")
+                            or rec.get("canonical") or "").strip().lower()
+                if canon and canon == want:
+                    entry = rec
+                    break
+            if entry is None:
+                entry = next(
+                    (rec for rec in records
+                     if rec.get("genusOrAbove") or rec.get("genus")),
+                    records[0])
+        else:
             out["error"] = f"unexpected_payload_{type(payload).__name__}"
             return out
         out["status"] = "ok"
-        out["genus"] = str(payload.get("genus") or "")
-        out["specific_epithet"] = str(payload.get("specificEpithet") or "")
+        out["genus"] = str(entry.get("genusOrAbove")
+                           or entry.get("genus") or "")
+        out["specific_epithet"] = str(entry.get("specificEpithet") or "")
         out["infraspecific_epithet"] = str(
-            payload.get("infraspecificEpithet") or "")
-        out["authorship"] = str(payload.get("authorship") or "")
+            entry.get("infraspecificEpithet") or "")
+        out["authorship"] = str(entry.get("authorship") or "")
         out["parser_type"] = str(
-            payload.get("type") or payload.get("matchType") or "")
-        out["canonical"] = str(payload.get("canonical") or "")
-        parsed_flag = payload.get("parsed")
+            entry.get("type") or entry.get("matchType") or "")
+        out["canonical"] = str(entry.get("canonicalName")
+                               or entry.get("canonical") or "")
+        parsed_flag = entry.get("parsed")
         if parsed_flag is None:
             # No explicit flag: treat "the parser saw a genus" as parsed.
             out["parsed"] = bool(out["genus"] or out["specific_epithet"])
@@ -263,6 +349,11 @@ def clean_name_for_lookup(species: str) -> str:
         return ""
     # drop author/year parentheticals
     s = _AUTHOR_PAREN.sub(" ", s)
+    # FIX-2026-09-22 (item 2): drop the NON-parenthesised author + year
+    # tail too ("Ptereoconus hoenesi Hoenes, 1891" -> "Ptereoconus
+    # hoenesi"); js/app.js rcaCleanNameForLookup mirrors this exactly.
+    s = _AUTHOR_TAIL_RE.sub(" ", s)
+    s = _ET_AL_TAIL_RE.sub("", s)
     # drop open-nomenclature qualifier tokens (the row itself is untouched)
     s = re.sub(r"\b(cf|aff|cf\.|aff\.)\s+", "", s, flags=re.IGNORECASE)
     s = re.sub(r"\b(ex\s+gr\.?|gr\.?|s\.\s?l\.?|s\.\s?s\.?|sensu|near)(?![a-z])",

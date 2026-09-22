@@ -116,6 +116,10 @@ const RCA_I18N = {
     'status.classifying': '正在识别图表类型…',
     'names.fuzzy': '学名模糊匹配：{name} → 可能是 {suggestion}（请人工核对）',
     'names.unmatched': '学名 {name} 未在参考数据库中匹配到（地方性或罕见种属常见，非必然错误）',
+    // FIX-2026-09-22 (item 4): names.py emits this msg_key for
+    // "Multiple equal matches"; it existed in no locale (and the JS mirror
+    // had no branch at all), so ambiguous answers were silent.
+    'names.ambiguous': '学名 {name} 在参考数据库中存在多个同等强度的匹配，需人工消歧',
     'upload.chartMode.zonationChart': '生物带对比图',
     'sec.zonations': '对比方案 (Zonations)',
     'sec.zonesTable': '生物带 (Zones)',
@@ -309,16 +313,18 @@ const RCA_I18N = {
     // BORROW-2026-09-20 (A) — 提取契约文案，镜像 rca_core/i18n.py。
     // 覆盖台账：把"图上画了破折号"记为已回答，把"模型什么都没写"记为缺口。
     // 仅作信息提示（severity: info），不参与加权评分。
-    // zh-ONLY ON PURPOSE: rca_core/i18n.py defines this key for zh only today,
-    // and tests_frontend.js `i18n-shared-parity:<lang>` locks the quality.*
-    // namespace key-for-key per locale — an en/ja entry here would fail that
-    // parity check. Add the en/ja glosses in the same commit that adds them on
-    // the Python side (single source of truth), not before.
+    // FIX-2026-09-22 (item 5): this key used to be "zh-only ON PURPOSE"
+    // because rca_core/i18n.py carried zh only; the en/ja glosses have now
+    // landed on BOTH sides, so the tests_frontend.js exemption is gone and
+    // strict three-way parity holds again.
     'quality.coverage_ledger': '覆盖台账：{cells} 个请求单元中 {answered} 个已作答（其中 {not_drawn} 个为图上明确未画），{gaps} 个静默缺失',
-    // BORROW-2026-09-20 (A): 12 个理由码（slug 稳定，供 UI 与导出使用）。Same
-    // zh-only rule as above: the reason_code.* catalog is authored in
-    // rca_core/i18n.py, which currently carries zh only. The slugs themselves —
-    // and their English glosses — live in js/reason-codes.js (RCA_REASON_CODES).
+    // FIX-2026-09-22 (item 5): display wrapper for the reason_code.* catalog,
+    // consumed by js/app.js (rcaCoverageReasonIssues).
+    'quality.coverage_reasons': '覆盖理由码：{reasons}',
+    // BORROW-2026-09-20 (A): 12 个理由码（slug 稳定，供 UI 与导出使用）。
+    // The slugs themselves — and their English glosses — live in
+    // js/reason-codes.js (RCA_REASON_CODES); the localized strings are the
+    // keys below, now complete in zh/en/ja on both transports.
     'reason_code.not_drawn': '图上该列存在但此分类单元未画出（破折号/空格）：明确的缺失记录，不是漏抽',
     'reason_code.uncertain': '读数不确定：边界、标签或图例无法可靠判读',
     'reason_code.obscured': '标记或其标签被其他要素、题注、褶皱或印刷溢墨遮挡',
@@ -447,6 +453,8 @@ RCA_I18N.en = {
     'status.classifying': 'Detecting chart type…',
     'names.fuzzy': 'Fuzzy name match: {name} → possibly {suggestion} (please verify)',
     'names.unmatched': 'Name {name} not matched in the reference database (common for endemic taxa; not necessarily an error)',
+    // FIX-2026-09-22 (item 4): see the zh entry.
+    'names.ambiguous': 'Name {name} has several equal-strength matches in the reference database (manual disambiguation needed)',
     'upload.chartMode.zonationChart': 'Zonation chart',
     'sec.zonations': 'Zonations',
     'sec.zonesTable': 'Zones',
@@ -633,6 +641,24 @@ RCA_I18N.en = {
   'quality.bed_index_order_swapped': 'Top/base bed indices swapped automatically',
   'quality.missing_section_ref': 'Some species reference an unknown section',
   'quality.biozone_order_violation': "Steno's Law violation: {species} in biozone {younger_biozone} (younger) appears below {older_biozone} (older)",
+  // FIX-2026-09-22 (item 5): the coverage-ledger / reason-code catalog was
+  // zh-only on BOTH transports, so en/ja users saw raw keys
+  // ("quality.coverage_ledger", "reason_code.not_drawn", ...). Complete en
+  // mirror of rca_core/i18n.py TRANSLATIONS["en"].
+  'quality.coverage_ledger': 'Coverage ledger: {answered} of {cells} requested cells answered ({not_drawn} explicitly not drawn on the chart), {gaps} silently missing',
+  'quality.coverage_reasons': 'Coverage reason codes: {reasons}',
+  'reason_code.not_drawn': 'The column exists on the chart but this taxon is deliberately not drawn (dash/blank): an explicit absence record, not a missed extraction',
+  'reason_code.uncertain': 'Uncertain reading: boundary, label or legend could not be interpreted reliably',
+  'reason_code.obscured': 'The mark or its label is covered by other elements, a caption, a fold or print bleed',
+  'reason_code.inferred': 'Inferred from the legend, text description or range zone; there is no such mark on the chart itself',
+  'reason_code.legend_only': 'The name appears only in the legend/index; no range mark inside the figure',
+  'reason_code.crosses_top': 'The range runs off the top edge of the frame, so the last appearance is undetermined',
+  'reason_code.crosses_base': 'The range runs off the bottom edge of the frame, so the first appearance is undetermined',
+  'reason_code.truncated': 'The mark, label or whole column is cut off by the frame edge, a panel split or a page break',
+  'reason_code.no_label': 'The mark is readable but its vertical-axis/level label is missing',
+  'reason_code.abbreviated': 'The label is an abbreviated or truncated name that cannot be uniquely restored',
+  'reason_code.low_confidence': 'Low confidence: this row carries dropped or conflicting evidence',
+  'reason_code.out_of_scope': 'The unit is outside the requested scope (lithology, age or non-biotic element)',
 };
 
 RCA_I18N.ja = {
@@ -747,6 +773,8 @@ RCA_I18N.ja = {
     'status.classifying': '図表タイプを判定中…',
     'names.fuzzy': '学名ファジーマッチ: {name} → {suggestion} の可能性（要確認）',
     'names.unmatched': '学名 {name} は参照データベースに一致なし（固有種ではよくあること。必ずしも誤りではない）',
+    // FIX-2026-09-22 (item 4): 中国語版の項を参照。
+    'names.ambiguous': '学名 {name} に対して同等の一致が複数あります（人手による解消が必要）',
     'upload.chartMode.zonationChart': '化石帯対比図',
     'sec.zonations': '対比区分 (Zonations)',
     'sec.zonesTable': '化石帯 (Zones)',
@@ -932,6 +960,22 @@ RCA_I18N.ja = {
   'quality.bed_index_order_swapped': '上/下 bed_index を自動的に入れ替えました',
   'quality.missing_section_ref': '一部の種が未知のセクションを参照しています',
   'quality.biozone_order_violation': 'Steno の法則違反：種 {species} の生層帯 {younger_biozone}（新しい）がより古い {older_biozone} の下に出現',
+  // FIX-2026-09-22 (item 5): ja mirror of the completed coverage-ledger /
+  // reason-code catalog (was zh-only on both transports; see the en block).
+  'quality.coverage_ledger': 'カバレッジ台帳：要求された {cells} セル中 {answered} 個が回答済み（うち {not_drawn} 個は図上で意図的に未描写）、{gaps} 個が沉默的欠落',
+  'quality.coverage_reasons': 'カバレッジ理由コード：{reasons}',
+  'reason_code.not_drawn': '列は図上に存在するがこの分類群は意図的に描かれていない（ダッシュ/空白）：明確な欠如記録であり、抽出漏れではない',
+  'reason_code.uncertain': '読み取り不確実：境界、ラベルまたは凡例を確実に判読できない',
+  'reason_code.obscured': 'マークまたはそのラベルが他の要素、キャプション、折り目、印刷のかすれに隠されている',
+  'reason_code.inferred': '凡例、テキスト記述または延帯からの推定；図自体に該当マークはない',
+  'reason_code.legend_only': '名称は凡例/索引のみに出現し、図内に延帯マークがない',
+  'reason_code.crosses_top': '延帯が枠の上辺を越えており、末出現を確定できない',
+  'reason_code.crosses_base': '延帯が枠の下辺を越えており、初出現を確定できない',
+  'reason_code.truncated': 'マーク、ラベルまたは列全体が枠の縁、パネル分割または改ページで切断されている',
+  'reason_code.no_label': 'マークは読めるが、その縦軸/層位ラベルが存在しない',
+  'reason_code.abbreviated': 'ラベルは略記または切断された名称で、一意に復元できない',
+  'reason_code.low_confidence': '低信頼度：この行には欠落または矛盾する証拠がある',
+  'reason_code.out_of_scope': 'このユニットは今回の要求範囲外（岩性、年代または非生物要素）',
 };
 
 // ==================== i18n runtime ====================

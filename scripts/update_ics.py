@@ -5,11 +5,12 @@ success is enough:
 
   (a) Macrostrat defs API  - the clean pull pattern demonstrated by
       willgearty/deeptime: one HTTP GET, a flat interval list, CC-BY-4.0.
-      The documented endpoint is ``/api/v2/defs/ages``; upstream currently
-      answers that path with 404 ("Cannot GET /defs/ages"), so the same
-      records are also fetched from ``/api/v2/defs/intervals?timescale_id=1``
-      ("international ages", the ICS ladder Macrostrat mirrors). Both URLs
-      are tried, first hit wins - see ``MACROSTRAT_AGE_URLS``.
+      The live ladder is served by ``/api/v2/defs/intervals?timescale_id=1``
+      ("international ages", the ICS mirror), which is tried FIRST; the
+      documented ``/api/v2/defs/ages`` path answers 404 on the current API
+      (FIX-2026-09-22, audit item 5: the working endpoint leads, the
+      documented alias stays as fallback). Both URLs are tried, first hit
+      wins - see ``MACROSTRAT_AGE_URLS``.
   (b) ICS chart RDF        - i-c-stratigraphy/chart publishes the official
       chart as one Turtle document (``chart.ttl``, CC-BY-4.0) whose
       ``rank:Age`` concepts carry ``time:hasBeginning``/``hasEnd``,
@@ -34,9 +35,32 @@ That file is consumed as ``dict[str, dict]`` and iterated wholesale by
 Nothing is overwritten by default: the result lands in
 ``rca_core/resources/ics_current.json`` and a diff summary against the
 canonical ``ics_2024.json`` is printed. Promoting it takes an explicit
-``--write-canonical``, which backs the old file up to ``ics_2024.json.bak``
-first and refuses (without ``--force``) when the refresh would break the
+``--write-canonical``, which:
+  * REFUSES ``--offline-fixture`` data outright - fixture payloads are toy
+    data and must never become the authority source; only ``--force``
+    promotes them, and then with a loud warning printed first
+    (FIX-2026-09-22, audit item 2);
+  * REFUSES promotion when the version stamp was only inferred from the
+    baseline (``ICS_VERSION`` in ``rca_core/standards/ics.py``) while the
+    refresh contains stages that do not exist in that baseline - new data
+    must not wear an old version stamp. Establish the version explicitly
+    with ``--ics-version`` (or take the ICS channel, which carries it)
+    (FIX-2026-09-22, audit item 4);
+  * backs the old file up through a numbered rotation
+    (``ics_2024.json.bak`` newest, ``.bak.1`` ... ``.bak.4``, cap 5) so the
+    true hand-rebuilt baseline survives several promotes, writes the new
+    file ATOMICALLY (temp + fsync + ``os.replace`` - a crash can never
+    leave a half canonical file), and validates that the payload loads
+    through ``rca_core/standards/ics.py``'s own import path BEFORE
+    touching the canonical file (FIX-2026-09-22, audit item 3).
+It still refuses (without ``--force``) when the refresh would break the
 data invariants guarded by ``tests/test_ics_invariants.py``.
+
+Version coherence contract: every row of a promoted table carries
+``ics_version``, and ``ICS_VERSION`` in ``rca_core/standards/ics.py`` is
+the stamp the report layer uses - when a promote changes the version,
+update ``ICS_VERSION`` in the same commit (the promote output reminds you;
+``read_baseline_version`` reads it back without importing rca_core).
 
 Usage:
     python scripts/update_ics.py
@@ -52,10 +76,14 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
+import shutil
 import sys
+import tempfile
 import urllib.error
 import urllib.request
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple
@@ -68,13 +96,16 @@ DEFAULT_OUT = RESOURCES / "ics_current.json"
 USER_AGENT = "RangeChartAnalyzer-ICSUpdater/1.0 (+research tool; not a browser)"
 TIMEOUT_SEC = 20.0
 
-# (a) Macrostrat defs. Both spellings are tried: the documented ``ages``
-# endpoint first, then the ``intervals`` form that serves the same data today.
+# (a) Macrostrat defs. FIX-2026-09-22 (audit item 5, measured): the working
+# ``intervals?timescale_id=1`` form is tried FIRST - it answers 200 today -
+# and the documented-but-404ing ``ages`` alias is kept only as the fallback,
+# in case upstream ever restores it. The previous order paid a guaranteed
+# 404 round-trip on every single refresh.
 MACROSTRAT_BASE = "https://macrostrat.org/api/v2"
 MACROSTRAT_AGE_URLS: Tuple[Tuple[str, str], ...] = (
-    ("defs/ages", MACROSTRAT_BASE + "/defs/ages?format=json&all=1"),
     ("defs/intervals?timescale_id=1",
      MACROSTRAT_BASE + "/defs/intervals?format=json&all=1&timescale_id=1"),
+    ("defs/ages", MACROSTRAT_BASE + "/defs/ages?format=json&all=1"),
 )
 # Hierarchy companions: international periods / epochs. Optional - a missing
 # one only costs detail, the baseline still anchors the period bounds.
@@ -946,10 +977,33 @@ def load_table(path: Path) -> Dict[str, Dict[str, Any]]:
 
 
 def write_json(path: Path, table: Dict[str, Dict[str, Any]]) -> None:
+    """Atomically write *table* to *path* (FIX-2026-09-22, audit item 3b).
+
+    The old ``path.write_text`` was a truncating, non-atomic write: a crash
+    (or an OS page-cache loss) halfway through left a HALF canonical file
+    behind, and ``rca_core/standards/ics.py`` then silently degraded the
+    whole lookup table to ``{}``. We now write to a sibling temp file,
+    flush + fsync it, and ``os.replace`` it over the target - a rename is
+    atomic on every POSIX and Windows (NTFS) filesystem, so readers see
+    either the old bytes or the new bytes, never a truncated mix.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(table, ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8")
+    tmp = path.with_name(path.name + ".tmp")
+    data = (json.dumps(table, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    try:
+        with open(tmp, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        # os.replace removes *tmp* on success; clean it up only on failure.
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def read_baseline_version(*ics_modules: Path) -> str:
@@ -1116,20 +1170,40 @@ def run(
     seed_era_map(baseline)
     result = acquire(channel, fixture=fixture, fetch=fetch, timeout=timeout)
     stamp = retrieved_at or _utc_now_stamp()
-    version = str(ics_version if ics_version is not None
-                  else (result.get("ics_version")
-                        or read_baseline_version(
-                            canonical.parent.parent / "standards" / "ics.py",
-                            ROOT / "rca_core" / "standards" / "ics.py")
-                        or "unspecified"))
+    # FIX-2026-09-22 (audit item 4): the version stamp must record HOW it was
+    # established. "explicit" = operator passed --ics-version; "channel" = the
+    # source itself carries it (only the ICS chart RDF does; the Macrostrat
+    # channel always answers ""); "baseline-fallback" = borrowed from
+    # ICS_VERSION in rca_core/standards/ics.py, which describes the BUNDLED
+    # table - stamping rows the baseline never contained with it would let
+    # new data wear an old version stamp, so promote_to_canonical refuses
+    # that combination unless --ics-version (or --force) is given.
+    version_source = ""
+    if ics_version is not None:
+        version, version_source = str(ics_version), "explicit"
+    elif str(result.get("ics_version") or ""):
+        version, version_source = str(result["ics_version"]), "channel"
+    else:
+        fallback = read_baseline_version(
+            canonical.parent.parent / "standards" / "ics.py",
+            ROOT / "rca_core" / "standards" / "ics.py")
+        version = fallback or "unspecified"
+        version_source = "baseline-fallback" if fallback else "unspecified"
     table, notes = build_table(
         result, baseline=baseline, retrieved_at=stamp, ics_version=version,
         carry_forward=carry_forward, keep_all_intervals=keep_all_intervals)
     errors, warnings = validate_table(table)
     diff = diff_tables(baseline, table)
+    # Stages the refresh introduces that the baseline (and therefore the
+    # fallback version stamp) cannot have known about. Carried-forward rows
+    # do not count: they ARE baseline data.
+    new_beyond_baseline = sorted(
+        name for name, row in table.items()
+        if not row.get("carried_forward") and name not in baseline)
 
     reporter(f"channel: {result.get('channel')} ({result.get('source')})")
     reporter(f"ics_version: {version or 'unknown'}   retrieved_at: {stamp}"
+             f"   (version source: {version_source})"
              + (f"   upstream modified: {result['modified']}"
                 if result.get("modified") else ""))
     reporter(f"intervals: {len(table)} rows (baseline {len(baseline)} rows)")
@@ -1157,16 +1231,113 @@ def run(
         reporter(f"alignment table: {rows} rows -> {export_csv}")
 
     if write_canonical:
-        promoted = promote_to_canonical(canonical, table, errors=errors, diff=diff,
-                                        force=force, reporter=reporter)["promoted"]
+        promotion = promote_to_canonical(
+            canonical, table, errors=errors, diff=diff,
+            force=force, reporter=reporter,
+            provenance=str(result.get("source") or ""),
+            version=version, version_source=version_source,
+            new_beyond_baseline=new_beyond_baseline)
+        promoted = promotion["promoted"]
+        promote_reason = promotion.get("reason", "")
     else:
         promoted = False
+        promote_reason = "dry run"
         reporter(f"dry run: {canonical.name} untouched "
-                 "(--write-canonical promotes it, backing it up to .bak first)")
+                 "(--write-canonical promotes it, backing it up through a "
+                 ".bak/.bak.N rotation first)")
 
     return {"table": table, "diff": diff, "errors": errors, "warnings": warnings,
-            "notes": notes, "version": version, "retrieved_at": stamp,
-            "result": result, "promoted": promoted, "baseline": baseline}
+            "notes": notes, "version": version, "version_source": version_source,
+            "new_beyond_baseline": new_beyond_baseline,
+            "retrieved_at": stamp,
+            "result": result, "promoted": promoted,
+            "promote_reason": promote_reason, "baseline": baseline}
+
+
+#: How many canonical backups the .bak/.bak.N rotation keeps per promote
+#: (FIX-2026-09-22, audit item 3a: a single fixed-name .bak was clobbered by
+#: every promote, so after two promotes the true baseline was gone).
+BACKUP_KEEP = 5
+
+
+def rotate_backups(path: Path, *, keep: int = BACKUP_KEEP) -> Path:
+    """Shift ``name.bak`` -> ``name.bak.1`` -> ... and return the free slot.
+
+    The newest backup always lives at ``<name>.bak``; older generations are
+    numbered upward and the ``keep``-th is dropped. Uses ``os.replace`` so a
+    crash mid-rotation can never lose a generation (each step is atomic).
+    """
+    path = Path(path)
+    newest = path.with_name(path.name + ".bak")
+    if newest.exists():
+        oldest = path.with_name(f"{path.name}.bak.{keep - 1}")
+        if oldest.exists():
+            oldest.unlink()
+        for k in range(keep - 2, 0, -1):
+            src = path.with_name(f"{path.name}.bak.{k}")
+            if src.exists():
+                src.replace(path.with_name(f"{path.name}.bak.{k + 1}"))
+        newest.replace(path.with_name(f"{path.name}.bak.1"))
+    return newest
+
+
+def validate_loads_in_ics_module(
+    table: Dict[str, Dict[str, Any]],
+    *,
+    ics_module: Path = ROOT / "rca_core" / "standards" / "ics.py",
+) -> list:
+    """Would ``rca_core/standards/ics.py`` load *table* intact? (FIX-2026-09-22,
+    audit item 3c).
+
+    Executes the module's own source in a throwaway namespace whose
+    ``__file__`` points at a temp tree containing *table* as
+    ``resources/ics_2024.json`` - the EXACT import every consumer performs
+    at startup, without paying the ``import rca_core`` cost (Pillow and the
+    global opener, see ``read_baseline_version``). A degraded import (empty
+    table, warning, or exception) must block the promote: the module's
+    M7(b) fallback turns a corrupt canonical file into ``ICS_2024 = {}``
+    and silently disables every age lookup in the app.
+    """
+    try:
+        src = Path(ics_module).read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"cannot read {ics_module} to validate the payload: {exc}"]
+    try:
+        # allow_nan=False: NaN/Infinity bounds would serialise as bare
+        # ``NaN`` - parseable by Python's json, poison for every comparison.
+        payload_text = json.dumps(table, ensure_ascii=False, allow_nan=False,
+                                  indent=2) + "\n"
+    except ValueError as exc:
+        return [f"table is not strict JSON (non-finite age bounds?): {exc}"]
+    temp_dir = tempfile.mkdtemp(prefix="ics_promote_check_")
+    try:
+        root = Path(temp_dir)
+        (root / "standards").mkdir()
+        (root / "resources").mkdir()
+        module_path = root / "standards" / "ics.py"
+        module_path.write_text(src, encoding="utf-8")
+        (root / "resources" / "ics_2024.json").write_text(payload_text,
+                                                          encoding="utf-8")
+        namespace = {"__file__": str(module_path), "__name__": "ics_load_check"}
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            try:
+                exec(compile(src, str(module_path), "exec"), namespace)
+            except Exception as exc:  # noqa: BLE001 - the import IS the check
+                return [f"rca_core/standards/ics.py raises on this payload: "
+                        f"{type(exc).__name__}: {exc}"]
+        problems: list = []
+        if namespace.get("ICS_TABLE_DEGRADED"):
+            problems.append("rca_core/standards/ics.py reports a DEGRADED "
+                            "(empty) load for this payload")
+        if not namespace.get("ICS_2024"):
+            problems.append("rca_core/standards/ics.py loads 0 rows")
+        for entry in caught:
+            problems.append("rca_core/standards/ics.py warned on load: "
+                            f"{entry.category.__name__}: {entry.message}")
+        return problems
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def promote_to_canonical(
@@ -1177,6 +1348,10 @@ def promote_to_canonical(
     diff: Dict[str, Any],
     force: bool,
     reporter: Callable[[str], None],
+    provenance: str = "",
+    version: str = "",
+    version_source: str = "",
+    new_beyond_baseline: Sequence[str] = (),
 ) -> Dict[str, Any]:
     """Back up and overwrite the canonical table, guarding the consumers."""
     path = Path(path)
@@ -1192,15 +1367,82 @@ def promote_to_canonical(
                  "resolving them - keep the default carry-forward (drop "
                  "--no-carry-forward), or pass --force.")
         return {"promoted": False, "reason": "missing baseline keys"}
-    backup = path.with_name(path.name + ".bak")
+    # FIX-2026-09-22 (audit item 2): offline-fixture data is TOY data (the
+    # mini fixtures are 15 rows and can promote as 101 rows, mostly
+    # carried-forward). It must never silently become the authority source;
+    # --write-canonical + --offline-fixture is refused, --force overrides
+    # only after a loud warning.
+    if provenance.startswith("offline-fixture"):
+        if not force:
+            reporter(f"REFUSING to write {path.name}: the payload came from "
+                     f"--offline-fixture ({provenance}). Fixture data must "
+                     "not become the canonical authority - re-run against "
+                     "the live channels, or pass --force to promote it "
+                     "DELIBERATELY (test/dev tables only).")
+            return {"promoted": False, "reason": "offline-fixture provenance"}
+        reporter(f"*** LOUD WARNING: --force is promoting OFFLINE-FIXTURE "
+                 f"data ({provenance}) into {path.name}. This table is toy "
+                 "data; every consumer of the canonical ICS ladder will "
+                 "read it as the real thing. Do it again from a real "
+                 "channel when the fixture was not the point. ***")
+    # FIX-2026-09-22 (audit item 4): the baseline-fallback stamp describes
+    # the BUNDLED table (ICS v2024/12). If the refresh carries stages that
+    # baseline never had, stamping every row with it is a provenance lie -
+    # and after the promote ics.py's ICS_VERSION would keep reporting the
+    # old version for the new data. Fail instead; --ics-version (or the ICS
+    # chart channel, which carries its own stamp) resolves it honestly.
+    if version_source == "baseline-fallback" and new_beyond_baseline and not force:
+        reporter(f"REFUSING to write {path.name}: the ics_version stamp "
+                 f"{version!r} was only inferred from ICS_VERSION in "
+                 f"rca_core/standards/ics.py, but the refresh carries "
+                 f"{len(new_beyond_baseline)} stage(s) absent from that "
+                 f"baseline: {', '.join(list(new_beyond_baseline)[:8])}"
+                 + (" ..." if len(new_beyond_baseline) > 8 else ""))
+        reporter("New data must not wear the old version stamp. Pass "
+                 "--ics-version YYYY-MM (the ICS chart revision the ladder "
+                 "actually reflects), refresh through --channel ics (it "
+                 "carries its own stamp), or --force to promote with the "
+                 "contradiction anyway.")
+        return {"promoted": False, "reason": "ics_version provenance"}
+    if version_source == "baseline-fallback" and new_beyond_baseline and force:
+        reporter(f"*** LOUD WARNING: --force promotes {len(new_beyond_baseline)} "
+                 f"post-baseline stage(s) under the baseline version stamp "
+                 f"{version!r}; ICS_VERSION in rca_core/standards/ics.py and "
+                 "the stamped rows now contradict the data. Update ICS_VERSION "
+                 "in the same commit. ***")
+    # FIX-2026-09-22 (audit item 3c): the payload must survive the exact
+    # import every consumer performs BEFORE the canonical file is touched -
+    # a degraded standards/ics.py load silently zeroes the whole table.
+    payload_problems = validate_loads_in_ics_module(table)
+    if payload_problems and not force:
+        reporter(f"REFUSING to write {path.name}: the payload does not load "
+                 "through rca_core/standards/ics.py:")
+        for problem in payload_problems:
+            reporter(f"  x {problem}")
+        reporter("Fix the payload, or pass --force only if you are sure the "
+                 "consumers' import is being widened on purpose.")
+        return {"promoted": False, "reason": "payload fails ics.py load"}
     if path.exists():
+        # FIX-2026-09-22 (audit item 3a): numbered rotation instead of one
+        # clobbered .bak.
+        backup = rotate_backups(path)
         backup.write_bytes(path.read_bytes())
-        reporter(f"backed up {path.name} -> {backup.name}")
-    write_json(path, table)
+        reporter(f"backed up {path.name} -> {backup.name} "
+                 f"(rotation keeps the newest {BACKUP_KEEP}: .bak, .bak.1, "
+                 "...)")
+    write_json(path, table)  # FIX-2026-09-22 (3b): temp + fsync + replace
     reporter(f"WROTE CANONICAL {path}")
+    reporter(f"ics_version stamp written into every row: {version!r} "
+             f"(source: {version_source or 'unknown'}). Version coherence: "
+             "ICS_VERSION in rca_core/standards/ics.py is what reports and "
+             "stage-alignment outputs cite - if this promote changed the "
+             "chart version, update ICS_VERSION in the same commit so the "
+             "stamps keep telling the truth.")
     reporter("reminder: js/ics_table.js mirrors this table and "
              "tests/test_ics_invariants.py pins the period bounds - update both "
-             "in the same commit.")
+             "in the same commit. rca_core/resources/ics_current.json is the "
+             "un-promoted refresh output; its schema/row invariants are pinned "
+             "by tests/test_ics_current_json_2026_09_22.py.")
     return {"promoted": True, "reason": "written"}
 
 
@@ -1223,9 +1465,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--canonical", type=Path, default=CANONICAL,
                         help="baseline table to diff against")
     parser.add_argument("--write-canonical", action="store_true",
-                        help="also overwrite the baseline file (backs it up to .bak)")
+                        help="also overwrite the baseline file (backs it up "
+                             "through a .bak/.bak.N rotation, keeps 5; "
+                             "refused for --offline-fixture data without "
+                             "--force)")
     parser.add_argument("--force", action="store_true",
-                        help="allow writing despite validation errors / dropped keys")
+                        help="allow writing despite validation errors / "
+                             "dropped keys / offline-fixture provenance / "
+                             "baseline-vs-stage ics_version contradiction")
     parser.add_argument("--offline-fixture", type=Path, default=None,
                         help="local JSON/TTL fixture instead of the network (CI)")
     parser.add_argument("--timeout", type=float, default=TIMEOUT_SEC,
@@ -1233,7 +1480,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--retrieved-at", default=None,
                         help="pin the provenance timestamp (ISO 8601) for reproducible output")
     parser.add_argument("--ics-version", default=None,
-                        help="override the chart version stamp")
+                        help="explicit chart version stamp (YYYY-MM, e.g. "
+                             "2025-01); REQUIRED to promote a Macrostrat-"
+                             "channel refresh that carries stages the "
+                             "baseline version does not know")
     parser.add_argument("--export-csv", type=Path, default=None,
                         help="write the name-alignment table here")
     parser.add_argument("--no-carry-forward", action="store_true",
@@ -1245,6 +1495,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
+    # FIX-2026-09-22 (audit item 2): --offline-fixture feeds TOY data (the
+    # mini fixtures are 15 real rows padded by carry-forward). The CLI
+    # refuses the --write-canonical combination up front with a hard exit,
+    # so a sandbox slip cannot print "WROTE CANONICAL" over the hand-rebuilt
+    # authority ladder; run()/promote_to_canonical() enforce the same gate
+    # for programmatic callers. --force makes it LOUD, never silent.
+    if args.offline_fixture is not None and args.write_canonical:
+        if not args.force:
+            print("error: --offline-fixture + --write-canonical is REFUSED: "
+                  "fixture payloads are toy data and must not become the "
+                  "canonical ICS authority. Re-run against the live channels "
+                  "to promote; pass --force only to do it DELIBERATELY "
+                  "(test/dev tables only).", file=sys.stderr)
+            return 4
+        print("*** LOUD WARNING: --force promotes OFFLINE-FIXTURE data "
+              f"({args.offline_fixture}) into the canonical ICS table. ***",
+              file=sys.stderr)
     try:
         summary = run(
             channel=args.channel, out=args.out, canonical=args.canonical,

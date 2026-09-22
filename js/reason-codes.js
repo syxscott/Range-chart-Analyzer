@@ -339,6 +339,13 @@ function rcaNormalizeReasonCode(value) {
  * Accepts an array, a comma/semicolon separated string, a single slug, an
  * object (``{"not_drawn": true}`` -> its keys) or null. Order of first
  * appearance is preserved so the UI shows the codes in the order claimed.
+ *
+ * FIX-2026-09-22 (audit item 8), mirror of ``normalize_codes`` in
+ * rca_core/reason_codes.py: in the object shape a boolean value is an
+ * assertion, so ``{"obscured": false}`` DENIES the code and the key is
+ * dropped. Only the exact ``false`` denies — ``0``, ``""`` and ``null`` are
+ * not claims either way and keep the historical behaviour (``===`` matches
+ * Python's ``is not False`` on JSON-parsed data).
  */
 function rcaNormalizeReasonCodes(values) {
   if (values === null || values === undefined) return [];
@@ -350,7 +357,7 @@ function rcaNormalizeReasonCodes(values) {
     if (!text) return [];
     items = text.split(';').join(',').split(',').filter((p) => p.trim());
   } else if (rcaIsMapping(values)) {
-    items = Object.keys(values);
+    items = Object.keys(values).filter((k) => values[k] !== false);
   } else {
     items = [values];
   }
@@ -480,10 +487,45 @@ function _blankCounts() {
   return out;
 }
 
+/**
+ * Validate an ``expectedUnits`` denominator — mirror of
+ * ``_coerce_expected_units`` in rca_core/reason_codes.py. Anything unusable
+ * (null, booleans, ``NaN``/``Infinity``, a non-integral float, a non-numeric
+ * string, a count <= 0) becomes ``null`` so the ledger keeps its historical
+ * shape instead of guessing at a base.
+ */
+function _coerceExpectedUnits(value) {
+  if (value === null || value === undefined || typeof value === 'boolean') {
+    return null;
+  }
+  let units;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || !Number.isInteger(value)) return null;
+    units = value;
+  } else if (typeof value === 'string' && value.trim()) {
+    // Python's side of this mirror validates with ``int(text)``, which rejects
+    // any decimal point; ``Number("5.0")`` would not, so drop it here too.
+    if (value.indexOf('.') !== -1) return null;
+    const num = Number(value.trim());
+    if (!Number.isFinite(num) || !Number.isInteger(num)) return null;
+    units = num;
+  } else {
+    return null;
+  }
+  return units > 0 ? units : null;
+}
+
 function _finalizeLedger(counts) {
   // Every cell lands in exactly one of the four buckets, so the cell count is
   // the bucket sum - correct for the grid view and for the emitted-only
   // fallback below the RCA_MAX_LEDGER_CELLS guard.
+  //
+  // FIX-2026-09-22 (audit item 3) note, mirror of rca_core/reason_codes.py:
+  // ``cells`` counts the rows that SURVIVED, so an upstream filter that deletes
+  // not_drawn / uncertain / silent_missing rows RAISES both coverage ratios.
+  // The shape below is the frozen Python/JS parity contract and stays as
+  // published, but a caller that knows how many units were actually requested
+  // can pin the denominator via ``rcaCoverageLedger(rows, {expectedUnits: n})``.
   const cells = counts[RCA_RESPONSE_EXTRACTED] + counts[RCA_RESPONSE_NOT_DRAWN]
     + counts[RCA_RESPONSE_UNCERTAIN] + counts[RCA_SILENT_MISSING];
   const answered = counts[RCA_RESPONSE_EXTRACTED] + counts[RCA_RESPONSE_NOT_DRAWN]
@@ -509,7 +551,10 @@ function _finalizeLedger(counts) {
  * @param {Array<Object>} rows  any iterable of row dicts (data.species_ranges,
  *                              data.abundances, ...) — malformed entries are
  *                              skipped, this never throws.
- * @param {Object} [options]    ``{columnKeys, stratumKeys, crossProduct}``
+ * @param {Object} [options]    ``{columnKeys, stratumKeys, crossProduct,
+ *                              expectedUnits}`` — ``expectedUnits`` is the
+ *                              optional row-independent coverage denominator
+ *                              (see the note in the totals block below).
  * @returns {Object} JSON-friendly ledger: ``{columns, strata, totals,
  *          reason_code_counts, explicit_responses, row_count,
  *          unattributed_rows, grid_used}``.
@@ -595,6 +640,28 @@ function rcaCoverageLedger(rows, options) {
   }
 
   const totals = _finalizeLedger(emittedCounts);
+  // FIX-2026-09-22 (audit item 3), mirror of coverage_ledger(expected_units=…):
+  // an OPTIONAL row-independent denominator for callers that hold provenance
+  // the rows cannot carry (how many cells the request itself covered). Every
+  // other number here — cells included — is derived from the rows that
+  // survived, so dropping not_drawn / uncertain / silent_missing rows used to
+  // make coverage look better. When ``expectedUnits`` is a positive count the
+  // two ratios are recomputed over max(observed, expected) and
+  // ``observed_units`` / ``expected_units`` / ``unreported_units`` /
+  // ``coverage_basis`` join ``totals``. Omit it and the output stays exactly
+  // the historical shape: the key set is part of the frozen parity fixtures.
+  const expected = _coerceExpectedUnits(opts.expectedUnits);
+  if (expected !== null) {
+    const observed = totals.cells;
+    const basis = Math.max(observed, expected);
+    totals.observed_units = observed;
+    totals.expected_units = expected;
+    totals.unreported_units = basis - observed;
+    totals.coverage_basis = expected >= observed ? 'expected' : 'observed';
+    totals.honest_coverage = basis ? rcaPyRound(totals.answered / basis, 4) : 0.0;
+    totals.strict_coverage = basis
+      ? rcaPyRound(totals.extracted / basis, 4) : 0.0;
+  }
   totals.explicit_responses = explicit;
   totals.row_count = rowCount;
   totals.unattributed_rows = unattributed;

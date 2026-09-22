@@ -606,6 +606,41 @@ function rcaAddRowWarning(row, flag) {
 }
 
 /**
+ * Mirror of rca_core/aggregate.py:_merge_row_warnings.
+ *
+ * FIX-2026-09-22 (audit item 2): ``_warning`` is a set of independent facts,
+ * not one field with several candidate values, so the generic scalar merger is
+ * the wrong tool for it. It kept a single run's flag (and, because
+ * ``rcaMergeContractField`` writes ``response_kind_divergent`` into the row
+ * while the loop is still running, whether the source row's own flag or the
+ * merge-stage flag survived depended on key order — the ``aggr[k] !==
+ * undefined`` guard then skipped the key altogether and destroyed the source
+ * warning). A row with several flags arrives as a list, which the mode merger
+ * cannot reduce, so that warning vanished too.
+ *
+ * Every flag of the existing target value plus every flag any run reported is
+ * kept, first-seen order, de-duplicated, written back with the
+ * single-string / list convention of ``rcaAddRowWarning``.
+ */
+function rcaMergeRowWarnings(target, values) {
+  const flags = [];
+  const push = (value) => {
+    if (value === null || value === undefined || value === '') return;
+    const parts = Array.isArray(value) ? value : [value];
+    for (const part of parts) {
+      if (typeof part === 'string' && part && flags.indexOf(part) === -1) {
+        flags.push(part);
+      }
+    }
+  };
+  push(target ? target._warning : null);
+  const list = Array.isArray(values) ? values : [];
+  for (const value of list) push(value);
+  if (!flags.length || !target || typeof target !== 'object') return;
+  target._warning = flags.length === 1 ? flags[0] : flags;
+}
+
+/**
  * BORROW-2026-09-20 (A+B) — mirror of rca_core/aggregate.py:_merge_contract_field.
  *
  * Merge one coverage/geometry field across runs into ``target``. Returns true
@@ -772,11 +807,18 @@ function mergePrimaryList(runs, km, n) {
       }
     }
     for (const [k, _vals] of fieldsToMerge) {
-      if (aggr[k] !== undefined) continue;  // already filled by strModeFields
       const perRun = group.map((x) => x ? x[k] : null);
       // BORROW-2026-09-20 (A+B): coverage contract + geometry sidecar are
       // merged by their own rules, never by the generic field merger.
       if (rcaMergeContractField(k, perRun, aggr)) continue;
+      if (k === '_warning') {
+        // FIX-2026-09-22 (audit item 2): union, and do it BEFORE the
+        // already-filled guard below — that guard used to swallow the key as
+        // soon as the contract merge had written response_kind_divergent.
+        rcaMergeRowWarnings(aggr, perRun);
+        continue;
+      }
+      if (aggr[k] !== undefined) continue;  // already filled by strModeFields
       let merged_v;
       if (km.primary === 'species_ranges' && (k === 'range_top_idx' || k === 'range_base_idx')) {
         merged_v = mergeTypedInteger(perRun);
@@ -941,6 +983,11 @@ function mergeNamedLists(runs, km) {
         // BORROW-2026-09-20 (A+B): same contract rules as the primary path, so
         // a biozone / site / point row merges identically.
         if (rcaMergeContractField(k, perRun, rep)) continue;
+        if (k === '_warning') {
+          // FIX-2026-09-22 (audit item 2): union here too.
+          rcaMergeRowWarnings(rep, perRun);
+          continue;
+        }
         const merged_v = mergeFieldAcrossRuns(perRun);
         if (merged_v === NO_MERGE) continue;
         rep[k] = merged_v;
