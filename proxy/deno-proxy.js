@@ -299,10 +299,15 @@ Deno.serve(async (request, info) => {
   // argument) unidentified traffic shares one bucket per window. Authorization
   // (Origin allowlist + secret), not this counter, is the real access control.
   const fwd = request.headers.get("x-forwarded-for");
-  const rightmostFwd = fwd ? fwd.split(",").slice(-1)[0].trim() : "";
+  // UI-REVIEW-2026-09-22: prefer the SOCKET address when Deno Deploy (or a
+  // self-hosted run) provides one - the rightmost XFF entry is only
+  // trustworthy behind a known edge. Bare `deno run` deployments used to
+  // let any client rotate the XFF header and get a fresh rate bucket per
+  // request, which is exactly the bypass the comment below warns about.
   const socketAddr = (info && info.remoteAddr && info.remoteAddr.hostname) || "";
+  const rightmostFwd = fwd ? fwd.split(",").slice(-1)[0].trim() : "";
   const anonBucket = "anon-window-" + Math.floor(Date.now() / RATE_WINDOW_MS);
-  const clientIp = rightmostFwd || socketAddr || anonBucket;
+  const clientIp = socketAddr || rightmostFwd || anonBucket;
   // Sprint B (REVIEW-2026-09-04) #11: reject unauthorized requests BEFORE
   // consuming a rate-limit slot, matching cloudflare-worker.js. Previously
   // the deno variant checked the rate limit first, so a flood of bogus

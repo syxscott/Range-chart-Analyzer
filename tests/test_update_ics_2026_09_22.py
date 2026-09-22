@@ -224,9 +224,15 @@ class TestPromoteDurability:
 
         monkeypatch.setattr(update_ics.os, "replace", spy_replace)
         update_ics.write_json(target, {"A": {"top_ma": 1.0}})
-        assert calls == [(target.with_name("table.json.tmp"), target)], \
+        # UI-REVIEW-2026-09-22: tmp name now carries pid+uuid (unique per
+        # run); assert the sibling-staging + os.replace CONTRACT.
+        assert len(calls) == 1
+        staged, dst = calls[0]
+        assert dst == target
+        assert staged.parent == target.parent
+        assert staged.name.startswith(target.name)
+        assert staged.name.endswith(".tmp"), \
             "write_json must stage in a sibling temp file and os.replace it"
-        assert not target.with_name("table.json.tmp").exists()
         assert json.loads(target.read_text(encoding="utf-8")) == \
             {"A": {"top_ma": 1.0}}
 

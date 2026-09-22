@@ -946,6 +946,11 @@ def _reason_codes(row: dict[str, Any]) -> list[str]:
         return []
     if isinstance(raw, str):
         raw = [raw]
+    # UI-REVIEW-2026-09-22 (deliberate, do NOT normalize): the typology
+    # records WHAT THE MODEL LITERALLY EMITTED - spelling variants stay in
+    # their own buckets (this is the audit trail). The coverage ledger in
+    # reason_codes.py normalizes to canonical slugs; the two aggregations
+    # answer different questions on purpose.
     codes: list[str] = []
     for item in raw:
         text = str(item).strip()

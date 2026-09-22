@@ -722,12 +722,13 @@ def _set_csrf_for_session(session_token: str, csrf_token: str) -> None:
         for k in expired:
             _csrf_store.pop(k, None)
         while len(_csrf_store) > _CSRF_STORE_MAX:
-            # ``_csrf_store`` is an insertion-ordered dict so popping from
-            # the head removes the oldest entries first.
-            try:
-                _csrf_store.pop(next(iter(_csrf_store)))
-            except (KeyError, StopIteration):
-                break
+            # FIX-2026-09-22 (audit): the timestamps here are
+            # "last validated use" (see _get_csrf_for_session), so evicting
+            # by OLDEST last-seen - not by insertion order - is the correct
+            # policy. The previous insertion-order pop could evict a session
+            # that had just been used while keeping genuinely idle ones.
+            oldest = min(_csrf_store, key=lambda k: _csrf_store[k][1])
+            _csrf_store.pop(oldest, None)
 
 
 def _rate_bucket(addr: str) -> str:
@@ -1140,10 +1141,37 @@ class Handler(BaseHTTPRequestHandler):
         return b"".join(chunks)
 
     # --- helpers ---
+    @staticmethod
+    def _strip_nonfinite_shallow(obj):
+        """Drop Infinity/NaN numbers from a response payload (top level and
+        one dict/list level deep) so json.dumps(allow_nan=False) cannot
+        throw. FIX-2026-09-22: provider envelopes can carry them."""
+        import math
+
+        def clean(value):
+            if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+                return None
+            if isinstance(value, dict):
+                return {k: clean(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [clean(v) for v in value]
+            return value
+
+        return clean(obj)
+
     def _send_json(self, status: int, payload: dict, *,
                    head_only: bool = False,
                    cache_control: "str | None" = None) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        try:
+            body = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        except ValueError:
+            # FIX-2026-09-22: provider envelopes parsed with plain
+            # json.loads can carry Infinity/NaN into usage fields - those
+            # would serialize as literal Infinity and break every
+            # response.json() consumer. Sanitise instead of emitting
+            # invalid JSON (RFC 8259).
+            body = json.dumps(_strip_nonfinite_shallow(payload),
+                              ensure_ascii=False, allow_nan=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -1427,6 +1455,13 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- routing ---
     def do_GET(self) -> None:
+        # FIX-2026-09-22: /health gives instance-probes (app.py
+        # _instance_answers) a documented, side-effect-free endpoint - the
+        # probe used to count ANY complete HTTP response (even a 404) as
+        # "alive" because there was nothing real to hit.
+        if urlparse(self.path).path.rstrip("/") == "/health":
+            self._send_json(200, {"ok": True, "service": "range-chart-analyzer"})
+            return
         # CSRF token endpoint: issue a token for the client to use in subsequent POSTs.
         if urlparse(self.path).path.rstrip("/") == "/api/extract":
             # Apply a per-IP rate limit so a single client cannot mint
@@ -2928,11 +2963,28 @@ class _BoundedThreadingHTTPServer(ThreadingHTTPServer):
 
 
 def _make_bounded_server(host: str, port: int, max_workers: int):
-    """Build an HTTP server bound to (host, port) with a thread cap."""
-    return _BoundedThreadingHTTPServer(
-        (host, port), Handler,
-        max_workers=max_workers,
+    """Build an HTTP server bound to (host, port) with a thread cap.
+
+    FIX-2026-09-22 (audit): ``--host ::1`` / ``--host ::`` used to crash
+    with a raw getaddrinfo traceback - the default server class binds
+    AF_INET only. Pick the address family from the host literal (same
+    semantics as app.py's ``_socket_family_for``) before constructing the
+    server, and surface bind failures as a clean error message.
+    """
+    family = socket.AF_INET6 if ":" in (host or "") else socket.AF_INET
+    srv_cls = type(
+        "_BoundedSrv",
+        (_BoundedThreadingHTTPServer,),
+        {"address_family": family,
+         "daemon_threads": True},
     )
+    try:
+        return srv_cls((host, port), Handler, max_workers=max_workers)
+    except OSError as exc:
+        raise SystemExit(
+            f"cannot bind {host!r}:{port} ({exc}). "
+            "Try another --host / --port, or free the port."
+        ) from exc
 
 
 if __name__ == "__main__":

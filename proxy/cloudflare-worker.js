@@ -387,9 +387,13 @@ export default {
     // here. The 429 echoes CORS so an authorized browser caller can read it.
     const rl = rateCheck(clientIp);
     if (!rl.allowed) {
+      // FIX-2026-09-22: secret-only mode - cors may be null (Origin not
+      // allowlisted) but the caller IS authorized by the shared key, so the
+      // 429 must echo CORS for that authorized browser caller to read it.
+      const cors429 = corsHeadersForAuthorized(request, cors) || {};
       return new Response(JSON.stringify({ error: 'rate_limit_exceeded', retryAfter: rl.resetMs }), {
         status: 429,
-        headers: { 'content-type': 'application/json', ...(cors || {}) },
+        headers: { 'content-type': 'application/json', ...cors429 },
       });
     }
 
@@ -397,7 +401,9 @@ export default {
     // proxy. This reflects the request's Origin with Vary: Origin.
     const corsEcho = corsHeadersForAuthorized(request, cors) || {};
 
-    // Preflight
+    // UI-REVIEW-2026-09-22: preflight BEFORE the rate limit - browsers cache
+    // preflights for 86400s, so burning a rate slot per preflight just let a
+    // page of preflights lock real requests out of the window.
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsEcho });
     }

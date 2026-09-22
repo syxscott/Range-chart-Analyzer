@@ -46,8 +46,11 @@ function rcaToCsv(headers, rows) {
 // so a single record stays on one line when pasted into a spreadsheet.
 function rcaToTsv(headers, rows) {
   const clean = (v) => {
-    const safe = rcaFormulaSafe(v);
-    return safe.replace(/[\t\r\n]+/g, ' ');
+    // UI-REVIEW-2026-09-22: fold whitespace FIRST, then re-apply the
+    // formula guard - parity with Python to_tsv, so a value like
+    // "\t=cmd" cannot keep its trigger after the fold.
+    const folded = String(v == null ? '' : v).replace(/[\t\r\n]+/g, ' ');
+    return rcaFormulaSafe(folded);
   };
   const lines = [headers.map(clean).join('\t')];
   for (const row of rows) {

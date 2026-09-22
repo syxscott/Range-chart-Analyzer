@@ -1817,8 +1817,10 @@ function rcaValidateCell(ref, text, row) {
     }
   }
   if (type === 'bool_yn') {
-    const v = s.toLowerCase();
-    if (['y', 'n', 'yes', 'no', 'true', 'false', '1', '0', 't', 'f'].indexOf(v) === -1) {
+    // UI-REVIEW-2026-09-22: an EMPTY cell is a legal edit (reads as False,
+    // parity with rca_core.exporter._coerce_cell) - the old whitelist
+    // rejected it, so the browser blocked an edit Qt allowed.
+    if (s !== '' && ['y', 'n', 'yes', 'no', 'true', 'false', '1', '0', 't', 'f'].indexOf(s.toLowerCase()) === -1) {
       return {
         ok: false, key: 'edit.cellNotYesNo', params: { value: s },
         text: rcaEditT('edit.cellNotYesNo', { value: s }),
@@ -3159,6 +3161,14 @@ function rcaEditRerender() {
   // (typeof-guarded so the editor works without js/history.js).
   if (typeof globalThis !== 'undefined' && typeof globalThis.rcaHistorySyncButtons === 'function') {
     try { globalThis.rcaHistorySyncButtons(root); } catch (_e) { /* no stack: leave as rendered */ }
+  }
+  // UI-REVIEW-2026-09-22 (E2E audit P2): structural edits (delete/undo a
+  // middle row) leave the linked canvas laid out against the OLD row set -
+  // row_index joins then point at the WRONG bar. Re-run the pure layout
+  // over the live model and redraw (the mounted stage is reused).
+  if (typeof globalThis !== 'undefined' && globalThis.rcaViz &&
+      typeof globalThis.rcaViz.relink === 'function') {
+    try { globalThis.rcaViz.relink(rcaTableEdits.live()); } catch (_e) { /* viz absent */ }
   }
   return true;
 }

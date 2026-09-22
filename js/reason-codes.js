@@ -503,10 +503,13 @@ function _coerceExpectedUnits(value) {
     if (!Number.isFinite(value) || !Number.isInteger(value)) return null;
     units = value;
   } else if (typeof value === 'string' && value.trim()) {
-    // Python's side of this mirror validates with ``int(text)``, which rejects
-    // any decimal point; ``Number("5.0")`` would not, so drop it here too.
-    if (value.indexOf('.') !== -1) return null;
-    const num = Number(value.trim());
+    // UI-REVIEW-2026-09-22 (parity): mirror Python ``int(text)`` exactly -
+    // optional sign, ASCII digits with optional underscores, NO hex prefix
+    // ("0x10" -> null) and NO exponent ("1e3" -> null). Number() used to
+    // accept both, so the JS/Python ledgers disagreed on those inputs.
+    const t = value.trim();
+    if (!/^[+-]?[0-9_]+$/.test(t)) return null;
+    const num = Number(t.replace(/_/g, ''));
     if (!Number.isFinite(num) || !Number.isInteger(num)) return null;
     units = num;
   } else {

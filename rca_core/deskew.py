@@ -263,7 +263,11 @@ def _ink_votes(
         row_start += w
         if one_sided:
             for x, v in enumerate(row):
-                if v < cut:
+                # UI-REVIEW-2026-09-22: inclusive (<=) so the documented
+                # "lowest grey value that still votes" actually votes; the
+                # strict < made the explicit-threshold path disagree with
+                # the default path on the boundary value.
+                if v <= cut:
                     append((x, y, max(1, paper - v)))
         else:
             for x, v in enumerate(row):
@@ -470,7 +474,11 @@ def _alias_checked_angle(
         if found is not None and math.isfinite(found):
             patch_angles.append(found)
     if not patch_angles:
-        return primary  # patches are blank margins: nothing to re-derive from
+        # UI-REVIEW-2026-09-22: blank verification patches are exactly the
+        # dense-ruling case where the downsample aliases - per this module's
+        # own principle ("a wrong sign is worse than no correction") return
+        # no correction instead of trusting the unverified primary.
+        return 0.0
     first = patch_angles[0]
     if abs(first - primary) <= _VERIFY_PATCH_TOL:
         return primary

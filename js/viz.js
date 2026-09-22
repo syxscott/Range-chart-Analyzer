@@ -1870,9 +1870,24 @@ function rcaVizGetState() {
 // The namespace object. `var` (not const) so the vm sandbox used by
 // tests_viz.js and the browser's global scope both end up seeing the very same
 // instance, and so a re-include of the file cannot double-bind it.
+function rcaVizRelink(result) {
+  var S = RCA_VIZ_STATE;
+  if (!S || !S.host || !result) return false;
+  if (!rcaVizHasDom()) return false;
+  S.result = result;
+  S.layout = rcaVizLayout(result, S.opts || {});
+  S.focus = null;
+  S.pinned = null;
+  S.hover = null;
+  rcaVizResize();
+  rcaVizDraw();
+  return true;
+}
+
 var rcaViz = {
   // lifecycle
   render: rcaVizRender,
+  relink: rcaVizRelink,
   resize: rcaVizResize,
   clear: rcaVizClear,
   destroy: rcaVizDestroy,

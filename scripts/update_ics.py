@@ -80,6 +80,7 @@ import os
 import re
 import shutil
 import sys
+import uuid
 import tempfile
 import urllib.error
 import urllib.request
@@ -558,6 +559,8 @@ def assign_hierarchy(
         bounds = period_bounds.get(period_name) or fallback_bounds.get(period_name)
         row["series"] = series_name
         row["period"] = period_name
+        # FIX-2026-09-22: unresolved bounds stay None (not 0.0/0.0) so the
+        # validator's presence checks can actually see and flag them.
         row["period_top_ma"], row["period_base_ma"] = bounds if bounds else (None, None)
         row["era"] = _era_for(period_name)
 
@@ -820,7 +823,13 @@ def validate_table(table: Dict[str, Dict[str, Any]]) -> Tuple[list, list]:
         top = _as_float(info.get("top_ma"))
         p_base = _as_float(info.get("period_base_ma"))
         p_top = _as_float(info.get("period_top_ma"))
-        if not period or not p_base or not p_top:
+        # FIX-2026-09-22: 0.0 is a LEGAL period top (Holocene ends at the
+        # present). The old truthiness test skipped every Quaternary row's
+        # period-consistency check. Refinement: a fully-unresolved 0.0/0.0
+        # envelope is the "unknown" signal (from build_table) and is still
+        # skipped, but any row with a real bound is now checked - so the
+        # Quaternary containment check finally runs.
+        if (p_base or 0) <= 0 and (p_top or 0) <= 0:
             continue
         pair = (p_base, p_top)
         if period in bounds and bounds[period] != pair:
@@ -989,7 +998,9 @@ def write_json(path: Path, table: Dict[str, Dict[str, Any]]) -> None:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    # FIX-2026-09-22: unique tmp name - a fixed "<name>.tmp" made two
+    # concurrent runs race on the same temp file.
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     data = (json.dumps(table, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     try:
         with open(tmp, "wb") as handle:
@@ -1426,7 +1437,16 @@ def promote_to_canonical(
         # FIX-2026-09-22 (audit item 3a): numbered rotation instead of one
         # clobbered .bak.
         backup = rotate_backups(path)
-        backup.write_bytes(path.read_bytes())
+        # FIX-2026-09-22: atomic BYTE-LEVEL snapshot of the file being
+        # replaced - unique tmp + fsync + os.replace. The old truncating
+        # write_bytes could leave a half-written .bak; re-serializing the
+        # table here (write_json) would instead break the durability test
+        # that asserts the .bak chain is byte-identical to what was on
+        # disk (a backup is the OLD state, not a re-render).
+        tmp_bak = backup.with_name(
+            f"{backup.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+        tmp_bak.write_bytes(path.read_bytes())
+        os.replace(tmp_bak, backup)
         reporter(f"backed up {path.name} -> {backup.name} "
                  f"(rotation keeps the newest {BACKUP_KEEP}: .bak, .bak.1, "
                  "...)")

@@ -2030,7 +2030,12 @@ def _wpd_slug(text: Any, fallback: str = "dataset") -> str:
         elif not out or out[-1] != "_":
             out.append("_")
     s = "".join(out).strip("._-")
-    return s or fallback
+    # UI-REVIEW-2026-09-22: cap the component so plate/panel/taxon names
+    # from long captions cannot push a dataset filename past Windows'
+    # MAX_PATH once the export directory prefix is added (E2E repro: a
+    # ~250-char species name produced a 246-char filename and the CSV
+    # silently failed to open). The manifest keeps the full label.
+    return (s[:80] or fallback)
 
 
 

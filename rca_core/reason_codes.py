@@ -493,13 +493,15 @@ def coverage_ledger(rows: Any,
     is derived from the rows that survived upstream filtering, dropping
     ``not_drawn`` / ``uncertain`` / ``silent_missing`` rows used to make the
     coverage look better — a denominator the model controls cannot be a
-    coverage base.  When ``expected_units`` is a positive count and exceeds the
-    observed cell count, ``totals`` additionally reports ``observed_units``,
-    ``expected_units``, ``unreported_units`` and ``coverage_basis``, and the
-    two ratio fields are recomputed over that larger denominator.  Omit it (or
-    pass something unusable) and the output is exactly the historical shape,
-    byte for byte — the key set is part of the frozen frontend/Python parity
-    fixtures, so nothing may appear there by default.
+    coverage base.  Whenever ``expected_units`` is a usable positive count,
+    ``totals`` additionally reports ``observed_units``, ``expected_units``,
+    ``unreported_units`` and ``coverage_basis``, and the two ratio fields are
+    recomputed over ``max(observed, expected)`` as the denominator (so an
+    expected count EXCEEDING the observed cells extends the base and the
+    difference shows up as ``unreported_units``).  Omit it (or pass something
+    unusable) and the output is exactly the historical shape, byte for byte —
+    the key set is part of the frozen frontend/Python parity fixtures, so
+    nothing may appear there by default.
     """
     column_keys = tuple(column_keys)
     stratum_keys = tuple(stratum_keys)

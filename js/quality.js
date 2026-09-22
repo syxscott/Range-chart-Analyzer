@@ -171,8 +171,12 @@ function _clamp01(x) { return Math.min(1.0, Math.max(0.0, x)); }
 // branch behaves identically in the browser-only path.
 // ---------------------------------------------------------------------------
 
-const _AGE_UNIT_RE = /(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b/i;
-const _AGE_RANGE_RE = /(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:[-–—]|\bto\b)\s*([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b/i;
+// UI-REVIEW-2026-09-22: NO lookbehind - it is a parse-time SyntaxError
+// on Safari<16.4 / older Android WebViews and silently killed the whole
+// quality module (the badge vanished). Number lives in group 2;
+// group 1 eats one forbidden prefix char when present.
+const _AGE_UNIT_RE = /(?:^|[^\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b/i;
+const _AGE_RANGE_RE = /(?:^|[^\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:[-–—]|\bto\b)\s*([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b/i;
 
 function _explicitMaValues(text) {
   const out = [];
@@ -1304,4 +1308,8 @@ if (typeof window !== 'undefined') {
   // BORROW-2026-09-20 (A): the ledger entry point, named exactly like the
   // Python function it mirrors (rca_core/quality.py:coverage_for).
   window.coverageFor = rcaCoverageFor;
+}
+if (typeof globalThis !== 'undefined') {
+  globalThis._AGE_UNIT_RE = _AGE_UNIT_RE;
+  globalThis._AGE_RANGE_RE = _AGE_RANGE_RE;
 }

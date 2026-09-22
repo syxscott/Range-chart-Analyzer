@@ -143,6 +143,11 @@ def _pid_alive(pid):
     try:
         os.kill(pid, 0)
         return True
+    except PermissionError:
+        # FIX-2026-09-22: EPERM means the process EXISTS but belongs to
+        # another user - treating it as dead made the probe steal the port
+        # from a live (foreign-owned) instance.
+        return True
     except OSError:
         return False
     except AttributeError:

@@ -698,10 +698,13 @@ def _other_fossils_from(raw: Any) -> list[str]:
                 value = item.get(key)
                 if isinstance(value, str) and value.strip():
                     return value.strip()
-            # No recognisable label: keep the raw dict textually rather than
-            # dropping the record.
+            # No recognisable label: keep the record as JSON text rather
+            # than dropping it (_stringify_scalar renders dicts as "").
             extras = {k: v for k, v in item.items() if k not in ("label", "species", "taxon", "name")}
-            return _stringify_scalar(item) if not extras else ""
+            try:
+                return json.dumps(item, ensure_ascii=False, sort_keys=True)
+            except (TypeError, ValueError):
+                return _stringify_scalar(item)
         return _stringify_scalar(item)
 
     if isinstance(raw, str):
@@ -4393,7 +4396,12 @@ def _merge_llm_cost(target: ExtractResult, usage: dict[str, Any] | None,
     in ``usage`` / ``latency_ms`` - otherwise the history and the cost ledger
     under-report exactly on the runs that needed a second call."""
     if isinstance(usage, dict):
-        for field in ("input", "output", "cached_input", "cached_output"):
+        # FIX-2026-09-22: the LLM layer produces the *_tokens keys
+        # (rca_core/usage.py) - the old "input"/"output" names never matched,
+        # silently dropping the billed tokens of retries and vision
+        # classification from the cost ledger.
+        for field in ("input_tokens", "output_tokens",
+                      "cache_read_tokens", "cache_creation_tokens"):
             add = int(usage.get(field) or 0)
             if add:
                 target.usage[field] = int(target.usage.get(field) or 0) + add
