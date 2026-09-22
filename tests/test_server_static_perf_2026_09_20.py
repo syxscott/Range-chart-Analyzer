@@ -30,6 +30,7 @@ Run just this file with:
 from __future__ import annotations
 
 import http.client
+import glob
 import os
 import re
 import socket
@@ -71,6 +72,34 @@ def _clean_rate_limit():
         yield
     finally:
         srv._rate_history = saved
+
+
+# FE-FIX-2026-09-22 (server cleanup finding 3): the PID-suffixed scratch
+# css this module writes into assets/ (test_editing_a_file_changes_the_etag)
+# already has a per-test try/finally, but a finally cannot run when the
+# process dies hard mid-run — an orphan assets/_fe_p_perf_<pid>_<hex>.css
+# was observed on disk after such a kill. This module-scoped sweep closes
+# the gap: it runs at setup (reclaiming leftovers from an earlier crashed
+# run) and again at module teardown, so a completed run never leaves the
+# artifact behind. Only this module's exact naming pattern is touched.
+_PERF_ARTIFACT_GLOB = os.path.join(ROOT, "assets", "_fe_p_perf_*.css")
+
+
+def _sweep_perf_artifacts():
+    for victim in glob.glob(_PERF_ARTIFACT_GLOB):
+        try:
+            os.remove(victim)
+        except OSError:
+            pass
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _sweep_test_artifacts():
+    _sweep_perf_artifacts()
+    try:
+        yield
+    finally:
+        _sweep_perf_artifacts()
 
 
 @pytest.fixture()

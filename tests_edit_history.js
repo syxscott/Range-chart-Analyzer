@@ -856,14 +856,16 @@ check('hist-rowadd-redo', H.redo() !== null && hd4.biozones.length === 2
 // end and report success) — the audit proved that wrong: the row lands at the
 // wrong index while the stack believes the exact-position restore happened.
 // undoDeleteRow accepts `row === len` (Python list.insert append) and refuses
-// `row > len`, which history.js classifies as transient ('retry'): the entry
-// stays on the stack, the model is untouched.
+// `row > len`. FE-FIX-2026-09-22 (FE-AUDIT item 8): that beyond-tail insert is
+// classified STALE now (was 'retry'): a 'retry' verdict left the entry on the
+// stack forever - every click moved nothing while the button stayed enabled,
+// the exact lock the 2026-09-21 poison pass was written for.
 H.clear();
 H.push({ type: 'rowDelete', tableId: 'species_ranges', row: 99, item: { species: 'ghost' } });
 check('hist-stale-insert-clamps', H.undo() === null && hd4.species_ranges.length === 1
-  && H.depth() === 1,
-  'out-of-range undoDeleteRow returns false (js/table.js FE-FIX item 1); the '
-  + 'rowDelete/undo verb does not TOUCH a row, so it is retryable, not stale');
+  && H.depth() === 0,
+  'out-of-range undoDeleteRow returns false (js/table.js FE-FIX item 1) and the '
+  + 'beyond-tail insert is stale, not stuck-retryable (history.js FE-FIX-2026-09-22 item 8)');
 check('hist-stale-insert-undo', H.redo() === null && hd4.species_ranges.length === 1,
   'the failed undo never moved the action to the redo stack, so there is '
   + 'nothing to redo and no phantom ghost row (the old clamp appended one)');

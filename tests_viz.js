@@ -514,6 +514,21 @@ function test_fix20260921_pure(ctx) {
   check('fix3-ma-bare-still-positive', mv('5 Ma') === 5);
   check('fix3-ma-cn-negative', mv('-2 百万年') === -2);
   check('fix3-ma-junk-null', mv('Changhsingian') === null && mv('') === null);
+  // FE-FIX-2026-09-22 (FE-AUDIT item 10, js/viz.js rcaVizMaValue): the TRUE
+  // MINUS SIGN '−' (U+2212) — what models and typography actually emit in
+  // '−5 Ma' — used to match NOTHING (or Number('−5') === NaN when the class
+  // was merely widened). It must parse exactly like ASCII '-'.
+  check('fix22-ma-unicode-minus', mv('\u22125 Ma') === -5
+    && mv('\u22125.5 m.a.') === -5.5 && mv('\u22122 百万年') === -2,
+    String(mv('\u22125 Ma')));
+  check('fix22-ma-unicode-minus-keeps-ascii', mv('-5 Ma') === -5
+    && mv('+5 Ma') === 5 && mv('5 Ma') === 5, 'ASCII path unchanged');
+  check('fix22-ma-unicode-minus-layout', (function () {
+    const lay = ctx.rcaVizLayout({
+      species_ranges: [{ species: 'U minus', range_top: '\u22125 Ma', range_base: '10 Ma' }],
+    });
+    return lay.axis.domain.lo === -5 && lay.bars[0].value_young === -5;
+  })(), 'the placement layer sees the sign too');
   const neg = ctx.rcaVizLayout({
     species_ranges: [
       { species: 'N neg', range_top: '-5 Ma', range_base: '10 Ma' },
@@ -719,6 +734,18 @@ function test_fix20260921_render() {
   S.hover = null;
   hoverCv.dispatch('click', { clientX: 300, clientY: cssH - 2 });
   check('fix1-empty-click-clears', S.pinned === null && S.focus === null);
+  // FE-FIX-2026-09-22 (FE-AUDIT item 10, js/viz.js rcaVizOnPointerDown): the
+  // blank-area click cleared the pin on the CANVAS but never fired the hover
+  // callback — the table kept the rca-row-active highlight of the pinned row
+  // lit forever. It must emit the same null the pointer-leave path emits.
+  hoverCv.dispatch('click', ptOf(L.bars[0]));     // pin row 0 again
+  const seenBeforeBlank = seen.length;
+  hoverCv.dispatch('click', { clientX: 300, clientY: cssH - 2 }); // blank
+  check('fix22-blank-click-emits-hover-clear',
+    S.pinned === null && S.focus === null
+    && seen.length > seenBeforeBlank
+    && seen.slice(seenBeforeBlank).every((v) => v === null),
+    JSON.stringify(seen.slice(seenBeforeBlank)));
   // item 2: un-pinned leave clears the transient focus (no stale x0.3).
   hoverCv.dispatch('mousemove', ptOf(L.bars[0]));
   check('fix2-transient-focus-set', S.focus === 0);

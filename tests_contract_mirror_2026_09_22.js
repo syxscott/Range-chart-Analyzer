@@ -84,6 +84,13 @@ function buildContext() {
       coverageFor: rcaCoverageFor,
       scoreRangeChart: scoreRangeChart,
       RC: RCAReasonCodes,
+      // FE-FIX-2026-09-22 (items 6/7): the float-grammar and axis-domain
+      // mirrors, pinned against Python by
+      // tests/test_fe_audit_fixes_2026_09_22.py via ND_FLOAT_CASES below.
+      pyFloatOrNull: rcaPyFloatOrNull,
+      normalizePos0999: rcaNormalizePos0999,
+      axisDomain: rcaAxisDomain,
+      stringifyScalar: rcaStringifyScalar,
     };
   `, ctx);
   return ctx.__exp;
@@ -441,6 +448,86 @@ function rangeChartPayload(axisCal) {
      ambiguousText + ' vs ' + unmatchedText);
   ok(unmatchedText === unTemplate.split('{name}').join('Gyro'),
      'unmatched (non-fuzzy) rows keep the names.unmatched wording');
+}
+
+// ---------------------------------------------------------------------------
+// 7. FE-FIX-2026-09-22 (item 6, 中高·实测): rcaPyFloatOrNull rejected every
+//    Unicode Nd digit ("٥٠٠", "１２７") that Python's float() accepts, so JS
+//    dropped geometry points / axis domains the server kept. The table below
+//    is the SHARED py<->JS contract - tests/test_fe_audit_fixes_2026_09_22.py
+//    re-computes every row against CPython float() (drift guard), including
+//    the underscore semantics (float('１_２') == 12.0; '_１２' / '１２_'
+//    raise; '１ｅ５' raises because fullwidth ｅ is Ll, not Nd).
+//    Rows: [string, expected number | null].
+// ---------------------------------------------------------------------------
+// __RCA_ND_FLOAT_CASES_BEGIN__
+const ND_FLOAT_CASES = JSON.parse(`[
+  ["٥٠٠", 500],
+  ["１２７", 127],
+  ["１_２", 12],
+  ["１2", 12],
+  ["2٥", 25],
+  ["１_２_３", 123],
+  ["_１２", null],
+  ["１２_", null],
+  ["１.５", 1.5],
+  ["１ｅ５", null],
+  ["١.٢e٣", 1200],
+  ["+１", 1],
+  ["-２.５e-１", -0.25],
+  ["１０００", 1000],
+  ["  １２  ", 12],
+  ["１２３４５６７８９０", 1234567890],
+  ["１e_２", null],
+  ["127", 127],
+  ["1_0", 10],
+  ["12_", null],
+  ["1__2", null],
+  ["1_2e3_4", 1.2e+35],
+  ["1e_2", null],
+  ["1._5", null],
+  ["1_.5", null],
+  ["", null]
+]`);
+// __RCA_ND_FLOAT_CASES_END__
+{
+  let allOk = true, firstBad = '';
+  for (const [s, want] of ND_FLOAT_CASES) {
+    const got = F.pyFloatOrNull(s);
+    const bad = (want === null) ? (got !== null)
+      : (got === null || Math.abs(got - want) > 1e-9);
+    if (bad) { allOk = false; if (!firstBad) firstBad = JSON.stringify(s) + ': got ' + got + ' want ' + want; }
+  }
+  ok(allOk, 'Nd digit strings map through rcaPyFloatOrNull exactly like float()', firstBad);
+  // The consumers the audit observed diverging: a geometry position and an
+  // axis domain written with Arabic-Indic / fullwidth digits now survive.
+  ok(F.normalizePos0999('٥٠٠') === 500,
+     'normalize_pos_0_999 accepts "٥٠٠" like Python float()+is_integer()');
+  ok(F.normalizePos0999('１_２') === 12,
+     'underscore-between-Nd stays INT 12 (float("１_２")==12.0, probed)');
+  const dom = F.axisDomain({ bottom: '１', top: '２７' });
+  ok(dom && dom.at_0 === 1 && dom.at_999 === 27,
+     'axis domain survives Unicode-digit ends (py _to_float_opt parity)');
+  // Strict rules from FIX-2026-09-22 item 8 stay intact through Nd input.
+  ok(F.normalizePos0999('１０００') === null,
+     'Nd "1000" still out of [0,999] - transliteration is not validation');
+  ok(F.normalizePos0999('１２.５') === null, 'Nd float is still not an integer');
+  ok(F.pyFloatOrNull(0) === 0 && F.pyFloatOrNull('٥٠٠') === 500,
+     'numeric pass-through unaffected by the Nd branch');
+}
+
+// ---------------------------------------------------------------------------
+// 8. FE-FIX-2026-09-22 (item 7): bool axis unit -> "" on BOTH engines
+//    (js stays as-is; the Python side gained the isinstance(bool) guard in
+//    rca_core/extractor.py::_axis_domain - pinned by the new pytest file).
+// ---------------------------------------------------------------------------
+{
+  const d = F.axisDomain({ at_0: 0, at_999: 25, unit: true });
+  ok(d && d.unit === '', 'JS mirror keeps rejecting a bool unit -> ""', JSON.stringify(d));
+  const out = F.normalizeResult(rangeChartPayload(
+    { vertical: { at_0: 0, at_999: 25, unit: true } }));
+  ok(out.axis_calibration && out.axis_calibration.vertical.unit === '',
+     'normalized result carries unit "" for a bool unit claim');
 }
 
 console.log('\n--- ' + passed + ' passed, ' + failed + ' failed ---');

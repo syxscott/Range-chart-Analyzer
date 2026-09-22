@@ -3859,7 +3859,15 @@ function test_backend_error_key_whitelist() {
       // came in, so it cannot surface (mirror of error_utils.py #110).
       const MAX = ctx.RCAErrorUtils.MAX_ERROR_BODY_CHARS;
       const padded = '{"pad":"' + 'a'.repeat(MAX) + '","error_key":"err.rateLimit"}';
+      // FE-FIX-2026-09-22 (item 5): direct mode NOW RETRIES a 429 (with
+      // Retry-After honoured), so this exhaustion path sleeps real backoff
+      // delays (~1 + 1.6 + 2.6 s). Clamp every timer in the sandbox to 20 ms
+      // for this call only - the static fetch stub never checks the signal,
+      // so the clamped request timeout cannot false-abort anything.
+      const _realST = ctx.setTimeout;
+      ctx.setTimeout = (fn, ms, ...a) => _realST(fn, Math.min(ms, 20), ...a);
       return directWith(padded, 429).then((r7) => {
+        ctx.setTimeout = _realST;
         check('errkey-direct-truncated-key-dropped', r7.errorKey === 'err.429');
         check('errkey-direct-body-bounded', (r7.raw || '').length === MAX);
       });
@@ -4028,6 +4036,251 @@ test_chart_mode_detection_matches_python();
 test_i18n_placeholder_parity();
 test_quality_msg_key_parity();
 test_quality_zonation_content_keys();
+
+// ---------------------------------------------------------------------------
+// FE-FIX-2026-09-22 (fix-agent Q) — app-shell / direct-transport regressions.
+// ---------------------------------------------------------------------------
+
+// Item 1 (高·实测): rcaVerifySpeciesNamesAsync normal completion used to
+// clear state._nameAbort BEFORE the stillCurrent() gate that requires it,
+// so the write-back below was UNREACHABLE and name issues NEVER rendered.
+// This test AWAITS the async round end-to-end (the old tests never did —
+// that is why the dead write-back stayed green).
+function test_name_verify_async_e2e() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const calls = [];
+  ctx.fetch = async (url) => {
+    calls.push(url);
+    return {
+      ok: true,
+      json: async () => ({ matchType: 'NONE', confidence: 0,
+        canonicalName: '', usageKey: null, alternatives: [] }),
+    };
+  };
+  const p = ctx.rcaVerifySpeciesNamesAsync({
+    species_ranges: [{ species: 'Aaa bbb' }, { species: 'Ccc ddd' }],
+  });
+  return p.then(() => {
+    check('nv2-fetch-ran-twice', calls.length === 2
+      && calls.every((u) => u.indexOf('api.gbif.org/v1/species/match') === 8),
+      JSON.stringify(calls));
+    check('nv2-state-issues-written', Array.isArray(ctx.state._nameIssues)
+      && ctx.state._nameIssues.length === 2
+      && ctx.state._nameIssues.every((i) => i.msg_key === 'names.unmatched'),
+      JSON.stringify(ctx.state._nameIssues));
+    check('nv2-abort-owner-released', ctx.state._nameAbort === null,
+      String(ctx.state._nameAbort));
+    const host = ctx.document.getElementById('names-verify-slot');
+    const box = host.children[0];
+    const rows = box ? box.children.filter((c) => c.className === 'names-issue') : [];
+    check('nv2-slot-rendered', rows.length === 2, 'host children=' + host.children.length);
+    check('nv2-slot-text', rows.length === 2
+      && rows[0].children[1].textContent.indexOf('Aaa bbb') !== -1
+      && rows[1].children[1].textContent.indexOf('Ccc ddd') !== -1,
+      rows.length === 2 ? rows[0].children[1].textContent : '(no rows)');
+  });
+}
+trackAsync('fe-q-name-verify-e2e', test_name_verify_async_e2e());
+
+// Item 1 lifecycle half: a cancel MID-FLIGHT must still NOT write back the
+// (partially collected) issues — the stillCurrent() gate swapped above the
+// ownership release keeps this guarantee intact.
+function test_name_verify_cancel_midflight() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let release = null;
+  let started = 0;
+  ctx.fetch = () => {
+    started += 1;
+    return new Promise((res) => {
+      release = () => res({
+        ok: true,
+        json: async () => ({ matchType: 'NONE', confidence: 0,
+          canonicalName: '', usageKey: null, alternatives: [] }),
+      });
+    });
+  };
+  const p = ctx.rcaVerifySpeciesNamesAsync({
+    species_ranges: [{ species: 'Aaa bbb' }, { species: 'Ccc ddd' }],
+  });
+  return new Promise((r) => setImmediate(r)).then(() => {
+    check('nv2-cancel-fetch-inflight', started === 1 && typeof release === 'function');
+    ctx.rcaCancelNameVerify();
+    release();
+    return p;
+  }).then(() => {
+    check('nv2-cancel-no-writeback', Array.isArray(ctx.state._nameIssues)
+      && ctx.state._nameIssues.length === 0, JSON.stringify(ctx.state._nameIssues));
+    const host = ctx.document.getElementById('names-verify-slot');
+    check('nv2-cancel-no-render', host.children.length === 0,
+      'children=' + host.children.length);
+    // A cancelled batch must not clobber a NEWER round's ownership.
+    check('nv2-cancel-abort-cleared', ctx.state._nameAbort === null);
+  });
+}
+trackAsync('fe-q-name-verify-cancel', test_name_verify_cancel_midflight());
+
+// Item 4 (中·实测): malformed-looking cleaned names are refused LOCALLY with
+// reason:'malformed' and ZERO network, like rca_core/names.py:439-441.
+function test_name_verify_malformed_local_gate() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const calls = [];
+  ctx.fetch = async (url) => {
+    calls.push(url);
+    return { ok: true, json: async () => ({ matchType: 'NONE', confidence: 0,
+      canonicalName: '', usageKey: null, alternatives: [] }) };
+  };
+  return ctx.rcaVerifySpeciesNamesAsync({
+    species_ranges: [
+      { species: 'Genus 1979' },        // digits residue -> malformed
+      { species: 'Foo et al. 2001' },   // survives cleaning with digits -> malformed
+      { species: 'Clarkina yini' },     // genuinely queryable
+    ],
+  }).then(() => {
+    check('nv4-only-one-network-round', calls.length === 1
+      && calls[0].indexOf(encodeURIComponent('Clarkina yini')) !== -1,
+      JSON.stringify(calls));
+    const issues = ctx.state._nameIssues;
+    check('nv4-local-issues-present', issues.length === 3
+      && issues[0].msg_key === 'names.unmatched' && issues[0].reason === 'malformed'
+      && issues[0].name === 'Genus 1979'
+      && issues[1].reason === 'malformed' && issues[1].name === 'Foo et al. 2001'
+      && issues[2].name === 'Clarkina yini' && !issues[2].reason,
+      JSON.stringify(issues));
+    const host = ctx.document.getElementById('names-verify-slot');
+    const box = host.children[0];
+    const rows = box ? box.children.filter((c) => c.className === 'names-issue') : [];
+    check('nv4-local-issues-rendered', rows.length === 3);
+  });
+}
+trackAsync('fe-q-name-verify-malformed', test_name_verify_malformed_local_gate());
+
+// Item 2 (中高·实测): the auto-mode classification fetch on the DIRECT
+// transport used to run with NO AbortController / timeout created later in
+// the flow -> a stalled classify hung at "Detecting chart type…" and Cancel
+// could not abort it. Now the shared controller covers BOTH rounds.
+function test_direct_auto_classify_abort() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const created = [];
+  const cleared = [];
+  const realST = ctx.setTimeout;
+  const realCT = ctx.clearTimeout;
+  ctx.setTimeout = (fn, ms, ...a) => {
+    const id = realST(fn, ms, ...a);
+    created.push({ id, ms });
+    return id;
+  };
+  ctx.clearTimeout = (id) => { cleared.push(id); return realCT(id); };
+  const ctl = new AbortController(); // HOST realm signal — opts.signal
+  const seenSignals = [];
+  let firstFetch;
+  const gotFirst = new Promise((r) => { firstFetch = r; });
+  ctx.fetch = (url, opts) => new Promise((res, rej) => {
+    const sig = opts && opts.signal;
+    seenSignals.push(sig);
+    firstFetch();
+    const reject = () => {
+      const e = new Error('Aborted');
+      e.name = 'AbortError';
+      rej(e);
+    };
+    if (!sig) return; // never resolves — reproduces the old hang
+    if (sig.aborted) reject();
+    else sig.addEventListener('abort', reject);
+  });
+  const p = ctx.extractRangeChart({
+    apiKey: 'sk', baseUrl: 'https://api.example.com', model: 'm', maxTokens: 100,
+    mode: 'auto', transport: 'direct', dataUrl: 'data:image/png;base64,QUFB',
+    mediaType: 'image/png', caption: '', chartLang: 'en', signal: ctl.signal,
+  });
+  return gotFirst.then(() => {
+    check('nv2-cls-timeout-armed-before-fetch',
+      created.some((t) => t.ms === ctx.RCA_CONFIG.requestTimeoutMs),
+      JSON.stringify(created.map((t) => t.ms)));
+    ctl.abort();
+    return p;
+  }).then((r) => {
+    check('nv2-cls-fetch-has-signal', seenSignals.length >= 1
+      && seenSignals[0] && typeof seenSignals[0].addEventListener === 'function',
+      'signal=' + String(seenSignals[0]));
+    check('nv2-cancel-surfaces', r && r.ok === false
+      && r.errorKey === 'err.cancelled', JSON.stringify(r));
+    const reqTimers = created.filter((t) => t.ms === ctx.RCA_CONFIG.requestTimeoutMs);
+    check('nv2-timer-cleaned-up', reqTimers.length >= 1
+      && reqTimers.every((t) => cleared.indexOf(t.id) !== -1),
+      'created=' + reqTimers.length + ' cleared=' + cleared.length);
+    ctx.setTimeout = realST;
+    ctx.clearTimeout = realCT;
+  });
+}
+trackAsync('fe-q-direct-auto-classify-abort', test_direct_auto_classify_abort());
+
+// Item 5 (低·静态): tryOnce only threw for 5xx, so error-utils'
+// RETRYABLE_STATUS 429/408 + Retry-After never applied on the direct
+// transport. A 429 with Retry-After: 3 must retry after ~3 s (not the
+// ~0.8 s backoff) and the recovery must surface; an exhausted 408 must
+// still report its honest status key (not err.network).
+function test_direct_429_retry_after_honoured() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const sleeps = [];
+  const realST = ctx.setTimeout;
+  ctx.setTimeout = (fn, ms, ...a) => {
+    if (ms >= 1000) sleeps.push(ms); // the request timer is far larger
+    return realST(fn, Math.min(ms, 10), ...a);
+  };
+  let n = 0;
+  ctx.fetch = async () => {
+    n += 1;
+    if (n === 1) {
+      return { ok: false, status: 429,
+        headers: { get: (k) => (String(k).toLowerCase() === 'retry-after' ? '3' : null) },
+        text: async () => 'rate limited' };
+    }
+    return { ok: true, status: 200,
+      json: async () => ({ content: [{ type: 'text',
+        text: '{"sections":[],"species_ranges":[],"biozones":[],"other_fossils":[],"confidence":0.5}' }] }),
+      text: async () => '' };
+  };
+  return ctx.extractRangeChart({
+    apiKey: 'sk', baseUrl: 'https://api.example.com', model: 'm', maxTokens: 100,
+    mode: 'range_chart', transport: 'direct', dataUrl: 'data:image/png;base64,QUFB',
+    mediaType: 'image/png', caption: '', chartLang: 'en', signal: nullSignal(),
+  }).then((r) => {
+    ctx.setTimeout = realST;
+    check('nv5-429-retried', n === 2, 'fetch calls=' + n);
+    check('nv5-retry-after-honoured', sleeps.indexOf(3000) !== -1,
+      'sleeps=' + JSON.stringify(sleeps));
+    check('nv5-recovery-surfaces', r.ok === true, JSON.stringify(r));
+  });
+}
+trackAsync('fe-q-direct-429-retry', test_direct_429_retry_after_honoured());
+
+function test_direct_408_budget_exhausted_key() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const realST = ctx.setTimeout;
+  ctx.setTimeout = (fn, ms, ...a) => realST(fn, Math.min(ms, 10), ...a);
+  let n = 0;
+  ctx.fetch = async () => {
+    n += 1;
+    return { ok: false, status: 408, headers: null, text: async () => 'timeout' };
+  };
+  return ctx.extractRangeChart({
+    apiKey: 'sk', baseUrl: 'https://api.example.com', model: 'm', maxTokens: 100,
+    mode: 'range_chart', transport: 'direct', dataUrl: 'data:image/png;base64,QUFB',
+    mediaType: 'image/png', caption: '', chartLang: 'en', signal: nullSignal(),
+  }).then((r) => {
+    ctx.setTimeout = realST;
+    check('nv5-408-retried-to-budget', n === 4, 'fetch calls=' + n);
+    check('nv5-408-honest-key', r.ok === false && r.errorKey === 'err.timeout'
+      && r.status === 408, JSON.stringify(r));
+  });
+}
+trackAsync('fe-q-direct-408-exhausted', test_direct_408_budget_exhausted_key());
 
 // Drain every registered async test before printing the summary. A fixed
 // timeout is not enough: assertions that resolve later would run after

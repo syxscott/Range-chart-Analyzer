@@ -225,6 +225,13 @@ function rcaVizMaValue(value) {
   var text = rcaVizText(value);
   // FE-FIX-2026-09-21: capture an optional [+-] sign (mirrors rcaVizNum,
   // js/viz.js:179) — '-5 Ma' must parse as -5, not 5.
+  // FE-FIX-2026-09-22 (FE-AUDIT item 10): models and table typography love
+  // the TRUE MINUS SIGN '−' (U+2212): '−5 Ma' matched nothing before (and
+  // Number('−5') is NaN even when the class is widened), so the sign was
+  // silently LOST or the whole reading refused. Normalise U+2212 to ASCII
+  // '-' before matching (the audit's "or normalise" option — extending the
+  // regex alone would still leave Number('−5') === NaN).
+  text = text.replace(/\u2212/g, '-');
   var m = /([+-]?\d+(?:\.\d+)?)\s*(?:Ma|m\.a\.|Ma\s*\()/i.exec(text);
   if (m) return Number(m[1]);
   m = /([+-]?\d+(?:\.\d+)?)\s*百万年/.exec(text);
@@ -1505,6 +1512,11 @@ function rcaVizOnPointerDown(ev) {
     S.pinned = null;
     S.focus = null;
     rcaVizDraw();
+    // FE-FIX-2026-09-22 (FE-AUDIT item 10): the unpin cleared the CANVAS
+    // state but never told the table — the rca-row-active highlight on the
+    // previously pinned row stayed lit (dead). Fire the same clear-hover
+    // path rcaVizOnPointerLeave uses (:1496) so both surfaces agree.
+    rcaVizEmitHover(null);
     return;
   }
   // FE-FIX-2026-09-21: click-to-pin used to be dead — canvas hover already

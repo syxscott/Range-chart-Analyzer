@@ -40,3 +40,9 @@ outputs/e2e_oa/
 # Local API credentials for the e2e harness (defense in depth — the file
 # itself lives outside the repo in %TEMP%).
 rca_e2e_api.env
+# FE-FIX-2026-09-22 (server cleanup finding 3): PID-suffixed scratch files
+# the server test suites write into assets/ to exercise ETag/streaming.
+# Both tests delete them (try/finally + a module teardown sweep), this glob
+# is defense in depth so a hard-killed run can never dirty the tree.
+assets/_fe_p_perf_*.css
+assets/_fe_f_*.css

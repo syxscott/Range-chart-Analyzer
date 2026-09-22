@@ -205,13 +205,21 @@ function fresh(model) { edits.detach(); edits.attach(deep(model)); }
 fresh(FIX);
 H.clear();
 
-// scalar rowAdd: undoAddRow answers with the removed ITEM ('' here) — the
-// pre-fix `!!removed` test reported a SUCCESSFUL removal as a failure and
-// left the stack stuck on top.
+// FE-FIX-2026-09-22 (FE-AUDIT item 2): addRow now REFUSES scalar-list tables
+// (other_fossils rows are plain strings; rca_core/editable.py only collects
+// DICT rows into `new_<i>`, so an appended '' showed dirty dots, undid and
+// redid — and was silently dropped from captureAll()/export). The registry
+// verb fails closed and the model stays untouched.
 const scalarAdd = edits.addRow('other_fossils');
-check('item1-scalar-add-action', scalarAdd && scalarAdd.type === 'rowAdd'
-  && scalarAdd.item === '' && scalarAdd.row === 1, canonical(scalarAdd));
-H.push(scalarAdd);
+check('item1-scalar-add-refused', scalarAdd === null
+  && ctx.rcaTableEdits.live().other_fossils.length === 1, canonical(scalarAdd));
+
+// A LEGACY rowAdd action for a scalar row (pushed by an older build, still
+// on a restored stack) must keep undoing/redoing symmetrically — the
+// model-level verbs did not change. Seed the row with the insert verb the
+// redo itself uses, exactly like the stack would replay it.
+edits.undoDeleteRow('other_fossils', 1, '');          // live row 1 = ''
+H.push({ type: 'rowAdd', tableId: 'other_fossils', row: 1, item: '' });
 const u1 = H.undo();
 check('item1-scalar-rowadd-undo-moves', u1 !== null && H.depth() === 0 && H.canRedo() === true
   && ctx.rcaTableEdits.live().other_fossils.length === 1,
@@ -221,6 +229,7 @@ check('item1-scalar-rowadd-redo-readds', r1 !== null && H.depth() === 1
   && edits.live().other_fossils.length === 2 && edits.live().other_fossils[1] === '',
   'redo=' + (r1 === null ? 'null' : 'ok'));
 H.undo();
+H.clear();
 
 // dict rowAdd at an explicit index: redo must RE-ADD the STORED item AT
 // action.row (not a fresh template elsewhere) — verified by mutating the
@@ -250,14 +259,14 @@ check('item1-rowdelete-redo-removes-again',
 H.clear();
 
 // The undoers called directly: each verb answers with a real boolean, not a
-// payload truthiness test.
-const scratchAdd = edits.addRow('other_fossils');   // row 1 now exists, item ''
+// payload truthiness test. (FE-FIX-2026-09-22: the scalar row is seeded with
+// the insert verb instead of addRow, which now refuses scalar lists.)
+edits.undoDeleteRow('other_fossils', 1, '');   // row 1 now exists, item ''
 check('item1-undoer-returns-booleans',
   undoers.rowAdd.undo({ type: 'rowAdd', tableId: 'other_fossils', row: 1, item: '' }, edits) === true
   && undoers.rowAdd.redo({ type: 'rowAdd', tableId: 'other_fossils', row: 1, item: '' }, edits) === true
   && undoers.rowAdd.undo({ type: 'rowAdd', tableId: 'other_fossils', row: 99, item: '' }, edits) === false,
   'undo/redo must be strict booleans; out-of-range removal stays false');
-void scratchAdd;
 H.clear();
 
 // ===========================================================================
@@ -378,15 +387,24 @@ check('item5-retry-after-transient-succeeds',
 
 // rcaHistoryActionIsStale unit corners.
 fresh(FIX);
-check('item5-stale-classifier-inserts-never-stale',
+// FE-FIX-2026-09-22 (FE-AUDIT item 8): inserts are no longer "never stale".
+// undoDeleteRow fails CLOSED for row > list.length (FE-FIX-2026-09-21
+// audit item 1 killed the silent clamp), so a beyond-tail rowDelete-undo /
+// rowAdd-redo can never succeed -> 'stale' (pop + announce) instead of the
+// old permanent 'retry'. row === list.length is still a legal append.
+check('item5-stale-classifier-inserts-beyond-tail',
   run('rcaHistoryActionIsStale')({ type: 'rowDelete', tableId: 'species_ranges', row: 99, item: {} },
+    'undo', edits) === true
+  && run('rcaHistoryActionIsStale')({ type: 'rowDelete', tableId: 'species_ranges', row: 2, item: {} },
     'undo', edits) === false
   && run('rcaHistoryActionIsStale')({ type: 'rowAdd', tableId: 'species_ranges', row: 400, item: {} },
+    'redo', edits) === true
+  && run('rcaHistoryActionIsStale')({ type: 'rowAdd', tableId: 'species_ranges', row: 0, item: {} },
     'redo', edits) === false
   && run('rcaHistoryActionIsStale')({ type: 'rowAdd', tableId: 'species_ranges', row: 400, item: {} },
     'undo', edits) === true
   && run('rcaHistoryActionIsStale')({ type: 'cellEdit', tableId: 'nope', row: 0 }, 'undo', edits) === true,
-  'inserts clamp (survivable), removes/cellEdits out of range are deterministic');
+  'beyond-tail inserts are deterministic; row===len appends and in-range verbs survive');
 unsub();
 H.clear();
 

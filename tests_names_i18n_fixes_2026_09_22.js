@@ -89,9 +89,14 @@ const appSrc = fs.readFileSync(path.join(__dirname, 'js', 'app.js'), 'utf8');
 vm.runInContext(
   extractFn(appSrc, 'rcaCleanNameForLookup') + '\n' +
   extractFn(appSrc, 'rcaGbifCandidate') + '\n' +
+  extractFn(appSrc, 'rcaLooksMalformedName') + '\n' +
   extractFn(appSrc, 'rcaNameIssuesFromGbif') + '\n' +
   extractFn(appSrc, 'rcaCoverageReasonIssues') + '\n' +
   'globalThis.rcaCleanNameForLookup = rcaCleanNameForLookup;\n' +
+  // FE-FIX-2026-09-22 (item 4): the JS mirror of looks_malformed_name,
+  // replayed against rca_core/names.py by the drift guard in
+  // tests/test_fe_audit_fixes_2026_09_22.py via MALFORMED_CASES below.
+  'globalThis.rcaLooksMalformedName = rcaLooksMalformedName;\n' +
   'globalThis.rcaNameIssuesFromGbif = rcaNameIssuesFromGbif;\n' +
   'globalThis.rcaCoverageReasonIssues = rcaCoverageReasonIssues;\n',
   ctx, { filename: 'js/app.js#names-helpers' });
@@ -99,6 +104,7 @@ vm.runInContext(
 const I18N = ctx.RCA_I18N;
 const t = ctx.t;
 const rcaCleanNameForLookup = ctx.rcaCleanNameForLookup;
+const rcaLooksMalformedName = ctx.rcaLooksMalformedName;
 const rcaNameIssuesFromGbif = ctx.rcaNameIssuesFromGbif;
 const rcaCoverageReasonIssues = ctx.rcaCoverageReasonIssues;
 
@@ -249,6 +255,111 @@ const CLEAN_CASES = [
 for (const [raw, want] of CLEAN_CASES) {
   check('clean-parity:' + raw, rcaCleanNameForLookup(raw) === want,
     'got ' + JSON.stringify(rcaCleanNameForLookup(raw)) + ' want ' + JSON.stringify(want));
+}
+
+// ---------------------------------------------------------------------------
+// FE-FIX-2026-09-22 (item 3): rcaNameIssuesFromGbif over-reported
+// names.ambiguous vs rca_core/names.py:456-457 + :491-497 - JS scanned ALL
+// alternatives and accepted a TRUTHY matchType, while Python truncates to
+// the first three and EXCLUDES ""/"NONE".
+// ---------------------------------------------------------------------------
+
+{
+  // The live repro: a GENUS EXACT whose only alternative is matchType NONE
+  // must NOT be ambiguous (py: `equal` filters match_type not in ("","NONE")).
+  const issues = rcaNameIssuesFromGbif({
+    matchType: 'EXACT', rank: 'GENUS', confidence: 99, canonicalName: 'X',
+    usageKey: 1, query: 'X',
+    alternatives: [{ confidence: '99', matchType: 'NONE' }],
+  });
+  check('amb3-none-alt-not-ambiguous', issues.length === 0, JSON.stringify(issues));
+  // A truthy-but-empty matchType used to pass the old `a.matchType` check.
+  const blank = rcaNameIssuesFromGbif({
+    matchType: 'EXACT', rank: 'GENUS', confidence: 99, canonicalName: 'X',
+    usageKey: 1, query: 'X', alternatives: [{ confidence: '99', matchType: '' }],
+  });
+  check('amb3-empty-matchtype-not-ambiguous', blank.length === 0, JSON.stringify(blank));
+  // A REAL equal-strength non-NONE alternative still fires (no regression
+  // of FIX-2026-09-22 item 4).
+  const real = rcaNameIssuesFromGbif({
+    matchType: 'EXACT', rank: 'GENUS', confidence: 99, canonicalName: 'X',
+    usageKey: 1, query: 'X',
+    alternatives: [{ confidence: '99', matchType: 'EXACT', canonicalName: 'X2' }],
+  });
+  check('amb3-real-equal-alt-fires', real.length === 1
+    && real[0].msg_key === 'names.ambiguous', JSON.stringify(real));
+  // Candidate list truncation parity: py builds candidates from
+  // alternatives[:3] (slice BEFORE the dict filter), so a leading junk
+  // entry costs one candidate slot.
+  const many = rcaNameIssuesFromGbif({
+    matchType: 'Multiple equal matches', confidence: 100, canonicalName: 'X',
+    query: 'X', rank: 'GENUS',
+    alternatives: [
+      'junk', { canonicalName: 'A', matchType: 'EXACT', confidence: 100 },
+      { canonicalName: 'B', matchType: 'EXACT', confidence: 100 },
+      { canonicalName: 'C', matchType: 'EXACT', confidence: 100 },
+    ],
+  });
+  check('amb3-candidates-sliced-to-3-pre-filter', many.length === 1
+    && many[0].candidates.length === 2
+    && many[0].candidates[0].canonical === 'A'
+    && many[0].candidates[1].canonical === 'B',
+  JSON.stringify(many[0] && many[0].candidates));
+  const four = rcaNameIssuesFromGbif({
+    matchType: 'Multiple equal matches', confidence: 100, canonicalName: 'X',
+    query: 'X', rank: 'GENUS',
+    alternatives: [
+      { canonicalName: 'A', matchType: 'EXACT', confidence: 100 },
+      { canonicalName: 'B', matchType: 'EXACT', confidence: 100 },
+      { canonicalName: 'C', matchType: 'EXACT', confidence: 100 },
+      { canonicalName: 'D', matchType: 'EXACT', confidence: 100 },
+    ],
+  });
+  check('amb3-candidates-max-three', four[0].candidates.length === 3,
+    JSON.stringify(four[0].candidates.map((c) => c.canonical)));
+}
+
+// ---------------------------------------------------------------------------
+// FE-FIX-2026-09-22 (item 4): rcaLooksMalformedName mirrors
+// rca_core/names.py::looks_malformed_name. The table below is the SHARED
+// contract: the Python side re-computes every row in
+// tests/test_fe_audit_fixes_2026_09_22.py (drift guard), so py and JS are
+// pinned against the same ~15 adversarial names offline.
+// Rows: [raw species string, cleaned GBIF query, malformed verdict].
+// ---------------------------------------------------------------------------
+
+// __RCA_MALFORMED_CASES_BEGIN__
+const MALFORMED_CASES = JSON.parse(`[
+  ["Genus 1979", "Genus 1979", true],
+  ["Hindeodus 1979", "Hindeodus 1979", true],
+  ["Foo et al. 2001", "Foo et al. 2001", true],
+  ["Clarkina yini, 2001", "Clarkina yini, 2001", true],
+  ["Bed 12 top", "Bed 12 top", true],
+  ["粗粒灰岩 Clarkina", "粗粒灰岩 Clarkina", true],
+  ["Ｃlarkina yini", "Ｃlarkina yini", true],
+  ["Ptereoconus hoenesi var novus thing", "Ptereoconus hoenesi var novus thing", true],
+  ["Ptereoconus hoenesi Hoenes, 1891", "Ptereoconus hoenesi", false],
+  ["Pteroconus Hoenes, 1891", "Pteroconus", false],
+  ["Clarkina yini Jiang and Wang, 2001", "Clarkina yini", false],
+  ["Clarkina yini Jiang et al. 2001", "Clarkina yini", false],
+  ["Clarkina yini", "Clarkina yini", false],
+  ["Clarkina (yini)", "Clarkina", false],
+  ["Patera × recta", "Patera × recta", false],
+  ["Genus sp.", "Genus", false]
+]`);
+// __RCA_MALFORMED_CASES_END__
+
+for (const [raw, wantClean, wantMal] of MALFORMED_CASES) {
+  const clean = rcaCleanNameForLookup(raw);
+  check('mal4-clean:' + raw, clean === wantClean,
+    'got ' + JSON.stringify(clean) + ' want ' + JSON.stringify(wantClean));
+  // Python verifies the gate on the CLEANED string (names.py:440) - empty
+  // cleans never reach the gate at all (empty_after_clean upstream).
+  if (wantClean !== '') {
+    const mal = rcaLooksMalformedName(clean);
+    check('mal4-gate:' + raw, mal === wantMal,
+      'got ' + mal + ' want ' + wantMal + ' for ' + JSON.stringify(clean));
+  }
 }
 
 console.log('\n--- ' + passed + ' passed, ' + failed + ' failed ---');

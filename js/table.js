@@ -726,6 +726,19 @@ function rcaPyFloatStr(value) {
   }
   digits = digits.replace(/0+$/, '');
   if (!digits.length) digits = '0';
+  // FE-FIX-2026-09-22 (FE-AUDIT item 4): JS keeps |x| < 1 as a FIXED string
+  // (String(1e-5) === '0.00001'), so the digit slice above carries LEADING
+  // zeros that Python's dtoa representation never has — decpt must be
+  // "where the first SIGNIFICANT digit sits" (value = 0.digits × 10^decpt),
+  // and without this strip the `decpt <= -4` exponent threshold is missed:
+  // str(1e-5) is '1e-05', not '0.00001' (same for 1.5e-5 / -2e-5 / 9.99e-5).
+  // Boundaries stay put: 0.0001 keeps decpt -3 → '0.0001', 1e16 → '1e+16'.
+  let lead = 0;
+  while (digits.length > lead + 1 && digits.charAt(lead) === '0') lead += 1;
+  if (lead > 0) {
+    digits = digits.slice(lead);
+    decpt -= lead;
+  }
   let out;
   if (decpt <= -4 || decpt > 16) {
     const exp = decpt - 1;
@@ -743,6 +756,52 @@ function rcaPyFloatStr(value) {
   return sign + out;
 }
 
+// FE-FIX-2026-09-22 (aud4 leftover): rcaExportCellText had no dict/list
+// branch, so a plain object reached the export path as String(value) ===
+// '[object Object]' while Python's _export_cell_text (rca_core/exporter.py:
+// 852-872) runs str(value) — i.e. the recursive repr for containers. These two
+// helpers mirror that repr: dict -> {'k': v}, list -> [a, b], with Python's
+// quote-selection (single quotes unless the text holds a ' and no ") and the
+// bool / None / float spellings the rest of the file already agrees on.
+function rcaPyReprStr(s) {
+  const useDouble = s.indexOf("'") !== -1 && s.indexOf('"') === -1;
+  const quote = useDouble ? '"' : "'";
+  let out = quote;
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s.charAt(i);
+    const code = s.charCodeAt(i);
+    if (ch === '\\') out += '\\\\';
+    else if (ch === quote) out += '\\' + quote;
+    else if (ch === '\n') out += '\\n';
+    else if (ch === '\r') out += '\\r';
+    else if (ch === '\t') out += '\\t';
+    else if (code < 0x20) out += '\\x' + (code < 16 ? '0' : '') + code.toString(16);
+    else out += ch;
+  }
+  return out + quote;
+}
+
+function rcaPyRepr(value) {
+  if (value === null || value === undefined) return 'None';
+  if (typeof value === 'boolean') return value ? 'True' : 'False';
+  if (typeof value === 'number') {
+    // Python's repr(float('nan')) is 'nan' / 'inf' — nested containers keep
+    // the spelling, only a TOP-LEVEL non-finite cell blanks (see below).
+    if (Number.isNaN(value)) return 'nan';
+    if (value === Infinity) return 'inf';
+    if (value === -Infinity) return '-inf';
+    if (Number.isInteger(value)) return String(value);
+    return rcaPyFloatStr(value);
+  }
+  if (typeof value === 'string') return rcaPyReprStr(value);
+  if (Array.isArray(value)) return '[' + value.map(rcaPyRepr).join(', ') + ']';
+  if (typeof value === 'object') {
+    const parts = Object.keys(value).map((k) => rcaPyReprStr(k) + ': ' + rcaPyRepr(value[k]));
+    return '{' + parts.join(', ') + '}';
+  }
+  return rcaPyReprStr(String(value));
+}
+
 function rcaExportCellText(value) {
   if (value === null || value === undefined) return '';
   // Python's `str(True)` is 'True', not JS's 'true' — a boolean that reaches
@@ -755,6 +814,12 @@ function rcaExportCellText(value) {
     if (!Number.isFinite(value)) return '';
     if (Number.isInteger(value)) return String(value);
     return rcaPyFloatStr(value);
+  }
+  // FE-FIX-2026-09-22 (aud4 leftover): dict/list cells serialise like Python
+  // str(value) instead of '[object Object]' / String(array).
+  if (typeof value === 'object') {
+    const obj = rcaPyRepr(value);
+    return RCA_NONFINITE_TEXT.indexOf(obj.trim().toLowerCase()) !== -1 ? '' : obj;
   }
   const s = String(value);
   return RCA_NONFINITE_TEXT.indexOf(s.trim().toLowerCase()) !== -1 ? '' : s;
@@ -1243,6 +1308,18 @@ const RCA_EDIT_STRINGS = {
   'edit.editsPending': { zh: '{n} 处未保存的修改', en: '{n} unsaved edit(s)' },
   'edit.rowsDeleted': { zh: '已删除 {n} 行', en: 'Deleted {n} row(s)' },
   'edit.noViz': { zh: '暂无联动图表可定位', en: 'No linked chart to locate in' },
+  // FE-FIX-2026-09-22 (FE-AUDIT item 11): editCell's two guard failures used
+  // to emit keys that existed in NO table — rcaEditT fell through to the
+  // generic cellNotNumber text ("此列需要数值") for a missing row or a
+  // read-only column. Both keys now answer in zh+en (the ja locale keeps
+  // falling back to en — accepted residual).
+  'edit.notEditable': { zh: '此列只读，不可编辑', en: 'This column is read-only' },
+  'edit.noRow': { zh: '找不到对应的行（数据可能已刷新）',
+    en: 'Row not found (the data may have been refreshed)' },
+  // FE-FIX-2026-09-22 (FE-AUDIT item 2): refusal reason announced when an
+  // addRow lands on a scalar-list table despite the hidden button.
+  'edit.addRowScalar': { zh: '纯文本列表暂不支持新增行（请直接编辑已有行）',
+    en: 'Adding rows is not supported for plain text lists (edit existing rows instead)' },
 };
 const RCA_EDIT_I18N_KEYS = Object.keys(RCA_EDIT_STRINGS);
 
@@ -1925,6 +2002,24 @@ const rcaTableEdits = {
     // (typeof-guarded: the editor must work without js/history.js loaded).
     const prevData = this.data;
     const nextData = rcaIsDict(data) ? data : null;
+    // FE-FIX-2026-09-22 (FE-AUDIT item 1): re-attaching the SAME data object
+    // (js/app.js renderCurrentResult re-attaches state.result on every
+    // render — reachable via the extraction-failure retry and the
+    // language-switch paths) used to re-baseline snapshot/_edited while the
+    // undo stack survived: the dirty marks vanished, captureAll() answered
+    // {} (edits silently treated as saved, never exported), yet Ctrl+Z still
+    // reverted the user's edit to the OLD value. Same object identity means
+    // the session continues — keep snapshot/_edited/_selection/_droppedMarks
+    // and only refresh the column configs (a conditional column may have
+    // grown or shrunk while the user edited).
+    if (nextData && prevData === nextData) {
+      this._cfgs = {};
+      const keep = Array.isArray(cfgs) ? cfgs : rcaTableConfigs(this.data);
+      for (const cfg of keep || []) {
+        if (cfg && cfg.id) this._cfgs[cfg.id] = cfg;
+      }
+      return this;
+    }
     this.data = nextData;
     this.snapshot = this.data ? rcaClone(this.data) : null;
     this._edited = {};
@@ -2083,13 +2178,23 @@ const rcaTableEdits = {
   // One cell edit, end to end: validate -> coerce -> write into the live data
   // -> update the dirty registry -> return the history action (or null when
   // the value did not actually change, so nothing lands on the undo stack).
-  editCell(tableId, rowIdx, colIdx, text) {
-    const spec = this.spec(tableId, colIdx);
+  editCell(tableId, rowIdx, colIdx, text, opts) {
+    // FE-FIX-2026-09-22 (FE-AUDIT item 3): `opts.spec` lets the DOM layer
+    // hand over the spec it resolved from the CELL'S OWN data-field (see
+    // rcaEditRefFromCell) instead of re-deriving it from the registry's
+    // possibly-stale column index. Without it (unit tests, Qt payload
+    // builders) the index lookup stays the documented behaviour.
+    const spec = (opts && opts.spec) || this.spec(tableId, colIdx);
     if (!spec || !spec.editable) {
-      return { ok: false, key: 'edit.notEditable', text: '' };
+      // FE-FIX-2026-09-22 (FE-AUDIT item 11): carry the localized reason in
+      // `text` (the key existed in no table before, so the DOM layer fell
+      // back to the wrong "A number is required" message).
+      return { ok: false, key: 'edit.notEditable', text: rcaEditT('edit.notEditable') };
     }
     const target = this.resolveCell(tableId, rowIdx);
-    if (!target.found) return { ok: false, key: 'edit.noRow', text: '' };
+    if (!target.found) {
+      return { ok: false, key: 'edit.noRow', text: rcaEditT('edit.noRow') };
+    }
     const check = rcaValidateCell(rcaEditValidateRef(this, tableId, spec), text, target.row);
     if (!check.ok) return check;
     const model = spec.model || spec.field;
@@ -2365,12 +2470,24 @@ const rcaTableEdits = {
 
   addRow(tableId, rowIdx) {
     if (!this.canDeleteRows(tableId)) return null;
+    // FE-FIX-2026-09-22 (FE-AUDIT item 2): a scalar-list row cannot travel
+    // through the capture payload (see rcaEditScalarListCfg) — refuse.
+    if (rcaEditScalarListCfg(this.cfg(tableId))) return null;
     const key = this.listKey(tableId);
     const list = this.data && this.data[key];
     if (!Array.isArray(list)) return null;
     const at = (rowIdx === undefined || rowIdx === null) ? list.length
       : Math.max(0, Math.min(list.length, rowIdx));
     const template = rcaNewRowTemplate(this.cfg(tableId), tableId);
+    // FE-FIX-2026-09-22 (FE-AUDIT item 9): the shiftEdited below moves the
+    // EDITED FLAGS with the rows but not the SELECTION — that is only
+    // coherent while insertion happens at the TAIL (every UI caller passes
+    // `rows.length`: the 新增行 button handler; FE-AUDIT item 2's refusal
+    // removed the one path that could add elsewhere from the DOM). An
+    // INSERT-IN-THE-MIDDLE caller would need selection shifting too; the
+    // explicit-index unit tests exercise the registry verb directly and pin
+    // the flag-shift semantics, a future non-tail UI insert must extend this
+    // function, not silently reuse it.
     list.splice(at, 0, template);
     this.shiftEdited(tableId, at, +1);
     return { type: 'rowAdd', tableId: tableId, row: at, item: rcaClone(template) };
@@ -2522,8 +2639,29 @@ function rcaTableStructuralEdits(cfg) {
   return !!cfg && !cfg.nested;
 }
 
+// FE-FIX-2026-09-22 (FE-AUDIT item 2): a SCALAR-list table (other_fossils —
+// editable.py:_SCALAR_LIST_KEYS, mirrored by RCA_EDIT_SCALAR_LIST_KEYS)
+// stores its rows as plain strings, and the payload format CANNOT represent
+// an appended row: rcaCaptureListEdits only collects DICT rows into
+// `new_<i>` (:1510-1512, matching rca_core/editable.py:205-209, which is
+// frozen contract). The old UI happily rendered the 新增行 button, created a
+// scalar '' row, showed dirty dots and let undo/redo dance — while
+// captureAll()/export silently dropped the row (edits believed saved, never
+// exported). Refuse it where the refusal is visible: no addRow button, and
+// rcaTableEdits.addRow returns null. Row DELETE stays supported for scalar
+// lists (a shortening list travels as `_replaced`, editable.py:147-154) —
+// which is why this predicate is deliberately NOT folded into
+// rcaTableStructuralEdits.
+function rcaEditScalarListCfg(cfg) {
+  if (!cfg || !Array.isArray(cfg.edit)) return false;
+  for (const spec of cfg.edit) {
+    if (spec && spec.scalar) return true;
+  }
+  return false;
+}
+
 function rcaEditAddRowButton(cfg) {
-  if (!rcaTableStructuralEdits(cfg)) return '';
+  if (!rcaTableStructuralEdits(cfg) || rcaEditScalarListCfg(cfg)) return '';
   return '<div class="rca-table-foot">'
     + '<button type="button" class="btn btn-secondary btn-small rca-addrow-btn"'
     + ' data-rca-addrow="' + rcaEscAttr(cfg.id) + '"'
@@ -2679,7 +2817,29 @@ function rcaEditRefFromCell(cell) {
   const col = rcaPyInt(rcaEditAttr(cell, 'data-col'));
   if (tableId === null || row === null || col === null) return null;
   const cfg = rcaTableEdits.cfg(tableId);
-  const spec = cfg ? rcaColEditSpec(cfg, col) : null;
+  // FE-FIX-2026-09-22 (FE-AUDIT item 3): the attach-time edit[col] index was
+  // the ONLY spec resolution here — but conditional columns (species_ranges
+  // author_year/note/..., H3/rcaRangeChartConfigs) can SHRINK between attach
+  // and a later edit (clear the last author_year, re-render drops the
+  // column), so after the shift the cell at data-col=N is e.g. `note` while
+  // the stale registry still answers `author_year` — typing wrote into the
+  // wrong model field (auditor reproduced). The cell carries its own
+  // identity (data-field / data-scalar, rcaEditDataAttrs): resolve through
+  // it first and keep the index only as a fallback for legacy markup. (The
+  // rerender-side registry refresh below removes the staleness at its
+  // source; this makes the resolution independent of it.)
+  let spec = null;
+  if (cfg && Array.isArray(cfg.edit)) {
+    if (rcaEditAttr(cell, 'data-scalar') === '1') {
+      for (const s of cfg.edit) {
+        if (s && s.scalar) { spec = s; break; }
+      }
+    } else {
+      const field = rcaEditAttr(cell, 'data-field');
+      if (field) spec = rcaTableEdits.specByField(tableId, field);
+    }
+  }
+  if (!spec) spec = cfg ? rcaColEditSpec(cfg, col) : null;
   if (!spec) return null;
   return { tableId: tableId, row: row, col: col, cell: cell, spec: spec,
     scalar: rcaEditAttr(cell, 'data-scalar') === '1' };
@@ -2834,11 +2994,22 @@ function rcaEditCommitCell(cell, textOverride) {
   const ref = rcaEditRefFromCell(cell);
   if (!ref) return { ok: true, changed: false, action: null, skipped: true };
   const text = textOverride !== undefined ? String(textOverride) : rcaEditText(cell);
-  const res = rcaTableEdits.editCell(ref.tableId, ref.row, ref.col, text);
+  // FE-FIX-2026-09-22 (FE-AUDIT item 3): write through the data-field
+  // resolved spec, not the raw column index.
+  const res = rcaTableEdits.editCell(ref.tableId, ref.row, ref.col, text, { spec: ref.spec });
   if (!res.ok) {
     // Tabulator's blocked-editor behaviour: the value stays on screen, the
     // cell keeps focus (red frame), and the reason is announced.
-    rcaEditMarkInvalid(cell, res.text || rcaEditT('edit.cellNotNumber', { value: text }));
+    // FE-FIX-2026-09-22 (FE-AUDIT item 11): route the message through the
+    // FAILURE'S OWN key — the old blanket fallback rendered the guard
+    // failures (edit.notEditable / edit.noRow, empty `text` before the fix)
+    // as "此列需要数值". A known key without text must never borrow the
+    // numeric-validator string.
+    let msg = res.text;
+    if (!msg && res.key && res.key !== 'edit.cellNotNumber') {
+      msg = RCA_EDIT_STRINGS[res.key] ? rcaEditT(res.key) : '';
+    }
+    rcaEditMarkInvalid(cell, msg || rcaEditT('edit.cellNotNumber', { value: text }));
     rcaEditFocus(cell);
     return res;
   }
@@ -2949,9 +3120,29 @@ function rcaEditRestoreForeign(root, captured) {
   }
 }
 
+// FE-FIX-2026-09-22 (FE-AUDIT item 3/7): rcaEditRerender paints with FRESH
+// rcaTableConfigs(live) (rcaRenderResults derives them per call), but the
+// registry kept the ATTACH-TIME `_cfgs` — so every index-based resolution
+// (rcaEditRefFromCell's fallback, rcaEditSyncDirtyDom's specByField +
+// indexOf, rcaTableEditAfterHistory's action.col) drifted after a
+// conditional-column shrink. Re-register the fresh configs on every rerender,
+// BEFORE the opts.rerender early-return: the Qt host swaps the DOM through
+// its own callback and used to skip even the (correct) syncs below, which
+// made the two render paths diverge.
+function rcaEditRefreshConfigs() {
+  const live = rcaTableEdits.live();
+  if (!live || typeof rcaTableConfigs !== 'function') return 0;
+  let n = 0;
+  for (const cfg of rcaTableConfigs(live)) {
+    if (cfg && cfg.id) { rcaTableEdits.setConfig(cfg); n += 1; }
+  }
+  return n;
+}
+
 function rcaEditRerender() {
   const root = RCA_EDIT_DOM.root;
   if (!root) return false;
+  rcaEditRefreshConfigs();
   const opts = RCA_EDIT_DOM.opts || {};
   if (typeof opts.rerender === 'function') return opts.rerender(root, rcaTableEdits.live()) !== false;
   if (typeof rcaRenderResults !== 'function') return false;
@@ -3115,9 +3306,31 @@ function rcaVizCall(method, arg) {
 // wrong semantics (viz.js's versions touch the chart directly and can throw
 // when the chart is absent; these are the never-throw namespace calls). The
 // table.js copies are now table.js-private names.
-function rcaEditVizFocus(idx) { return rcaVizCall('focusRow', idx); }
-function rcaEditVizClearFocus() { return rcaVizCall('clearFocus', null); }
-function rcaEditVizLocateTo(idx) { return rcaVizCall('locateTo', idx); }
+function rcaEditVizFocus(idx, tableId) {
+  // FE-FIX-2026-09-22 (FE-AUDIT item 6): only species_ranges exists on the
+  // canvas — a focus request for any other table is a silent no-op.
+  if (tableId !== undefined && !rcaEditVizTracksTable(tableId)) return false;
+  return rcaVizCall('focusRow', idx);
+}
+function rcaEditVizClearFocus(tableId) {
+  if (tableId !== undefined && !rcaEditVizTracksTable(tableId)) return false;
+  return rcaVizCall('clearFocus', null);
+}
+function rcaEditVizLocateTo(idx, tableId) {
+  if (tableId !== undefined && !rcaEditVizTracksTable(tableId)) return false;
+  return rcaVizCall('locateTo', idx);
+}
+
+// FE-FIX-2026-09-22 (FE-AUDIT item 6): js/viz.js's rcaVizLayout builds its
+// bars from `species_ranges` ONLY (js/viz.js:550-551), so its row space is
+// the species_ranges row space. Hovering or 定位-ing ANY other table used to
+// drive the same canvas anyway — focusing sections row N highlighted
+// species_ranges row N's bar, a lie on the chart. Only species_ranges may
+// move the viz; everything else keeps the (harmless, table-local) row
+// highlight and stays off the canvas.
+function rcaEditVizTracksTable(tableId) {
+  return tableId === 'species_ranges';
+}
 
 // ---- row highlight / locate ----------------------------------------------
 
@@ -3142,7 +3355,10 @@ function rcaTableHighlightRow(idx, tableId) {
   }
   if (idx === null || idx === undefined) {
     RCA_TABLE_HIGHLIGHT_ROW = null;
-    rcaEditVizClearFocus();
+    // FE-FIX-2026-09-22 (FE-AUDIT item 6): the canvas only knows
+    // species_ranges rows — passing tid keeps non-species tables off it
+    // (the table-local rca-row-active class above/below is unaffected).
+    rcaEditVizClearFocus(tid);
     return true;
   }
   const row = rcaEditRowEl(tid, idx);
@@ -3150,7 +3366,7 @@ function rcaTableHighlightRow(idx, tableId) {
   RCA_TABLE_HIGHLIGHT_ROW = idx;
   RCA_EDIT_DOM.lastTable = tid;
   rcaEditScrollIntoView(row);
-  rcaEditVizFocus(idx);
+  rcaEditVizFocus(idx, tid);
   return !!row;
 }
 
@@ -3158,7 +3374,14 @@ function rcaTableHighlightRow(idx, tableId) {
 function rcaEditLocateRow(tableId, idx) {
   RCA_EDIT_DOM.lastTable = tableId;
   rcaTableHighlightRow(idx, tableId);
-  const ok = rcaEditVizLocateTo(idx);
+  // FE-FIX-2026-09-22 (FE-AUDIT item 6): 定位 on a table the canvas does not
+  // draw announces the same edit.noViz reason the missing-canvas path uses
+  // and returns false — it must not light up an unrelated species bar.
+  if (!rcaEditVizTracksTable(tableId)) {
+    rcaEditAnnounce(rcaEditT('edit.noViz'));
+    return false;
+  }
+  const ok = rcaEditVizLocateTo(idx, tableId);
   if (!ok) rcaEditAnnounce(rcaEditT('edit.noViz'));
   return ok;
 }
@@ -3301,6 +3524,15 @@ function rcaEditOnClick(ev) {
   if (add) {
     ev.preventDefault && ev.preventDefault();
     const tableId = rcaEditAttr(add, 'data-rca-addrow');
+    // FE-FIX-2026-09-22 (FE-AUDIT item 2): the button is not rendered for
+    // scalar-list tables anymore, but stale markup (or a hand-built DOM)
+    // must still refuse LOUDLY — rcaTableEdits.addRow returns null for them
+    // because the payload (new_<i> is dict-only) would silently drop the
+    // row from captureAll()/export.
+    if (rcaEditScalarListCfg(rcaTableEdits.cfg(tableId))) {
+      rcaEditAnnounce(rcaEditT('edit.addRowScalar'));
+      return;
+    }
     const rows = rcaRowsForTable(rcaTableEdits.live(), tableId);
     const act = rcaTableEdits.addRow(tableId, rows.length);
     if (act) { rcaEditPublishAction(act); rcaEditRerender(); }
@@ -3350,7 +3582,10 @@ function rcaEditOnMouseOver(ev) {
     const tableId = rcaEditAttr(rcaEditClosest(rowEl, '[data-table]') || {}, 'data-table');
     RCA_EDIT_DOM.hoverRow = idx;
     if (tableId) RCA_EDIT_DOM.lastTable = tableId;
-    rcaEditVizFocus(idx);
+    // FE-FIX-2026-09-22 (FE-AUDIT item 6): hovering a sections/biozones row
+    // used to focus the species_ranges bar at the SAME index — pass the
+    // table through the guard; the rca-row-hover class stays table-local.
+    rcaEditVizFocus(idx, tableId);
     if (RCA_EDIT_DOM.invalid !== target) rcaEditClass(rowEl, 'rca-row-hover', true);
   }
 }
@@ -3361,9 +3596,13 @@ function rcaEditOnMouseOut(ev) {
   if (!rowEl) return;
   const idx = rcaPyInt(rcaEditAttr(rowEl, 'data-row'));
   if (idx === null || idx !== RCA_EDIT_DOM.hoverRow) return;
+  const tableId = rcaEditAttr(rcaEditClosest(rowEl, '[data-table]') || {}, 'data-table');
   RCA_EDIT_DOM.hoverRow = null;
   rcaEditClass(rowEl, 'rca-row-hover', false);
-  rcaEditVizClearFocus();
+  // FE-FIX-2026-09-22 (FE-AUDIT item 6): symmetric to the mouseover guard —
+  // leaving a non-species row never focused the canvas, so it must not
+  // clearFocus it either.
+  rcaEditVizClearFocus(tableId);
 }
 
 // FE-FIX-2026-09-21 (audit item 9): a contenteditable WITHOUT a paste guard
@@ -3381,6 +3620,17 @@ function rcaEditOnPaste(ev) {
   try {
     text = (cd && typeof cd.getData === 'function') ? String(cd.getData('text/plain') || '') : '';
   } catch (_e) { text = ''; }
+  // FE-FIX-2026-09-22 (FE-AUDIT item 5): raw text/plain from a spreadsheet
+  // carries the cell separators ('A\tB\nC'). Inserting it verbatim makes the
+  // TABS/NEWLINES part of the model value — the next TSV export shifts one
+  // column per tab and the CSV has to quote an embedded newline out of
+  // anything readable. CHOSEN POLICY (auditor option a, documented):
+  // collapse every run of [\r\n\t]+ to a SINGLE SPACE and keep the words —
+  // stricter Tabulator-style "first cell only" heuristically DELETES data
+  // the user may have meant; collapsing preserves content and stays one
+  // column wide. (Whitespace-only clipboard text collapses to ' ' and is
+  // still inserted; the '' fast-path below only fires on empty clipboard.)
+  text = text.replace(/[\r\n\t]+/g, ' ');
   if (typeof ev.preventDefault === 'function') ev.preventDefault();
   if (!text) return;
   if (typeof document !== 'undefined' && document

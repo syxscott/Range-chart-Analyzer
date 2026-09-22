@@ -867,6 +867,33 @@
     return s.length > 0 && s.length <= 100 ? s : '';
   }
 
+  // FE-FIX-2026-09-22 (item 4): exact mirror of rca_core/names.py::
+  // looks_malformed_name (+ _MALFORMED_RESIDUE_RE / _AUTHOR_TAIL_RE /
+  // _ET_AL_TAIL_RE). Before this gate existed browser-side, 'Genus 1979' /
+  // 'Foo et al. 2001' survived rcaCleanNameForLookup and were NETWORKED to
+  // GBIF, while Python refused them locally with
+  // unmatched_reason='malformed' and ZERO network - a transport fork in
+  // both cost and behaviour. The token-count step ignores an author + year
+  // tail (FIX-2026-09-22 item 2 relaxation) so a cited name such as
+  // 'Ptereoconus hoenesi Hoenes, 1891' stays QUERYABLE on both sides;
+  // digits residue, non-Latin glyphs and >4 tokens after tail removal are
+  // rejected. The tail regexes below are the very literals used by
+  // rcaCleanNameForLookup above (kept separate because looks_malformed_name
+  // removes the tails with '' and counts tokens, not ' '); they live INSIDE
+  // the function so the brace-extraction harness in
+  // tests_names_i18n_fixes_2026_09_22.js can replay this gate standalone.
+  function rcaLooksMalformedName(query) {
+    const residueRe = /[^A-Za-z .\-'×,()]+/;
+    const authorTailRe = /\s+[A-Z][A-Za-z.'\-]+(?:\s*(?:,|&|\band\b|\bet\b|\bin\b)\s*[A-Za-z][A-Za-z.'\-]+)*(?:\s*,\s*(?:et\s+al\.?\s*)?\d{4}[a-z]?|\s+et\s+al\.?\s*\d{4}[a-z]?)\s*$/;
+    const etAlTailRe = /\s+et\s+al\.?\s*$/i;
+    let s = String(query || '').trim();
+    if (!s) return true;
+    s = s.replace(authorTailRe, '');
+    s = s.replace(etAlTailRe, '');
+    if (s.split(/\s+/).filter(Boolean).length > 4) return true;
+    return residueRe.test(s);
+  }
+
   function rcaNameIssuesFromGbif(payload) {
     const mt = String((payload && payload.matchType) || 'NONE');
     const conf = parseFloat(payload && payload.confidence) || 0;
@@ -882,10 +909,19 @@
     // a genus-rank hit whose alternatives are just as strong) incl. the
     // candidate list.
     const rank = String((payload && payload.rank) || '');
-    const alts = Array.isArray(payload && payload.alternatives)
-      ? payload.alternatives.filter((a) => a && typeof a === 'object') : [];
+    // FE-FIX-2026-09-22 (item 3): exact parity with names.py:456-457 +
+    // :491-497. Python builds its candidate view from alternatives[:3]
+    // (dict records only, slice BEFORE the dict filter) and its
+    // equal-strength test EXCLUDES empty / "NONE" match types. The JS
+    // version scanned every alternative and accepted any truthy matchType,
+    // so a NONE-ranked weaker alternative could not fire but a trailing-
+    // position junk record could, and the candidate list was untruncated.
+    const altsRaw = Array.isArray(payload && payload.alternatives)
+      ? payload.alternatives : [];
+    const alts = altsRaw.slice(0, 3).filter((a) => a && typeof a === 'object');
     const equalAlt = alts.some((a) =>
-      (parseFloat(a.confidence) || 0) >= conf && a.matchType);
+      (parseFloat(a.confidence) || 0) >= conf
+      && a.matchType && a.matchType !== 'NONE');
     const ambiguous = mt === 'Multiple equal matches'
       || (('EXACT HIGHERRANK SYNONYM DOUBTFUL'.split(' ').indexOf(mt) >= 0)
           && rank.toUpperCase() === 'GENUS' && equalAlt);
@@ -1019,17 +1055,28 @@
         && myToken === state.extractToken;
     }
     const seen = new Map();  // cleaned -> original
+    // FE-FIX-2026-09-22 (item 4): names the Python gate refuses locally
+    // never reach the network here either - they resolve to an immediate
+    // names.unmatched issue carrying reason:'malformed' (the exact shape
+    // rca_core/names.py::name_issues emits for _unmatched("malformed")).
+    const localIssues = [];
+    const localSeen = new Set();
     for (const row of result.species_ranges.slice(0, 40)) {
       const cleaned = rcaCleanNameForLookup(row && row.species);
-      if (cleaned && !seen.has(cleaned) && seen.size < NAME_VERIFY_MAX) {
-        seen.set(cleaned, row.species);
+      if (!cleaned || seen.has(cleaned) || localSeen.has(cleaned)) continue;
+      if (rcaLooksMalformedName(cleaned)) {
+        localSeen.add(cleaned);
+        localIssues.push({ msg_key: 'names.unmatched',
+          name: (row && row.species) || cleaned, reason: 'malformed' });
+        continue;
       }
+      if (seen.size < NAME_VERIFY_MAX) seen.set(cleaned, row.species);
     }
-    if (seen.size === 0) {
-      if (state._nameAbort === batch) state._nameAbort = null;
-      return;
-    }
-    const issues = [];
+    // FE-FIX-2026-09-22 (item 4): the old `if (seen.size === 0) return;`
+    // early-out is gone - it would have dropped a purely-local (all
+    // malformed) issue list unrendered. The query loop below simply does
+    // zero rounds when nothing is queryable.
+    const issues = localIssues.slice();
     for (const [cleaned, original] of seen) {
       if (!stillCurrent()) return;
       // Mirror of names.py: the batch budget is checked BEFORE every
@@ -1058,8 +1105,16 @@
         batch.signal.removeEventListener('abort', onBatchAbort);
       }
     }
-    if (state._nameAbort === batch) state._nameAbort = null;
+    // FE-FIX-2026-09-22 (item 1, 高·实测): the two lines below were
+    // REVERSED — the normal-completion path released batch ownership of
+    // state._nameAbort BEFORE the stillCurrent() gate, which requires
+    // `state._nameAbort === batch` to be true. The gate therefore ALWAYS
+    // failed, the write-back below was unreachable, and name-verification
+    // issues never rendered at all (the whole feature was dead; a
+    // language-switch re-render read an always-empty state._nameIssues).
+    // Ownership is now checked first and released only on the winning path.
     if (!stillCurrent()) return;
+    if (state._nameAbort === batch) state._nameAbort = null;
     state._nameIssues = issues;
     if (typeof rcaRenderNameIssues === 'function' && issues.length > 0) {
       rcaRenderNameIssues(issues);

@@ -1209,6 +1209,13 @@ def _axis_domain(raw: Any) -> dict[str, Any] | None:
     if low is None or high is None:
         return None
     unit = raw.get("unit")
+    # FE-FIX-2026-09-22 (item 7): bool is an int subclass, so True used to
+    # sail through the isinstance gate and export the unit "True" - while
+    # the JS mirror (js/minimax.js rcaAxisDomain) emitted "". Both engines
+    # now REJECT a bool unit to "" (the auditor's cleaner of the two
+    # conventions; a boolean is not a unit of measurement).
+    if isinstance(unit, bool):
+        unit = ""
     return {"at_0": low, "at_999": high,
             "unit": str(unit).strip() if isinstance(unit, (str, int, float)) else ""}
 

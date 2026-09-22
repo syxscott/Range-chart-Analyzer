@@ -200,8 +200,22 @@ function rcaHistoryActionIsStale(action, direction, edits) {
     const list = data[key];
     if (!Array.isArray(list)) return true;            // tableId gone
     const row = Number(action.row);
-    // INSERTS clamp (undoDeleteRow mirrors Python list.insert), so a big row
-    // index still succeeds; only REMOVE/TOUCH-in-place verbs fail closed.
+    // FE-FIX-2026-09-22 (FE-AUDIT item 8): the old comment claimed inserts
+    // "clamp" like Python list.insert — true of the PRE-FIX undoDeleteRow,
+    // but FE-FIX-2026-09-21 (audit item 1) made it fail CLOSED for
+    // rowIdx > list.length (an out-of-range silent append was the bug it
+    // killed). So an insert verb (rowDelete-undo / rowAdd-redo, both replay
+    // through undoDeleteRow) whose row is beyond the CURRENT tail can never
+    // succeed after an external data shrink — exactly the enabled-but-stuck
+    // button the 2026-09-21 poison pass was written for. Classify it as
+    // stale (undoDeleteRow still accepts row === list.length: Python
+    // list.insert appends), and keep the LIFO semantics untouched: only
+    // the top entry is ever examined/popped, transient (no-model) failures
+    // stay 'retry' above this line.
+    const isInsert = (action.type === 'rowDelete' && direction === 'undo')
+      || (action.type === 'rowAdd' && direction === 'redo');
+    if (isInsert) return !(row >= 0 && row <= list.length);
+    // REMOVE / TOUCH-in-place verbs need the row to exist.
     const touchesRow = action.type === 'cellEdit'
       || (action.type === 'rowDelete' && direction === 'redo')
       || (action.type === 'rowAdd' && direction === 'undo');

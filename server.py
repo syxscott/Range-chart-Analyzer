@@ -1141,7 +1141,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- helpers ---
     def _send_json(self, status: int, payload: dict, *,
-                   head_only: bool = False) -> None:
+                   head_only: bool = False,
+                   cache_control: "str | None" = None) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1149,6 +1150,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+        # FE-FIX-2026-09-22 (server finding 1): a dynamic per-session GET (the
+        # CSRF token mint) must state its own cache policy — it carries fresh
+        # secret material and has no static-ETag revalidation story, so the
+        # caller passes ``cache_control="no-store"`` explicitly. Every other
+        # exit keeps the previous (header-less) behaviour unchanged.
+        if cache_control is not None:
+            self.send_header("Cache-Control", cache_control)
         # FE-BORROW-2026-09-20 (域P): Content-Length is mandatory on every
         # response now that the connection may outlive it (HTTP/1.1 keep-alive);
         # for HEAD the length still describes what the GET twin would have sent,
@@ -1462,10 +1470,13 @@ class Handler(BaseHTTPRequestHandler):
                 session_token = secrets.token_urlsafe(32)
             csrf_token = _generate_csrf_token()
             _set_csrf_for_session(session_token, csrf_token)
+            # FE-FIX-2026-09-22 (server finding 1): the minted pair is
+            # per-session secret material on a cacheable GET — harden it with
+            # ``Cache-Control: no-store`` so no intermediary may retain it.
             self._send_json(200, {
                 "csrf_token": csrf_token,
                 "session_token": session_token,
-            })
+            }, cache_control="no-store")
             return
         # P2-4 (REVIEW-2026-07-25): PROV-O JSON-LD provenance export endpoint.
         # Pattern: GET /api/history/<id>/provenance
@@ -1555,6 +1566,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
             self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+            # FE-FIX-2026-09-22 (server finding 1): this raw-200 exit bypasses
+            # _send_json, so it owes the same cache hardening a dynamic
+            # per-record GET carries: ``no-store`` (the audit trail is live
+            # per-record data, never cacheable), plus ``Vary: X-RCA-Client`` —
+            # the response is personalised by that header (403 without the
+            # exact value) and by the loopback/token gate below, so any
+            # intermediary must not share it across variants.
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Vary", _PROVENANCE_CLIENT_HEADER)
             self.send_header("Content-Length", str(len(body)))
             if self._body_pending():
                 # FE-FIX-2026-09-21 (audits #2/#4): this raw-200 exit bypasses
@@ -1594,6 +1614,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_static(self, *, head_only: bool) -> None:
         """Serve one whitelisted file from ROOT; shared by do_GET/do_HEAD."""
+        # FE-FIX-2026-09-22 (server finding 2): deliberate no-Range — a
+        # ``Range:`` request is downgraded to a full 200 (RFC 9110 §14.2 lets a
+        # server ignore Range; auditor-verified no correctness impact).
         # FE-BORROW-2026-09-20 (域P): a GET/HEAD that (wrongly) carries a body
         # leaves bytes on a connection we would otherwise keep alive.
         #

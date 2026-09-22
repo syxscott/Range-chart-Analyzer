@@ -728,12 +728,61 @@ function rcaPyOr(value, fallback) {
 // kept as a local copy because aggregate.js and minimax.js each have to run
 // standalone (tests_aggregate.js loads aggregate.js alone), and the two are
 // pinned against the same Python oracle by tests/test_parity.py.
-const _RCA_PY_FLOAT_RE = /^[+-]?(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d+)?$/;
+// FE-FIX-2026-09-22 (item 6): the exponent group now tolerates underscores
+// between its DIGITS ("1_2e3_4" -> 1.2e+35, float() accepts - probed) —
+// safe because _rcaPyUnderscoresLegal below runs first and rejects every
+// misplaced underscore (leading / trailing / doubled / against e or .).
+const _RCA_PY_FLOAT_RE = /^[+-]?(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d[\d_]*)?$/;
+// FE-FIX-2026-09-22 (item 6, 中高·实测): Python's float() accepts ANY
+// Unicode Nd decimal digit - "٥٠٠" -> 500.0, "１２７" -> 127.0 (probed on
+// CPython, mirrored by tests/test_fe_audit_fixes_2026_09_22.py) - while
+// the ASCII \d regex above REJECTED them, so the browser dropped geometry
+// points / axis domains the server kept (low_confidence and
+// axis_calibration_unusable diverged between transports). Nd digits live
+// in contiguous 10-codepoint blocks, so the value is the distance walked
+// BACK to the block's first codepoint (the one preceded by a non-Nd).
+// Underscore semantics are CPython-exact: transliteration happens BEFORE
+// the regex test, so "１_２" behaves like "1_2" (float('１_２') == 12.0,
+// probes '_１２' / '１２_' raise ValueError, rejected here by the same
+// anchored regex as before). Non-Nd lookalikes ("１ｅ５", fullwidth e is
+// Ll not Nd) stay rejected exactly like Python.
+function rcaPyFloatTransliterate(s) {
+  if (!/[^\x00-\x7F]/.test(s)) return s;   // ASCII fast path
+  let out = '';
+  for (const ch of s) {
+    if (ch.charCodeAt(0) < 128 || !/\p{Nd}/u.test(ch)) { out += ch; continue; }
+    let cp = ch.codePointAt(0);
+    let value = 0;
+    while (value < 10 && /\p{Nd}/u.test(String.fromCodePoint(cp - 1))) {
+      cp -= 1; value += 1;
+    }
+    out += String(value);
+  }
+  return out;
+}
+// FE-FIX-2026-09-22 (item 6 companion): the anchored regex above predates
+// this audit and lets a digit-run END in "_" (it is inside [\d_]*), while
+// CPython's float() RAISES on "12_" / "1__2" / "1._5" / "1e_2" - legal only
+// DIRECTLY BETWEEN TWO DIGITS (probed: float("１_２")==12.0,
+// float("_１２")/float("１２_") raise ValueError). The check runs on the
+// TRANSLITERATED string, so Unicode-digit payloads get the identical
+// verdict, and float() grammar's exponent digits ("1_2e3_4") stay legal.
+function _rcaPyUnderscoresLegal(s) {
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== '_') continue;
+    const a = s.charCodeAt(i - 1);
+    const b = s.charCodeAt(i + 1);
+    const isDigit = (c) => c >= 48 && c <= 57;   // ASCII '0'..'9'
+    if (!isDigit(a) || !isDigit(b)) return false;
+  }
+  return true;
+}
 function rcaPyFloatOrNull(value) {
   if (typeof value === 'number') return value;
   if (typeof value === 'boolean') return value ? 1 : 0;   // float(True) == 1.0
   if (typeof value !== 'string') return null;             // dict / list -> TypeError
-  const s = value.trim();
+  const s = rcaPyFloatTransliterate(value.trim());
+  if (s.indexOf('_') !== -1 && !_rcaPyUnderscoresLegal(s)) return null;
   if (!s) return null;
   const low = s.toLowerCase();
   if (low === 'inf' || low === '+inf' || low === 'infinity' || low === '+infinity') return Infinity;
@@ -3288,6 +3337,26 @@ async function extractRangeChart(opts) {
   }
   const url = target + '/v1/messages';
 
+  // FE-FIX-2026-09-22 (item 2, 中高·静态): the controller/timer used to be
+  // created AFTER the auto-mode classification fetch, so that first
+  // round-trip ran with NO signal and NO timeout - a stalled classify hung
+  // forever at "Detecting chart type…", the Cancel button could not abort
+  // it, and the busy state held until the browser's socket timeout. They
+  // are now created BEFORE the classification block and shared by BOTH
+  // rounds (classify + extract); the existing cleanup below (catch path
+  // and post-retry path both clearTimeout / removeEventListener) covers
+  // the earlier start, and an abort during classification falls through to
+  // the extraction round's AbortError branch, so the user-visible outcome
+  // stays err.cancelled / err.timeout exactly as before.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), RCA_CONFIG.requestTimeoutMs);
+  // FIX-6: honor a caller-supplied cancel signal (user pressed Cancel).
+  const onExtAbort = () => controller.abort();
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener('abort', onExtAbort);
+  }
+
   // UI-REVIEW-2026-09-07 (auto mode, direct transport): the caption
   // heuristic matched nothing (app.js only forwards "auto" when that is
   // the case), so classify the image itself with a cheap small-token
@@ -3324,6 +3393,9 @@ async function extractRangeChart(opts) {
           'content-type': 'application/json',
         },
         body: JSON.stringify(clsBody),
+        // FE-FIX-2026-09-22 (item 2): the shared controller now covers the
+        // classification round too - timeout AND Cancel abort this fetch.
+        signal: controller.signal,
         redirect: 'manual',
       });
       if (clsResp && clsResp.ok) {
@@ -3390,14 +3462,9 @@ async function extractRangeChart(opts) {
     ],
   };
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), RCA_CONFIG.requestTimeoutMs);
-  // FIX-6: honor a caller-supplied cancel signal (user pressed Cancel).
-  const onExtAbort = () => controller.abort();
-  if (opts.signal) {
-    if (opts.signal.aborted) controller.abort();
-    else opts.signal.addEventListener('abort', onExtAbort);
-  }
+  // FE-FIX-2026-09-22 (item 2): controller / timer / cancel wiring now live
+  // BEFORE the auto-mode classification block (single shared owner of both
+  // round-trips) - see the note above the `if (mode === 'auto')` guard.
 
   // M11 (REVIEW-2026-08-19): wrap the direct-mode fetch in retryWithBackoff
   // so transient network failures (5xx, TypeError from fetch, broker reset)
@@ -3405,6 +3472,55 @@ async function extractRangeChart(opts) {
   // cancellation at the retry-loop level, so a user Cancel stops the
   // retry chain mid-flight. Err.parse / err.cancelled are surfaced by
   // downstream branches — only TRANSPORT errors are retried.
+  // FE-FIX-2026-09-22 (item 5): the non-ok -> user-facing-error mapping is
+  // now a helper, because a RETRYABLE status (429/408/5xx) is consumed
+  // inside tryOnce (it must be re-read on every attempt) and, once the
+  // retry budget is spent, the result must still surface the honest
+  // err.429 / status-derived key + bounded body — previously the exhausted
+  // 5xx throw collapsed into a generic 'err.network' on this path.
+  const rcaDirectErrorResult = async (r) => {
+    let detail = '';
+    try { detail = await r.text(); } catch (_e) { /* ignore */ }
+    // REVIEW-2026-09-20 #110 mirror: bound the body BEFORE parsing it, so the
+    // lifted error_key can only ever come from text the user is actually
+    // shown — exactly what rca_core/error_utils.py `_extract_error_code` does
+    // with MAX_ERROR_BODY_CHARS. A body truncated mid-JSON yields no key and
+    // falls through to the status-derived one.
+    const maxBodyChars = (typeof window !== 'undefined' && window.RCAErrorUtils
+      && window.RCAErrorUtils.MAX_ERROR_BODY_CHARS) || 2000;
+    if (detail.length > maxBodyChars) detail = detail.substring(0, maxBodyChars);
+    // Phase M fix: try to surface the server's structured error_key
+    // from the JSON body when the status is one of the documented
+    // ones. Previously resp.text() was used unconditionally, which
+    // discarded the server's `error_key: 'err.bodyTooLarge'` hint.
+    let errorKey = 'err.http';
+    if (r.status === 401) errorKey = 'err.401';
+    else if (r.status === 403) errorKey = 'err.403';
+    // REVIEW-2026-11-07 (low): direct-mode 403 → 'err.403' (upstream
+    // rejected the key/endpoint). Distinct from backend-mode
+    // 'err.forbidden' (CSRF/origin), see the comment in rcaCallBackend.
+    else if (r.status === 413) errorKey = 'err.bodyTooLarge';
+    else if (r.status === 429) errorKey = 'err.429';
+    else if (r.status === 408) errorKey = 'err.timeout';
+    // If the body is JSON, lift the server's error_key (when it
+    // matches a known key) so the i18n string is correct.
+    // REVIEW-2026-09-20: "known" is now enforced. This body comes from an
+    // upstream provider or a user-pasted proxy — attacker-shaped — and used
+    // to be copied into `errorKey` verbatim, which app.js then fed to t() and
+    // rendered. Anything outside RCA_KNOWN_ERROR_KEYS is dropped and the
+    // status-derived key above stands.
+    let serverKey = null;
+    try {
+      const j = JSON.parse(detail);
+      if (j && typeof j.error_key === 'string') serverKey = j.error_key;
+    } catch (_e) { /* not JSON, ignore */ }
+    if (serverKey) {
+      const known = rcaKnownErrorKey(serverKey, null);
+      if (known) errorKey = known;
+    }
+    return { ok: false, errorKey, status: r.status, raw: detail };
+  };
+
   const tryOnce = async () => {
     const r = await fetch(url, {
       method: 'POST',
@@ -3422,10 +3538,25 @@ async function extractRangeChart(opts) {
       // attacker-controlled endpoint.
       redirect: 'manual',
     });
-    if (r && r.ok === false && r.status >= 500 && r.status < 600) {
+    if (r && r.ok === false
+        && (r.status === 429 || r.status === 408
+            || (r.status >= 500 && r.status < 600))) {
       // 5xx is transient — throw so retryWithBackoff retries.
+      // FE-FIX-2026-09-22 (item 5, 低·静态): 429 / 408 are in
+      // error-utils RETRYABLE_STATUS too (429 legitimately so — the API
+      // answers it with a Retry-After the backoff must honour), but the
+      // old 5xx-only condition sent them straight to the non-ok branch,
+      // so direct transport never retried them and Retry-After was dead
+      // code. err.headers rides through retryWithBackoff into
+      // getRetryDelay(); the maxRetries budget already caps the loop.
+      // err.httpErrorResult carries the bounded, key-lifted view of the
+      // LAST attempt so an exhausted budget still reports err.429/err.5xx
+      // (the retryable throw consumes the body — the outer !resp.ok
+      // branch could no longer read it).
       const err = new Error('HTTP ' + r.status);
       err.status = r.status;
+      err.headers = r.headers || null;
+      err.httpErrorResult = await rcaDirectErrorResult(r);
       throw err;
     }
     return r;
@@ -3456,52 +3587,19 @@ async function extractRangeChart(opts) {
     if (err && err.name === 'AbortError') {
       return { ok: false, errorKey: (opts.signal && opts.signal.aborted) ? 'err.cancelled' : 'err.timeout' };
     }
-    // CORS/TypeError from fetch, or transient 5xx that exhausted retries.
+    // FE-FIX-2026-09-22 (item 5): a retryable HTTP status whose retry
+    // budget was spent still reports its bounded, key-lifted error result
+    // (err.429 / err.5xx era 'err.http' + raw), mirroring how Python's
+    // retry_http_request RETURNS the last failed status instead of raising.
+    if (err && err.httpErrorResult) return err.httpErrorResult;
+    // CORS/TypeError from fetch, or a transport error with no HTTP result.
     return { ok: false, errorKey: 'err.network' };
   }
   clearTimeout(timer);
   if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
 
   if (!resp.ok) {
-    let detail = '';
-    try { detail = await resp.text(); } catch (_e) { /* ignore */ }
-    // REVIEW-2026-09-20 #110 mirror: bound the body BEFORE parsing it, so the
-    // lifted error_key can only ever come from text the user is actually
-    // shown — exactly what rca_core/error_utils.py `_extract_error_code` does
-    // with MAX_ERROR_BODY_CHARS. A body truncated mid-JSON yields no key and
-    // falls through to the status-derived one.
-    const maxBodyChars = (typeof window !== 'undefined' && window.RCAErrorUtils
-      && window.RCAErrorUtils.MAX_ERROR_BODY_CHARS) || 2000;
-    if (detail.length > maxBodyChars) detail = detail.substring(0, maxBodyChars);
-    // Phase M fix: try to surface the server's structured error_key
-    // from the JSON body when the status is one of the documented
-    // ones. Previously resp.text() was used unconditionally, which
-    // discarded the server's `error_key: 'err.bodyTooLarge'` hint.
-    let errorKey = 'err.http';
-    if (resp.status === 401) errorKey = 'err.401';
-    else if (resp.status === 403) errorKey = 'err.403';
-    // REVIEW-2026-11-07 (low): direct-mode 403 → 'err.403' (upstream
-    // rejected the key/endpoint). Distinct from backend-mode
-    // 'err.forbidden' (CSRF/origin), see the comment in rcaCallBackend.
-    else if (resp.status === 413) errorKey = 'err.bodyTooLarge';
-    else if (resp.status === 429) errorKey = 'err.429';
-    // If the body is JSON, lift the server's error_key (when it
-    // matches a known key) so the i18n string is correct.
-    // REVIEW-2026-09-20: "known" is now enforced. This body comes from an
-    // upstream provider or a user-pasted proxy — attacker-shaped — and used
-    // to be copied into `errorKey` verbatim, which app.js then fed to t() and
-    // rendered. Anything outside RCA_KNOWN_ERROR_KEYS is dropped and the
-    // status-derived key above stands.
-    let serverKey = null;
-    try {
-      const j = JSON.parse(detail);
-      if (j && typeof j.error_key === 'string') serverKey = j.error_key;
-    } catch (_e) { /* not JSON, ignore */ }
-    if (serverKey) {
-      const known = rcaKnownErrorKey(serverKey, null);
-      if (known) errorKey = known;
-    }
-    return { ok: false, errorKey, status: resp.status, raw: detail };
+    return rcaDirectErrorResult(resp);
   }
 
   let payload;

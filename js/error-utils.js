@@ -345,6 +345,14 @@ async function retryWithBackoff(func, {
 
         const delay = getRetryDelay({
             status: lastError?.status || null,
+            // FE-FIX-2026-09-22 (item 5 companion): transports that throw
+            // with `err.headers` (js/minimax.js direct mode now surfaces
+            // 429/408 for retry) get their Retry-After / Retry-After-Ms
+            // honoured here — previously the loop only forwarded `status`,
+            // so getRetryDelay's whole header branch was unreachable from
+            // every caller of retryWithBackoff. Errors without headers keep
+            // the exponential-backoff fallback (headers: null).
+            headers: lastError?.headers || null,
             attempt,
             initialDelay,
             backoffFactor,
