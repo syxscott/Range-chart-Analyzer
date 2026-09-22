@@ -355,7 +355,11 @@ class TestProbeUsesRealHost:
 
         return types.SimpleNamespace(
             socket=lambda fam, typ: _Sock(fam, typ),
-            AF_INET=2, AF_INET6=23, SOCK_STREAM=1, SOL_SOCKET=0xFFF,
+            # UI-REVIEW-2026-09-22: use the REAL platform constants - the
+            # hardcoded Windows value AF_INET6=23 broke this test on Linux
+            # CI (socket.AF_INET6 == 10 there).
+            AF_INET=socket.AF_INET, AF_INET6=socket.AF_INET6,
+            SOCK_STREAM=socket.SOCK_STREAM, SOL_SOCKET=0xFFF,
             SO_EXCLUSIVEADDRUSE=getattr(socket, "SO_EXCLUSIVEADDRUSE", None),
         )
 
