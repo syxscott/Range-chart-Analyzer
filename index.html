@@ -55,8 +55,20 @@
                          pre-JS fallback. -->
                     <div class="theme-toggle" role="group" aria-label="Theme" data-i18n-label="a11y.themeLabel">
                         <button type="button" data-theme-choice="system" aria-pressed="false" title="System" data-i18n-title="theme.system">AUTO</button>
-                        <button type="button" data-theme-choice="light" aria-pressed="false" title="Light" data-i18n-title="theme.light">☀</button>
-                        <button type="button" data-theme-choice="dark" aria-pressed="false" title="Dark" data-i18n-title="theme.dark">☾</button>
+                        <button type="button" data-theme-choice="light" aria-pressed="false" title="Light" data-i18n-title="theme.light"><svg class="theme-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4L17 7M7 17l-1.6 1.6"/></svg></button>
+                        <button type="button" data-theme-choice="dark" aria-pressed="false" title="Dark" data-i18n-title="theme.dark"><svg class="theme-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a8.6 8.6 0 1 0 11.1 11.1z"/></svg></button>
+                        <!-- AUDIT-2026-09-27 (F-05): the light/dark toggles used the
+                             bare characters ☀ and ☾ (U+263E). At ~12px the crescent
+                             renders as something a reader cannot tell from the
+                             letter "C", and the two glyphs come from different
+                             symbol fonts so they do not match each other either.
+                             Inline SVG puts both on the same 14px grid with the
+                             same stroke weight as the card icons already in this
+                             file. `aria-hidden` on the svg: the button's
+                             title / data-i18n-title IS the accessible name and a
+                             screen reader must not read path data. The active
+                             state is still the existing aria-pressed, so
+                             js/theme.js and tests_contrast.js are unaffected. -->
                     </div>
                     <!-- FE-BORROW-2026-09-20 (domain U): role="tablist" was
                          wrong — language buttons do not page-switch, they
@@ -108,6 +120,10 @@
                     <div class="form-row">
                         <label class="field-label" for="max-tokens" data-i18n="settings.maxTokens">最大输出 Token</label>
                         <div class="range-row">
+                            <div class="range-head">
+                                <span class="range-value-label" aria-hidden="true"></span>
+                                <output class="range-value" for="max-tokens" id="max-tokens-out">4000</output>
+                            </div>
                             <input type="range" id="max-tokens" min="500" max="32000" step="500" aria-describedby="max-tokens-hint">
                             <output for="max-tokens" id="max-tokens-out">4000</output>
                         </div>
@@ -116,6 +132,10 @@
                     <div class="form-row">
                         <label class="field-label" for="max-edge" data-i18n="settings.maxEdge">图像分辨率上限 (px)</label>
                         <div class="range-row">
+                            <div class="range-head">
+                                <span class="range-value-label" aria-hidden="true"></span>
+                                <output class="range-value" for="max-edge" id="max-edge-out">4000</output>
+                            </div>
                             <input type="range" id="max-edge" min="0" max="8000" step="500" aria-describedby="max-edge-hint">
                             <output for="max-edge" id="max-edge-out">4000</output>
                         </div>
@@ -123,7 +143,15 @@
                     </div>
                     <div class="form-row">
                         <label class="field-label" for="enhance" data-i18n="settings.enhance">图像增强</label>
-                        <div class="range-row">
+                        <!-- AUDIT-2026-09-27 (item 1): this was a
+                             `.range-row` — the `1fr 64px` grid built for
+                             <input type=range> + <output>. A grid item with
+                             width:auto is stretched to its track, so the
+                             checkbox rendered 186x13px (a faint sliver, and
+                             a hit area far below the 24x24 of WCAG 2.2 SC
+                             2.5.8) and left the 64px readout column empty.
+                             Its own row; the sliders are unchanged. -->
+                        <div class="switch-row">
                             <input type="checkbox" id="enhance" role="switch" aria-describedby="enhance-hint">
                         </div>
                         <p class="field-hint" id="enhance-hint" data-i18n="settings.enhance.hint">对薄延长线和小字号标注启用 3× 上采样 + 去噪，提升识别率（会增加传输时间）。</p>
@@ -131,6 +159,10 @@
                     <div class="form-row">
                         <label class="field-label" for="runs" data-i18n="settings.runs">运行次数 (1–5)</label>
                         <div class="range-row">
+                            <div class="range-head">
+                                <span class="range-value-label" aria-hidden="true"></span>
+                                <output class="range-value" for="runs" id="runs-out">1</output>
+                            </div>
                             <input type="range" id="runs" min="1" max="5" step="1" aria-describedby="runs-hint">
                             <output for="runs" id="runs-out">1</output>
                         </div>
@@ -143,10 +175,17 @@
                     </div>
                     <div class="form-row">
                         <span class="field-label" id="conn-mode-label" data-i18n="settings.mode">连接模式</span>
+                        <!-- AUDIT-2026-09-27 (item 8d): roving tabindex, same
+                             model as #lang-switch below (a radiogroup is ONE
+                             tab stop; the arrows move the selection inside
+                             it). All three buttons used to be tabbable, so
+                             two visually identical controls promised
+                             arrow-key navigation and behaved differently.
+                             app.js keeps tabindex in sync with aria-checked. -->
                         <div class="segmented" role="radiogroup" aria-labelledby="conn-mode-label" id="conn-mode-seg">
-                            <button type="button" role="radio" data-value="auto" aria-checked="true" data-i18n="settings.mode.auto">自动</button>
-                            <button type="button" role="radio" data-value="backend" aria-checked="false" data-i18n="settings.mode.backend">经本地后端（推荐，避免 CORS）</button>
-                            <button type="button" role="radio" data-value="direct" aria-checked="false" data-i18n="settings.mode.direct">浏览器直连 / 代理</button>
+                            <button type="button" role="radio" data-value="auto" aria-checked="true" tabindex="0" data-i18n="settings.mode.auto">自动</button>
+                            <button type="button" role="radio" data-value="backend" aria-checked="false" tabindex="-1" data-i18n="settings.mode.backend">经本地后端（推荐，避免 CORS）</button>
+                            <button type="button" role="radio" data-value="direct" aria-checked="false" tabindex="-1" data-i18n="settings.mode.direct">浏览器直连 / 代理</button>
                         </div>
                         <select id="conn-mode" hidden aria-hidden="true">
                             <option value="auto" selected></option>
@@ -225,7 +264,16 @@
                     <textarea id="caption" data-i18n-ph="upload.caption.placeholder" maxlength="2000"></textarea>
                     <div class="caption-meta">
                         <p class="field-hint" data-i18n="upload.caption.hint">若有图注文字，粘贴在此有助于提高提取准确度。</p>
-                        <span class="caption-counter" id="caption-counter" aria-live="polite">0 / 2000</span>
+                        <!-- AUDIT-2026-09-27 (item 8e): the counter is NOT a
+                             live region. Its text is rewritten on every
+                             keystroke, so a screen reader narrated "37 / 2000",
+                             "38 / 2000", ... through a 2000-character caption —
+                             hundreds of announcements for one field. The
+                             visible counter keeps updating silently; the polite
+                             region below is written only when the length crosses
+                             the warn / over thresholds (js/app.js). -->
+                        <span class="caption-counter" id="caption-counter">0 / 2000</span>
+                        <span class="visually-hidden" id="caption-counter-live" role="status" aria-live="polite"></span>
                     </div>
                 </div>
 
@@ -303,9 +351,19 @@
                          feedback. Static markup on purpose: app.js captures and
                          re-appends #viz-host around every innerHTML rewrite, so
                          these nodes are the ones the renderer draws into.
-                         The canvases are decorative (aria-hidden + role="img");
-                         #viz-summary holds the text alternative and the DOM
-                         tables below stay the semantic truth source. -->
+                         AUDIT-2026-09-27 (item 6): the canvases used to be
+                         `aria-hidden="true"` with no tabindex and the only key
+                         handler was a document-level Escape — a keyboard user
+                         could neither highlight nor pin a bar even though the
+                         hint right above promises 点击＝固定聚焦. The HOVER layer
+                         is the interactive surface, so it is now focusable
+                         (tabindex=0, named by the heading, described by the
+                         summary below) and driven by ↑/↓/Home/End/Enter/Space
+                         in js/viz.js, which reuses the existing
+                         focus / pinned / hover / flash state machine and
+                         announces through #viz-summary. The BARS layer stays
+                         decorative; the DOM tables below remain the semantic
+                         truth source. -->
                     <div id="viz-host" class="viz-host" role="group" aria-labelledby="viz-heading">
                         <div class="viz-head">
                             <span class="viz-heading-text" id="viz-heading">延限—层位联动图</span>
@@ -313,15 +371,25 @@
                                  js/viz.js is being fixed to honor exactly this
                                  promise — hover is transient, one click PINS
                                  the focus row, clicking again (or Esc) unpins.
-                                 The old copy only mentioned Esc. -->
-                            <span class="viz-hint">悬停画布行＝高亮表格行 · 点击＝固定聚焦 · 再点/Esc＝取消</span>
+                                 The old copy only mentioned Esc.
+                                 AUDIT-2026-09-27 (item 6): the keyboard half
+                                 of the same affordance is now real, so it is
+                                 named here too. -->
+                            <span class="viz-hint">悬停画布行＝高亮表格行 · 点击＝固定聚焦 · 再点/Esc＝取消 · ↑↓＝键盘移动 · Enter＝固定</span>
                         </div>
                         <div class="rca-viz-stage">
                             <img class="rca-viz-image" alt="" aria-hidden="true">
                             <canvas class="rca-viz-canvas rca-viz-bars" aria-hidden="true" role="img"></canvas>
-                            <canvas class="rca-viz-canvas rca-viz-hover" aria-hidden="true" role="img"></canvas>
+                            <canvas class="rca-viz-canvas rca-viz-hover" tabindex="0" role="img" aria-labelledby="viz-heading" aria-describedby="viz-summary"></canvas>
                         </div>
-                        <p class="rca-viz-summary" id="viz-summary" role="status" aria-live="polite"></p>
+                        <!-- AUDIT-2026-09-27 (item 6): the live region carries
+                             the text alternative in .rca-viz-summary-text and,
+                             while a keyboard user walks the bars, the current
+                             row in .rca-viz-srstate. Two spans because a
+                             wholesale textContent rewrite would drop the counts
+                             AND make the screen reader re-read all of them on
+                             every keypress. -->
+                        <p class="rca-viz-summary" id="viz-summary" role="status" aria-live="polite"><span class="rca-viz-summary-text"></span><span class="rca-viz-srstate"></span></p>
                     </div>
                 </div>
             </section>

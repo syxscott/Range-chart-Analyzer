@@ -28,6 +28,17 @@
     --info-soft:     #e0e7ff;
 
     --secondary-color: #6b7280;
+    /* AUDIT-2026-09-27 (F-07): SOFT OVERLAY tokens. The editing layer
+       (css/table-edit.css) used to re-declare its three dark tints as raw
+       rgba() literals in :root[data-theme="dark"] blocks, so a palette change
+       could not reach them and tests_contrast.js could not audit them (it read
+       only style.css + app-ux.css, so every colour in viz.css / table-edit.css
+       was invisible to the WCAG pass). One token per overlay role: light = the
+       existing opaque *-soft surface, dark = the translucent tint it replaced
+       (a dark card cannot take an opaque pale wash without hiding the text). */
+    --overlay-primary: var(--primary-soft);
+    --overlay-warning: var(--warning-soft);
+    --overlay-info:    var(--info-soft);
     /* Phase A: warm neutral palette (stone-50/200/300). */
     --border-color:    #e7e5e4;
     --border-strong:   #d6d3d1;
@@ -127,6 +138,11 @@
         --warning-soft:  #78350f;
         --danger-soft:   #7f1d1d;
         --info-soft:     #312e81;
+        /* AUDIT-2026-09-27 (F-07): the dark half of the soft-overlay tokens —
+           the literals that used to sit in css/table-edit.css. */
+        --overlay-primary: rgba(37, 99, 235, 0.14);
+        --overlay-warning: rgba(180, 83, 9, 0.18);
+        --overlay-info:    rgba(99, 102, 241, 0.18);
         --shadow-soft: 0 1px 2px 0 rgba(0,0,0,.4), 0 4px 12px -2px rgba(0,0,0,.5);
         --shadow-pop:  0 1px 2px 0 rgba(0,0,0,.4), 0 8px 24px -4px rgba(0,0,0,.6);
         /* UI-Polish Phase 1: dark override for the card hover shadow. */
@@ -163,6 +179,11 @@
     --warning-soft:  #78350f;
     --danger-soft:   #7f1d1d;
     --info-soft:     #312e81;
+    /* AUDIT-2026-09-27 (F-07): same dark overlay tints for the explicit-toggle
+       path (kept in lockstep with the prefers-color-scheme block above). */
+    --overlay-primary: rgba(37, 99, 235, 0.14);
+    --overlay-warning: rgba(180, 83, 9, 0.18);
+    --overlay-info:    rgba(99, 102, 241, 0.18);
     --shadow-soft: 0 1px 2px 0 rgba(0,0,0,.4), 0 4px 12px -2px rgba(0,0,0,.5);
     --shadow-pop:  0 1px 2px 0 rgba(0,0,0,.4), 0 8px 24px -4px rgba(0,0,0,.6);
     /* UI-Polish Phase 1: same dark --shadow-lg override for the toggle path. */
@@ -644,21 +665,54 @@ textarea { resize: vertical; min-height: 64px; }
 }
 
 /* ==================== Range input ==================== */
+/* AUDIT-2026-09-27 (F-04): the readout used to sit in a trailing 64px grid
+   column, so with the thumb near the left (max-tokens 4000 of 500-32000,
+   max-edge 4000 of 0-8000) the number landed at the far END of the track and
+   read as the track's end value, not the thumb's position. The value now
+   shares the label's line, right-aligned, and the slider owns the next line —
+   so the number is always adjacent to the label it belongs to and the track
+   is a single full-width row. */
 .range-row {
-    display: grid;
-    grid-template-columns: 1fr 64px;
-    align-items: center;
+    display: block;
+}
+.range-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
     gap: 12px;
+    margin-bottom: 2px;
+}
+.range-head .range-value {
+    font-variant-numeric: tabular-nums;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
 }
 .range-row input[type=range] {
     -webkit-appearance: none;
     appearance: none;
     width: 100%;
+    /* AUDIT-2026-09-27 (item 8a): the ELEMENT is 24px tall (the WCAG 2.2
+       SC 2.5.8 target minimum) and the thin 4px look moved to the
+       runnable-track pseudo-element below. The slider used to BE the 4px
+       track, so its hit area was 16x4 px — and these three sliders are the
+       only way to set max-tokens / max-edge / runs at all. */
+    height: 24px;
+    background: transparent;
+    border-radius: 999px;
+    outline: none;
+    cursor: pointer;
+}
+/* The visible track. Chrome centres it in the 24px content box, Firefox
+   sizes it from ::-moz-range-track — hence the pair. */
+.range-row input[type=range]::-webkit-slider-runnable-track {
     height: 4px;
     border-radius: 999px;
     background: var(--border-color);
-    outline: none;
-    cursor: pointer;
+}
+.range-row input[type=range]::-moz-range-track {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--border-color);
 }
 /* FE-BORROW-2026-09-20 (domain U, a11y): the `outline:none` above used to be
    the whole story — keyboard users got no replacement indicator on the
@@ -673,6 +727,8 @@ textarea { resize: vertical; min-height: 64px; }
     -webkit-appearance: none;
     appearance: none;
     width: 16px; height: 16px;
+    /* (4px track - 16px thumb) / 2: pull the thumb onto the new track. */
+    margin-top: -6px;
     border-radius: 50%;
     background: var(--primary-color);
     border: 2px solid var(--bg-white);
@@ -694,6 +750,32 @@ textarea { resize: vertical; min-height: 64px; }
     font-size: var(--text-sm);
     color: var(--text-muted);
     text-align: right;
+}
+
+/* ==================== Standalone switch/checkbox row ==================== */
+/* AUDIT-2026-09-27 (item 1): the 图像增强 checkbox used to sit in a
+   `.range-row`, which is the `grid-template-columns: 1fr 64px` two-column grid
+   built for <input type=range> + <output>. A grid item with `width:auto` is
+   STRETCHED to its track, so the checkbox rendered 186x13px — a barely visible
+   sliver whose hit area is a fifth of the WCAG 2.2 SC 2.5.8 24x24 minimum —
+   while its 64px readout column stayed empty. Its own row: no dead column, a
+   real box and a real target. The sliders above are untouched. */
+.switch-row {
+    display: flex;
+    align-items: center;
+    min-height: 24px;
+}
+.switch-row input[type="checkbox"] {
+    /* `* { box-sizing: border-box }` (line 240) would fold the padding INTO
+       the 20px and land the target back at 20x20; content-box keeps the
+       20px glyph inside a 24x24 target. */
+    box-sizing: content-box;
+    width: 20px;
+    height: 20px;
+    padding: 2px;
+    margin: 0;
+    accent-color: var(--primary-color);
+    cursor: pointer;
 }
 
 /* ==================== iOS toggle switch ==================== */
@@ -1340,8 +1422,27 @@ table.data-table tbody tr.row-low-agreement:hover td {
 :root[data-theme="dark"] table.data-table tbody tr.row-low-agreement td {
     background: var(--warning-soft);
 }
+/* AUDIT-2026-09-27 (item 8f): the LIGHT hover tint above (#fde68a) had no dark
+   twin. It only looks harmless today because the dark zebra rules are more
+   specific and win by the cascade — i.e. the rule is dead, not correct. Reorder
+   those two selectors (or add one more :hover class) and near-white dark text
+   lands on #fde68a at ~1.1:1. Give the hover its own dark value, at the same
+   specificity the non-hover twin above already uses, and cover the two STICKY
+   cells (which carry their own opaque background at higher specificity). */
+:root[data-theme="dark"] table.data-table tbody tr.row-low-agreement:hover td,
+:root[data-theme="dark"] table.data-table tbody tr.row-low-agreement:hover td.rca-cell-select,
+:root[data-theme="dark"] table.data-table tbody tr.row-low-agreement:hover th[scope="row"] {
+    /* --warning-soft (#78350f) lifted toward the light theme's #fde68a step:
+       dark --text-base (#e7e5e4) still measures ~8:1 on it. */
+    background: rgba(180, 83, 9, 0.45);
+}
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme]) table.data-table tbody tr.row-low-agreement td {
         background: var(--warning-soft);
+    }
+    :root:not([data-theme]) table.data-table tbody tr.row-low-agreement:hover td,
+    :root:not([data-theme]) table.data-table tbody tr.row-low-agreement:hover td.rca-cell-select,
+    :root:not([data-theme]) table.data-table tbody tr.row-low-agreement:hover th[scope="row"] {
+        background: rgba(180, 83, 9, 0.45);
     }
 }

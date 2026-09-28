@@ -618,15 +618,34 @@ function _pyI18nKeysByLocale() {
   const out = {};
   for (const lang of ['zh', 'en', 'ja']) {
     const keys = new Set();
+    const shared = new Set();
     const start = pySrc.indexOf('TRANSLATIONS["' + lang + '"] = {');
     if (start !== -1) {
       const end = pySrc.indexOf('\n}', start);
       const body = pySrc.slice(start, end === -1 ? undefined : end);
       let m;
-      const rx = /^    "((?:col|sec|quality|names|reason_code)\.[A-Za-z0-9_]+)":/gm;
-      while ((m = rx.exec(body)) !== null) keys.add(m[1]);
+      // AUDIT-2026-09-27: the completeness regex used to whitelist FIVE
+      // prefixes -- /^(?:col|sec|quality|names|reason_code)\./ -- so only
+      // those were checked for zh/en/ja coverage. The fallback chain in
+      // rca_core/i18n.py is lang -> en -> RAW KEY, so a zh-only key under any
+      // other prefix renders as a dotted key for en/ja operators and CI
+      // stayed green. That is how `tab.extract` (zh only) shipped: an
+      // English operator saw the literal string "tab.extract" in the tab
+      // strip. Completeness is therefore checked over EVERY key.
+      const rx = /^\s+"([A-Za-z0-9_.\-]+)":/gm;
+      while ((m = rx.exec(body)) !== null) {
+        keys.add(m[1]);
+        // The two catalogues are deliberately asymmetric in BOTH directions
+        // -- rca_core carries the Tk GUI's wizard./usage./history.detail./
+        // tab. namespaces that the browser has no use for, and js carries
+        // err./upload./settings./preset. that the desktop has no page for --
+        // so the CROSS-catalogue check below is scoped to the namespaces both
+        // surfaces actually render, not to the whole catalogue.
+        if (/^(col|sec|quality|names|reason_code)\./.test(m[1])) shared.add(m[1]);
+      }
     }
     out[lang] = keys;
+    out[lang + ':shared'] = shared;
   }
   return out;
 }
@@ -653,11 +672,20 @@ function test_i18n_parity() {
     'zh=' + zh.length + ' en=' + en.length);
   check('i18n-zh-ja-parity', JSON.stringify(zh) === JSON.stringify(ja),
     'zh=' + zh.length + ' ja=' + ja.length);
-  // 3. The keys the oracle carries must not be MISSING from the JS zh
-  //    catalog either (shared-parity covers both directions per locale, but
-  //    this pins the oracle-catalogue relationship for all namespaces).
-  const missing = [...allPy].filter((k) => !(k in ctx.RCA_I18N.zh));
-  check('i18n-js-covers-py-catalog', missing.length === 0, missing.join(','));
+  // 3. Cross-catalogue: the namespaces BOTH surfaces render must be present
+  //    in the browser catalogue too. Scoped deliberately -- the desktop-only
+  //    namespaces (wizard./usage./history.detail./tab./about./...) have no
+    //    There is deliberately NO reverse check either: the
+    //    browser-only upload./settings./preset./err. namespaces have
+    //    no desktop page, so NEITHER direction can be an equality.
+    //    Measured 2026-09-27: 212 keys are desktop-only and 102 are
+    //    browser-only, and both sets are intentional.
+  //    false failures when completeness was widened.
+  const allPyShared = new Set([...py['zh:shared'], ...py['en:shared'],
+                               ...py['ja:shared']]);
+  const missing = [...allPyShared].filter((k) => !(k in ctx.RCA_I18N.zh));
+  check('i18n-js-covers-py-shared-namespaces', missing.length === 0,
+    missing.join(','));
 }
 
 // ---- Phase B: theme.js contract ----

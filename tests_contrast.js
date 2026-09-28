@@ -167,8 +167,15 @@ const readCss = (rel) => {
 // Linked stylesheet order (index.html): style.css first, then the layers that
 // may override it. Missing files read as '' so the audit degrades with them.
 const RULES = []
-  .concat(collectRules(readCss('css/style.css'), [], []))
-  .concat(collectRules(readCss('css/app-ux.css'), [], []));
+  // AUDIT-2026-09-27 (F-07a): this read only style.css and app-ux.css,
+  // so EVERY colour in viz.css and table-edit.css had never been
+  // audited - and table-edit.css holds the editing layer's hover /
+  // dirty / active tints, i.e. the states a user stares at while
+  // correcting rows. All four now, in index.html's cascade order.
+.concat(collectRules(readCss('css/style.css'), [], []))
+  .concat(collectRules(readCss('css/viz.css'), [], []))
+  .concat(collectRules(readCss('css/table-edit.css'), [], []))
+.concat(collectRules(readCss('css/app-ux.css'), [], []));
 
 const isRootBlock = (r, names) => names.some((n) => r.selector === n);
 

@@ -78,10 +78,16 @@
  * already muted, and a second multiplication would push them under the 3:1
  * WCAG non-text floor against the reference image).
  *
- * Accessibility: the canvas layers carry `aria-hidden="true"` + `role="img"`
- * and the meaning is spelled out in `.rca-viz-summary` (uPlot's
- * legend-ivi idea — the interactive surface is decorative, the text alternative
- * is the reachable one).
+ * Accessibility: the BARS canvas is decorative (`aria-hidden="true"`), the
+ * HOVER canvas is the interactive one — AUDIT-2026-09-27 (item 6) made it
+ * focusable (`tabindex="0"`, named by the heading, described by the summary)
+ * and keyboard-operable: ↑/↓/←/→/Home/End walk the bars, Enter/Space pins and
+ * unpins, Esc releases. Every one of those routes through the SAME
+ * focus / pinned / hover / flash state machine as the pointer (no parallel
+ * keyboard state) and announces the current row through the existing
+ * `#viz-summary` live region (uPlot's legend-ivi idea: the counts live in
+ * `.rca-viz-summary-text`, the transient row sentence in `.rca-viz-srstate`,
+ * so a keypress never rewrites — and re-reads — the whole text alternative).
  *
  * Not in this round (documented on purpose): series visibility toggling
  * (uPlot `setSeries`), editing, and hit-testing against the source pixels.
@@ -1057,6 +1063,11 @@ var RCA_VIZ_STRINGS = {
     kind_none: 'unresolved',
     unplaced_names: 'Unplaceable: {names}',
     mixed: ' Mixed sources: {sources}.',
+    // AUDIT-2026-09-27 (item 6): keyboard-cursor sentences for
+    // `.rca-viz-srstate`. {n}/{total} mirror the count the tables show.
+    kb_row: 'Row {n} of {total}: {label}.',
+    kb_row_pinned: 'Row {n} of {total}: {label}, pinned.',
+    kb_released: 'Focus released.',
   },
   zh: {
     summary: '{rows} 行延限中 {placed} 行已按{kind}轴定位；{unplaced} 行无法定位。',
@@ -1067,6 +1078,29 @@ var RCA_VIZ_STRINGS = {
     kind_none: '未定轴',
     unplaced_names: '无法定位：{names}',
     mixed: ' 混合来源：{sources}。',
+    kb_row: '第 {n}/{total} 行：{label}。',
+    kb_row_pinned: '第 {n}/{total} 行：{label}，已固定。',
+    kb_released: '已取消聚焦。',
+  },
+  // AUDIT-2026-09-27 (F-02): this catalogue had `en` and `zh` only, so
+  // `rcaVizT` fell back to English and a Japanese user heard the summary and
+  // the keyboard-cursor sentences in the wrong language — inside a
+  // role="status" live region, i.e. the one place a screen-reader user cannot
+  // skim past. Added as a full peer of the other two, not a partial: every
+  // key in `en` must exist here, or a missing key silently degrades to English
+  // again. `tests_ui_fixes_2026_09_27.js` asserts the key sets are equal.
+  ja: {
+    summary: '延限行 {rows} 行中、{kind}軸で {placed} 行を配置済み、{unplaced} 行は配置できません。',
+    summary_empty: '作図できる延限行がありません。',
+    kind_geometry: 'ピクセル較正済み（0-999 フレーム）',
+    kind_bed: '層位',
+    kind_age: '階／年代',
+    kind_none: '軸未確定',
+    unplaced_names: '配置できません: {names}',
+    mixed: ' 出典が混在しています: {sources}。',
+    kb_row: '{total} 行中 {n} 行目: {label}。',
+    kb_row_pinned: '{total} 行中 {n} 行目: {label}、固定済み。',
+    kb_released: 'フォーカスを解除しました。',
   },
 };
 
@@ -1117,6 +1151,12 @@ function rcaVizSummary(layout) {
 var RCA_VIZ_STATE = {
   host: null, stage: null, img: null, barsCv: null, hoverCv: null,
   summary: null,
+  summaryText: null, // AUDIT-2026-09-27 (item 6): the static text alternative
+                    // inside #viz-summary. The paragraph itself also carries
+                    // .rca-viz-srstate (the keyboard row sentence), so the
+                    // summary text is written HERE, never through
+                    // summary.textContent (that would wipe the state span).
+  srState: null,     // transient "row 3 of 12: X" sentence, keyboard only
   layout: null, result: null, opts: null, imageSrc: null,
   focus: null,      // DISPLAYED focus row_index (uPlot focus); fed either by
                     // a pin or by a transient hover while nothing is pinned
@@ -1124,6 +1164,10 @@ var RCA_VIZ_STATE = {
                     // (or the locate flow). Hover may not move the focus away
                     // while this is set; Esc / re-click / empty click unpin.
   hover: null,      // transient row_index under the pointer
+  kb: null,         // AUDIT-2026-09-27 (item 6): row_index the keyboard cursor
+                    // sits on. It is NOT a second focus: moving it goes
+                    // through the same focus/hover/emit path the pointer uses,
+                    // so exactly one highlight exists in either modality.
   flash: null,      // {row_index, until, token} driven by locateTo()
   flashSeq: 0,      // FE-FIX-2026-09-21: monotonically increasing flash id —
                     // a superseded rAF loop must not kill the newest flash
@@ -1199,17 +1243,62 @@ function rcaVizEnsure(hostEl) {
     S.summary.className = 'rca-viz-summary';
     hostEl.appendChild(S.summary);
   }
+  // AUDIT-2026-09-27 (item 6): #viz-summary is now a TWO-span live region —
+  // the static text alternative plus the keyboard row sentence. Both spans are
+  // resolved here (and created when missing) so the renderer never has to
+  // rewrite the paragraph's textContent, which would delete the state span and
+  // make the screen reader re-read the whole alternative on every keypress.
+  // A legacy/older host whose summary is a bare text node is migrated by
+  // moving that text into the new span. A host too minimal to nest children
+  // (the node stubs tests_viz.js builds) keeps the pre-split contract: the
+  // paragraph IS the text holder and there is no state span to write.
+  var canNest = S.summary && typeof S.summary.appendChild === 'function'
+    && typeof S.summary.insertBefore === 'function';
+  S.summaryText = canNest ? hostEl.querySelector('.rca-viz-summary-text') : null;
+  S.srState = canNest ? hostEl.querySelector('.rca-viz-srstate') : null;
+  if (canNest) {
+    if (!S.summaryText) {
+      S.summaryText = document.createElement('span');
+      S.summaryText.className = 'rca-viz-summary-text';
+      if (S.summary.textContent) S.summaryText.textContent = S.summary.textContent;
+      S.summary.textContent = '';
+      S.summary.insertBefore(S.summaryText, S.summary.firstChild || null);
+    }
+    if (!S.srState) {
+      S.srState = document.createElement('span');
+      S.srState.className = 'rca-viz-srstate';
+      S.summary.appendChild(S.srState);
+    }
+  } else {
+    S.summaryText = S.summary;
+    S.srState = null;
+  }
   S.stage = stage;
   S.host = hostEl;
-  // WPD/aria discipline: the overlay is decorative, the table is the truth.
+  // WPD/aria discipline: the DATA layer is decorative (the DOM tables are the
+  // truth source); the HOVER layer is the interactive surface and must stay
+  // reachable — AUDIT-2026-09-27 (item 6) took it out of aria-hidden and gave
+  // it a tab stop, a name (the group heading) and a description (the text
+  // alternative). The attributes are re-asserted on every ensure() because
+  // app.js swaps #results-content by innerHTML and this node is re-adopted.
   S.img.setAttribute('aria-hidden', 'true');
   S.img.setAttribute('alt', '');
   S.barsCv.setAttribute('aria-hidden', 'true');
   S.barsCv.setAttribute('role', 'img');
-  S.hoverCv.setAttribute('aria-hidden', 'true');
+  S.hoverCv.removeAttribute('aria-hidden');
   S.hoverCv.setAttribute('role', 'img');
+  S.hoverCv.setAttribute('tabindex', '0');
+  if (!S.hoverCv.getAttribute('aria-describedby')) S.hoverCv.setAttribute('aria-describedby', 'viz-summary');
   if (!S.summary.getAttribute('role')) S.summary.setAttribute('role', 'status');
   return true;
+}
+
+/** Write the text alternative into the summary's static span (never textContent). */
+function rcaVizSetSummary(layout) {
+  var S = RCA_VIZ_STATE;
+  var el = S.summaryText || S.summary;
+  if (!el || typeof el.textContent === 'undefined') return;
+  el.textContent = rcaVizSummary(layout);
 }
 
 function rcaVizCtx(canvas) {
@@ -1539,6 +1628,132 @@ function rcaVizOnTouchStart(ev) {
   if (ev && ev.touches && ev.touches[0]) rcaVizOnPointerMove(ev.touches[0]);
 }
 
+// ---------------------------------------------------------------------------
+// KEYBOARD PATH (AUDIT-2026-09-27, item 6)
+// ---------------------------------------------------------------------------
+// Before this, the hover canvas was `aria-hidden` with no tabindex and the
+// only key handler was a document-level Escape, so the "点击＝固定聚焦"
+// affordance the hint advertises was pointer-only: a keyboard user could not
+// highlight a row, could not pin one, and had no way to ask the canvas what it
+// showed. Everything below routes through the EXISTING state machine —
+// S.kb is a cursor, S.focus is still the single displayed focus, S.pinned is
+// still the single pin — so a keyboard highlight and a mouse highlight are the
+// same highlight, and the table side needs no new wiring: rcaVizEmitHover()
+// is the same notification the pointer sends.
+
+/** Bar list in draw order, or [] when nothing is laid out. */
+function rcaVizBars() {
+  var S = RCA_VIZ_STATE;
+  if (!S.layout || !Array.isArray(S.layout.bars)) return [];
+  return S.layout.bars;
+}
+
+/** 0-based position of row_index in the bar list, or -1. */
+function rcaVizPosOf(row_index) {
+  var bars = rcaVizBars();
+  for (var i = 0; i < bars.length; i++) {
+    if (bars[i].row_index === row_index) return i;
+  }
+  return -1;
+}
+
+/** Publish the keyboard cursor into the state machine + the live region. */
+function rcaVizApplyKb(pinned) {
+  var S = RCA_VIZ_STATE;
+  var bars = rcaVizBars();
+  var pos = rcaVizPosOf(S.kb);
+  if (pos === -1 || !bars.length) {
+    rcaVizSetSrState(null);
+    return false;
+  }
+  var bar = bars[pos];
+  // Same rule the pointer path uses: a pin outranks the transient row.
+  S.hover = bar.row_index;
+  S.focus = S.pinned !== null ? S.pinned : bar.row_index;
+  rcaVizDraw();
+  rcaVizEmitHover(bar.row_index);
+  rcaVizSetSrState(bar, pos + 1, bars.length, !!pinned);
+  return true;
+}
+
+/** Write (or clear) the transient state sentence inside #viz-summary. */
+function rcaVizSetSrState(bar, n, total, pinned) {
+  var S = RCA_VIZ_STATE;
+  if (!S.srState || typeof S.srState.textContent === 'undefined') return;
+  if (!bar) { S.srState.textContent = ''; return; }
+  var params = {
+    n: n, total: total,
+    label: bar.label || rcaVizText(bar.species) || ('#' + (bar.row_index + 1)),
+  };
+  S.srState.textContent = rcaVizT(pinned ? 'kb_row_pinned' : 'kb_row', params);
+}
+
+/** Move the cursor by `delta` rows (or jump to first/last with `absolute`). */
+function rcaVizMoveKb(delta, absolute) {
+  var S = RCA_VIZ_STATE;
+  var bars = rcaVizBars();
+  if (!bars.length) return false;
+  var pos = rcaVizPosOf(S.kb);
+  if (pos === -1) pos = rcaVizPosOf(S.focus);
+  var next;
+  if (absolute === 'first') next = 0;
+  else if (absolute === 'last') next = bars.length - 1;
+  else if (pos === -1) next = delta >= 0 ? 0 : bars.length - 1;
+  else next = pos + delta;
+  if (next < 0) next = 0;
+  if (next > bars.length - 1) next = bars.length - 1;
+  S.kb = bars[next].row_index;
+  return rcaVizApplyKb(false);
+}
+
+/** Enter / Space: pin the cursor row, or unpin it when it is already pinned. */
+function rcaVizToggleKbPin() {
+  var S = RCA_VIZ_STATE;
+  if (rcaVizPosOf(S.kb) === -1) return false;
+  // Identical toggle to rcaVizOnPointerDown — one pin, one meaning.
+  if (S.pinned === S.kb) {
+    S.pinned = null;
+    S.focus = S.hover !== null ? S.hover : null;
+  } else {
+    S.pinned = S.kb;
+    S.focus = S.kb;
+  }
+  return rcaVizApplyKb(S.pinned === S.kb);
+}
+
+function rcaVizOnKeyDown(ev) {
+  if (!ev) return;
+  var key = ev.key;
+  var handled = true;
+  if (key === 'ArrowDown' || key === 'ArrowRight') rcaVizMoveKb(1);
+  else if (key === 'ArrowUp' || key === 'ArrowLeft') rcaVizMoveKb(-1);
+  else if (key === 'Home') rcaVizMoveKb(0, 'first');
+  else if (key === 'End') rcaVizMoveKb(0, 'last');
+  else if (key === 'Enter' || key === ' ' || key === 'Spacebar') rcaVizToggleKbPin();
+  else handled = false;
+  // PageUp/PageDown and the letter keys belong to the page, not to us.
+  if (handled && typeof ev.preventDefault === 'function') ev.preventDefault();
+}
+
+/** Entering the canvas: seed the cursor, silently (aria-describedby already
+ *  read the text alternative) — the first arrow key is what announces. */
+function rcaVizOnFocus() {
+  var S = RCA_VIZ_STATE;
+  if (S.kb !== null) return;
+  if (rcaVizPosOf(S.focus) !== -1) S.kb = S.focus;
+  else if (S.pinned !== null) S.kb = S.pinned;
+  else if (rcaVizBars().length) S.kb = rcaVizBars()[0].row_index;
+}
+
+/** Leaving the canvas: drop the transient row exactly like mouseleave does, so
+ *  a keyboard highlight cannot outlive the focus that justified it. The pin
+ *  survives (same contract as the pointer path). */
+function rcaVizOnBlur() {
+  var S = RCA_VIZ_STATE;
+  S.kb = null;
+  rcaVizOnPointerLeave();
+}
+
 function rcaVizOnDocumentKeyDown(ev) {
   var S = RCA_VIZ_STATE;
   if (!ev || (ev.key !== 'Escape' && ev.key !== 'Esc')) return;
@@ -1548,6 +1763,13 @@ function rcaVizOnDocumentKeyDown(ev) {
   S.focus = S.hover !== null ? S.hover : null;
   rcaVizDraw();
   rcaVizEmitHover(S.hover);
+  // AUDIT-2026-09-27 (item 6): say so in the live region — a keyboard user
+  // pressed Esc and, with no announcement, could not tell whether the pin had
+  // survived. The cursor row (S.kb) deliberately stays put, so the next arrow
+  // key continues from the same row.
+  if (S.srState && typeof S.srState.textContent !== 'undefined') {
+    S.srState.textContent = rcaVizT('kb_released');
+  }
 }
 
 function rcaVizOnWindowResize() {
@@ -1564,6 +1786,12 @@ function rcaVizWire() {
   S.hoverCv.addEventListener('mouseleave', rcaVizOnPointerLeave);
   S.hoverCv.addEventListener('click', rcaVizOnPointerDown);
   S.hoverCv.addEventListener('touchstart', rcaVizOnTouchStart, { passive: true });
+  // AUDIT-2026-09-27 (item 6): the keyboard half of the same affordance, on
+  // the same element (the hover layer is the only interactive one). Esc stays
+  // document-level so it also releases a pin the user set with the mouse.
+  S.hoverCv.addEventListener('keydown', rcaVizOnKeyDown);
+  S.hoverCv.addEventListener('focus', rcaVizOnFocus);
+  S.hoverCv.addEventListener('blur', rcaVizOnBlur);
   S.wired = true;
   // Esc releases the pinned focus — the hint index.html prints next to the
   // title promises exactly that, so the renderer owns the key binding.
@@ -1635,6 +1863,7 @@ function rcaVizRender(hostEl, result, imageSrc, opts) {
   S.focus = null;
   S.pinned = null;   // FE-FIX-2026-09-21: a new result never keeps an old pin
   S.hover = null;
+  S.kb = null;       // AUDIT-2026-09-27 (item 6): no cursor from the old result
   S.flash = null;
   S.flashSeq += 1;   // FE-FIX-2026-09-21: invalidate any in-flight flash loop
   if (imageSrc) {
@@ -1656,11 +1885,8 @@ function rcaVizRender(hostEl, result, imageSrc, opts) {
     S.img.removeAttribute('src');
     S.imageSrc = null;
   }
-  if (typeof S.summary.textContent !== 'undefined') {
-    S.summary.textContent = rcaVizSummary(layout);
-  }
-  var box = rcaVizStageBox(layout);
-  rcaVizApplyStageSize(box);
+  rcaVizSetSummary(layout);
+  var box = rcaVizStageBox(layout);  rcaVizApplyStageSize(box);
   rcaVizSizeLayers(box);
   rcaVizWire();
   rcaVizDrawBars();
@@ -1781,6 +2007,7 @@ function rcaVizClear() {
   S.focus = null;
   S.pinned = null;   // FE-FIX-2026-09-21: a blanked panel has no pin either
   S.hover = null;
+  S.kb = null;       // AUDIT-2026-09-27 (item 6): no keyboard cursor either
   S.flash = null;
   S.flashSeq += 1;   // FE-FIX-2026-09-21: stop any in-flight flash loop
   if (!rcaVizHasDom()) {
@@ -1797,8 +2024,11 @@ function rcaVizClear() {
     var h = rcaVizCtx(S.hoverCv);
     if (h) h.clearRect(0, 0, S.hoverCv.width, S.hoverCv.height);
   }
-  if (S.summary && typeof S.summary.textContent !== 'undefined') {
-    S.summary.textContent = '';
+  if (S.summaryText && typeof S.summaryText.textContent !== 'undefined') {
+    S.summaryText.textContent = '';
+  }
+  if (S.srState && typeof S.srState.textContent !== 'undefined') {
+    S.srState.textContent = '';
   }
   // FE-FIX-2026-09-21: clear() blanked the panel but left S.host set, so
   // getState().mounted stayed true on an empty view. Null it consistently —
@@ -1818,6 +2048,11 @@ function rcaVizDestroy() {
     S.hoverCv.removeEventListener('mouseleave', rcaVizOnPointerLeave);
     S.hoverCv.removeEventListener('click', rcaVizOnPointerDown);
     S.hoverCv.removeEventListener('touchstart', rcaVizOnTouchStart);
+    // AUDIT-2026-09-27 (item 6): the keyboard listeners too, or a re-render
+    // would stack a second set on the same (re-adopted) canvas.
+    S.hoverCv.removeEventListener('keydown', rcaVizOnKeyDown);
+    S.hoverCv.removeEventListener('focus', rcaVizOnFocus);
+    S.hoverCv.removeEventListener('blur', rcaVizOnBlur);
   }
   if (typeof document !== 'undefined' && document
       && typeof document.removeEventListener === 'function') {
@@ -1841,6 +2076,9 @@ function rcaVizDestroy() {
   S.barsCv = null;
   S.hoverCv = null;
   S.summary = null;
+  S.summaryText = null;
+  S.srState = null;
+  S.kb = null;
   return true;
 }
 
@@ -1854,6 +2092,7 @@ function rcaVizGetState() {
     focus: S.focus,
     pinned: S.pinned,   // FE-FIX-2026-09-21: the click-pinned row (hover-immune)
     hover: S.hover,
+    kb: S.kb,           // AUDIT-2026-09-27 (item 6): the keyboard cursor row
     kind: S.layout ? S.layout.axis.kind : null,
     listeners: S.hoverListeners.length,
     dpr: S.dpr,
@@ -1879,6 +2118,18 @@ function rcaVizRelink(result) {
   S.focus = null;
   S.pinned = null;
   S.hover = null;
+  S.kb = null;
+  // AUDIT-2026-09-27 (item 7): relink recomputed the layout and repainted, but
+  // never rewrote the text alternative — only rcaVizRender does. After an
+  // added or deleted row, #viz-summary (role="status") kept announcing the
+  // PREVIOUS counts, and that stale sentence is exactly what a screen reader
+  // user hears. The summary is part of the layout, so it must be republished
+  // wherever the layout is recomputed. The keyboard sentence goes with it:
+  // there is no cursor row any more.
+  rcaVizSetSummary(S.layout);
+  if (S.srState && typeof S.srState.textContent !== 'undefined') {
+    S.srState.textContent = '';
+  }
   rcaVizResize();
   rcaVizDraw();
   return true;

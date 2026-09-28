@@ -71,7 +71,11 @@
 
 .viz-hint {
     font-size: var(--text-2xs);
-    color: var(--text-light);
+    /* AUDIT-2026-09-27 (item 8c): --text-light (#78716c) on --bg-light
+       measured 4.46:1 — just under the WCAG AA 4.5 floor for 11px text.
+       --text-muted (#57534e) is 6.0:1 on the same surface and is the token
+       the sibling .rca-viz-summary caption already uses. */
+    color: var(--text-muted);
 }
 
 /* ------------------------------------------------------- three layers ---- */
@@ -127,6 +131,17 @@
     touch-action: none;     /* a touch drag must not scroll the page away */
 }
 
+/* AUDIT-2026-09-27 (item 6): the hover layer is now the KEYBOARD control
+   (tabindex="0", arrow keys walk the bars, Enter pins) — a keyboard user
+   needs to see where they are. The ring is drawn INSIDE the canvas box
+   because the canvas fills .rca-viz-stage and that stage clips its overflow
+   (same failure as the clipped rings on .lang-switch / .theme-toggle /
+   .segmented): an outward 2px-offset ring would lose its outer half. */
+.rca-viz-hover:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+}
+
 /* ------------------------------------------------------------- caption --- */
 /* The a11y twin of the canvas (uPlot legend-ivi idea): the canvases are
    aria-hidden + role="img", so this line is what a screen reader gets. */
@@ -140,8 +155,21 @@
     overflow-wrap: anywhere;
 }
 
-.rca-viz-summary:empty {
+.rca-viz-summary:empty,
+.rca-viz-summary:not(:has(span:not(:empty))) {
     display: none;
+}
+
+/* AUDIT-2026-09-27 (item 6): #viz-summary is the live region the keyboard
+   path announces through, and it now holds TWO spans — the static text
+   alternative (rca-viz-summary-text) and the transient state sentence
+   (rca-viz-srstate, empty until an arrow key moves the cursor). Without the
+   split, rewriting the paragraph's textContent on every keypress would also
+   throw away the counts, and a live region that is rewritten wholesale
+   re-reads all of it. */
+.rca-viz-srstate:not(:empty)::before {
+    content: " · ";
+    color: var(--text-base);
 }
 
 /* ------------------------------------------- reverse highlight (table) --- */

@@ -152,3 +152,130 @@ table.data-table tbody th[scope="row"]:first-child {
 .alert :focus-visible {
     outline-offset: 3px;
 }
+
+/* AUDIT-2026-09-27 (item 3): .lang-switch, .theme-toggle and .segmented all
+   set `overflow:hidden` — that is what keeps the joined buttons square
+   inside one rounded frame. The global `:focus-visible` ring is drawn OUTSIDE
+   the button box (2px at 2px offset), so the group clipped the outer half of
+   the ring off the FIRST and the LAST button of every one of the three
+   groups. Pull the ring back inside the button box instead of dropping
+   overflow:hidden: the joined look (and the ring's 2px width, offset and
+   colour) is unchanged, and all four edges of it are now visible on every
+   member. Applies to the group member, not the group, so the middle buttons
+   are unaffected. */
+.lang-switch button:focus-visible,
+.theme-toggle button:focus-visible,
+.segmented button:focus-visible {
+    outline-offset: -2px;
+}
+
+/* ==================== Forced colours ====================
+   AUDIT-2026-09-27 (item 8b): the <h1> is gradient text —
+   `-webkit-text-fill-color: transparent` over a `background-clip: text`
+   gradient. Under `forced-colors: active` the UA overrides the background,
+   the fill stays transparent, and the only h1 on the page renders as a blank
+   space. Same pattern as the css/table-edit.css block: drop the paint tricks
+   and let the system colour through. */
+@media (forced-colors: active) {
+    .header h1 {
+        -webkit-text-fill-color: CanvasText;
+        color: CanvasText;
+        background: none;
+        -webkit-background-clip: initial;
+        background-clip: initial;
+    }
+}
+
+/* ==================== Print ====================
+   AUDIT-2026-09-27 (item 2): the page had NO print stylesheet at all, so
+   Ctrl-P printed the API-key field, the whole dropzone, every toolbar
+   button, the toast overlay — and, for a dark-theme user, a full dark page
+   that eats a cartridge. It also printed the tables WRONG: .table-wrap is a
+   height-capped scroll region and `thead th` is position:sticky (both from
+   this file), so a long result was cut off at 72vh with the header floating
+   over row 1 of every page.
+
+   Everything here is additive: if this file 404s the page still prints, just
+   with the chrome and the dark palette intact — no layout depends on it. */
+@media print {
+    @page { margin: 12mm; }
+
+    /* AUDIT-2026-09-27 (item 2, revised): force the light scheme by
+       RE-MAPPING the tokens on the results subtree instead of painting
+       `background: #fff` on a list of selectors. Custom properties inherit,
+       so one block re-skins the card, every table, the zebra stripes, the
+       low-agreement / selected / active row marks and the viz summary — the
+       states a hand-written background list would each have to remember (and
+       the first version of this block silently turned the whole page white
+       while losing every data tint). Scoped to an id on purpose: it is the
+       PRINT surface, and the screen-theme palette in style.css is what
+       tests_contrast.js audits. Values are the light-theme tokens. */
+    #results-card {
+        --bg-page: #fafaf9; --bg-white: #ffffff; --bg-light: #f7f6f5;
+        --bg-lighter: #efedeb; --surface: #efedeb;
+        --text-dark: #0c0a09; --text-base: #1c1917; --text-muted: #57534e;
+        --text-light: #78716c;
+        --border-color: #e7e5e4; --border-strong: #d6d3d1;
+        --primary-color: #2563eb; --primary-hover: #1d4ed8; --primary-soft: #eff6ff;
+        --primary-dark: #1e3a8a; --primary-active: #2563eb;
+        --success-color: #10b981; --success-soft: #d1fae5;
+        --warning-color: #b45309; --warning-soft: #fef3c7;
+        --danger-color: #dc2626; --danger-soft: #fee2e2;
+        --info-color: #6366f1; --info-soft: #e0e7ff;
+        --secondary-color: #6b7280;
+        --shadow-sm: none; --shadow: none; --shadow-md: none;
+        --shadow-lg: none; --shadow-xl: none; --shadow-soft: none;
+        --shadow-pop: none; --shadow-primary: none;
+        background: #fff;
+        color: #1c1917;
+    }
+    /* The page behind the card: a dark-theme user otherwise prints a full
+       dark sheet around a white card. */
+    html, body, .container {
+        background: #fff !important;
+        color: #000 !important;
+    }
+    .card, .table-wrap, .rca-viz-stage, #viz-host, .rca-selection-bar,
+    .alert, .rca-edit-status, .rca-viz-summary {
+        box-shadow: none !important;
+    }
+
+    /* App chrome: nothing here is a result. */
+    header.header, footer.footer, .skip-link, .toast, .page-drop-overlay,
+    #settings-card, #upload-card, #loading-slot, #run-progress, #results-empty,
+    button, input, select, textarea, .field-hint, .caption-meta,
+    .rca-selection-bar, .rca-table-foot, .alert-actions, .viz-hint,
+    .rca-edit-status, .rca-dialog-backdrop {
+        display: none !important;
+    }
+
+    /* Let the tables run to their full length. */
+    .table-wrap {
+        max-height: none !important;
+        overflow: visible !important;
+    }
+    table.data-table thead th,
+    table.data-table thead th:first-child,
+    table.data-table tbody td:first-child,
+    table.data-table tbody th[scope="row"]:first-child,
+    [data-editable="1"] table.data-table tbody td.rca-cell-select,
+    [data-editable="1"] table.data-table tbody th[scope="row"],
+    [data-editable="1"] table.data-table thead th.rca-col-select,
+    [data-editable="1"] table.data-table thead th[scope="col"]:nth-child(2) {
+        position: static !important;
+    }
+    /* Repeat the header on every page instead of once, and never split a row
+       across a page break. */
+    table.data-table thead { display: table-header-group; }
+    table.data-table tr { break-inside: avoid; page-break-inside: avoid; }
+
+    /* The linked canvas is the visual anchor for the tables below it: unclamp
+       it (it scrolls on screen) so the whole chart reaches the paper. The two
+       <canvas> layers are bitmaps js/viz.js painted from the ON-SCREEN theme
+       tokens, so a dark-theme user still gets dark-theme bar colours on the
+       now-white stage — the token remap above cannot repaint a bitmap, and
+       the tables below carry the same rows in full. */
+    #viz-host { max-height: none !important; overflow: visible !important; }
+
+    a[href]::after { content: ""; }  /* no URL spam after every link */
+}

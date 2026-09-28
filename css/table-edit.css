@@ -34,13 +34,13 @@
                 outline-color var(--transition-fast);
 }
 
+/* AUDIT-2026-09-27 (F-07): --overlay-primary replaces the raw dark literal
+   `rgba(37, 99, 235, 0.14)`; the token already differs per theme (opaque
+   --primary-soft in light, the translucent tint in dark), so the dark override
+   block this rule used to need is gone. */
 [data-editable="1"] .rca-edit-cell:hover {
-    background-color: var(--primary-soft);
+    background-color: var(--overlay-primary);
     text-decoration-color: var(--border-strong);
-}
-
-:root[data-theme="dark"] [data-editable="1"] .rca-edit-cell:hover {
-    background-color: rgba(37, 99, 235, 0.14);
 }
 
 /* editTriggerEvent: "focus" — the ring appears while the caret is in the cell,
@@ -65,14 +65,31 @@
     background-image: none;
 }
 
+/* AUDIT-2026-09-27 (item 4): style.css clamps EVERY body cell with
+   `max-width:280px; overflow:hidden; text-overflow:ellipsis;
+   white-space:nowrap` — a deliberate one-line-per-row design for the
+   READ-ONLY table. A contenteditable cell inherited it, so a long species
+   name or note was cut off with no way to scroll the caret back into view,
+   and the `title` tooltip only ever showed the COMMITTED value: you typed,
+   the text was on screen but invisible. Wrap instead of clamp, but only for
+   the editable case — the read-only clamp (and .cell-wrapping) is untouched. */
+[data-editable="1"] table.data-table tbody td.rca-edit-cell[contenteditable="true"] {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow: visible;
+    text-overflow: clip;
+}
+
 /* ---- dirty: "this cell differs from the extraction" ---------------------- */
 /*
  * Mirrors rca_core/editable.py's diff: a mark exists exactly while
  * capture_edits() would report something for that (row, field).
  */
+/* AUDIT-2026-09-27 (F-07): --overlay-warning replaces the raw dark literal
+   `rgba(180, 83, 9, 0.18)` — same token, per-theme value, no dark block. */
 .rca-edit-cell.rca-cell-dirty {
     box-shadow: inset 3px 0 0 0 var(--warning-color);
-    background-color: var(--warning-soft);
+    background-color: var(--overlay-warning);
 }
 
 .rca-edit-cell.rca-cell-dirty::after {
@@ -83,10 +100,6 @@
     font-size: 8px;
     line-height: 1;
     color: var(--warning-color);
-}
-
-:root[data-theme="dark"] .rca-edit-cell.rca-cell-dirty {
-    background-color: rgba(180, 83, 9, 0.18);
 }
 
 /* ---- invalid: the red frame that keeps focus ---------------------------- */
@@ -116,7 +129,15 @@
    puts .cell-empty on them; the placeholder is drawn here instead, where it
    cannot be selected, edited or committed. The :not(.rca-cell-invalid) guard
    keeps the ⚠ ::before of the blocked-editor state intact. */
-[data-editable="1"] .rca-edit-cell.cell-empty:not(.rca-cell-invalid)::before {
+/* AUDIT-2026-09-27 (F-01): `:not(:focus)` is the other half of that promise.
+   The class is only re-stripped on the next repaint, so a FOCUSED empty cell
+   showed the dash in front of the caret and typing rendered "-Brachiopoda" on
+   screen (the dash only vanished once the commit repainted). Suppressing the
+   placeholder while the cell holds focus leaves the empty-cell state exactly as
+   it is when nobody is editing it, and changes none of the placeholder's own
+   guarantees: it is still a ::before, so it is never in the DOM text, never
+   selected, and never committed. */
+[data-editable="1"] .rca-edit-cell.cell-empty:not(.rca-cell-invalid):not(:focus)::before {
     content: "-";
     color: var(--text-light);
     pointer-events: none;
@@ -199,14 +220,16 @@ tr[data-row].rca-row-selected > th {
     color: var(--text-base);
 }
 
+/* AUDIT-2026-09-27 (item 8g): the unit used to be hard-coded Chinese here
+   with a single `html[lang="en"]` twin, so the ja UI silently printed the
+   Chinese form and NO translator could reach the string (it never appears in
+   the DOM, so neither rcaApplyI18n nor a re-render can translate it).
+   js/app.js now emits the active language's unit as --rca-rows-unit on
+   <html>; the literal below is only the pre-JS / no-JS fallback. */
 .rca-selection-bar .rsb-count::after {
-    content: " 行";
+    content: var(--rca-rows-unit, " 行");
     color: var(--text-muted);
     font-weight: 400;
-}
-
-html[lang="en"] .rca-selection-bar .rsb-count::after {
-    content: " row(s)";
 }
 
 .rca-selection-bar .rsb-actions {
@@ -256,19 +279,16 @@ tr.rca-row-active .rca-locate-btn {
 }
 
 /* ---- review-row highlight (J/K walk + viz hover hand-off) ---------------- */
+/* AUDIT-2026-09-27 (F-07): --overlay-info replaces the raw dark literal
+   `rgba(99, 102, 241, 0.18)`; the dark override block is no longer needed. */
 tr.rca-row-active > td,
 tr.rca-row-active > th {
-    background-color: var(--info-soft);
+    background-color: var(--overlay-info);
 }
 
 tr.rca-row-active > th[scope="row"] {
     box-shadow: inset 3px 0 0 0 var(--info-color);
     font-weight: 700;
-}
-
-:root[data-theme="dark"] tr.rca-row-active > td,
-:root[data-theme="dark"] tr.rca-row-active > th {
-    background-color: rgba(99, 102, 241, 0.18);
 }
 
 /* Low-confidence rows are the J/K walking route; mark them with a leading bar
