@@ -400,6 +400,23 @@ def test_window_contract():
     _app()
     import gui_fluent
 
+    # AUDIT-2026-09-28: CI runs this file as a SCRIPT (`python
+    # tests_gui_fluent.py`), so tests/conftest.py's autouse fixture does not
+    # apply to it. Without this, the window inherits the developer's real
+    # ~/.range_chart_analyzer.json -- `Translator(self.cfg.get("lang", "zh"))`
+    # -- so every check below would answer a question about their settings
+    # rather than about the code. It is the same class of defect the conftest
+    # fixture fixes for tests/; duplicating it here is the cost of this file
+    # not being collectable by pytest.
+    import gui as _gui_mod
+    _real_load = gui_fluent.load_config
+    _real_save = getattr(gui_fluent, "save_config", None)
+    _gui_real_load = getattr(_gui_mod, "load_config", None)
+    gui_fluent.load_config = lambda: {"lang": "en"}
+    gui_fluent.save_config = lambda cfg: True
+    if _gui_real_load is not None:
+        _gui_mod.load_config = lambda: {"lang": "en"}
+
     check("module-has-main", hasattr(gui_fluent, "main"))
 
     win = gui_fluent.RangeChartFluentWindow()
@@ -475,6 +492,15 @@ def test_window_contract():
         check("providers-has-test-workers",
               isinstance(getattr(win.providers_page, "_test_workers", None), dict))
     finally:
+        # AUDIT-2026-09-28: restore the real load_config/save_config patched
+        # above. run_all() constructs further windows after this one, and a
+        # script that leaks a stubbed load_config would make every later check
+        # silently run against a config that no user can have.
+        gui_fluent.load_config = _real_load
+        if _real_save is not None:
+            gui_fluent.save_config = _real_save
+        if _gui_real_load is not None:
+            _gui_mod.load_config = _gui_real_load
         # AUDIT-2026-09-27 [item 0.1]: WebEngine-safe teardown — a plain
         # close/deleteLater leaves the process aborting at shutdown.
         _destroy_window(win)

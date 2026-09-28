@@ -270,9 +270,22 @@ class TestExtractPageAuditBehaviour(unittest.TestCase):
                              thumbnail_b64=thumb)
             self.assertFalse(page.preview.pixmap().isNull(),
                              "the history thumbnail must actually be drawn")
-            self.assertIn("thumb", page.lbl_imginfo.text().lower(),
-                          "the caption must say it is a stored thumbnail, not "
-                          "a re-loadable source file")
+            # AUDIT-2026-09-28: this used to assert the literal substring
+            # "thumb", which only holds in English. The caption is the
+            # `image.historyThumbnail` entry, so on a Chinese or Japanese
+            # install it renders as 历史记录缩略图（仅供核对） and the
+            # assertion failed -- on CI, where no user config exists and the
+            # default language wins, while passing on the machine that wrote
+            # it. Ask the catalogue what the right string is instead, and say
+            # what the test means: this is the thumbnail notice, not the
+            # generic "no image" text.
+            self.assertEqual(page.lbl_imginfo.text(),
+                             win.tr.t("image.historyThumbnail"),
+                             "the caption must be the stored-thumbnail notice")
+            self.assertNotEqual(page.lbl_imginfo.text(),
+                                win.tr.t("image.none"),
+                                "the caption must NOT be the generic "
+                                "image.none text a re-loadable file gets")
         finally:
             self._destroy_window(win)
 
