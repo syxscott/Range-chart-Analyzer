@@ -343,6 +343,33 @@ def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE,
         # a real error instead of a 0×0 image.
         return base64.b64encode(raw).decode("ascii"), mime, 0, 0, False, True
 
+    # AUDIT-2026-09-27 [item 3.1] (found by running the real pipeline over
+    # figures cut from the 2020 radiolarian literature, not by a test):
+    # a phone photo carries its rotation in EXIF Orientation, and Pillow does
+    # NOT apply it on open. ``rca_core.history.make_thumbnail_with_size`` has
+    # called ``ImageOps.exif_transpose`` since REVIEW-2026-09-20 (finding 9),
+    # so the HISTORY copy was stored upright — while this function sent the
+    # same file to the model sideways, and the Extract page previewed the
+    # sideways version too. Verified with a 400x200 JPEG tagged
+    # Orientation=6: model received 400x200, history stored 100x200. The
+    # same figure was upright in review and sideways in extraction, which
+    # is precisely the input the VLM reads worst.
+    # Applied BEFORE the w/h read below and before any pixel work, so the
+    # reported dimensions, the max_edge downscale and the deskew detector all
+    # see the orientation the model will actually get. A corrupt EXIF block
+    # must not cost us the image, so this is best-effort like the one in
+    # history.py.
+    _exif_transposed = False
+    try:
+        from PIL import ImageOps  # type: ignore
+        _before = img
+        img = ImageOps.exif_transpose(img) or img
+        if img is not _before:
+            w, h = img.size
+            _exif_transposed = True
+    except Exception:
+        pass
+
     # FIX (enhance): pre-process the image to boost VLM recognition of thin
     # lines and small text. Default off — the user opts in via the UI.
     # REVIEW-2026-09-20 #12: everything from here touches PIXEL data, and PIL
@@ -359,6 +386,12 @@ def load_image_b64(path: str, max_edge: int = DEFAULT_MAX_EDGE,
         return base64.b64encode(raw).decode("ascii"), mime, 0, 0, False, True
 
     modified = False
+    # A real EXIF rotation must ALSO defeat the original-bytes fast path
+    # further down. Without this the function reported the transposed size
+    # while still uploading the untransposed original — caught by the
+    # verification run immediately after the fix was written.
+    if _exif_transposed:
+        modified = True
     try:
         if deskew:
             try:
@@ -571,10 +604,26 @@ def _row_from_string(item: str, kind: str) -> dict[str, Any] | None:
         return {"name": text}
     if kind == "species_ranges":
         return {"species": text}
+    # AUDIT-2026-09-27 P1: the paleomap / scatter / chemical tables were
+    # reached only through `_dict_rows`, which skipped bare strings outright,
+    # so a whole table could vanish with ok=True and NO warning. Only tables
+    # that actually have a single natural identifier are listed: a scatter
+    # point or a chemical data point needs a coordinate pair to mean anything,
+    # so a bare string there is junk, exactly like an abundance row.
+    if kind in ("continents", "oceans_seas", "tectonic_features",
+                "biogeographic_realms", "fossil_sites", "groups",
+                "events", "intervals"):
+        return {"name": text}
+    if kind == "paleolatitude_indicators":
+        return {"type": text}
+    if kind == "data_points":
+        return {"sample_id": text}
     # Deliberately NOT abundances: a taxon row needs a level/abundance to mean
     # anything, so a bare string there is far more likely to be junk than a
     # record — tests_core pins that it is dropped, and coercing it would
-    # invent a taxon with no associated measurement.
+    # invent a taxon with no associated measurement. Same reasoning for
+    # scatter ``points`` / ``outliers`` and for ``correlations`` / ``nodes``,
+    # which need a second field to identify anything.
     return None
 
 
@@ -620,16 +669,28 @@ def _iter_rows(raw: Any, kind: str, warnings: list[str] | None = None):
                     _flag("string_row_coerced")
 
 
-def _dict_rows(raw: Any):
+def _dict_rows(raw: Any, kind: str | None = None, warnings: list[str] | None = None):
     """Yield dict rows from a list- OR dict-shaped named array.
 
     REVIEW-2026-09-10: every non-range-chart normalizer did
     ``for x in (parsed.get(k) or [])`` and skipped non-dicts, so a
     dict-shaped emission (``{"sections": {"Ki-1": {...}}}``) produced [] and
     silently discarded every record. Iterating a dict's values recovers them.
-    Bare strings are NOT coerced here (the caller decides whether the key has
-    a natural single-field row shape); they are skipped exactly as before.
+
+    AUDIT-2026-09-27 P1: ``kind`` (optional, and off by default so the existing
+    call sites are untouched) additionally coerces a bare-string entry into a
+    single-field row and records ``string_row_coerced``, which is what
+    ``_iter_rows`` already did for range_chart / abundance / zonation. Without
+    it, ``{"continents": ["Laurasia", "Pangaea"]}`` came back as six empty
+    tables with ``ok=True`` and no warning at all - the project's own
+    definition of silent data loss. Tables with no natural single-field row
+    (abundances, scatter points/outliers, correlations, nodes) still skip bare
+    strings; see ``_row_from_string``.
     """
+    def _flag(tag: str) -> None:
+        if warnings is not None and tag not in warnings:
+            warnings.append(tag)
+
     if isinstance(raw, dict):
         for value in raw.values():
             if isinstance(value, dict):
@@ -638,6 +699,11 @@ def _dict_rows(raw: Any):
         for item in raw:
             if isinstance(item, dict):
                 yield item
+            elif isinstance(item, str) and kind:
+                row = _row_from_string(item, kind)
+                if row is not None:
+                    yield row
+                    _flag("string_row_coerced")
 
 
 _PRIMARY_ID_KEYS = {
@@ -833,6 +899,39 @@ def _append_warning(warnings: list[str], tag: str) -> None:
         warnings.append(tag)
 
 
+def _rehydrate_array_root(parsed: dict[str, Any], spec_keys: tuple[tuple[str, tuple[str, ...]], ...],
+                          warnings: list[str] | None = None) -> bool:
+    """Distribute ``_array_root`` back into ``parsed`` so the normalizer sees it.
+
+    AUDIT-2026-09-27 P0-1: ``_unwrap_array_root_into`` appends the RAW items to
+    the target list, which is what the chemical mode wants (it has no
+    per-table loop to re-normalize them). The paleomap and scatter normalizers
+    DO have per-table loops that emit coerced rows, so the raw items have to
+    travel back through ``parsed`` or they would bypass coercion. Handing each
+    table a FRESH bucket and only publishing non-empty ones keeps the tables
+    that the model answered normally completely untouched, and - critically -
+    avoids handing a normalizer's own output list back to its own reader.
+
+    Returns True when an array root was present and distributed.
+    """
+    items = parsed.get("_array_root")
+    if not isinstance(items, list) or not items:
+        return False
+    buckets: dict[str, list] = {}
+    out: dict[str, Any] = {}
+    for key, probe in spec_keys:
+        buckets.setdefault(key, [])
+        out[key] = buckets[key]
+    _unwrap_array_root_into(parsed, out, tuple(
+        (key, probe, buckets[key]) for key, probe in spec_keys), warnings)
+    published = False
+    for key, rows in buckets.items():
+        if rows:
+            parsed[key] = rows
+            published = True
+    return published
+
+
 def _payload_mismatch(data: dict[str, Any], result_truncated: bool) -> str:
     """Non-empty reason when the normalized payload is unusable, else "".
 
@@ -938,7 +1037,10 @@ def _normalize_section_into(sec: dict[str, Any],
     (and the sibling species/biozone helpers) guarantees a uniform shape.
     """
     def s(v):
-        return "" if v is None else str(v)
+        # Container-safe (see _stringify_scalar): a dict/list in a
+        # scalar field degrades to "" rather than leaking a Python
+        # repr into a scientific field.
+        return _stringify_scalar(v)
 
     formations = sec.get("formations")
     if isinstance(formations, list):
@@ -1509,7 +1611,10 @@ def _normalize_species_into(sp: dict[str, Any],
                             ) -> None:
     """Build a species_ranges row from a raw dict and append it."""
     def s(v):
-        return "" if v is None else str(v)
+        # Container-safe (see _stringify_scalar): a dict/list in a
+        # scalar field degrades to "" rather than leaking a Python
+        # repr into a scientific field.
+        return _stringify_scalar(v)
 
     # REVIEW-2026-09-10: species rows carried their bed indices through
     # _normalize_optional_int with no order check, unlike the columnar path
@@ -1581,7 +1686,10 @@ def _normalize_biozone_into(bz: dict[str, Any],
     subzone, oppel, range zone.
     """
     def s(v):
-        return "" if v is None else str(v)
+        # Container-safe (see _stringify_scalar): a dict/list in a
+        # scalar field degrades to "" rather than leaking a Python
+        # repr into a scientific field.
+        return _stringify_scalar(v)
 
     name = s(bz.get("name")).strip()
     # P0-4: infer zone_type from name keywords when not explicitly provided.
@@ -1637,7 +1745,10 @@ def normalize_result(parsed):
             "_warnings": ["normalize_non_dict_input"],
         }
     def s(v):
-        return "" if v is None else str(v)
+        # Container-safe (see _stringify_scalar): a dict/list in a
+        # scalar field degrades to "" rather than leaking a Python
+        # repr into a scientific field.
+        return _stringify_scalar(v)
 
     out = {
         "sections": [],
@@ -2115,7 +2226,8 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
                 parsed.setdefault("_unclassified", []).append(item)
 
     def s(v: Any) -> str:
-        return "" if v is None else str(v)
+        # REVIEW-2026-09-10: container-safe (see _stringify_scalar).
+        return _stringify_scalar(v)
 
     def fi(v: Any) -> tuple[int | None, bool]:
         """Convert a bed-index field to ``(int | None, lossy)``.
@@ -2303,7 +2415,11 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
         return out
 
     sections = []
-    for sec in _dict_rows(parsed.get("sections")):
+    # AUDIT-2026-09-27 P1: a bare-string section row used to be skipped with
+    # no warning at all. `sections` is a name-bearing table, so the string is
+    # the identifier - coerce it and say so, exactly as range_chart does.
+    _columnar_warnings: list[str] = []
+    for sec in _dict_rows(parsed.get("sections"), "sections", _columnar_warnings):
         try:
             conf_v = float(sec.get("confidence_by_section", 0.0))
         except (TypeError, ValueError):
@@ -2345,6 +2461,9 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
     lithology_legend, lithology_legend_warn = norm_legend(parsed.get("lithology_legend"))
     # Collect warnings to surface at root level
     legend_warnings = [w for w in (fossil_legend_warn, lithology_legend_warn) if w]
+    for w in _columnar_warnings:            # AUDIT-2026-09-27 P1
+        if w not in legend_warnings:
+            legend_warnings.append(w)
 
     out: dict[str, Any] = {
         "sections": sections,
@@ -3194,7 +3313,7 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
         }
 
     # Normalize data_points
-    for pt in _dict_rows(parsed.get("data_points")):
+    for pt in _dict_rows(parsed.get("data_points"), "data_points", _chem_warnings):
         values_raw = pt.get("values") or {}
         values = {}
         if isinstance(values_raw, dict):
@@ -3246,7 +3365,7 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
     # the isinstance check for every value and the whole emission vanished
     # silently. Same tolerant path as data_points above (and norm_cross in
     # the columnar mode).
-    for ev in _dict_rows(parsed.get("events")):
+    for ev in _dict_rows(parsed.get("events"), "events", _chem_warnings):
         row = {
             "type": s(ev.get("type")),
             "depth_m": s(ev.get("depth_m")),
@@ -3263,7 +3382,7 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
 
     # Normalize intervals
     # REVIEW-2026-09-20 #4: same dict-shaped recovery as events.
-    for iv in _dict_rows(parsed.get("intervals")):
+    for iv in _dict_rows(parsed.get("intervals"), "intervals", _chem_warnings):
         row = {
             "name": s(iv.get("name")),
             "top_depth_m": s(iv.get("top_depth_m")),
@@ -3407,6 +3526,60 @@ _KNOWN_PALEOMAP_REALM_KEYS = ("name", "type", "coordinates", "characteristic_fau
 _KNOWN_PALEOMAP_SITE_KEYS = ("name", "lat_lon", "age", "fossils", "marker_type")
 _KNOWN_PALEOMAP_INDICATOR_KEYS = ("type", "coordinates")
 
+# AUDIT-2026-09-27 P0-1: the row tables of a paleogeographic map, most
+# specific probe first. ``_classify_array_item`` is a RANGE-CHART heuristic
+# that maps any dict carrying a ``name`` onto "sections", which is not a
+# paleomap table at all - so without these probes every array item fell
+# through to ``_unclassified`` and the map came back empty. A bare
+# ``{"name": ...}`` on a paleogeographic map is a landmass, hence the
+# ``continents`` catch-all last.
+_PALEOMAP_ARRAY_SPEC_KEYS = (
+    ("paleolatitude_indicators", ("type", "coordinates")),
+    ("fossil_sites", ("lat_lon",)),
+    ("fossil_sites", ("marker_type",)),
+    ("biogeographic_realms", ("characteristic_fauna",)),
+    ("tectonic_features", ("direction",)),
+    ("continents", ("paleolatitude",)),
+    ("oceans_seas", ("name", "type", "coordinates")),
+    ("continents", ("name",)),
+)
+
+
+def first_non_empty(candidates: Any) -> Any:
+    """The first candidate that carries a value, else ``None``.
+
+    AUDIT-2026-09-27 [item 7.1] (found by a repo-wide unbound-name scan).
+    ``_one_point`` below has called this since paleomap was added, but the
+    name was never defined in this module — so every paleomap row whose
+    ``coordinates`` arrived as a dict raised ``NameError``. ``extract_paleomap``
+    wraps the normaliser in ``except Exception`` and downgrades it to
+    ``ok=False`` with a warning string, so the failure presented as
+    "extraction failed" and the whole result was lost. It only escaped notice
+    because the model often emits the other two coordinate shapes (a
+    ``[lat, lon]`` list, or a ``"12N 30E"`` string) which take different
+    branches — a data-loss bug whose trigger is model-output-dependent, i.e.
+    the worst kind to catch by hand.
+
+    "Carries a value" deliberately means *not None and not an empty
+    container/string* — NOT truthiness. ``0.0`` is a real latitude (the
+    equator) and longitude (the prime meridian), and a plain
+    ``next((v for v in xs if v), None)`` would discard exactly those rows.
+    The semantics match ``rca_core.exporter._nonempty``.
+    """
+    if candidates is None:
+        return None
+    try:
+        iterable = list(candidates)
+    except TypeError:
+        return candidates if candidates is not None else None
+    for v in iterable:
+        if v is None:
+            continue
+        if isinstance(v, (list, dict, str, tuple, set)) and len(v) == 0:
+            continue
+        return v
+    return None
+
 
 def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
     """Coerce the parsed paleogeographic map JSON into the strict result shape.
@@ -3442,6 +3615,14 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         "paleolatitude_indicators": [],
         "confidence": 0.0,
     }
+
+    # AUDIT-2026-09-27 P0-1: this was the only remaining normalizer without
+    # the ``_array_root`` unwrap. json_utils wraps a bare-array emission (the
+    # model replying ``[{...}, {...}]`` to an object contract) into
+    # ``{"_array_root": [...]}``; ``parsed.get("continents")`` was then empty,
+    # ``_pop_array_root_extras`` DELETED the key, and the whole map came back
+    # as ``ok=True`` with six empty tables and no warning.
+    _rehydrate_array_root(parsed, _PALEOMAP_ARRAY_SPEC_KEYS, _paleomap_warnings)
 
     # Normalize metadata
     meta = parsed.get("metadata") or {}
@@ -3505,10 +3686,25 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         if pts or val in (None, "", [], {}):
             return pts
         _paleomap_warnings.append(f"coordinates_unparsed:{label}")
+        # AUDIT-2026-09-27 [item 7.4]: a coordinate the model wrote as TEXT is
+        # not junk — "48.1N 12.0E" is exactly what a geologist wants to see,
+        # and every paleomap table routes through this function, so returning
+        # [] here discarded the value in all six of them. The warning stays
+        # (the string was not machine-parsed), but the value is kept rather
+        # than thrown away; the GUI renders this column with `col.coordinates`
+        # and displays a string there without complaint.
+        #
+        # The test is "contains a digit", not merely "is a non-empty string":
+        # the models also emit placeholders ("unknown", "not visible in
+        # chart", "-") for a coordinate they could not read, and those must
+        # NOT be promoted into the coordinates column as if they were a
+        # reading. Those keep the pre-existing behaviour: dropped, warned.
+        if isinstance(val, str) and any(ch.isdigit() for ch in val):
+            return [val.strip()]
         return pts
 
     # Normalize continents
-    for cont in _dict_rows(parsed.get("continents")):
+    for cont in _dict_rows(parsed.get("continents"), "continents", _paleomap_warnings):
         row = {
             "name": s(cont.get("name")),
             "type": s(cont.get("type")),
@@ -3521,7 +3717,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["continents"].append(row)
 
     # Normalize oceans/seas
-    for sea in _dict_rows(parsed.get("oceans_seas")):
+    for sea in _dict_rows(parsed.get("oceans_seas"), "oceans_seas", _paleomap_warnings):
         row = {
             "name": s(sea.get("name")),
             "type": s(sea.get("type")),
@@ -3532,7 +3728,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["oceans_seas"].append(row)
 
     # Normalize tectonic features
-    for feat in _dict_rows(parsed.get("tectonic_features")):
+    for feat in _dict_rows(parsed.get("tectonic_features"), "tectonic_features", _paleomap_warnings):
         row = {
             "name": s(feat.get("name")),
             "type": s(feat.get("type")),
@@ -3544,7 +3740,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["tectonic_features"].append(row)
 
     # Normalize biogeographic realms
-    for realm in _dict_rows(parsed.get("biogeographic_realms")):
+    for realm in _dict_rows(parsed.get("biogeographic_realms"), "biogeographic_realms", _paleomap_warnings):
         row = {
             "name": s(realm.get("name")),
             "type": s(realm.get("type")),
@@ -3555,10 +3751,22 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["biogeographic_realms"].append(row)
 
     # Normalize fossil sites
-    for site in _dict_rows(parsed.get("fossil_sites")):
+    for site in _dict_rows(parsed.get("fossil_sites"), "fossil_sites", _paleomap_warnings):
         row = {
             "name": s(site.get("name")),
-            "lat_lon": s(site.get("lat_lon")),
+            # AUDIT-2026-09-27 [item 7.3]: this was the ONE paleomap table
+            # that did not route its coordinate through norm_coords — every
+            # sibling (continents / oceans_seas / tectonic_features /
+            # biogeographic_realms / paleolatitude_indicators) does. `s(...)`
+            # stringifies, and a dict/list lat_lon stringifies to "", so a
+            # model returning structured coordinates for a site lost them
+            # outright. And because "lat_lon" is in _KNOWN_PALEOMAP_SITE_KEYS
+            # the value was considered "known", so _carry_extras did not
+            # rescue it either. Observed in real runs as lat_lon: "" next to
+            # a fossil_sites row that plainly had coordinates.
+            # The GUI already renders this column with `col.coordinates`, so
+            # normalising it is also what the table was displaying all along.
+            "lat_lon": norm_coords(site.get("lat_lon"), "fossil_sites"),
             "age": s(site.get("age")),
             "fossils": s(site.get("fossils")),
             "marker_type": s(site.get("marker_type")),
@@ -3567,7 +3775,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["fossil_sites"].append(row)
 
     # Normalize paleolatitude indicators
-    for ind in _dict_rows(parsed.get("paleolatitude_indicators")):
+    for ind in _dict_rows(parsed.get("paleolatitude_indicators"), "paleolatitude_indicators", _paleomap_warnings):
         row = {
             "type": s(ind.get("type")),
             "coordinates": norm_coords(ind.get("coordinates"), "paleolatitude_indicators"),
@@ -3697,6 +3905,15 @@ _KNOWN_SCATTER_GROUP_KEYS = ("name", "color", "marker", "n_points_visible", "des
 _KNOWN_SCATTER_POINT_KEYS = ("x", "y", "z", "group", "label", "note")
 _KNOWN_SCATTER_OUTLIER_KEYS = ("x", "y", "group", "reason")
 
+# AUDIT-2026-09-27 P0-1: scatter row probes, most specific first. A point is
+# the only table carrying a measured coordinate PAIR; an outlier is the only
+# one carrying ``reason``; a bare ``{"name": ...}`` is a series definition.
+_SCATTER_ARRAY_SPEC_KEYS = (
+    ("outliers", ("reason",)),
+    ("points", ("x", "y")),
+    ("groups", ("name",)),
+)
+
 
 def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
     """Coerce the parsed scatter plot JSON into the strict result shape.
@@ -3715,7 +3932,10 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
         }
 
     def s(v):
-        return "" if v is None else str(v)
+        # Container-safe (see _stringify_scalar): a dict/list in a
+        # scalar field degrades to "" rather than leaking a Python
+        # repr into a scientific field.
+        return _stringify_scalar(v)
 
     out = {
         "metadata": {},
@@ -3732,6 +3952,11 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
     # BORROW-2026-09-20 (B): a scatter plot is two continuous axes (x, y).
     _scatter_axes = axis_domains_from(parsed)
 
+    # AUDIT-2026-09-27 P0-1: same missing ``_array_root`` unwrap the paleomap
+    # normalizer had - a bare-array reply emptied groups/points/outliers and
+    # was still reported as a successful extraction.
+    _rehydrate_array_root(parsed, _SCATTER_ARRAY_SPEC_KEYS, scatter_warnings)
+
     meta = parsed.get("metadata") or {}
     if isinstance(meta, dict):
         out["metadata"] = {
@@ -3746,7 +3971,7 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
         }
 
     # Normalize groups
-    for grp in _dict_rows(parsed.get("groups")):
+    for grp in _dict_rows(parsed.get("groups"), "groups", scatter_warnings):
         row = {
             "name": s(grp.get("name")),
             "color": s(grp.get("color")),
@@ -3763,6 +3988,8 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
     # result contradicted its own metadata.n_points (which keeps the model's
     # full count) and the JSON/table/CSV silently reported 500 of N
     # observations. The cap now surfaces as a warning.
+    # AUDIT-2026-09-27 P1: `points` / `outliers` take no `kind` - a bare string
+    # is not a measurement, so it stays dropped (see _row_from_string).
     _points_all = list(_dict_rows(parsed.get("points")))
     if len(_points_all) > 500:
         scatter_warnings.append("points_truncated_to_500")

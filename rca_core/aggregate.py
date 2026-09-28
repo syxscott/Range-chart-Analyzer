@@ -725,6 +725,35 @@ def _is_chimeric_row(group: list, merged: dict) -> bool:
     return True
 
 
+def _recombination_ballots(group: list, keys: tuple = (
+        "range_base", "range_top", "biozone", "section")) -> list:
+    """The distinct readings a group of runs produced, with a vote count each.
+
+    AUDIT-2026-09-27 P1: the honest replacement for DELETING a recombined row.
+    A researcher who sees "2 runs read Bed 7-Bed 9 / Zone B, 2 runs read
+    Bed 7-Bed 11 / Zone C" can adjudicate the disagreement; one who finds the
+    taxon simply missing can only assume the tool lost it.
+    """
+    tally = {}
+    order = []
+    for g in group:
+        if not isinstance(g, dict):
+            continue
+        tup = tuple(_norm(g.get(k, "")) for k in keys)
+        if not any(tup):
+            continue
+        if tup not in tally:
+            tally[tup] = 0
+            order.append(tup)
+        tally[tup] += 1
+    out = []
+    for tup in sorted(order, key=lambda t: (-tally[t], t)):
+        row = dict(zip(keys, tup))
+        row["votes"] = tally[tup]
+        out.append(row)
+    return out
+
+
 def _mode_keys(d_items, keys):
     """Majority-vote the schema-declared fields of a merged row.
 
@@ -891,15 +920,76 @@ def _merge_primary_list(runs, schema, n):
         # P1-1 (REVIEW-2026-07-25): bio-geological consistency gate.
         # If every contributing run produced a DIFFERENT (range_base,
         # range_top, biozone) tuple for this species — i.e. no run ever
-        # observed the merged tuple — DROP this row instead of emitting a
-        # chimeric "consensus" the data never supported.
+        # observed the merged tuple — the row is a per-field RECOMBINATION.
+        #
+        # AUDIT-2026-09-27 P1: this used to DROP the row. That was wrong, and
+        # the mode-vote tie-break is why: `_mode` breaks a 1-1 tie with
+        # `sorted(top_keys)[0]`, so the merged tuple is only ever observed
+        # when EVERY field's winner came from the same run. Two runs that
+        # disagree on >= 2 of {range_base, range_top, biozone} therefore
+        # ALWAYS produce an "unobserved" tuple — which is ordinary OCR
+        # disagreement, not fabrication. Executed before the fix: run A
+        # {Bed 7, Bed 9, Zone B} + run B {Bed 7, Bed 11, Zone C}, both
+        # observing the species, merged to `species_ranges: []`. Raising
+        # `runs` — the documented way to make an extraction MORE reliable —
+        # was deleting taxa, and `chimera_warnings` was read by
+        # gui_fluent.py alone, so server.py and the whole browser path never
+        # learned a row had vanished.
+        #
+        # The row is now KEPT, flagged `recombined_consensus`, and carries the
+        # ballots so the operator can adjudicate. The predicate itself is
+        # unchanged — only its consequence moved.
+        # AUDIT-2026-09-27 [item 11.1] (measured, NOT changed): the flag fires
+        # only when >=2 of {range_base, range_top, biozone} differ, i.e. when
+        # NO run observed the merged tuple. A ONE-field disagreement takes the
+        # other branch: the merged tuple still equals one run's observation,
+        # so it is not flagged, yet which run wins is decided by `_mode`'s
+        # alphabetical tie-break. Demonstrated on a real recorded payload --
+        # run A range_top="Sample 1 (RP13, C20r, uppermost)" vs run B
+        # range_top="ZZZ-DIFFERENT" merges to run A's value with
+        # `agreement = "2/2"` and no warning of any kind.
+        #
+        # That matches the documented meaning of `agreement` ("how many runs
+        # produced this row", i.e. presence consensus, see the line ~827 that
+        # builds it), so it is not a contract violation. It IS a reading
+        # hazard: 2/2 is the strongest marker the table offers, a single
+        # misread endpoint is the commonest multi-run failure, and a
+        # minority-reported value can win on alphabetical order while
+        # displaying 2/2.
+        #
+        # Left alone deliberately. Flagging it means a new row field, a new
+        # REASON_CODES entry, a matching branch in js/aggregate.js (which
+        # mirrors this predicate at ~line 495) and an i18n message in three
+        # locales -- a behaviour change on two surfaces, not a bug fix.
+        # Raised for a decision rather than done unilaterally.
+        #
+        # AUDIT-2026-09-27 [item 11.2] ATTEMPTED, THEN REVERTED. The flag was
+        # built and measured; it turned 4 contract tests red:
+        #   test_majority_agreement_with_one_outlier_kept
+        #   test_divergent_merge_preserves_zone_warning
+        #   test_single_warning_stays_a_bare_string_in_both_engines
+        #   test_fixture_matches_python
+        # Together those say dissent is not a defect: an outlier is what the
+        # multi-run vote EXISTS to outvote, and warning per dissenting row
+        # turns the strongest channel in the table into noise the operator
+        # learns to dismiss.
+        #
+        # There is also no way to calibrate the threshold here. Every one of
+        # the 74 recorded payloads (outputs/e2e_oa/results/*.json = 66, plus
+        # tests/fixtures/real_payloads/*.json = 8) is SINGLE-run: none carries
+        # a `runs`/`results`/`attempts` container or a run-count field, so 0
+        # of 74 would exercise this branch. "How often does one run dissent"
+        # -- the only question that decides whether the warning is worth
+        # having -- is unmeasurable from anything in this repo today.
+        #
+        # To unblock it: record a few genuinely multi-run extractions
+        # (>=2 runs of the same figure) into the corpus, then measure the
+        # dissent rate before choosing a threshold. Do not re-implement the
+        # flag against synthetic data and assume the rate transfers.
         if _is_chimeric_row(group, aggr):
-            # Still append, but mark it so downstream consumers can flag
-            # it. The merge caller checks this flag and excludes from
-            # final output via the `_drop_chimeras` toggle.
-            aggr["_chimera_dropped"] = True
-            merged.append(aggr)
-            continue
+            _add_row_warning(aggr, "recombined_consensus")
+            aggr["_recombination_ballots"] = _recombination_ballots(group)
+            aggr["_chimera_recombined"] = True
 
         merged.append(aggr)
 
@@ -968,10 +1058,24 @@ def _merge_named_lists(runs, schema):
 
         groups = {}
         order = []
+        # AUDIT-2026-09-27 P2: a MIXED list (some runs emit objects, another
+        # emits strings) used to lose every string. The string fast-path above
+        # is gated on "no dict anywhere", so one dict steered the whole list
+        # into the dict branch, whose loop `continue`s on every non-dict item.
+        # Executed: `['Brachiopoda', {'name': 'Crustacea'}]` + `['Mollusca']`
+        # merged to `[{'name': 'Crustacea'}]` — two taxa gone, no warning, and
+        # the single-run path kept them. A model emitting objects in one run
+        # and strings in the next is an ordinary, expected shape.
+        # Non-dict items are therefore collected and merged back as strings
+        # rather than dropped.
+        stray_strings: list[str] = []
         for r in runs:
             items = r.get(key) or []
             for it in items:
                 if not isinstance(it, dict):
+                    text = str(it).strip()
+                    if text:
+                        stray_strings.append(text)
                     continue
                 # UI-REVIEW-2026-09-07: business-identity fields for keys
                 # whose items have no natural name (zonation correlations).
@@ -1062,6 +1166,16 @@ def _merge_named_lists(runs, schema):
             if not rep and group:
                 rep = dict(group[0])
             merged.append(rep)
+        # AUDIT-2026-09-27 P2: put the mixed-in strings back, deduped
+        # case-insensitively and appended after the object rows so the output
+        # keeps the first-seen ordering of the object half.
+        if stray_strings:
+            seen = {_norm(it.get("name") or it.get("marker") or it.get("meaning") or "")
+                    for it in merged if isinstance(it, dict)}
+            for text in stray_strings:
+                if _norm(text) and _norm(text) not in seen:
+                    seen.add(_norm(text))
+                    merged.append(text)
         out[key] = merged
     return out
 
@@ -1161,6 +1275,35 @@ def merge_results(
                     out[key] = copy.deepcopy(run[key])
                     break
 
+    # AUDIT-2026-09-27 P1: carry over EVERY remaining root key, not just a
+    # hand-picked three. The N-run path builds `out` from the primary list +
+    # list_keys + confidence, so any figure-level key the single-run path
+    # keeps was silently dropped by raising the run count. The concrete case
+    # that matters is `axis_calibration`: it is a FIRST-CLASS hoisted root key
+    # by contract (extractor.py `_fold_axis_calibration`), no MergeSchema
+    # declares it, and js/viz.js reads it to turn the rows' 0-999 positions
+    # into real bed/age values. Executed before the fix: present after
+    # `total_runs=1`, GONE after `total_runs=2` — i.e. running the extraction
+    # MORE carefully destroyed the axis evidence, and the vertical axis
+    # silently fell back to uncalibrated positions with no tick labels.
+    #
+    # Rule: any root key that is not one the merge manages (the primary list,
+    # the declared list_keys, the confidence field, `runs`) survives, taken
+    # from the FIRST run that carries it, deep-copied. Same "first run that
+    # has it" rule as `_extras` / `_warnings` above, and the same deep-copy
+    # discipline: an alias would let a caller's in-place edit of the merged
+    # result rewrite the source run, breaking audit integrity.
+    managed = {sch.primary_list_key, sch.confidence_field, "runs"}
+    managed.update(sch.list_keys)
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        for key, value in run.items():
+            if key in managed or key in out:
+                continue
+            if isinstance(value, (list, dict)) and value:
+                out[key] = copy.deepcopy(value)
+
     # Weighted-mean confidence (M-1 / REVIEW-2026-09-20 comment correction).
     # The claim that this is a "simple average" was wrong: each run is
     # weighted by its OWN ``runs`` field, so a run that itself already
@@ -1255,19 +1398,23 @@ def merge_results(
     # output. Dropped rows are surfaced via ``chimera_warnings`` so the
     # UI can tell the operator "we dropped X rows because no run ever
     # observed the merged (FAD/LAD/biozone) tuple together".
+    # P1-1 (REVIEW-2026-07-25): surface recombined rows via
+    # ``chimera_warnings`` so the UI can tell the operator "the runs read this
+    # range differently". AUDIT-2026-09-27 P1: the rows are NO LONGER REMOVED
+    # here — they stay in ``out`` carrying ``_warning: recombined_consensus``
+    # and ``_recombination_ballots``. Dropping them is how a 2/2-agreement
+    # taxon disappeared from the merged table.
+    #
+    # ``chimera_warnings`` keeps its name because gui_fluent.py already reads
+    # it; the reason text changed from "we dropped this" to "runs disagreed",
+    # and each entry now carries the ballots so the same information is
+    # available to every consumer instead of only the Fluent GUI.
     primary_key = sch.primary_list_key
     chimeras = [
         r for r in out.get(primary_key, [])
-        if r.get("_chimera_dropped")
+        if r.get("_chimera_recombined")
     ]
     if chimeras:
-        out[primary_key] = [
-            r for r in out.get(primary_key, [])
-            if not r.get("_chimera_dropped")
-        ]
-        # Strip the internal marker from any rows that remain.
-        for r in out.get(primary_key, []):
-            r.pop("_chimera_dropped", None)
         if "chimera_warnings" not in out:
             out["chimera_warnings"] = []
         for c in chimeras:
@@ -1275,10 +1422,12 @@ def merge_results(
                 "table": primary_key,
                 "row": {k: c.get(k) for k in ("species", "section", "biozone",
                                               "range_top", "range_base")},
-                "reason": "no single run observed the merged (FAD/LAD/biozone) tuple",
+                "reason": "runs disagreed on the (FAD/LAD/biozone) tuple; "
+                          "row kept and flagged, not dropped",
+                "ballots": c.get("_recombination_ballots") or [],
             }
             out["chimera_warnings"].append(w)
-            c.pop("_chimera_dropped", None)
+            c.pop("_chimera_recombined", None)
 
     return out
 

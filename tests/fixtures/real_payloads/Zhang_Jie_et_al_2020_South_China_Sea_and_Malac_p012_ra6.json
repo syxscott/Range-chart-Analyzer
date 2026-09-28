@@ -1,0 +1,855 @@
+{
+ "metadata": {
+  "title": "Latitudinal variation of Species number, Diversity, Richness, and Evenness (SCS top row, MLS bottom row)",
+  "x_axis_label": "Top axis of each panel: Species number (S), Diversity (H), Richness (D), Evenness (J); Bottom axis: Latitude (N)",
+  "y_axis_label": "Latitude (N)",
+  "z_axis_label": "",
+  "x_unit": "see panel-specific top axis (S, H, D, J)",
+  "y_unit": "degrees North",
+  "n_points": null,
+  "grouping_variable": "season (winter vs spring)"
+ },
+ "groups": [
+  {
+   "name": "Stations in spring",
+   "color": "#FFFFFF (open/white diamond with black outline)",
+   "marker": "diamond",
+   "n_points_visible": null,
+   "description": "Open diamond markers connected by dashed line"
+  },
+  {
+   "name": "Stations in winter",
+   "color": "#000000 (filled black diamond)",
+   "marker": "diamond",
+   "n_points_visible": null,
+   "description": "Filled black diamond markers connected by solid line"
+  }
+ ],
+ "points": [
+  {
+   "x": "96",
+   "y": "22",
+   "z": "",
+   "group": "Stations in spring",
+   "label": "96",
+   "note": "SCS, top panel (Species number S)",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "y_pos_0_999": {
+      "pos": 978,
+      "axis": "y",
+      "value": 23.495495,
+      "unit": "Latitude (N) °"
+     }
+    },
+    "axes": {
+     "y": {
+      "at_0": 0.0,
+      "at_999": 24.0,
+      "unit": "Latitude (N) °"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "94",
+   "y": "20.5",
+   "z": "",
+   "group": "Stations in spring",
+   "label": "94",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "y_pos_0_999": {
+      "pos": 933,
+      "axis": "y",
+      "value": 22.414414,
+      "unit": "Latitude (N) °"
+     }
+    },
+    "axes": {
+     "y": {
+      "at_0": 0.0,
+      "at_999": 24.0,
+      "unit": "Latitude (N) °"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "92",
+   "y": "17.5",
+   "z": "",
+   "group": "Stations in spring",
+   "label": "92",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "y_pos_0_999": {
+      "pos": 857,
+      "axis": "y",
+      "value": 20.588589,
+      "unit": "Latitude (N) °"
+     }
+    },
+    "axes": {
+     "y": {
+      "at_0": 0.0,
+      "at_999": 24.0,
+      "unit": "Latitude (N) °"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "90",
+   "y": "16",
+   "z": "",
+   "group": "Stations in spring",
+   "label": "90",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "88",
+   "y": "14",
+   "z": "",
+   "group": "Stations in spring",
+   "label": "88",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "86",
+   "y": "12.5",
+   "z": "",
+   "group": "Stations in spring",
+   "label": "86",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "84",
+   "y": "10",
+   "z": "",
+   "group": "Stations in spring",
+   "label": "84",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "82",
+   "y": "8.5",
+   "z": "",
+   "group": "Stations in spring",
+   "label": "82",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "80",
+   "y": "5",
+   "z": "",
+   "group": "Stations in spring",
+   "label": "80",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 380,
+      "axis": "x",
+      "value": 65.645646,
+      "unit": "Species number (S), SCS panel"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "78",
+   "y": "0.5",
+   "z": "",
+   "group": "Stations in spring",
+   "label": "78",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 440,
+      "axis": "x",
+      "value": 72.852853,
+      "unit": "Species number (S), SCS panel"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "1",
+   "y": "22",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "1",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 520,
+      "axis": "x",
+      "value": 82.462462,
+      "unit": "Species number (S), SCS panel"
+     },
+     "y_pos_0_999": {
+      "pos": 978,
+      "axis": "y",
+      "value": 23.495495,
+      "unit": "Latitude (N) °"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     },
+     "y": {
+      "at_0": 0.0,
+      "at_999": 24.0,
+      "unit": "Latitude (N) °"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "2",
+   "y": "21",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "2",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 570,
+      "axis": "x",
+      "value": 88.468468,
+      "unit": "Species number (S), SCS panel"
+     },
+     "y_pos_0_999": {
+      "pos": 945,
+      "axis": "y",
+      "value": 22.702703,
+      "unit": "Latitude (N) °"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     },
+     "y": {
+      "at_0": 0.0,
+      "at_999": 24.0,
+      "unit": "Latitude (N) °"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "4",
+   "y": "20",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "4",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 610,
+      "axis": "x",
+      "value": 93.273273,
+      "unit": "Species number (S), SCS panel"
+     },
+     "y_pos_0_999": {
+      "pos": 920,
+      "axis": "y",
+      "value": 22.102102,
+      "unit": "Latitude (N) °"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     },
+     "y": {
+      "at_0": 0.0,
+      "at_999": 24.0,
+      "unit": "Latitude (N) °"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "5",
+   "y": "18",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "5",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 650,
+      "axis": "x",
+      "value": 98.078078,
+      "unit": "Species number (S), SCS panel"
+     },
+     "y_pos_0_999": {
+      "pos": 872,
+      "axis": "y",
+      "value": 20.948949,
+      "unit": "Latitude (N) °"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     },
+     "y": {
+      "at_0": 0.0,
+      "at_999": 24.0,
+      "unit": "Latitude (N) °"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "7",
+   "y": "16.5",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "7",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 700,
+      "axis": "x",
+      "value": 104.084084,
+      "unit": "Species number (S), SCS panel"
+     },
+     "y_pos_0_999": {
+      "pos": 830,
+      "axis": "y",
+      "value": 19.93994,
+      "unit": "Latitude (N) °"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     },
+     "y": {
+      "at_0": 0.0,
+      "at_999": 24.0,
+      "unit": "Latitude (N) °"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "9",
+   "y": "14.5",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "9",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 740,
+      "axis": "x",
+      "value": 108.888889,
+      "unit": "Species number (S), SCS panel"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "11",
+   "y": "12.5",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "11",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 780,
+      "axis": "x",
+      "value": 113.693694,
+      "unit": "Species number (S), SCS panel"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "13",
+   "y": "10",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "13",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 830,
+      "axis": "x",
+      "value": 119.6997,
+      "unit": "Species number (S), SCS panel"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "15",
+   "y": "9.5",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "15",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 860,
+      "axis": "x",
+      "value": 123.303303,
+      "unit": "Species number (S), SCS panel"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "16",
+   "y": "7.5",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "16",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 890,
+      "axis": "x",
+      "value": 126.906907,
+      "unit": "Species number (S), SCS panel"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "17",
+   "y": "7",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "17",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 920,
+      "axis": "x",
+      "value": 130.510511,
+      "unit": "Species number (S), SCS panel"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "18",
+   "y": "6",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "18",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 930,
+      "axis": "x",
+      "value": 131.711712,
+      "unit": "Species number (S), SCS panel"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "20",
+   "y": "4",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "20",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "22",
+   "y": "2.5",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "22",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "23",
+   "y": "1",
+   "z": "",
+   "group": "Stations in winter",
+   "label": "23",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  }
+ ],
+ "outliers": [
+  {
+   "x": "96",
+   "y": "21",
+   "group": "Stations in spring",
+   "reason": "highest species number / diversity / richness point at 21°N in SCS panels",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "y_pos_0_999": {
+      "pos": 955,
+      "axis": "y",
+      "value": 22.942943,
+      "unit": "Latitude (N) °"
+     }
+    },
+    "axes": {
+     "y": {
+      "at_0": 0.0,
+      "at_999": 24.0,
+      "unit": "Latitude (N) °"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ],
+   "_extras": {
+    "note": "Evenness panel outlier spring"
+   }
+  },
+  {
+   "x": "16",
+   "y": "7.5",
+   "group": "Stations in winter",
+   "reason": "right-most / lowest evenness point in SCS Evenness panel",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 890,
+      "axis": "x",
+      "value": 126.906907,
+      "unit": "Species number (S), SCS panel"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "31",
+   "y": "5",
+   "group": "Stations in winter",
+   "reason": "northernmost MLS station (5°N) with maximum species number (~50), diversity (~3), richness (~8), evenness (~0.9)",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "72",
+   "y": "4.2",
+   "group": "Stations in spring",
+   "reason": "high-latitude MLS spring outlier (4.2°N) with moderate-low S/H/D/J",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "x": "77",
+   "y": "1",
+   "group": "Stations in spring",
+   "reason": "MLS southern outlier (1°N) with low species number (~30)",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 350,
+      "axis": "x",
+      "value": 62.042042,
+      "unit": "Species number (S), SCS panel"
+     },
+     "y_pos_0_999": {
+      "pos": 30,
+      "axis": "y",
+      "value": 0.720721,
+      "unit": "Latitude (N) °"
+     }
+    },
+    "axes": {
+     "x": {
+      "at_0": 20.0,
+      "at_999": 140.0,
+      "unit": "Species number (S), SCS panel"
+     },
+     "y": {
+      "at_0": 0.0,
+      "at_999": 24.0,
+      "unit": "Latitude (N) °"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  }
+ ],
+ "statistics": {
+  "correlation": "",
+  "regression_line": "",
+  "r_squared": "",
+  "p_value": ""
+ },
+ "confidence": 0.62,
+ "axis_calibration": {
+  "y": {
+   "at_0": 0.0,
+   "at_999": 24.0,
+   "unit": "Latitude (N) °"
+  },
+  "x": {
+   "at_0": 20.0,
+   "at_999": 140.0,
+   "unit": "Species number (S), SCS panel"
+  }
+ },
+ "_extras": {
+  "note": "Figure is a multi-panel composite of four variable-vs-latitude line plots for two surveys (SCS top, MLS bottom). Y-axis (latitude) is shared; top X-axis varies per panel (S, H, D, J). Point coordinates transcribed represent the y-axis latitude; the x-value is the top-axis variable value at the labelled station. Stations 78, 80, 82, 84, 86, 88, 90, 92, 94, 96 are spring SCS; 1, 2, 4, 5, 7, 9, 11, 13, 15, 16, 17, 18, 20, 22, 23 are winter SCS. MLS spring: 72, 74, 76, 77; MLS winter: 25, 27, 28, 30, 31. Some labels overlap (16/17/18 at ~7°N)."
+ }
+}

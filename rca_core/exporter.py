@@ -104,8 +104,17 @@ def validate_export_invariants(
     never raises and never blocks an export; it only reports. The only
     hard consumer is ``to_xlsx``, which raises ValueError when ``ok`` is
     False (so a broken workbook is never written). ``to_csv`` / ``to_tsv``
-    still run to completion so the user can see what's wrong, and the GUI
-    can badge the result with a 'had invariants failures' flag.
+    still run to completion so the user can see what's wrong.
+
+    AUDIT-2026-09-27 [item 9.1]: the sentence here used to end "and the GUI
+    can badge the result with a 'had invariants failures' flag". That was
+    never implemented and never could have been: no GUI module references
+    this function, nothing reads its return value outside to_xlsx, and no
+    i18n key for such a badge exists in any of the three locales. Checked
+    rather than assumed. Removed, because a docstring that describes a
+    non-existent feature sends the next maintainer looking for a flag that
+    is not there. If the badge is ever wanted it has to be BUILT — the
+    invariant report is already available to whoever does it.
 
     REVIEW-2026-09-20: the return gained the third element (warnings).
     Call sites unpack three values now — ``ok, issues, warnings = ...``.
@@ -578,13 +587,28 @@ def _columnar_section_tables(data: dict[str, Any] | None) -> list[dict[str, Any]
     ]
 
 
-# REVIEW-2026-09-20: the three ASSISTANT modes (UI-REVIEW checklist) have no
-# table schema at all — no ``TABLE_CONFIGS`` branch, nothing in js/table.js,
-# no editable grid. Their root keys mirror ``rca_core/extractor.py``'s
-# ``_KNOWN_CHEMICAL_STRAT_ROOT_KEYS`` / ``_KNOWN_PALEOMAP_ROOT_KEYS`` /
-# ``_KNOWN_SCATTER_PLOT_ROOT_KEYS`` (kept as literals here for the same reason
-# js/json-utils.js duplicates them: importing extractor from exporter would
-# create an import cycle). Kept in sync by ``tests/test_exporter_modes.py``.
+# REVIEW-2026-09-20: the ASSISTANT modes (UI-REVIEW checklist) have no
+# dedicated table schema in the main TABLE_CONFIGS dispatch. Their root keys
+# mirror ``rca_core/extractor.py``'s ``_KNOWN_CHEMICAL_STRAT_ROOT_KEYS`` /
+# ``_KNOWN_PALEOMAP_ROOT_KEYS`` / ``_KNOWN_SCATTER_PLOT_ROOT_KEYS`` (kept as
+# literals here for the same reason js/json-utils.js duplicates them:
+# importing extractor from exporter would create an import cycle).
+#
+# AUDIT-2026-09-27: this comment was WRONG about paleomap, and it named a
+# guard that does not exist. It claimed all three modes had "no TABLE_CONFIGS
+# branch, nothing in js/table.js, no editable grid" and that the literals were
+# "kept in sync by tests/test_exporter_modes.py". Measured now:
+#   * paleomap DOES have configs on both sides — ``_looks_paleomap`` +
+#     ``_paleomap_tables`` here, ``rcaLooksPaleomap`` + ``rcaPaleomapConfigs``
+#     in js/table.js — so the blanket claim steered the next reader away from
+#     code that exists. chemical_stratigraphy and scatter are still tableless.
+#   * tests/test_exporter_modes.py does not exist anywhere in the repo. The
+#     real guards are tests/test_paleomap_tables.py (the paleomap configs and
+#     their column set) and tests/test_generic_tables.py (the generic
+#     fallback the tableless modes use).
+# A stale claim like this is a defect in this repo's own terms: the same wave
+# that recorded a phantom "GUI badges the result" comment in
+# ``validate_export_invariants`` removed it rather than leaving it.
 _TABLELESS_MODES: dict[str, tuple[str, ...]] = {
     "chemical_stratigraphy": ("data_points", "events", "intervals"),
     "paleomap": (
@@ -618,12 +642,24 @@ def detect_tableless_mode(data: dict[str, Any] | None) -> str | None:
     """
     if not isinstance(data, dict) or not data:
         return None
-    # A result that DOES carry tables is never tableless, whatever else it
-    # holds (a merged or hand-edited payload can contain stray keys).
-    for table_key in ("species_ranges", "sections", "abundances", "nodes",
-                      "zonations", "zones", "correlations", "biozones"):
-        v = data.get(table_key)
-        if isinstance(v, list) and v:
+    # AUDIT-2026-09-27 [item 4.2]. The payload's own CONTENT decides, not a
+    # whitelist of key names. The old first clause returned "not tableless"
+    # for eight hardcoded table keys and let everything else fall through to
+    # the mode checks -- which meant it got BOTH directions wrong:
+    #
+    #   * 7 of 66 recorded real responses carried 24 populated tables
+    #     (palaeomap: continents, tectonic_features, fossil_sites ...) and
+    #     were classified tableless, so the GUI showed "No results yet" and
+    #     the data was only reachable by exporting JSON;
+    #   * 7 of 66 carried NO table at all (range_chart / abundance_diagram
+    #     with nothing tabular) and were classified tabular, so ``to_xlsx``
+    #     wrote a 4-sheet workbook of nothing -- precisely what this
+    #     function's own docstring says it exists to prevent.
+    #
+    # One clause replaces both: a populated list of objects anywhere in the
+    # payload means there IS tabular data, whatever the mode is called.
+    for v in data.values():
+        if isinstance(v, list) and v and isinstance(v[0], dict):
             return None
     for mode, exclusive in _MODE_EXCLUSIVE_KEYS.items():
         if any(_nonempty(data.get(k)) for k in exclusive):
@@ -638,6 +674,232 @@ def detect_tableless_mode(data: dict[str, Any] | None) -> str | None:
 
 def _nonempty(v: Any) -> bool:
     return bool(v) if isinstance(v, (list, dict, str)) else v is not None
+
+
+def _looks_paleomap(data: dict[str, Any] | None) -> bool:
+    """True when the payload carries paleomap-shaped tables.
+
+    AUDIT-2026-09-27 [item 4.2]. Mirrors js/table.js.
+
+    The trigger is any paleomap-exclusive key that actually holds rows. The
+    exclusivity matters: `metadata` / `confidence` overlap every mode, and
+    a range chart may legitimately carry a `note`. Being strict on the key
+    NAME but not on its CONTENT is what made the old behaviour wrong in both
+    directions -- it classified 7 real responses with 24 populated tables as
+    "no tables at all", and let 7 genuinely empty range charts through as
+    tabular.
+    """
+    if not isinstance(data, dict) or not data:
+        return False
+    for k in ("continents", "oceans_seas", "tectonic_features",
+              "biogeographic_realms", "paleolatitude_indicators", "fossil_sites"):
+        v = data.get(k)
+        if isinstance(v, list) and v and isinstance(v[0], dict):
+            return True
+    return False
+
+
+def _paleomap_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Palaeomap / locality-map table configs.
+
+    AUDIT-2026-09-27 [item 4.2]. These tables were already being produced by
+    the extractor -- measured over 66 recorded real responses, 7 paleomap
+    results carried 24 tables in total (9 continents, 16 fossil sites with
+    coordinates, tectonic features, biogeographic realms) -- and
+    ``detect_tableless_mode`` threw every one of them away, because it
+    matched on a whitelist of table KEYS and those keys never appear in a
+    palaeomap payload. The user saw "No results yet" over data they had paid
+    for, with no indication it existed anywhere.
+
+    Mirrors the js/table.js branch of the same name; the two are covered by
+    tests_diff_frontend_parity.js.
+    """
+    def _rows(key):
+        v = (data or {}).get(key)
+        return v if isinstance(v, list) else []
+
+    return [
+        {
+            "id": "continents",
+            "title_key": "sec.continents",
+            "cols": ["col.name", "col.type", "col.paleolatitude",
+                     "col.coordinates"],
+            "data_keys": ["name", "type", "paleolatitude", "coordinates"],
+            "identity_keys": ["name"],
+            "row": lambda r: [
+                r.get("name", ""), r.get("type", ""),
+                r.get("paleolatitude", ""), r.get("coordinates", ""),
+            ],
+        },
+        {
+            "id": "oceans_seas",
+            "title_key": "sec.oceansSeas",
+            "cols": ["col.name", "col.type", "col.coordinates", "col.note"],
+            "data_keys": ["name", "type", "coordinates", "note"],
+            "identity_keys": ["name"],
+            "row": lambda r: [
+                r.get("name", ""), r.get("type", ""),
+                r.get("coordinates", ""), r.get("note", ""),
+            ],
+        },
+        {
+            "id": "tectonic_features",
+            "title_key": "sec.tectonicFeatures",
+            "cols": ["col.name", "col.type", "col.direction",
+                     "col.description", "col.coordinates"],
+            "data_keys": ["name", "type", "direction", "description",
+                          "coordinates"],
+            "identity_keys": ["name"],
+            "row": lambda r: [
+                r.get("name", ""), r.get("type", ""), r.get("direction", ""),
+                r.get("description", ""), r.get("coordinates", ""),
+            ],
+        },
+        {
+            "id": "biogeographic_realms",
+            "title_key": "sec.biogeographicRealms",
+            "cols": ["col.name", "col.type", "col.characteristicFauna",
+                     "col.coordinates"],
+            "data_keys": ["name", "type", "characteristic_fauna",
+                          "coordinates"],
+            "identity_keys": ["name"],
+            "row": lambda r: [
+                r.get("name", ""), r.get("type", ""),
+                r.get("characteristic_fauna", ""), r.get("coordinates", ""),
+            ],
+        },
+        {
+            "id": "paleolatitude_indicators",
+            "title_key": "sec.paleolatitudeIndicators",
+            "cols": ["col.type", "col.coordinates"],
+            "data_keys": ["type", "coordinates"],
+            "identity_keys": ["type", "coordinates"],
+            "row": lambda r: [r.get("type", ""), r.get("coordinates", "")],
+        },
+        {
+            "id": "fossil_sites",
+            "title_key": "sec.fossilSites",
+            "cols": ["col.name", "col.age", "col.coordinates", "col.fossil",
+                     "col.fossilMarker"],
+            "data_keys": ["name", "age", "lat_lon", "fossils", "marker_type"],
+            "identity_keys": ["name"],
+            "row": lambda r: [
+                r.get("name", ""), r.get("age", ""), r.get("lat_lon", ""),
+                r.get("fossils", ""), r.get("marker_type", ""),
+            ],
+        },
+    ]
+
+
+def _nonempty_or_none(configs: list[dict[str, Any]],
+                      data: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Drop configs whose TOP-LEVEL source table is missing or empty.
+
+    AUDIT-2026-09-27 [item 4.2]. A mode can contribute six tables while a
+    given figure only carries two of them; rendering four header-only tables
+    is the same kind of lie as the four empty range-chart sheets. Also the
+    backstop for a result that produced no tabular data at all: ``to_xlsx``
+    refuses to save a workbook with zero rows, so an all-empty config list
+    would otherwise raise a confusing openpyxl error instead of the clear
+    "no tabular structure" one.
+
+    SCOPED deliberately. This resolves ``data[config_id]``, so it is blind to
+    a table nested under a parent row -- which is how ``_columnar_section_
+    tables`` stores lithology_blocks / age_units / samples (inside each
+    ``sections[i]``). Applying it there deleted them, so only the range-chart
+    fallback and the paleomap branch, whose sources are top-level, use it.
+    """
+    if not configs or not isinstance(data, dict):
+        return configs
+    out = []
+    for c in configs:
+        src = data.get(c.get("id"))
+        # Any NON-EMPTY list counts, including a list of plain strings:
+        # `other_fossils` is deliberately a string list and is exported as a
+        # one-column sheet (tests/test_exporter_xlsx_fix.py::
+        # TestToXlsxStringOtherFossils pins exactly that). An earlier draft
+        # of this helper required `src[0]` to be a dict and silently dropped
+        # those tables, which is how four existing tests caught it.
+        if isinstance(src, list) and src:
+            out.append(c)
+    return out
+
+def _col_label(key: str) -> str:
+    """`col.<snake_key>` when that translation exists, else a readable literal.
+
+    A generic table has arbitrary columns, so it cannot ship an i18n key per
+    possible column. Where a translation already exists (col.group,
+    col.coordinates, ...) it is used, so the generic tables look native; the
+    rest fall back to a humanised label, and ``Translator.t`` returns an
+    unknown key verbatim, so a literal renders as itself.
+    """
+    from .i18n import TRANSLATIONS
+    camel = re.sub(r"_([a-z])", lambda m: m.group(1).upper(), key)
+    i18n_key = "col." + camel
+    en = TRANSLATIONS.get("en") or {}
+    if i18n_key in en:
+        return i18n_key
+    words = re.split(r"[_\-]+", key)
+    return " ".join(w[:1].upper() + w[1:] for w in words if w)
+
+
+def _title_label(key: str) -> str:
+    """Readable table title; the same verbatim-fallback trick as _col_label."""
+    from .i18n import TRANSLATIONS
+    camel = re.sub(r"_([a-z])", lambda m: m.group(1).upper(), key)
+    for pref in ("sec.", "table."):
+        if (pref + camel) in (TRANSLATIONS.get("en") or {}):
+            return pref + camel
+    words = re.split(r"[_\-]+", key)
+    return " ".join(w[:1].upper() + w[1:] for w in words if w)
+
+
+def _generic_tables(data: dict[str, Any],
+                    claimed: set[str]) -> list[dict[str, Any]]:
+    """Render any populated table no mode-specific branch claimed.
+
+    AUDIT-2026-09-27 [item 6.1] — the generalisation fix. A real 48-figure
+    corpus run (tests_real_corpus.py) measured 4 results carrying 131 rows
+    across ``data_points`` / ``events`` / ``intervals`` (chemical_
+    stratigraphy) and ``groups`` / ``points`` / ``outliers`` (scatter_plot)
+    that rendered ZERO tables: the same silent data loss as paleomap, just
+    for the two modes that were still on the tableless list.
+
+    Adding a ``_looks_<mode>`` + ``_<mode>_tables`` pair per mode does not
+    scale — it is a defect per mode, and the model can return a key nobody
+    anticipated. So this is the fallback: anything shaped like a table gets
+    rendered, and the specific branches stay only where they add real
+    semantics (merged runs, nested sub-tables, identity keys).
+
+    It cannot resurrect the "four empty sheets" failure, because it only emits
+    for a populated list of OBJECTS — the same test every other branch and the
+    tableless gate use. A result with nothing tabular still yields nothing.
+    """
+    if not isinstance(data, dict):
+        return []
+    out = []
+    for key, val in data.items():
+        if key in claimed:
+            continue
+        if not (isinstance(val, list) and val and isinstance(val[0], dict)):
+            continue
+        col_keys = [k for k in val[0].keys() if isinstance(k, str)]
+        if not col_keys:
+            continue
+        out.append({
+            "id": key,
+            "title_key": _title_label(key),
+            "generic": True,
+            # No index column here: the GUI (`["#"] + [self._t(c) ...]`) and the
+            # browser renderer both prepend it, so including it would misalign
+            # `edit` (index-aligned with cols) by one — which
+            # tests_edit_history.js::edit-cols-aligned-all-modes checks.
+            "cols": [_col_label(k) for k in col_keys],
+            "data_keys": col_keys,
+            "identity_keys": col_keys[:1],
+            "row": (lambda r, ks=tuple(col_keys): [r.get(k, "") for k in ks]),
+        })
+    return out
 
 
 def get_configs_for_result(data: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -670,7 +932,22 @@ def get_configs_for_result(data: dict[str, Any] | None) -> list[dict[str, Any]]:
     # Phylogenetic-tree detection (nodes with parent/id structure).
     if _looks_phylogenetic_tree(data):
         return _phylogenetic_tree_tables(data)
-    return _range_chart_tables(data)
+    # AUDIT-2026-09-27 [item 4.2]: paleomap. Placed before the range-chart
+    # fallback because a palaeomap payload carries none of the range-chart
+    # keys, so it used to fall straight through to _range_chart_tables() --
+    # four sheets that are empty unless the tableless gate caught it first.
+    if _looks_paleomap(data):
+        return _nonempty_or_none(_paleomap_tables(data), data)
+    # AUDIT-2026-09-27 [item 6.1]: LAST resort, after every mode-specific
+    # branch. Whatever is still a populated table nobody claimed gets
+    # rendered generically. Without this, a mode whose tables have no branch
+    # loses the data silently — measured at 131 rows across 4 of 48 real
+    # figures before this line existed.
+    specific = _nonempty_or_none(_range_chart_tables(data), data)
+    if specific:
+        claimed = {c["id"] for c in specific}
+        return specific + _generic_tables(data, claimed)
+    return _generic_tables(data, set())
 
 
 def _abundance_diagram_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -1221,6 +1498,17 @@ def apply_table_edits(
     # REVIEW-2026-09-20: identity index instead of the old positional
     # ``data_row_idx`` cursor.
     pool = _identity_pool(existing_items, identity_keys) if identity_keys else {}
+    # AUDIT-2026-09-27 P1: a data-row index is needed again — not as an
+    # identity cursor (that WAS the P0-7 bug and stays removed) but so an
+    # identity miss can recover the row's real sub-tables from the same
+    # position, see the positional fallback below.
+    #
+    # It counts EMITTED rows, not `rows` positions: the placeholder row skipped
+    # below still consumes a slot in `rows`, so `enumerate(rows)` would drift
+    # by one for every row after a placeholder and hand a section the
+    # NEIGHBOUR's sub-tables — the same class of mis-attribution this whole
+    # change exists to prevent.
+    data_ri = 0
     for row in rows:
         # Skip empty placeholder rows (a Qt quirk: rowCount is 1 even
         # when the model is empty, so the last row is a phantom). A skipped
@@ -1235,6 +1523,8 @@ def apply_table_edits(
             if txt:
                 out.append(txt)
             continue
+        ri = data_ri
+        data_ri += 1
         # Coerce the cells first: the identity is computed from the EDITED
         # row (the operator may have corrected the name itself).
         edited: dict[str, Any] = {}
@@ -1254,10 +1544,31 @@ def apply_table_edits(
             src_idx = _pop_match(pool, _row_identity(edited, identity_keys))
         if src_idx is not None and isinstance(existing_items[src_idx], dict):
             d: dict[str, Any] = dict(existing_items[src_idx])
+        elif ri < len(existing_items) and isinstance(existing_items[ri], dict):
+            # AUDIT-2026-09-27 P1: identity miss, but this is still the row the
+            # operator is editing - they retyped the very field the identity is
+            # built from (fixing an OCR'd column label, correcting a section
+            # name). Inheriting NOTHING here destroyed real extracted data:
+            # executed on a columnar result, editing one cell of `sections`
+            # took `lithology_blocks`, `age_units` and `samples` with it, and
+            # the sections tab never showed those sub-tables, so the loss was
+            # invisible. Those keys are now carried over from the row at the
+            # same position.
+            #
+            # `_extras` is still EXCLUDED, and that distinction is the whole
+            # point: plate / page references are provenance the model attached
+            # to a row, and attaching the neighbour's to a renamed row
+            # fabricates it - which is exactly what the identity match above
+            # was introduced to prevent. Sub-tables are measurement data, not
+            # provenance, so carrying them is recovery rather than invention.
+            #
+            # A row APPENDED past the end still inherits nothing.
+            prev = existing_items[ri]
+            d = {k: copy.deepcopy(v) for k, v in prev.items() if k != "_extras"}
         else:
-            # Genuinely new (or unmatchable) row: no inheritance. The old code
-            # reused whatever happened to sit at this index — a deleted row's
-            # _extras landed on its successor.
+            # Genuinely new row: no inheritance. The old code reused whatever
+            # happened to sit at this index — a deleted row's _extras landed on
+            # its successor.
             d = {}
         d.update(edited)
         out.append(d)
@@ -1375,8 +1686,27 @@ def _sanitize_formula_cell(v: Any) -> Any:
     quote so Excel/LibreOffice treats it as text, not an executable formula.
     An LLM-extracted (or attacker-crafted) value like =CMD(...) or
     =HYPERLINK(...) would otherwise execute on open.
+
+    AUDIT-2026-09-27 P1: a real NUMBER is never a formula, so the triggers are
+    only applied to text. Previously ``str(v)`` was inspected for every value,
+    and every negative number began with ``-`` - so the float ``-31.2`` came
+    out as the STRING ``'-31.2`` with a literal apostrophe in the file. South
+    and west hemisphere sections therefore exported a coordinates cell a
+    strict reader parses as ``'-31.2, 120.5`` rather than the coordinate, and
+    negative thickness/level values became text cells that Excel's sorting,
+    averaging, pivots and charts silently drop. ``rca_core/standards/pbdb.py``
+    already had this exemption (``-31.0`` is a latitude, not an attack) and
+    documented why; the generic exporter never received it. A genuine
+    negative-number-as-TEXT cell (the string ``"-31"``) is still prefixed.
     """
     if v is None:
+        return v
+    # A real int / float / Decimal is data, not a formula, whatever it looks
+    # like. bool is excluded explicitly: it is an int subclass, but a cell
+    # holding True/False should follow the text rules like any other label.
+    if isinstance(v, bool):
+        pass
+    elif isinstance(v, (int, float, _Decimal)):
         return v
     s = str(v)
     if s and s[0] in ("=", "+", "-", "@", "\t", "\r", "\n"):
@@ -1595,6 +1925,18 @@ def to_xlsx(
         has no tabular shape at all (assistant modes — JSON only).
     RuntimeError: when openpyxl is not installed.
     """
+    # AUDIT-2026-09-27 [item 6.2] (found by the generalisation test): a
+    # non-dict payload (None, or a list) reached validate_export_invariants
+    # and died with "AttributeError: 'NoneType' object has no attribute 'get'".
+    # The docstring promises a clear ValueError for "no tabular shape at all",
+    # and a crash in the validator is exactly the confusing failure the rest of
+    # this function works to avoid. Guard it here so every unusable payload
+    # gets the same honest message.
+    if not isinstance(data, dict) or not data:
+        raise ValueError(
+            "to_xlsx: this result has no tabular structure "
+            f"(payload: {type(data).__name__}); use the JSON export instead")
+
     # F-1 (REVIEW-2026-07-25 P2-5): wire the entry validator so data-integrity
     # violations are surfaced before any table is written to the workbook.
     # REVIEW-2026-09-20: only BLOCKING issues raise. A blank ``section`` or a

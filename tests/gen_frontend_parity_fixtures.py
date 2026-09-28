@@ -163,11 +163,40 @@ _add(
         "sections": [{"name": "S", "formations": " Nanling Fm ",
                       "coordinates": {"lat": 1}, "thickness_m": 12.5}],
     }),
+    # AUDIT-2026-09-27: the literal "NaN" as a confidence. Both engines accept
+    # it as a float -- Python's float("NaN") and JS's Number("NaN") both give
+    # NaN -- and then they clamp it with the SAME INTENT and the OPPOSITE
+    # result, because the languages disagree: Python's min(1.0, nan) returns
+    # 1.0 (it does not propagate NaN), while JS's Math.min(1, NaN) is NaN and
+    # stays NaN until the falsy fallback turns it into 0. So one model's
+    # `"confidence": "NaN"` becomes a PERFECT 1.0 in the desktop app and a 0 in
+    # the browser. Found by difffuzz_normalize.py. Every other unparseable
+    # value ("bogus", "[]") agrees, so this is the NaN path alone -- which is
+    # why no hand-written confidence fixture ever hit it.
+    _case("range_chart", "rc_root_confidence_nan", {
+        "sections": [], "confidence": "NaN",
+    }),
+    _case("range_chart", "rc_row_confidence_nan", {
+        "sections": [], "confidence": 1,
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "9", "confidence": "NaN"}],
+    }),
 )
 
 # --- columnar_section ------------------------------------------------------
 _add(
     _case("columnar_section", "col_empty", {}),
+    # AUDIT-2026-09-27: a container the model put in an UNRECOGNISED field.
+    # Python's _stringify_scalar renders it as text ("(1, 2)"); the browser's
+    # _extras carry-over keeps the real array. Neither loses the information,
+    # and the repo's stated policy is that the browser is "lossless-or-empty,
+    # never a fabricated Python repr" (rcaStringifyScalar's docstring), so
+    # teaching JS to emit "(1, 2)" is the one option that is definitely wrong.
+    # Tracked rather than fixed. Found by difffuzz_normalize.py.
+    _case("columnar_section", "col_extras_container", {
+        "sections": [{"id": "Ki-1", "group": "G", "lithology": [1, 2]}],
+        "confidence": 1,
+    }),
     _case("columnar_section", "col_foreign", {"totally_unrelated": 1}),
     _case("columnar_section", "col_dict_shaped", {
         "sections": {
@@ -493,6 +522,15 @@ _add(
           "```json\n{\"zonations\": [{\"name\": \"N\"}], \"correlations\": []}\n```"),
     _case("safe_json_loads", "sj_unclosed_fence",
           "```json\n{\"sections\": [{\"name\": \"A\"}]}"),
+    # AUDIT-2026-09-27: a leading UTF-8 BOM. JS trim() removes U+FEFF (it is in
+    # the ECMAScript WhiteSpace production as the historical ZWNBSP) and
+    # Python's str.strip() does not, so a BOM-prefixed reply parsed in the
+    # browser and failed on the desktop/backend. Found by difffuzz_json.py.
+    _case("safe_json_loads", "sj_bom_object", "\ufeff{\"sections\": [{\"name\": \"A\"}]}"),
+    _case("safe_json_loads", "sj_bom_array",
+          "\ufeff[{\"species\": \"A\", \"section\": \"S\"}]"),
+    _case("safe_json_loads", "sj_bom_with_prose",
+          "\ufeffSure! Here it is:\n{\"sections\": [{\"name\": \"A\"}]}\nDone."),
 )
 
 # --- age bounds (quality.js / ics_table.js vs standards/ics.py) ------------
@@ -530,6 +568,17 @@ _AGE_INPUTS = [
     ("Wuchiapingian", "middle"),
     ("Capitanian", "older"),
     (" Guadalupian ", "younger"),
+    # AUDIT-2026-09-27: non-ASCII decimal digits. Python's `\d` and `float()`
+    # accept every Unicode decimal digit; ECMAScript's `\d` is `[0-9]` and
+    # nothing else. So the desktop/backend path resolves "26<U+0660> Ma" to an
+    # absolute age and the browser path calls it unresolvable — the same label
+    # produces different DwC/PBDB ages depending on which engine read the
+    # figure. Full-width digits are written with \u escapes so this file stays
+    # pure ASCII. Parked in EXPECTED_DIVERGENCES in tests_diff_frontend_parity.js
+    # until someone decides which way the contract should go; it is a behaviour
+    # change on BOTH engines, not a bug fix.
+    ("26٠ Ma", "older"),
+    ("２６０ Ma", "older"),
 ]
 for _i, (_text, _prefer) in enumerate(_AGE_INPUTS):
     _add(_case("age_bound", "ag_%02d" % (_i + 1), _text, _prefer))
@@ -750,6 +799,32 @@ _add(
         _mrun({"species": "A", "section": "S1", "range_top": "9",
                "response_kind": "extracted"}),
     ]),
+    # AUDIT-2026-09-27 [P2]: the ballots of a recombined row are ORDERED
+    # (votes desc, then the tuple). The tie-break compares the VALUES, and a
+    # value that is a PREFIX of another is the case that separates a tuple
+    # comparison from a string comparison of its encoding: the JSON separator
+    # ',' (0x2C) sorts after the space (0x20) inside a value, so "bed 1 (rp13)"
+    # used to compare LESS than "bed 1" and the two engines listed the same
+    # disagreement in opposite order. No prior case had two ballot values in a
+    # prefix relationship, which is why this survived.
+    _mg("mrg_ballot_prefix_order", [
+        _mrun({"species": "A", "section": "S1", "range_base": "bed 1",
+               "range_top": "bed 9", "biozone": "zone c"}),
+        _mrun({"species": "A", "section": "S1", "range_base": "bed 1 (rp13)",
+               "range_top": "bed 9", "biozone": "zone b"}),
+    ]),
+    # ...and one where a 2-vote reading must outrank two 1-vote readings, so
+    # the primary sort key is covered and not just the tie-break.
+    _mg("mrg_ballot_majority_first", [
+        _mrun({"species": "A", "section": "S1", "range_base": "bed 9",
+               "range_top": "bed 9", "biozone": "zone b"}),
+        _mrun({"species": "A", "section": "S1", "range_base": "bed 9",
+               "range_top": "bed 9", "biozone": "zone b"}),
+        _mrun({"species": "A", "section": "S1", "range_base": "bed 3",
+               "range_top": "bed 8", "biozone": "zone a"}),
+        _mrun({"species": "A", "section": "S1", "range_base": "bed 4",
+               "range_top": "bed 8", "biozone": "zone a"}),
+    ], total=4),
     _mg("mrg_single_run_passthrough", [
         _mrun({"species": "A", "section": "S1", "response_kind": "not_drawn",
                "reason_codes": ["not_drawn"]}),

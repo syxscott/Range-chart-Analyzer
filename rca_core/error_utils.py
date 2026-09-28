@@ -196,8 +196,30 @@ def get_retry_delay(
 ) -> float:
     """Calculate retry delay with exponential backoff and jitter.
 
-    Respects Retry-After headers when present, with smart fallback.
-    Mirrors DSH's provider-retry.js getRetryDelayMs() logic.
+    Respects Retry-After headers **when they are passed in**, with smart
+    fallback. Mirrors DSH's provider-retry.js getRetryDelayMs() logic.
+
+    AUDIT-2026-09-28: the "when they are passed in" is load-bearing, and the
+    bare "Respects Retry-After headers when present" this used to say is how
+    that came to be trusted as a live guarantee. The test suite pins the
+    header behaviour at THIS level -- ``get_retry_delay(429, {"retry-after":
+    "7"}) == 7.0`` and a zero Retry-After never meaning zero backoff -- and
+    all of that is correct. But only ONE of the three production call sites
+    can supply headers at all:
+
+        error_utils.retry_with_backoff   headers=get_headers() or None  OK
+        llm.call_llm_api_with_retry      headers=None   <-- LLM calls
+        extractor transport retry        headers=None   <-- image transport
+
+    The two that actually hit a provider's rate limit always pass None,
+    because ``call_llm_api`` reads the response and never captures
+    ``resp.headers`` -- so a server answering ``429 Retry-After: 120`` is
+    backed off by ~0.8 s and retried three times, which is the opposite of
+    what Retry-After asks for and can extend the limit. Carrying the headers
+    out means changing that call's return tuple (consumed in several places)
+    and its js/error-utils.js mirror, so it is left for the owner rather than
+    changed here. Until then: the function honours Retry-After, and the LLM
+    path does not use it.
     """
     delay: float | None = None
 

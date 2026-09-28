@@ -193,7 +193,25 @@ function diff(a, b, trail, out) {
   out.push(`${trail}: py=${JSON.stringify(a)} js=${JSON.stringify(b)}`);
 }
 
-// Two cases stay diverged ON PURPOSE. Both are recorded here instead of being
+//  * ag_34 / ag_35 — non-ASCII decimal digits in an age label. Python's `\d`
+//    and `float()` accept every Unicode decimal digit; ECMAScript's `\d` is
+//    `[0-9]` and nothing else, so rca_core/standards/ics.py resolves
+//    "26٠ Ma" (Arabic-Indic zero) and "２６０ Ma" (full-width) to an
+//    absolute age while js/quality.js#_resolveAgeBound calls them
+//    unresolvable. Same label, different DwC/PBDB age, decided by which
+//    engine read the figure. Found by difffuzz_ics.py, which fuzzes the
+//    shapes the 33 well-formed age fixtures never covered. Aligning them is
+//    a behaviour change on BOTH engines (fold Unicode digits in JS, or
+//    tighten the Python regex to ASCII), so it needs an owner decision;
+//    until then it is tracked here rather than left invisible.
+//  * rc_root_confidence_nan / rc_row_confidence_nan — the literal "NaN" as a
+//    confidence. Both engines accept it as a float, then clamp it with the
+//    same intent and opposite results: Python's min(1.0, nan) is 1.0 (Python
+//    does not propagate NaN through min/max), JS's Math.min(1, NaN) is NaN and
+//    stays NaN until the falsy fallback makes it 0. One model output becomes a
+//    perfect 1.0 in the desktop app and a 0 in the browser. Found by
+//    difffuzz_normalize.py; every other unparseable confidence agrees.
+// Five cases stay diverged ON PURPOSE. All are recorded here instead of being
 // papered over, so the suite still exits 0 and a future drift shows up as a NEW
 // failure rather than as noise that everyone learned to skim.
 //
@@ -219,6 +237,10 @@ function diff(a, b, trail, out) {
 const EXPECTED_DIVERGENCES = {
   rc_dict_shaped_sections: 'JS enumerates integer-like object keys first (ECMAScript ordinary-object order); row ORDER only',
   rc_section_formations_string: 'Python still calls bare str() in normalize_result; containers leak a repr where _stringify_scalar yields ""',
+  ag_34: 'Python \\d/float() accept Unicode decimal digits, JS \\d is [0-9] only; Arabic-Indic digit age label resolves in rca_core and not in the browser',
+  ag_35: 'Same Unicode-vs-ASCII digit split, full-width digits: resolves in rca_core/standards/ics.py, unresolvable in js/quality.js',
+  rc_root_confidence_nan: 'Python min()/max() do not propagate NaN, JS Math.min/max do; confidence "NaN" clamps to 1.0 in rca_core and to 0 in the browser',
+  rc_row_confidence_nan: 'Same NaN-clamp split on a per-species confidence: 1.0 in rca_core, absent in the browser',
 };
 
 function main() {

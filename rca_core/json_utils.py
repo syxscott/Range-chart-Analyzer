@@ -296,8 +296,24 @@ def _looks_like_payload_list(parsed: Any) -> bool:
     * the majority of the elements are objects (a ``[...]`` of bare scalars is
       far more likely to be a sentence fragment in prose than an extraction);
     * and either one of those objects carries a known root key (an array of
-      wrapper objects), or at least one looks like a DATA ROW (a few fields),
-      which is what a cut row array contains.
+      wrapper objects), or the array is uniformly row-shaped (below).
+
+    AUDIT-2026-09-27 P0-2: the row-shape test used to demand ``len(item) >= 2``,
+    which rejected the single-field rows that ``sections``, ``biozones``,
+    ``sites``, ``zones`` and the paleomap tables are MADE of - a cut
+    ``[{"name":"Z1"},{"name":"Z2"},{"name":"Z3`` was repaired correctly and
+    then thrown away here, and Level 4 rescued ONE arbitrary inner row. That is
+    the exact loss Level 3.5 exists to prevent, and the sibling DICT path does
+    not have it: ``_looks_like_payload_root`` only needs one known root key, so
+    ``{"zonations":[{...},{...},{...`` was rescued while the bare-array form of
+    the same payload was not. The asymmetry, not the rule, was the defect.
+
+    A one-field row is now admitted, but only when EVERY object in the array is
+    one-field: the single stray ``{"a": 1}`` the old comment worried about does
+    not satisfy that, and a real single-row payload still has nowhere else to
+    land (Level 4 drops arrays). An array that merely CONTAINS a multi-field
+    object was already, and still is, admitted by the rule above - it carries
+    an unambiguous data row, which is the whole point of the test.
 
     Used by safe_json_loads Level 3.5 only — Levels 3/3.2/5/6 keep wrapping
     any array unconditionally, as before.
@@ -309,10 +325,11 @@ def _looks_like_payload_list(parsed: Any) -> bool:
         return False
     if any(_looks_like_payload_root(item) for item in dicts):
         return True
-    # Row-shaped: at least one object with a couple of fields. One stray
-    # ``{"a": 1}`` in prose does not satisfy this, and a real single-row
-    # payload has nowhere else to land (Level 4 drops arrays).
-    return any(len(item) >= 2 for item in dicts)
+    # Row-shaped: a multi-field row is unambiguous. A uniformly one-field array
+    # is the single-field-table case above; a MIX is neither, so it is refused.
+    if any(len(item) >= 2 for item in dicts):
+        return True
+    return all(len(item) == 1 for item in dicts)
 
 
 # Angle-bracket placeholders are how the prompt contract and a model's
@@ -656,6 +673,19 @@ def safe_json_loads(text: str) -> dict[str, Any]:
     if not text:
         raise ValueError("empty text")
     s = str(text).strip()
+    # AUDIT-2026-09-27: also drop a leading UTF-8 BOM (U+FEFF).
+    #
+    # ECMAScript's String.prototype.trim() removes U+FEFF -- the spec lists it
+    # in the WhiteSpace production as the historical ZWNBSP -- but Python's
+    # str.strip() does NOT, because it goes by str.isspace() and U+FEFF is not
+    # whitespace there. So a model reply or file that starts with a BOM parsed
+    # in the browser and FAILED on the desktop/backend. A BOM is a byte-order
+    # mark, not content, so dropping it is unambiguously right; this is
+    # measured with difffuzz_json.py, which found it by prefixing a
+    # top-level array with U+FEFF. Only the LEADING one is removed: a U+FEFF
+    # inside a caption is content and must survive.
+    if s.startswith(chr(0xFEFF)):
+        s = s[1:].lstrip()
 
     # Level 1: strip markdown fences.
     s = strip_markdown_fence(s)

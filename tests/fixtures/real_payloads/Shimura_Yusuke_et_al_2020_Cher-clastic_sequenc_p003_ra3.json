@@ -1,0 +1,463 @@
+{
+ "metadata": {
+  "section_name": "Nakato Section",
+  "location": "Nakato Section (Late Cretaceous)",
+  "latitude": "Not visible",
+  "longitude": "Not visible",
+  "age_range": "Late Cretaceous (Late Cenomanian to Campanian), ~80–100 Ma",
+  "curve_types": [
+   "238U-206Pb age distribution",
+   "Radiolarian age range"
+  ]
+ },
+ "data_points": [
+  {
+   "sample_id": "19120110-117",
+   "depth_m": "",
+   "age_ma": "84.1",
+   "stage": "Santonian (Late Cretaceous)",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "Sandstone",
+   "fossil_horizon": "",
+   "note": "Cathodoluminescence spot location shown on grain image",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 156,
+      "axis": "vertical",
+      "value": 88.190991,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 83.6,
+      "at_999": 113.0,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "inferred"
+   ]
+  },
+  {
+   "sample_id": "19120110-076",
+   "depth_m": "",
+   "age_ma": "112.3",
+   "stage": "Albian (Early Cretaceous)",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "Sandstone",
+   "fossil_horizon": "",
+   "note": "Older detrital grain",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "inferred",
+    "low_confidence"
+   ]
+  },
+  {
+   "sample_id": "19032201-077",
+   "depth_m": "",
+   "age_ma": "84.2",
+   "stage": "Santonian (Late Cretaceous)",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "Conglomerate",
+   "fossil_horizon": "",
+   "note": "Cathodoluminescence spot on grain",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 156,
+      "axis": "vertical",
+      "value": 88.190991,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 83.6,
+      "at_999": 113.0,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "inferred"
+   ]
+  },
+  {
+   "sample_id": "19032201-012",
+   "depth_m": "",
+   "age_ma": "91.8",
+   "stage": "Turonian (Late Cretaceous)",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "Conglomerate",
+   "fossil_horizon": "",
+   "note": "Cathodoluminescence spot on grain",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 146,
+      "axis": "vertical",
+      "value": 87.896697,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 83.6,
+      "at_999": 113.0,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    }
+   },
+   "response_kind": "extracted",
+   "reason_codes": [
+    "inferred"
+   ]
+  }
+ ],
+ "events": [
+  {
+   "type": "other",
+   "depth_m": "",
+   "age_ma": "93",
+   "name": "Principal 238U-206Pb age peak (Sandstone, n=92)",
+   "magnitude": "Mode ~93 Ma, n=92",
+   "description": "Histogram mode at 93 Ma for sandstone sample 19120110",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "type": "other",
+   "depth_m": "",
+   "age_ma": "93",
+   "name": "Principal 238U-206Pb age peak (Conglomerate, n=95)",
+   "magnitude": "Mode ~93 Ma, n=95",
+   "description": "Histogram mode at 93 Ma for conglomerate sample 19032201",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "type": "other",
+   "depth_m": "",
+   "age_ma": "~100–80",
+   "name": "YSG and YC1σ age clusters (Santonian–Coniacian)",
+   "magnitude": "YSG ~80–88 Ma, YC1σ ~80–85 Ma",
+   "description": "Probability plot shows youngest single grain and youngest cluster ages clustering in the Santonian",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 150,
+      "axis": "vertical",
+      "value": 88.014414,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 83.6,
+      "at_999": 113.0,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    }
+   }
+  },
+  {
+   "type": "uncertain",
+   "depth_m": "",
+   "age_ma": "~90–100",
+   "name": "Varicolored shale interval (age uncertain)",
+   "magnitude": "Coniacian–Cenomanian boundary, ~90–100 Ma",
+   "description": "Red dashed box marks interval of uncertain age with question mark in panel c",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 240,
+      "axis": "vertical",
+      "value": 90.663063,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 83.6,
+      "at_999": 113.0,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    }
+   }
+  },
+  {
+   "type": "other",
+   "depth_m": "",
+   "age_ma": ">100",
+   "name": "Chert radiolarian age (Albian–Cenomanian)",
+   "magnitude": "Radiolarian age older than 100 Ma",
+   "description": "Orange box indicates chert radiolarian age assignment",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 600,
+      "axis": "vertical",
+      "value": 101.257658,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 83.6,
+      "at_999": 113.0,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    }
+   }
+  }
+ ],
+ "intervals": [
+  {
+   "name": "Late Cretaceous — Campanian (Cam.)",
+   "top_depth_m": "",
+   "base_depth_m": "",
+   "top_age_ma": "72.1",
+   "base_age_ma": "83.6",
+   "characteristic_values": "YSG and YC1σ ages plot here (Santonian–Campanian)",
+   "lithology": "Sandstone / Conglomerate",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "top_pos_0_999": {
+      "pos": 0,
+      "axis": "vertical",
+      "value": 83.6,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 83.6,
+      "at_999": 113.0,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    }
+   },
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "name": "Late Cretaceous — Santonian (San.)",
+   "top_depth_m": "",
+   "base_depth_m": "",
+   "top_age_ma": "83.6",
+   "base_age_ma": "86.3",
+   "characteristic_values": "YSG/YC1σ cluster and radiolarian-bearing Varicolored shale upper boundary",
+   "lithology": "Varicolored shale (uncertain)",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "name": "Late Cretaceous — Coniacian (Con.)",
+   "top_depth_m": "",
+   "base_depth_m": "",
+   "top_age_ma": "86.3",
+   "base_age_ma": "89.8",
+   "characteristic_values": "Part of uncertain Varicolored shale interval",
+   "lithology": "Varicolored shale (uncertain)",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "name": "Late Cretaceous — Turonian (Tur.)",
+   "top_depth_m": "",
+   "base_depth_m": "",
+   "top_age_ma": "89.8",
+   "base_age_ma": "93.9",
+   "characteristic_values": "Lower part of Varicolored shale interval (age uncertain)",
+   "lithology": "Varicolored shale (uncertain)",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "base_pos_0_999": {
+      "pos": 484,
+      "axis": "vertical",
+      "value": 97.843844,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 83.6,
+      "at_999": 113.0,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    }
+   },
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "name": "Late Cretaceous — Cenomanian (Cen.)",
+   "top_depth_m": "",
+   "base_depth_m": "",
+   "top_age_ma": "93.9",
+   "base_age_ma": "100.5",
+   "characteristic_values": "Chert radiolarian age; 93 Ma histogram mode corresponds to this stage",
+   "lithology": "Chert",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "top_pos_0_999": {
+      "pos": 484,
+      "axis": "vertical",
+      "value": 97.843844,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     },
+     "base_pos_0_999": {
+      "pos": 638,
+      "axis": "vertical",
+      "value": 102.375976,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 83.6,
+      "at_999": 113.0,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    }
+   }
+  },
+  {
+   "name": "Early Cretaceous — Albian (Alb.)",
+   "top_depth_m": "",
+   "base_depth_m": "",
+   "top_age_ma": "100.5",
+   "base_age_ma": "~113.0",
+   "characteristic_values": "Chert radiolarian age extends into upper part; older detrital grain 112.3 ± 4.7 Ma present",
+   "lithology": "Chert",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "top_pos_0_999": {
+      "pos": 638,
+      "axis": "vertical",
+      "value": 102.375976,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     },
+     "base_pos_0_999": {
+      "pos": 895,
+      "axis": "vertical",
+      "value": 109.939339,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 83.6,
+      "at_999": 113.0,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    }
+   }
+  },
+  {
+   "name": "Early Cretaceous — Aptian (Apt.)",
+   "top_depth_m": "",
+   "base_depth_m": "",
+   "top_age_ma": "~113.0",
+   "base_age_ma": "~125.0",
+   "characteristic_values": "Below plotted YSG/YC1σ data; radiolarian age uncertain",
+   "lithology": "Chert",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "top_pos_0_999": {
+      "pos": 895,
+      "axis": "vertical",
+      "value": 109.939339,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     },
+     "base_pos_0_999": {
+      "pos": 999,
+      "axis": "vertical",
+      "value": 113.0,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 83.6,
+      "at_999": 113.0,
+      "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+     }
+    }
+   }
+  }
+ ],
+ "confidence": 0.72,
+ "axis_calibration": {
+  "vertical": {
+   "at_0": 83.6,
+   "at_999": 113.0,
+   "unit": "Ma (approx., from stage boundaries plotted in panel c; axis labels show 80, 90, 100, 110 Ma)"
+  }
+ }
+}

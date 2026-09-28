@@ -521,6 +521,53 @@ function rcaIsChimericRow(group, merged) {
   return true;
 }
 
+// The distinct readings a group of runs produced, with a vote count each.
+// AUDIT-2026-09-27 P1: the honest replacement for DELETING a recombined row. A
+// researcher who sees "2 runs read Bed 7-Bed 9 / Zone B, 2 runs read
+// Bed 7-Bed 11 / Zone C" can adjudicate; one who finds the taxon simply
+// missing can only assume the tool lost it.
+// Mirror of rca_core/aggregate.py:_recombination_ballots.
+const RCA_RECOMBINATION_KEYS = ['range_base', 'range_top', 'biozone', 'section'];
+// Order two ballot tuples the way Python's `sorted(..., key=t)` does:
+// element-wise, then shorter-first on a common prefix.
+// AUDIT-2026-09-27 P2: this used to compare `JSON.stringify(tup)`, which
+// orders PREFIXES BACKWARDS. The separator ',' (0x2C) sorts after the space
+// (0x20) that appears inside a value, so "bed 9 (rp13)" compared LESS than
+// "bed 9" -- the exact opposite of the tuple comparison. The two engines
+// therefore showed the same run disagreement in opposite order, and the
+// first ballot listed is the one an operator reads first.
+function rcaTupleCompare(a, b) {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const x = String(a[i] == null ? '' : a[i]);
+    const y = String(b[i] == null ? '' : b[i]);
+    if (x < y) return -1;
+    if (x > y) return 1;
+  }
+  return a.length - b.length;
+}
+function rcaRecombinationBallots(group, keys) {
+  const ks = keys || RCA_RECOMBINATION_KEYS;
+  if (!Array.isArray(group)) return [];
+  const tally = new Map();
+  for (const g of group) {
+    if (!g || typeof g !== 'object') continue;
+    const tup = ks.map((k) => rcaAggNorm(g[k]));
+    if (!tup.some((v) => v)) continue;
+    const key = JSON.stringify(tup);
+    if (!tally.has(key)) tally.set(key, { tup: tup, votes: 0 });
+    tally.get(key).votes += 1;
+  }
+  return Array.from(tally.values())
+    .sort((a, b) => (b.votes - a.votes) || rcaTupleCompare(a.tup, b.tup))
+    .map((e) => {
+      const row = {};
+      ks.forEach((k, i) => { row[k] = e.tup[i]; });
+      row.votes = e.votes;
+      return row;
+    });
+}
+
 // Python `str(row.get(a) or row.get(b) or "")` — the `or` chain treats 0, "",
 // false and None as absent, which is NOT the same as a null check.
 function rcaOrChainStr(row, k) {
@@ -847,13 +894,23 @@ function mergePrimaryList(runs, km, n) {
         rcaAddRowWarning(aggr, 'index_order_swap');
       }
     }
-    // M-1 fix: chimera detection. If every contributing run produced a
+    // M-1 fix: recombination detection. If every contributing run produced a
     // DIFFERENT (range_base, range_top, biozone, section) tuple for this
-    // species — i.e. no run ever observed the merged tuple — flag with
-    // _chimera_dropped so the caller can filter (and so score_consistency
-    // in quality.js can surface chimera_warnings).
+    // species — i.e. no run ever observed the merged tuple — flag it.
+    //
+    // AUDIT-2026-09-27 P1: this used to REMOVE the row. That was wrong, and
+    // the vote tie-break is why: the mode breaks a 1-1 tie with a sorted
+    // first-wins rule, so the merged tuple is only ever observed when EVERY
+    // field's winner came from the same run. Two runs that disagree on >= 2
+    // of {range_base, range_top, biozone} therefore ALWAYS produce an
+    // "unobserved" tuple — ordinary OCR disagreement, not fabrication.
+    // Raising `runs`, the documented way to make an extraction MORE
+    // reliable, was deleting taxa. The row is now kept, flagged
+    // `recombined_consensus`, and carries the ballots.
     if (rcaIsChimericRow(group, aggr)) {
-      aggr._chimera_dropped = true;
+      rcaAddRowWarning(aggr, 'recombined_consensus');
+      aggr._recombination_ballots = rcaRecombinationBallots(group);
+      aggr._chimera_recombined = true;
     }
     merged.push(aggr);
   }
@@ -912,9 +969,23 @@ function mergeNamedLists(runs, km) {
     }
     const groups = new Map();
     const order = [];
+    // AUDIT-2026-09-27 P2: a MIXED list (some runs emit objects, another emits
+    // strings) used to lose every string. The string fast-path above is gated
+    // on "no object anywhere", so one object steered the whole list into the
+    // object branch, whose loop `continue`s on every non-object item.
+    // Executed: ['Brachiopoda', {name:'Crustacea'}] + ['Mollusca'] merged to
+    // [{name:'Crustacea'}] — two taxa gone, no warning — while the single-run
+    // path kept them. A model emitting objects in one run and strings in the
+    // next is an ordinary, expected shape. Non-object items are collected and
+    // merged back as strings rather than dropped. Mirrors the Python fix.
+    const strayStrings = [];
     for (const r of runs) {
       for (const it of r[key] || []) {
-        if (!it || typeof it !== 'object') continue;
+        if (!it || typeof it !== 'object') {
+          const text = String(it === null || it === undefined ? '' : it).trim();
+          if (text) strayStrings.push(text);
+          continue;
+        }
         // UI-REVIEW-2026-09-07: business-identity fields for keys whose
         // items have no natural name (zonation correlations) — group by
         // those so the same edge across runs merges into one row. Mirrors
@@ -995,6 +1066,21 @@ function mergeNamedLists(runs, km) {
       if (Object.keys(rep).length === 0 && group[0]) Object.assign(rep, group[0]);
       merged.push(rep);
     }
+    // AUDIT-2026-09-27 P2: put the mixed-in strings back, deduped
+    // case-insensitively and appended after the object rows so the output
+    // keeps the first-seen ordering of the object half.
+    if (strayStrings.length > 0) {
+      const seen = new Set();
+      for (const it of merged) {
+        if (it && typeof it === 'object') {
+          seen.add(rcaAggNorm(it.name || it.marker || it.meaning || ''));
+        }
+      }
+      for (const text of strayStrings) {
+        const n = rcaAggNorm(text);
+        if (n && !seen.has(n)) { seen.add(n); merged.push(text); }
+      }
+    }
     out[key] = merged;
   }
   return out;
@@ -1050,6 +1136,33 @@ function rcaMergeResults(results, totalRuns, keymap) {
       if (run && typeof run === 'object' && run[key]) {
         out[key] = deepClone(run[key]);
         break;
+      }
+    }
+  }
+
+  // AUDIT-2026-09-27 P1: carry over EVERY remaining root key, not just a
+  // hand-picked three. The N-run path builds `out` from the primary list +
+  // listKeys + confidence, so any figure-level key the single-run passthrough
+  // keeps was silently dropped by raising the run count. The concrete case
+  // that matters is `axis_calibration`: a FIRST-CLASS hoisted root key by
+  // contract, declared by no keymap, and read by js/viz.js to turn the rows'
+  // 0-999 positions into real bed/age values. Executed before the fix: present
+  // after totalRuns=1, GONE after totalRuns=2 — running the extraction MORE
+  // carefully destroyed the axis evidence and the vertical axis silently
+  // fell back to uncalibrated positions with no tick labels.
+  //
+  // Rule: any root key the merge does not manage (primary, listKeys,
+  // confidence, `runs`) survives, taken from the FIRST run that carries it,
+  // deep-cloned. Mirrors rca_core/aggregate.py.
+  const managed = new Set([km.primary, km.confidence, 'runs'].concat(km.listKeys || []));
+  for (const run of runs) {
+    if (!run || typeof run !== 'object') continue;
+    for (const key of Object.keys(run)) {
+      if (managed.has(key) || Object.prototype.hasOwnProperty.call(out, key)) continue;
+      const v = run[key];
+      if ((Array.isArray(v) || (v && typeof v === 'object')) && v
+          && Object.keys(v).length > 0) {
+        out[key] = deepClone(v);
       }
     }
   }
@@ -1127,30 +1240,31 @@ function rcaMergeResults(results, totalRuns, keymap) {
     out[km.extraSections] = merged;
   }
 
-  // M-1 fix: filter chimeric rows from the primary list. Dropped rows
-  // are surfaced via `chimera_warnings` so consumers and the UI can
-  // tell the operator "we dropped X rows because no run ever observed
-  // the merged (FAD/LAD/biozone) tuple together". Mirrors
-  // rca_core/aggregate.py:784-807.
+  // M-1 fix: SURFACE recombined rows via `chimera_warnings`. AUDIT-2026-09-27
+  // P1: the rows are NO LONGER REMOVED here — they stay in the primary list
+  // carrying `_warning: recombined_consensus` and `_recombination_ballots`.
+  // Dropping them is how a 2/2-agreement taxon disappeared from the merged
+  // table. `chimera_warnings` keeps its name because the GUI already reads it;
+  // the reason text now says "runs disagreed", and each entry carries the
+  // ballots so every consumer gets the information, not just the Fluent GUI.
+  // Mirrors rca_core/aggregate.py (merge_results' chimera block).
   const primaryList = out[km.primary];
   if (Array.isArray(primaryList) && primaryList.length > 0) {
-    const chimeras = primaryList.filter((r) => r && r._chimera_dropped);
+    const chimeras = primaryList.filter((r) => r && r._chimera_recombined);
     if (chimeras.length > 0) {
-      const surviving = primaryList.filter((r) => r && !r._chimera_dropped);
-      for (const r of surviving) delete r._chimera_dropped;
-      out[km.primary] = surviving;
-      out.chimera_warnings = [];
+      if (!Array.isArray(out.chimera_warnings)) out.chimera_warnings = [];
       for (const c of chimeras) {
-        const row = {
-          species: c.species, section: c.section, biozone: c.biozone,
-          range_top: c.range_top, range_base: c.range_base,
-        };
         out.chimera_warnings.push({
           table: km.primary,
-          row: row,
-          reason: 'no single run observed the merged (FAD/LAD/biozone) tuple',
+          row: {
+            species: c.species, section: c.section, biozone: c.biozone,
+            range_top: c.range_top, range_base: c.range_base,
+          },
+          reason: 'runs disagreed on the (FAD/LAD/biozone) tuple; '
+            + 'row kept and flagged, not dropped',
+          ballots: c._recombination_ballots || [],
         });
-        delete c._chimera_dropped;
+        delete c._chimera_recombined;
       }
     }
   }

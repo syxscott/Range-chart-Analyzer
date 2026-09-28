@@ -1,0 +1,971 @@
+{
+ "metadata": {
+  "section_name": "Not visible",
+  "location": "Not visible",
+  "latitude": "Not visible",
+  "longitude": "Not visible",
+  "age_range": "Late Permian (Wuchiapingian) - Middle Jurassic (Bathonian?), ~260-170 Ma",
+  "curve_types": [
+   "δ30Si (NBS-28-Rad)",
+   "BSi burial rate"
+  ]
+ },
+ "data_points": [
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "248",
+   "stage": "Lopingian/Wuchiapingian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 130,
+      "axis": "vertical",
+      "value": 246.986987,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "247",
+   "stage": "Lopingian/Wuchiapingian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 145,
+      "axis": "vertical",
+      "value": 245.485485,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "246",
+   "stage": "Lopingian/Wuchiapingian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 160,
+      "axis": "vertical",
+      "value": 243.983984,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "245",
+   "stage": "Lopingian/Wuchiapingian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 175,
+      "axis": "vertical",
+      "value": 242.482482,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "243",
+   "stage": "Triassic/Early Induan",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 205,
+      "axis": "vertical",
+      "value": 239.479479,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "242",
+   "stage": "Triassic/Early Induan",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 220,
+      "axis": "vertical",
+      "value": 237.977978,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "241",
+   "stage": "Triassic/Early Induan",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 235,
+      "axis": "vertical",
+      "value": 236.476476,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "240",
+   "stage": "Triassic/Early Induan",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 250,
+      "axis": "vertical",
+      "value": 234.974975,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "239",
+   "stage": "Triassic/Early Olenekian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 265,
+      "axis": "vertical",
+      "value": 233.473473,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "237",
+   "stage": "Triassic/Middle Anisian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 295,
+      "axis": "vertical",
+      "value": 230.47047,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "236",
+   "stage": "Triassic/Middle Anisian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 310,
+      "axis": "vertical",
+      "value": 228.968969,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "235",
+   "stage": "Triassic/Middle Anisian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 325,
+      "axis": "vertical",
+      "value": 227.467467,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "230",
+   "stage": "Triassic/Late Carnian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 399,
+      "axis": "vertical",
+      "value": 220.06006,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "227",
+   "stage": "Triassic/Late Carnian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 444,
+      "axis": "vertical",
+      "value": 215.555556,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "223",
+   "stage": "Triassic/Late Norian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 504,
+      "axis": "vertical",
+      "value": 209.54955,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "220",
+   "stage": "Triassic/Late Norian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "pos_0_999": {
+      "pos": 549,
+      "axis": "vertical",
+      "value": 205.045045,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "218",
+   "stage": "Triassic/Late Norian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "215",
+   "stage": "Triassic/Late Norian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "212",
+   "stage": "Triassic/Late Norian-Rhaetian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "210",
+   "stage": "Triassic/Rhaetian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "208",
+   "stage": "Triassic/Rhaetian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "205",
+   "stage": "Jurassic/Early Sinemurian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "203",
+   "stage": "Jurassic/Early Sinemurian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "195",
+   "stage": "Jurassic/Early Pliensbachian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "192",
+   "stage": "Jurassic/Early Pliensbachian-Toarcian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "189",
+   "stage": "Jurassic/Early Toarcian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "183",
+   "stage": "Jurassic/Early Toarcian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "180",
+   "stage": "Jurassic/Early Toarcian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "partially obscured by axis edge",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "sample_id": "",
+   "depth_m": "",
+   "age_ma": "177",
+   "stage": "Jurassic/Early Toarcian",
+   "values": {
+    "δ13C": "",
+    "δ18O": "",
+    "87Sr_86Sr": "",
+    "other": ""
+   },
+   "lithology": "",
+   "fossil_horizon": "",
+   "note": "partially obscured by axis edge",
+   "response_kind": "extracted",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  }
+ ],
+ "events": [
+  {
+   "type": "isotope_excursion",
+   "depth_m": "",
+   "age_ma": "218",
+   "name": "negative δ30Si excursion",
+   "magnitude": "~-0.3‰ (minimum)",
+   "description": "Lower-than-baseline δ30Si value near the Late Norian, reaching roughly -0.3‰.",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "type": "isotope_excursion",
+   "depth_m": "",
+   "age_ma": "192",
+   "name": "positive δ30Si peak",
+   "magnitude": "~+2.0‰ (maximum)",
+   "description": "Highest δ30Si value in the record, occurring in the Early Jurassic (Pliensbachian/Toarcian).",
+   "reason_codes": [
+    "low_confidence"
+   ]
+  }
+ ],
+ "intervals": [
+  {
+   "name": "Late Permian (Wuchiapingian)",
+   "top_depth_m": "",
+   "base_depth_m": "",
+   "top_age_ma": "260",
+   "base_age_ma": "252",
+   "characteristic_values": "δ30Si ~0.0–1.0‰",
+   "lithology": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "top_pos_0_999": {
+      "pos": 0,
+      "axis": "vertical",
+      "value": 260.0,
+      "unit": "Ma"
+     },
+     "base_pos_0_999": {
+      "pos": 88,
+      "axis": "vertical",
+      "value": 251.191191,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   }
+  },
+  {
+   "name": "Triassic (Induan - Rhaetian)",
+   "top_depth_m": "",
+   "base_depth_m": "",
+   "top_age_ma": "252",
+   "base_age_ma": "201",
+   "characteristic_values": "δ30Si ~-0.3–1.5‰; BSi burial rate 0.2–0.4 g/cm²·kyr",
+   "lithology": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "top_pos_0_999": {
+      "pos": 88,
+      "axis": "vertical",
+      "value": 251.191191,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "reason_codes": [
+    "low_confidence"
+   ]
+  },
+  {
+   "name": "Early Jurassic (Sinemurian - Toarcian)",
+   "top_depth_m": "",
+   "base_depth_m": "",
+   "top_age_ma": "201",
+   "base_age_ma": "174",
+   "characteristic_values": "δ30Si ~0.5–2.0‰ (peak ~2.0‰ near Pliensbachian-Toarcian)",
+   "lithology": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": true,
+    "points": {
+     "base_pos_0_999": {
+      "pos": 999,
+      "axis": "vertical",
+      "value": 160.0,
+      "unit": "Ma"
+     }
+    },
+    "axes": {
+     "vertical": {
+      "at_0": 260.0,
+      "at_999": 160.0,
+      "unit": "Ma"
+     }
+    }
+   },
+   "reason_codes": [
+    "low_confidence"
+   ]
+  }
+ ],
+ "confidence": 0.75,
+ "axis_calibration": {
+  "vertical": {
+   "at_0": 260.0,
+   "at_999": 160.0,
+   "unit": "Ma"
+  }
+ }
+}

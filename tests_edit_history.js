@@ -1241,9 +1241,30 @@ check('dom-invalid-hint-shown', (confCell.getAttribute('data-rca-invalid') || ''
   && (confCell.getAttribute('data-rca-invalid') || '').indexOf('[?') !== 0,
   confCell.getAttribute('data-rca-invalid'));
 const focusBefore = confCell.focused;
+const blurredBefore = confCell.blurred;
 dom.dispatchEvent(mkEvent('focusout', confCell));
-check('dom-invalid-locks-focus-on-blur', confCell.focused === focusBefore + 1);
-check('dom-invalid-text-survives', confCell.textContent === 'abc', 'Tabulator keeps the typed value');
+// AUDIT-2026-09-27 P1 (WCAG 2.1.2 No Keyboard Trap, Level A): these two
+// assertions used to be
+//   dom-invalid-locks-focus-on-blur  -> confCell.focused === focusBefore + 1
+//   dom-invalid-text-survives         -> confCell.textContent === 'abc'
+// i.e. they PINNED the trap. rcaEditOnFocusOut re-focused any cell flagged
+// invalid, rcaEditHandleKey had no Tab case, and Enter failed validation for
+// the same reason - so a plain typo ("abc" in a float column) put the caret
+// in an inescapable loop and the results panel looked frozen. Only Escape
+// escaped. The model is now protected and the FOCUS IS RELEASED: the cell
+// reverts to its last valid value, the invalid state clears, and Tab moves on.
+// The reason was already announced at rejection time, and a cell showing the
+// model value again is not invalid, so the red frame must not linger either.
+check('dom-invalid-does-not-refocus-on-blur', confCell.focused === focusBefore,
+  'a failed validation must never take focus back');
+check('dom-invalid-blurs-on-blur', confCell.blurred === blurredBefore + 1);
+check('dom-invalid-reverts-to-model-value', confCell.textContent === '0.4',
+  'the model value is authoritative, not the rejected keystrokes');
+check('dom-invalid-model-untouched', domData.species_ranges[1].confidence === 0.4);
+check('dom-invalid-frame-cleared-on-blur',
+  confCell.className.indexOf('rca-cell-invalid') === -1, confCell.className);
+check('dom-invalid-no-push-on-revert', S.rcaHistory.depth() === stackBefore);
+confCell.focus();
 confCell.textContent = '0.9';
 dom.dispatchEvent(mkEvent('keydown', confCell, { key: 'Enter' }));
 check('dom-invalid-cleared-after-fix', confCell.className.indexOf('rca-cell-invalid') === -1);

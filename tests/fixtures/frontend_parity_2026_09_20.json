@@ -882,7 +882,7 @@
        "Nanling Fm"
       ],
       "formation_thickness_m": "",
-      "coordinates": "{'lat': 1}",
+      "coordinates": "",
       "_extras": {
        "thickness_m": 12.5
       }
@@ -892,6 +892,65 @@
     "biozones": [],
     "other_fossils": [],
     "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_root_confidence_nan",
+   "payload": {
+    "sections": [],
+    "confidence": "NaN"
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 1.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_row_confidence_nan",
+   "payload": {
+    "sections": [],
+    "confidence": 1,
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "confidence": "NaN"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "range_base": "",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": 1.0,
+      "note": ""
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 1.0
    }
   },
   {
@@ -905,6 +964,48 @@
     "lithology_legend": [],
     "cross_beds": [],
     "confidence": 0.0
+   }
+  },
+  {
+   "group": "columnar_section",
+   "id": "col_extras_container",
+   "payload": {
+    "sections": [
+     {
+      "id": "Ki-1",
+      "group": "G",
+      "lithology": [
+       1,
+       2
+      ]
+     }
+    ],
+    "confidence": 1
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "id": "Ki-1",
+      "group": "G",
+      "lithology_blocks": [],
+      "age_units": [],
+      "samples": [],
+      "coordinates_text": "",
+      "thickness_m": "",
+      "confidence_by_section": 0.0,
+      "_extras": {
+       "lithology": [
+        1,
+        2
+       ]
+      }
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 1.0
    }
   },
   {
@@ -3199,6 +3300,47 @@
    }
   },
   {
+   "group": "safe_json_loads",
+   "id": "sj_bom_object",
+   "payload": "﻿{\"sections\": [{\"name\": \"A\"}]}",
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "A"
+     }
+    ]
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_bom_array",
+   "payload": "﻿[{\"species\": \"A\", \"section\": \"S\"}]",
+   "extra": null,
+   "python": {
+    "_array_root": [
+     {
+      "species": "A",
+      "section": "S"
+     }
+    ],
+    "_note": "model returned a top-level array; wrapping for diagnostics"
+   }
+  },
+  {
+   "group": "safe_json_loads",
+   "id": "sj_bom_with_prose",
+   "payload": "﻿Sure! Here it is:\n{\"sections\": [{\"name\": \"A\"}]}\nDone.",
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "A"
+     }
+    ]
+   }
+  },
+  {
    "group": "age_bound",
    "id": "ag_01",
    "payload": "Late Permian (Wuchiapingian)",
@@ -3515,6 +3657,26 @@
    "python": {
     "name": "Guadalupian",
     "ma": 259.51
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_34",
+   "payload": "26٠ Ma",
+   "extra": "older",
+   "python": {
+    "name": "Capitanian",
+    "ma": 260.0
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_35",
+   "payload": "２６０ Ma",
+   "extra": "older",
+   "python": {
+    "name": "Capitanian",
+    "ma": 260.0
    }
   },
   {
@@ -5879,6 +6041,304 @@
     "biozones": [],
     "other_fossils": [],
     "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_ballot_prefix_order",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_base": "bed 1",
+        "range_top": "bed 9",
+        "biozone": "zone c"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_base": "bed 1 (rp13)",
+        "range_top": "bed 9",
+        "biozone": "zone b"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "species": "A",
+      "section": "S1",
+      "range_base": "bed 1",
+      "range_top": "bed 9",
+      "biozone": "zone b",
+      "_warning": "recombined_consensus",
+      "_recombination_ballots": [
+       {
+        "range_base": "bed 1",
+        "range_top": "bed 9",
+        "biozone": "zone c",
+        "section": "s1",
+        "votes": 1
+       },
+       {
+        "range_base": "bed 1 (rp13)",
+        "range_top": "bed 9",
+        "biozone": "zone b",
+        "section": "s1",
+        "votes": 1
+       }
+      ]
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 2,
+      "agreement": "2/2"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8,
+    "chimera_warnings": [
+     {
+      "table": "species_ranges",
+      "row": {
+       "species": "A",
+       "section": "S1",
+       "biozone": "zone b",
+       "range_top": "bed 9",
+       "range_base": "bed 1"
+      },
+      "reason": "runs disagreed on the (FAD/LAD/biozone) tuple; row kept and flagged, not dropped",
+      "ballots": [
+       {
+        "range_base": "bed 1",
+        "range_top": "bed 9",
+        "biozone": "zone c",
+        "section": "s1",
+        "votes": 1
+       },
+       {
+        "range_base": "bed 1 (rp13)",
+        "range_top": "bed 9",
+        "biozone": "zone b",
+        "section": "s1",
+        "votes": 1
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_ballot_majority_first",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_base": "bed 9",
+        "range_top": "bed 9",
+        "biozone": "zone b"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_base": "bed 9",
+        "range_top": "bed 9",
+        "biozone": "zone b"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_base": "bed 3",
+        "range_top": "bed 8",
+        "biozone": "zone a"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_base": "bed 4",
+        "range_top": "bed 8",
+        "biozone": "zone a"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 4,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 4,
+    "species_ranges": [
+     {
+      "agreement_count": 4,
+      "agreement": "4/4",
+      "species": "A",
+      "section": "S1",
+      "range_base": "bed 9",
+      "range_top": "bed 8",
+      "biozone": "zone a",
+      "_warning": "recombined_consensus",
+      "_recombination_ballots": [
+       {
+        "range_base": "bed 9",
+        "range_top": "bed 9",
+        "biozone": "zone b",
+        "section": "s1",
+        "votes": 2
+       },
+       {
+        "range_base": "bed 3",
+        "range_top": "bed 8",
+        "biozone": "zone a",
+        "section": "s1",
+        "votes": 1
+       },
+       {
+        "range_base": "bed 4",
+        "range_top": "bed 8",
+        "biozone": "zone a",
+        "section": "s1",
+        "votes": 1
+       }
+      ]
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 4,
+      "agreement": "4/4"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8,
+    "chimera_warnings": [
+     {
+      "table": "species_ranges",
+      "row": {
+       "species": "A",
+       "section": "S1",
+       "biozone": "zone a",
+       "range_top": "bed 8",
+       "range_base": "bed 9"
+      },
+      "reason": "runs disagreed on the (FAD/LAD/biozone) tuple; row kept and flagged, not dropped",
+      "ballots": [
+       {
+        "range_base": "bed 9",
+        "range_top": "bed 9",
+        "biozone": "zone b",
+        "section": "s1",
+        "votes": 2
+       },
+       {
+        "range_base": "bed 3",
+        "range_top": "bed 8",
+        "biozone": "zone a",
+        "section": "s1",
+        "votes": 1
+       },
+       {
+        "range_base": "bed 4",
+        "range_top": "bed 8",
+        "biozone": "zone a",
+        "section": "s1",
+        "votes": 1
+       }
+      ]
+     }
+    ]
    }
   },
   {

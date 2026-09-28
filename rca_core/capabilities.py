@@ -15,13 +15,21 @@ Maturity levels:
 
 REVIEW-2026-09-20: ``export_supported`` declares whether a mode has a TABLE
 representation at all — i.e. whether the CSV / TSV / XLSX / table-edit path
-means anything for it. The three ``assistant`` modes (chemical stratigraphy,
-palaeomap, scatter plot) have no ``TABLE_CONFIGS`` branch and no js/table.js
-renderer, so their only real export is JSON. UIs use this flag to disable the
-table tab instead of showing — and exporting — four empty range-chart sheets.
+means anything for it. The ``assistant`` modes (chemical stratigraphy, scatter
+plot) have no ``TABLE_CONFIGS`` branch and no js/table.js renderer, so their
+only real export is JSON. UIs use this flag to disable the table tab instead of
+showing — and exporting — four empty range-chart sheets.
 The runtime counterpart is ``rca_core.exporter.detect_tableless_mode``, which
-classifies a RESULT rather than a mode; ``tests/test_exporter_modes.py`` keeps
-the two lists in agreement.
+classifies a RESULT rather than a mode.
+
+AUDIT-2026-09-27 [item 4.2]: ``paleomap`` was in the "no tables" group and has
+been moved out. The flag encoded an assumption — that an assistant mode never
+returns tables — which the recorded real responses disprove: 7 of 16 palaeomap
+results carried 24 populated tables between them. ``detect_tableless_mode`` was
+likewise rewritten to ask whether the payload actually CONTAINS a table rather
+than whether its key names appear on a whitelist, because the old test was wrong
+in both directions (dropping 24 real tables, while letting 7 genuinely empty
+results through to a 4-sheet empty workbook).
 """
 
 from __future__ import annotations
@@ -69,9 +77,20 @@ CAPABILITIES: dict[str, dict[str, Any]] = {
     },
     "paleomap": {
         "maturity": "assistant",
-        "export_supported": False,
-        "notes": "Palaeogeographic maps and locality figures; present-day "
-                 "geological maps are honestly refused by the model.",
+        # AUDIT-2026-09-27 [item 4.2]: promoted to export_supported. The
+        # tables were always in the extractor output — measured over 66
+        # recorded real responses, 7 palaeomap results carried 24 tables
+        # (9 continents, 16 fossil sites with coordinates, tectonic features,
+        # biogeographic realms) — but this flag was False, so UIs disabled the
+        # table tab and the data was reachable only by exporting JSON. There is
+        # now a `_paleomap_tables` branch in exporter.py and a matching
+        # `rcaPaleomapConfigs` in js/table.js.
+        "export_supported": True,
+        "notes": "Palaeogeographic maps and locality figures; six tables "
+                 "(continents, oceans/seas, tectonic features, biogeographic "
+                 "realms, palaeolatitude indicators, fossil sites). "
+                 "Present-day geological maps are honestly refused by the "
+                 "model.",
     },
     "scatter_plot": {
         "maturity": "assistant",

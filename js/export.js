@@ -12,7 +12,22 @@
 // engines (Excel for Mac in particular) treat a leading newline as a
 // formula-bar prefix that lets the trigger character escape the OWASP
 // guard. Prepending ' alongside \n closes that loophole.
+// AUDIT-2026-09-27 P1: a real NUMBER is never a formula, so the triggers apply
+// to text only. `String(-31.2)` starts with "-", so every negative number used
+// to come out as the STRING "'-31.2" with a literal apostrophe in the file —
+// south/west hemisphere coordinates stopped parsing as coordinates, and
+// negative thickness/level cells became text that Excel's sorting, averaging,
+// pivots and charts silently drop. rca_core/standards/pbdb.py already had this
+// exemption and documented why; this mirror now matches it. A negative number
+// carried as TEXT ("-31") is still prefixed.
 function rcaFormulaSafe(value) {
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return value;
+    // NaN / +-Infinity are not numbers a cell can hold; the Python side
+    // blanks them in _sanitize_number_cell before reaching here.
+    return '';
+  }
+  if (typeof value === 'bigint') return value;
   const s = value === null || value === undefined ? '' : String(value);
   if (!s) return s;
   const c = s[0];
@@ -49,7 +64,20 @@ function rcaToTsv(headers, rows) {
     // UI-REVIEW-2026-09-22: fold whitespace FIRST, then re-apply the
     // formula guard - parity with Python to_tsv, so a value like
     // "\t=cmd" cannot keep its trigger after the fold.
-    const folded = String(v == null ? '' : v).replace(/[\t\r\n]+/g, ' ');
+    //
+    // AUDIT-2026-09-27 P3: the fold itself was NOT at parity. Python folds
+    // with " ".join(s.split()) - every Unicode whitespace run, trimmed - while
+    // this only replaced [\t\r\n]. Executed: "   =HYPERLINK(x)" came out of
+    // Python as "'=HYPERLINK(x)" (guarded) but out of the browser UNGUARDED,
+    // and "a\xa0b" (NBSP) was normalised on one side only - the two engines
+    // emitted different TSV bytes for the same chart. \s is the Unicode-aware
+    // class, and the leading/trailing trim is what makes a leading-space
+    // trigger visible to the guard below.
+    //
+    // Numbers skip the stringification for the same reason as rcaFormulaSafe:
+    // a real -31 is data, and String() would hand the guard a "-31" to prefix.
+    if (typeof v === 'number') return rcaFormulaSafe(v);
+    const folded = String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
     return rcaFormulaSafe(folded);
   };
   const lines = [headers.map(clean).join('\t')];

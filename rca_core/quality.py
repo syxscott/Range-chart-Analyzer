@@ -29,7 +29,11 @@ js/i18n.js (``quality.*`` keys) so the UI can render localized messages.
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
+# AUDIT-2026-09-27 [item 7.2]: Optional is used in two annotations below
+# (`_resolve_age_ma(...) -> Optional[float]`) but was never imported.
+# Safe at runtime only because of `from __future__ import annotations`;
+# it breaks mypy and would NameError under typing.get_type_hints().
+from typing import Any, Iterable, Optional
 
 try:
     from .standards.ics import (

@@ -1,0 +1,928 @@
+{
+ "metadata": {
+  "title": "",
+  "extraction_timestamp": "2026-07-26T12:00:00",
+  "tree_type": "",
+  "scale": "",
+  "rooted": true,
+  "source": "",
+  "taxon_group": "Cercozoa/Rhizaria",
+  "image_source": "",
+  "total_nodes": 62,
+  "root_name": "Cercozoa (root)"
+ },
+ "root_ids": [
+  "n0"
+ ],
+ "nodes": [
+  {
+   "id": "n0",
+   "parent": null,
+   "name": "Cercozoa (root)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n1",
+   "parent": "n0",
+   "name": "Phaeodaria clade",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 59.0,
+   "metadata": {
+    "support_confidence": 0.95,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n2",
+   "parent": "n1",
+   "name": "Challengeriidae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n3",
+   "parent": "n1",
+   "name": "inner node (Porospathiidae+Tuscaroridae+Aulosphaeridae/Sagosphaeridae)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 69.0,
+   "metadata": {
+    "support_confidence": 0.9,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n4",
+   "parent": "n3",
+   "name": "Porospathiidae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n5",
+   "parent": "n3",
+   "name": "inner node (Tuscaroridae+Aulosphaeridae/Sagosphaeridae)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 99.0,
+   "metadata": {
+    "support_confidence": 0.95,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n6",
+   "parent": "n5",
+   "name": "Tuscaroridae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n7",
+   "parent": "n5",
+   "name": "Aulosphaeridae, Sagosphaeridae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n8",
+   "parent": "n1",
+   "name": "Medusettidae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n9",
+   "parent": "n1",
+   "name": "inner node (Coelodendridae+Conchariidae+Aulacanthidae+Rhizaria+Phacodinidae+Clade K)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 99.0,
+   "metadata": {
+    "support_confidence": 0.95,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n10",
+   "parent": "n9",
+   "name": "inner node (Coelodendridae+Conchariidae)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 99.0,
+   "metadata": {
+    "support_confidence": 0.95,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n11",
+   "parent": "n10",
+   "name": "Coelodendridae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n12",
+   "parent": "n10",
+   "name": "Conchariidae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n13",
+   "parent": "n9",
+   "name": "Aulacanthidae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n14",
+   "parent": "n9",
+   "name": "inner node (Rhizaria sp.+Phacodinidae+Clade K)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 99.0,
+   "metadata": {
+    "support_confidence": 0.95,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n15",
+   "parent": "n14",
+   "name": "Rhizaria sp.",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n16",
+   "parent": "n14",
+   "name": "inner node (Phacodinidae+Clade K)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 62.0,
+   "metadata": {
+    "support_confidence": 0.9,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n17",
+   "parent": "n16",
+   "name": "Phacodinidae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n18",
+   "parent": "n16",
+   "name": "Clade K",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n19",
+   "parent": "n0",
+   "name": "other Cercozoa",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n20",
+   "parent": "n0",
+   "name": "Radiolaria clade",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 100.0,
+   "metadata": {
+    "support_confidence": 0.98,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n21",
+   "parent": "n20",
+   "name": "Phaeodaria",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n22",
+   "parent": "n20",
+   "name": "inner node (Acantharia+Taxopodia+Spumellaria+Nassellaria)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 100.0,
+   "metadata": {
+    "support_confidence": 0.98,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n23",
+   "parent": "n22",
+   "name": "Acantharia",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n24",
+   "parent": "n22",
+   "name": "inner node (Taxopodia+Spumellaria+Nassellaria)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 91.0,
+   "metadata": {
+    "support_confidence": 0.95,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n25",
+   "parent": "n24",
+   "name": "Taxopodia",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n26",
+   "parent": "n24",
+   "name": "inner node (Spumellaria+Nassellaria)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 65.0,
+   "metadata": {
+    "support_confidence": 0.9,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n27",
+   "parent": "n26",
+   "name": "Spumellaria clade",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 66.0,
+   "metadata": {
+    "support_confidence": 0.9,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n28",
+   "parent": "n27",
+   "name": "Liosphaeroidea",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n29",
+   "parent": "n27",
+   "name": "inner node (Hexalonchidae+Hexasty lidae+Spongodiscoidea+Spongosphaeroidea+Rhizosphaeridae)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 69.0,
+   "metadata": {
+    "support_confidence": 0.9,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n30",
+   "parent": "n29",
+   "name": "inner node (Hexalonchidae+Hexastylidae)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 100.0,
+   "metadata": {
+    "support_confidence": 0.98,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n31",
+   "parent": "n30",
+   "name": "Hexalonchidae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n32",
+   "parent": "n30",
+   "name": "Hexastylidae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n33",
+   "parent": "n29",
+   "name": "inner node (Spongodiscoidea+Spongosphaeroidea+Rhizosphaeridae)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 100.0,
+   "metadata": {
+    "support_confidence": 0.98,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n34",
+   "parent": "n33",
+   "name": "Spongodiscoidea",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n35",
+   "parent": "n33",
+   "name": "Spongosphaeroidea",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n36",
+   "parent": "n33",
+   "name": "Rhizosphaeridae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n37",
+   "parent": "n27",
+   "name": "inner node (Clade H+Actinommidea+Stylodicytoidea+Pylonioidea)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 99.0,
+   "metadata": {
+    "support_confidence": 0.95,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n38",
+   "parent": "n37",
+   "name": "Clade H",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 89.0,
+   "metadata": {
+    "support_confidence": 0.9,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n39",
+   "parent": "n37",
+   "name": "inner node (Actinommidea+Stylodicytoidea)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 99.0,
+   "metadata": {
+    "support_confidence": 0.95,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n40",
+   "parent": "n39",
+   "name": "Actinommidea",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n41",
+   "parent": "n39",
+   "name": "Stylodicytoidea",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n42",
+   "parent": "n37",
+   "name": "Pylonioidea",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n43",
+   "parent": "n26",
+   "name": "Nassellaria clade",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 100.0,
+   "metadata": {
+    "support_confidence": 0.98,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n44",
+   "parent": "n43",
+   "name": "Eucyrtidioidea",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n45",
+   "parent": "n43",
+   "name": "inner node (Lychnocaniidae+Pterocorythidae)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 88.0,
+   "metadata": {
+    "support_confidence": 0.9,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n46",
+   "parent": "n45",
+   "name": "Lychnocaniidae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n47",
+   "parent": "n45",
+   "name": "Pterocorythidae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n48",
+   "parent": "n43",
+   "name": "inner node (Theopiliidae+Plagiacanthoidea+Acanthodesmoidea+Sphaerozoidae+Collophidiidae+Collospheeridae+Orosphaeridae)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 100.0,
+   "metadata": {
+    "support_confidence": 0.98,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n49",
+   "parent": "n48",
+   "name": "inner node (Theopiliidae+Plagiacanthoidea)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 99.0,
+   "metadata": {
+    "support_confidence": 0.95,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n50",
+   "parent": "n49",
+   "name": "Theopiliidae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n51",
+   "parent": "n49",
+   "name": "Plagiacanthoidea",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 98.0,
+   "metadata": {
+    "support_confidence": 0.9,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n52",
+   "parent": "n48",
+   "name": "inner node (Acanthodesmoidea+(Sphaerozoidae+Collophidiidae)+Collospheeridae+Orosphaeridae)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 98.0,
+   "metadata": {
+    "support_confidence": 0.95,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n53",
+   "parent": "n52",
+   "name": "Acanthodesmoidea",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n54",
+   "parent": "n52",
+   "name": "Collodaria clade",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 100.0,
+   "metadata": {
+    "support_confidence": 0.98,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n55",
+   "parent": "n54",
+   "name": "inner node (Sphaerozoidae+Collophidiidae)",
+   "is_leaf": false,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 100.0,
+   "metadata": {
+    "support_confidence": 0.98,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n56",
+   "parent": "n55",
+   "name": "Sphaerozoidae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n57",
+   "parent": "n55",
+   "name": "Collophidiidae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": 99.0,
+   "metadata": {
+    "support_confidence": 0.95,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n58",
+   "parent": "n54",
+   "name": "Collospheeridae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  },
+  {
+   "id": "n59",
+   "parent": "n52",
+   "name": "Orosphaeridae",
+   "is_leaf": true,
+   "branch_length": null,
+   "node_age_ma": null,
+   "support": null,
+   "metadata": {
+    "support_confidence": null,
+    "depth_range_m": "",
+    "depth_confidence": null,
+    "sequence_count": null
+   }
+  }
+ ],
+ "legend": {
+  "depth_colors": {},
+  "sequence_count_min": null,
+  "sequence_count_max": null
+ },
+ "confidence": 0.86,
+ "_extras": {
+  "version": "1"
+ }
+}

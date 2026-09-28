@@ -22,10 +22,20 @@ def _run(ranges):
 
 
 class TestChimeraDetection:
-    def test_pure_disagreement_drops_chimeric_row(self):
+    def test_pure_disagreement_flags_but_keeps_the_row(self):
         """Three runs, same (S, X) key, but every field disagreeing —
         per-field mode votes combine into a tuple no run ever observed.
-        Merged output must drop the row and surface a chimera warning."""
+
+        AUDIT-2026-09-27 P1: the DETECTION is unchanged, but the row is no
+        longer DROPPED. It used to be, and that is a defect rather than a
+        safeguard: with a 1-1 vote tie broken by sorted-first-wins, ANY run
+        set that disagrees on >= 2 of the four fields produces a tuple no run
+        observed, so the rule deleted ordinary OCR disagreement. Here all
+        three runs saw "Genus sp." in section X and the merged table came
+        back empty. The row now survives carrying `_warning:
+        recombined_consensus` plus the three ballots, so a researcher can see
+        "each run read a different range" instead of finding a missing taxon
+        and assuming the tool lost it. `chimera_warnings` keeps its shape."""
         results = [
             _run([{"species": "Genus sp.", "section": "X",
                    "range_top": "Bed 9", "range_base": "Bed 7",
@@ -38,16 +48,21 @@ class TestChimeraDetection:
                    "biozone": "A Zone"}]),
         ]
         merged = merge_results(results, total_runs=3)
-        # The merged row must NOT appear in species_ranges — it's chimeric.
         sp_rows = merged.get("species_ranges", [])
-        assert len(sp_rows) == 0, (
-            f"chimeric row should be dropped, got: {sp_rows}"
+        assert len(sp_rows) == 1, (
+            f"a recombined row must survive, flagged; got: {sp_rows}"
         )
-        # But a warning should be surfaced.
+        assert sp_rows[0].get("_warning") == "recombined_consensus"
+        # All three distinct readings must be recoverable from the row itself.
+        ballots = sp_rows[0].get("_recombination_ballots") or []
+        assert len(ballots) == 3, f"expected 3 ballots, got {ballots}"
+        assert all(b["votes"] == 1 for b in ballots)
+        # ...and the warning is still surfaced for every consumer.
         warnings = merged.get("chimera_warnings", [])
         assert len(warnings) == 1, f"expected 1 chimera warning, got {warnings}"
         assert warnings[0]["table"] == "species_ranges"
         assert warnings[0]["row"]["species"] == "Genus sp."
+        assert len(warnings[0]["ballots"]) == 3
 
     def test_consistent_rows_not_flagged_as_chimeric(self):
         """Two runs that agree on the (range_base, range_top, biozone)

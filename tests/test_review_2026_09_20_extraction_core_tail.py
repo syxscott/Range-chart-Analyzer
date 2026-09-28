@@ -88,7 +88,28 @@ class TestTruncatedArrayRepair:
         assert _looks_like_payload_list([{"a": 1, "b": 2}, {"c": 3}, 4])
         assert not _looks_like_payload_list([{"a": 1, "b": 2}, 3, 4])
         # ...and a single-field row array is NOT enough (one stray {"a": 1]).
-        assert not _looks_like_payload_list([{"a": 1}])
+        # AUDIT-2026-09-27 P0-2: this assertion used to be the other way round
+        # (``not _looks_like_payload_list([{"a": 1}])``). Requiring >= 2 fields
+        # rejected exactly the rows that sections / biozones / sites / zones and
+        # the paleomap tables are made of: a reply cut inside
+        # [{"name":"Z1"},{"name":"Z2"},{"name":"Z3 was repaired correctly by
+        # _repair_truncated_json and then discarded here, and Level 4 rescued
+        # ONE arbitrary inner row - the precise loss Level 3.5 exists to
+        # prevent. The sibling DICT path never had this gap, so the object form
+        # of a payload was rescued while the bare-array form was not.
+        assert _looks_like_payload_list([{"a": 1}])
+        assert _looks_like_payload_list([{"name": "Z1"}, {"name": "Z2"}])
+        # ...and a mixed array is still admitted by the multi-field rule above,
+        # because it contains an unambiguous data row.
+        assert _looks_like_payload_list([{"name": "Z1"}, {"name": "Z2", "age": "a"}])
+
+    def test_truncated_single_field_rows_are_all_recovered(self):
+        """AUDIT-2026-09-27 P0-2: the end-to-end symptom of the rule above."""
+        rows = safe_json_loads(
+            '[{"name": "Z1"}, {"name": "Z2"}, {"name": "Z3'
+        ).get("_array_root")
+        assert rows is not None, "the correct repair was discarded"
+        assert [r["name"] for r in rows] == ["Z1", "Z2"]
 
 
 # ---------------------------------------------------------------------------
