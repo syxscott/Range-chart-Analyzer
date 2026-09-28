@@ -16,6 +16,7 @@ import base64
 import collections
 import concurrent.futures
 import hashlib  # FE-BORROW-2026-09-20 (域P): static ETag fingerprint
+import io  # REVIEW-2026-09-27 [item 1]: BufferedReader over a deadline-aware raw
 import ipaddress
 import json
 import os
@@ -92,13 +93,25 @@ _PROVENANCE_TOKEN_ENV = "RCA_PROVENANCE_TOKEN"
 # history id (and ``int(...)`` on <= 12 digits can never hit the limit).
 _PROVENANCE_ID_RE = re.compile(r"^/api/history/(\d{1,12})/provenance$")
 
-# Sprint B (REVIEW-2026-09-04) #1: per-request timeout clamp + the slack
-# added on top of timeout_sec to form the multi-run *batch* budget.
+# Sprint B (REVIEW-2026-09-04) #1: per-request timeout clamp, plus the slack
+# that used to form the multi-run *batch* budget on its own.
 # Module-level so regression tests can shrink them (the clamps inline in
 # the handler would otherwise force a >=20 s wait to reach the timeout
 # path in tests).
 _MIN_EXTRACT_TIMEOUT_SEC = 10
 _MAX_EXTRACT_TIMEOUT_SEC = 300
+# REVIEW-2026-09-27 [item 2]: the multi-run branch no longer derives its batch
+# budget from this constant. It budgeted ``timeout_sec + 10`` for the WHOLE
+# batch while a single slot can legitimately spend ~4 x ``timeout_sec``
+# (``_call_llm`` retries once on a transient transport error —
+# TRANSPORT_ATTEMPTS = 2 in rca_core/extractor.py — and ``extract()`` re-asks
+# the whole mode when the payload is a silent miss), so a slow-but-successful
+# N-run extraction was abandoned and reported ``err.timeout`` while its daemon
+# thread went on to complete, was still billed by the provider, and had its
+# result thrown away uncached — the retry paid for it twice. The constant is
+# kept (it is still module state other code may tune) and is now only the
+# "extra beyond one extraction" term of the shared budget below; a batch whose
+# runs all finish early is still bounded by the per-request POST rate limit.
 _MULTI_RUN_TIMEOUT_SLACK_SEC = 10
 
 # REVIEW-2026-09-20: the SINGLE-run path had no deadline at all. `Handler.timeout`
@@ -115,6 +128,32 @@ _SINGLE_RUN_MAX_ATTEMPTS = 6
 _SINGLE_RUN_DEADLINE_SLACK_SEC = 15
 
 
+def _extraction_wall_clock_budget_sec(timeout_sec: int) -> int:
+    """Total wall-clock seconds ONE extraction may spend, for every caller.
+
+    REVIEW-2026-09-27 [item 2]: the single-run and the multi-run branch
+    answered the same question — "how long may this handler wait for the
+    provider?" — with two unrelated numbers, and they disagreed by ~6x
+    (``timeout_sec * 6 + 15`` above vs ``timeout_sec + 10`` a screen down).
+    The cheaper number was the one that shipped for N-runs, so the batch
+    branch abandoned slots that the single-run branch would have waited for.
+
+    One budget, derived once, from the reasoning already documented at
+    ``_SINGLE_RUN_MAX_ATTEMPTS``: ``timeout_sec`` per outbound attempt times
+    the worst-case number of attempts, plus slack. The multi-run branch uses
+    the SAME value because its slots run concurrently (daemon threads, see
+    :func:`_spawn_extract_thread`), so the batch finishes when its SLOWEST
+    slot does — it is one slot's budget, not N of them added up.
+
+    Both call sites shrink it the same way in tests, by shrinking
+    ``_SINGLE_RUN_MAX_ATTEMPTS`` / ``_SINGLE_RUN_DEADLINE_SLACK_SEC`` /
+    ``_MIN_EXTRACT_TIMEOUT_SEC`` on this module.
+    """
+    return (timeout_sec * _SINGLE_RUN_MAX_ATTEMPTS
+            + _SINGLE_RUN_DEADLINE_SLACK_SEC
+            + _MULTI_RUN_TIMEOUT_SLACK_SEC)
+
+
 # S8 fix: redact API-key-like patterns from error_body before echoing to the UI.
 # Upstream servers may echo back request headers (including Authorization)
 # or query params. We redact common key formats to prevent accidental leakage.
@@ -125,9 +164,33 @@ _SINGLE_RUN_DEADLINE_SLACK_SEC = 15
 # segment of a Bearer JWT was redacted (payload + signature survived). The
 # prefix alternation also missed this repo's own third-party presets
 # ("ccs-...", "pk-...") and the Google/AWS fixed formats. Expanded both.
+# AUDIT-2026-09-27 [P2]: measured leak in the JSON / named-parameter forms.
+# A field-name alternative wrote `api[_-]?key\s*[:=]\s*`, which requires the
+# separator to follow the name DIRECTLY. A JSON body puts a closing quote
+# first, so `{"x-api-key": "Zq7X..."}` and `{"api_key": "Zq7X..."}` sailed
+# through while `?api_key=Zq7X...` was redacted -- the same field, two
+# serializations, opposite outcomes. `?key=`, `secret=` and `token=` were
+# missing entirely, as was a bare `Authorization:` with no "Bearer".
+#
+# The fix is deliberately restricted to forms that carry an UNAMBIGUOUS
+# marker -- a known field name, or the Authorization header -- so ordinary
+# prose is untouched. A random 24-character string in free text is
+# indistinguishable from a word and is deliberately NOT chased: redacting it
+# would destroy every error message (tests/test_review_2026_09_10.py pins
+# `R("plain error message") == "plain error message"`), and a redacted
+# diagnosis is worth less than a visible one.
+# `\bkey` does not match inside "monkey", so a `key=` alternative cannot
+# swallow it.
 _API_KEY_RE = re.compile(
-    r"(?:sk-|ccs-|pk-|Bearer\s+|x-api-key\s*[:=]\s*|api[_-]?key\s*[:=]\s*)"
-    r"[A-Za-z0-9._+\-/=]{8,}"
+    r"(?:"
+    r"sk-|ccs-|pk-|Bearer\s+"
+    r"|(?:x-)?(?:api|access|auth|session|secret|private)[_-]?key[\"']?\s*[:=]\s*[\"']?"
+    r"|(?:x-)?(?:auth|access|session|bearer|api)[_-]?token[\"']?\s*[:=]\s*[\"']?"
+    r"|secret[\"']?\s*[:=]\s*[\"']?"
+    r"|\btoken[\"']?\s*[:=]\s*[\"']?"
+    r"|\bkey[\"']?\s*[:=]\s*[\"']?"
+    r"|authorization[\"']?\s*[:=]\s*[\"']?"
+    r")[A-Za-z0-9._+\-/=]{8,}"
     r"|AIza[0-9A-Za-z_\-]{20,}"
     r"|AKIA[0-9A-Z]{16}",
     re.IGNORECASE,
@@ -1020,6 +1083,76 @@ def _spawn_extract_thread(mode: str, common: dict,
     return fut
 
 
+class _DeadlineSocketIO(io.RawIOBase):
+    """Raw socket reader whose EVERY recv is capped by a live wall-clock budget.
+
+    REVIEW-2026-09-27 [item 1]: why a raw reader and not a wrapper around the
+    stdlib's ``rfile``.
+
+    ``socket.settimeout`` is a per-recv INACTIVITY timer, and
+    ``BaseHTTPRequestHandler.timeout`` is nothing else. The request line and
+    the header block are read through ``rfile.readline()``, and CPython's
+    ``BufferedReader.readline`` loops on the raw socket file INTERNALLY - one
+    client drip (one byte every ``timeout - 1`` seconds) can therefore sit
+    inside a *single* readline call and reset that timer on every recv, for as
+    long as it likes. The thread never reaches ``do_GET``/``do_POST`` (so no
+    rate limit, no 503, no 408 can fire on it) and never returns: 32 such
+    connections consume the whole bounded worker pool, unauthenticated, for a
+    few bytes per minute each. A deadline checked *before* each read cannot
+    catch that - the drip never leaves the call it started in. Checking before
+    each RECV can, because every recv is a real syscall boundary, so this sits
+    there: ``readinto`` is the one place CPython must pass through for every
+    byte it buffers.
+
+    The budget comes from a callable so arming/disarming is the caller's
+    business: ``Handler`` arms it per request in
+    :meth:`Handler.handle_one_request` and releases it in
+    :meth:`Handler.parse_request` (the body phase, the drain in
+    :meth:`Handler.finish` and the extraction deadlines own the socket after
+    that). While armed, each recv's socket timeout is the SMALLER of the
+    per-recv inactivity cap and what is left of the total - so the phase ends
+    at the budget, not at "whenever the client stops talking". While disarmed
+    the recv is left completely alone, which keeps the documented keep-alive
+    idle window (``timeout``) and every existing socket-timeout manipulation
+    exactly as they were.
+    """
+
+    def __init__(self, sock, left_sec, inactivity_sec: float) -> None:
+        super().__init__()
+        self._sock = sock
+        self._left_sec = left_sec          # callable -> float (may be <= 0)
+        self._inactivity_sec = inactivity_sec
+
+    def readable(self) -> bool:
+        return True
+
+    def fileno(self) -> int:
+        return self._sock.fileno()
+
+    def readinto(self, b) -> int:  # noqa: ANN001 - io.RawIOBase protocol
+        left = self._left_sec()
+        if left is not None:
+            if left <= 0:
+                # Budget spent. Refusing to start another recv is what turns
+                # "forever" into "the deadline"; socket.timeout is the exact
+                # exception the stdlib already treats as "discard this
+                # connection", so no new failure mode is introduced.
+                raise socket.timeout("request line/header deadline exceeded")
+            try:
+                self._sock.settimeout(max(0.05, min(left, self._inactivity_sec)))
+            except OSError:
+                pass  # socket already dead; the recv below reports it
+        return self._sock.recv_into(b)
+
+    def close(self) -> None:
+        # Deliberately does NOT close the socket: it belongs to
+        # socketserver, which closes it in shutdown_request(). Closing the
+        # stock makefile this reader replaced (see Handler.setup) already
+        # dropped its socket-io refcount, so nothing leaks.
+        self._sock = None
+        super().close()
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "RangeChartAnalyzer/1.0"
 
@@ -1086,6 +1219,35 @@ class Handler(BaseHTTPRequestHandler):
     # enforces its own wall-clock deadline.
     _BODY_DEADLINE_SEC = 60
 
+    # REVIEW-2026-09-27 [item 1]: ...and the comment above over-promised. The
+    # body deadline starts only AFTER ``parse_request()`` returns, so the
+    # request line and the header block were still covered by the per-recv
+    # inactivity timer alone: one byte every 59 s keeps
+    # ``rfile.readline(65537)`` alive forever, the thread never reaches
+    # ``do_GET``/``do_POST`` (so no rate limit, no 503, no 408) and never
+    # returns - 32 unauthenticated connections, and the whole bounded pool,
+    # gone for good. This is the total budget for that phase, armed per
+    # request in :meth:`handle_one_request` and enforced inside every recv by
+    # :class:`_DeadlineSocketIO` (installed once per connection in
+    # :meth:`setup`).
+    #
+    # Deliberately equal to ``timeout`` (assigned from it, so the two cannot
+    # drift): 60 s is the existing promise for "a normal request line +
+    # headers", and keeping the TOTAL at the same number means the
+    # keep-alive idle window documented above (which is also bounded by
+    # ``timeout``) is not shortened. A class attribute, not a module-level
+    # one, for the same reason ``timeout`` is: ``Handler``
+    # ``._REQUEST_HEAD_DEADLINE_SEC = 2`` shrinks it in a test.
+    _REQUEST_HEAD_DEADLINE_SEC = timeout
+
+    # REVIEW-2026-09-27 [item 1]: ``None`` means "no head budget on this
+    # connection" (idle keep-alive gap, body, handler). ``handle_one_request``
+    # sets the absolute ``time.monotonic()`` value for the request it is about
+    # to read and ``parse_request`` clears it, so a reused connection arms it
+    # again per request. Read through :meth:`_head_budget_left_sec`, which is
+    # what the raw reader calls.
+    _head_deadline_at = None
+
     # FE-BORROW-2026-09-20 (域P): bounds for the polite-close drain in
     # :meth:`finish` - at most this many abandoned request bytes, read with at
     # most this much wall-clock time. Memory is not the binding constraint (the
@@ -1139,6 +1301,111 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
         return b"".join(chunks)
+
+    def setup(self) -> None:
+        """Install a deadline-aware reader for the request line + headers.
+
+        REVIEW-2026-09-27 [item 1]: the standard ``rfile`` is a socket
+        makefile, so a per-recv ``socket.settimeout`` is all that can bound a
+        read - and a client that emits one byte inside every interval resets
+        it forever (see :class:`_DeadlineSocketIO`). The replacement is a
+        plain ``io.BufferedReader`` over a raw reader that checks the total
+        budget before every recv, so buffering (and therefore throughput) is
+        unchanged while the head phase gains a real deadline.
+
+        Swapped in here, once per connection, and NOT in
+        :meth:`handle_one_request`: ``setup`` is the only point at which the
+        stock reader is guaranteed to be EMPTY, so no already-buffered byte
+        can be stranded outside the new reader (a POST whose body arrives in
+        the same TCP segment as its headers is the case that would break).
+
+        The stock makefile is closed rather than dropped: ``socket.makefile``
+        takes a reference on the socket's file-object count, and leaking one
+        per connection would keep every descriptor alive until GC.
+        """
+        super().setup()
+        try:
+            self.rfile.close()
+        except (OSError, ValueError):
+            pass
+        self.rfile = io.BufferedReader(
+            _DeadlineSocketIO(self.connection, self._head_budget_left_sec,
+                              self.timeout),
+            io.DEFAULT_BUFFER_SIZE)
+
+    def _head_budget_left_sec(self):
+        """Seconds left in the head budget, or None when not armed.
+
+        REVIEW-2026-09-27 [item 1]: the callable the raw reader asks before
+        every recv, so arming is a plain attribute assignment at the two
+        boundaries (request start / headers complete) and the reader itself
+        holds no state that could go stale on a reused keep-alive connection.
+        """
+        deadline = self._head_deadline_at
+        if deadline is None:
+            return None
+        return deadline - time.monotonic()
+
+    def handle_one_request(self) -> None:
+        """Arm the TOTAL wall-clock budget for the head phase of one request.
+
+        REVIEW-2026-09-27 [item 1]: ``timeout`` (60 s) is a per-recv inactivity
+        timer and the only other total deadline in this handler
+        (``_BODY_DEADLINE_SEC``) starts *after* ``parse_request`` returns, so a
+        client that emits one byte every 59 s kept the stdlib stuck in
+        ``rfile.readline`` forever: the thread never reached
+        ``do_GET``/``do_POST``, so nothing could answer it (no rate limit, no
+        503, no 408) and it never returned — 32 such connections took the
+        whole bounded pool, unauthenticated, at a few bytes per minute each.
+        The budget is armed here, released by :meth:`parse_request` when the
+        headers are in, and enforced per recv by the reader installed in
+        :meth:`setup`.
+
+        Note what is NOT changed: the keep-alive idle gap between two requests
+        is still bounded by ``timeout`` alone (the budget for a request starts
+        when we go looking for it), and a timeout raised while reading the
+        request line - before there is a protocol version to answer in - is
+        still the stdlib's silent ``close_connection``.
+        """
+        self._head_deadline_at = (time.monotonic()
+                                  + self._REQUEST_HEAD_DEADLINE_SEC)
+        try:
+            super().handle_one_request()
+        finally:
+            # Belt and braces: if a handler raised out of the stdlib (or the
+            # request line timed out), no later read on this connection may be
+            # measured against a head budget that has already been answered.
+            self._head_deadline_at = None
+
+    def _send_head_timeout(self, exc: BaseException) -> None:
+        """Best-effort 408 for a request whose head phase ran out of time.
+
+        REVIEW-2026-09-27 [item 1]: sent through the stdlib's ``send_error``
+        because that is what the neighbouring pre-handler rejections use (414
+        for an over-long request line, 431 for too many headers) and it
+        always frames the response — including ``Connection: close``, which is
+        mandatory here: we are hanging up on a client that may still be
+        dribbling bytes at us.
+
+        Every failure mode is swallowed. The peer may already be gone (a
+        half-open connection raises on the first write), and this runs on the
+        way out of a read that has already timed out: if the 408 cannot be
+        delivered then the close IS the answer, and letting an OSError escape
+        here would replace a clean disconnect with a traceback and an
+        unreleased worker.
+        """
+        try:
+            self.send_error(
+                408, "Request Timeout",
+                "The request line and headers did not arrive within "
+                f"{self._REQUEST_HEAD_DEADLINE_SEC}s.")
+        except (OSError, ValueError, socket.timeout):
+            self.close_connection = True
+        except Exception:  # noqa: BLE001 - never let the 408 kill the worker
+            self.close_connection = True
+        # ``exc`` is intentionally unused beyond documentation: the stdlib
+        # already logged it via log_error, and a client's own bytes must not
+        # be echoed back into a response body.
 
     # --- helpers ---
     @staticmethod
@@ -1208,9 +1475,40 @@ class Handler(BaseHTTPRequestHandler):
         every request on a reused connection, so any per-request attribute has
         to be re-initialised here (the stdlib does the same for
         ``close_connection``).
+
+        REVIEW-2026-09-27 [item 1]: this override is also the ONLY place the
+        head phase (request line + header block) can be RELEASED and
+        answered, because ``handle_one_request`` reads the request line itself
+        and swallows every TimeoutError after that with a silent
+        ``close_connection = True`` - a 408 sent from the outer override would
+        never be reached. Two jobs here:
+
+        1. Release the head budget. ``parse_request`` returns exactly when the
+           request line and the header block are complete, which is the
+           boundary the total budget must stop at: the body phase has its own
+           (``_read_body_with_deadline``) and a handler may legitimately run
+           for minutes - one extraction is bounded separately, at the
+           single/multi-run call sites. Without the release a healthy 20 MB
+           upload or a real extraction would be cancelled half-way through.
+        2. Answer a head phase that ran out of time. The client is still
+           there, and 408 is what the body phase already answers with, so
+           both phases of one request now report the same way instead of one
+           of them hanging up without a word. Returning False is the stdlib's
+           own "an error has been sent, just exit" signal, so the dispatcher
+           stops and ``close_connection`` ends the keep-alive loop.
         """
         self._request_body_consumed = False
-        return super().parse_request()
+        try:
+            return super().parse_request()
+        except (socket.timeout, TimeoutError) as exc:
+            self.close_connection = True
+            self._send_head_timeout(exc)
+            return False
+        finally:
+            # Also runs on the timeout path, so the budget is released even
+            # when the deadline fired - a request that ends in 408 must not
+            # leave an expired deadline armed for the next one.
+            self._head_deadline_at = None
 
     def _body_pending(self) -> bool:
         """True when the request still has unread body bytes on the socket.
@@ -1585,7 +1883,25 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 self._send_json(404, {"error": "not found"})
                 return
-            rec = store.get(record_id)
+            # REVIEW-2026-09-27 [item 4a]: this read sat between two guarded
+            # sites (the singleton probe above, the ``to_prov_jsonld``
+            # try/except below) with no guard of its own, yet it is the one
+            # that touches SQLite directly: ``HistoryStore.get`` is a plain
+            # SELECT, and this file already documents that a read can raise
+            # ``sqlite3.OperationalError: database is locked`` while another
+            # process (the GUI, a second server) holds the write lock. That
+            # escaped do_GET as an exception, so the handler died mid-response:
+            # no JSON at all, the client saw a bare connection close, and the
+            # export looked like a broken server rather than a busy database.
+            # A read failure is not "not found", so it is reported as 503
+            # (retryable — the sibling store-unavailable path above uses the
+            # same code for the same class of problem) and the connection is
+            # answered and closed cleanly.
+            try:
+                rec = store.get(record_id)
+            except Exception:  # noqa: BLE001 - sqlite3 errors of any kind
+                self._send_json(503, {"error": "history store busy"})
+                return
             if rec is None:
                 self._send_json(404, {"error": "not found"})
                 return
@@ -1818,19 +2134,26 @@ class Handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path.rstrip("/") != "/api/extract":
             self._send_json(404, {"error": "not found"})
             return
-        # RATE LIMIT: sliding window 30 req / 60 s per remote IP.
+        # REVIEW-2026-09-27 [item 3]: the extraction rate limit used to be
+        # charged HERE, above every cheap rejection, so a tokenless
+        # cross-origin POST — anything a web page the victim visits can fire at
+        # this origin — burned a slot of the shared 30-per-minute extraction
+        # budget before it was refused, and the victim's own next 30
+        # extractions all came back 429. That is the same cross-site starvation
+        # the GET side already fixed by moving the CSRF mint onto its own
+        # ``bucket="get"`` budget (see do_GET); the POST side just had the
+        # order backwards. The budget is now charged only by a request that has
+        # actually passed the origin + CSRF gates below, i.e. by a caller that
+        # already holds a valid token — the requests that are refused cost
+        # nothing but their own two rejected ones.
+        #
+        # A flood of tokenless garbage is still bounded, it just is bounded by
+        # the cheap rejections (and by the CSRF mint's own "get" bucket) rather
+        # than by the paid extraction budget.
         try:
             client_ip = self.client_address[0]
         except Exception:
             client_ip = "unknown"
-        allowed, wait_sec = _check_rate_limit(client_ip)
-        if not allowed:
-            self._send_json(429, {
-                "ok": False,
-                "error_key": "err.rateLimit",
-                "error_body": f"Rate limit exceeded. Retry after {wait_sec} seconds.",
-            })
-            return
         # CSRF / same-origin validation
         if not self._validate_csrf_and_origin():
             return
@@ -1857,6 +2180,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(403, {
                 "ok": False, "error_key": "err.forbidden",
                 "error_body": "Invalid or expired CSRF token.",
+            })
+            return
+
+        # RATE LIMIT: sliding window 30 req / 60 s per remote IP. Charged
+        # AFTER the origin + token gates (REVIEW-2026-09-27 [item 3] above)
+        # and still BEFORE a single body byte is read, so it caps exactly what
+        # it is meant to cap: admitted extractions, the ones that pull a body
+        # off the network and spend provider money.
+        allowed, wait_sec = _check_rate_limit(client_ip)
+        if not allowed:
+            self._send_json(429, {
+                "ok": False,
+                "error_key": "err.rateLimit",
+                "error_body": f"Rate limit exceeded. Retry after {wait_sec} seconds.",
             })
             return
 
@@ -2320,8 +2657,16 @@ class Handler(BaseHTTPRequestHandler):
             # spend on one extraction, plus slack. The worker runs in a daemon
             # thread (see _spawn_extract_thread) so abandoning a hung call costs
             # neither a leaked non-daemon thread nor a Ctrl+C hang.
-            run_deadline = (timeout_sec * _SINGLE_RUN_MAX_ATTEMPTS
-                            + _SINGLE_RUN_DEADLINE_SLACK_SEC)
+            # REVIEW-2026-09-27 [item 2]: the budget now comes from the ONE
+            # shared derivation (``_extraction_wall_clock_budget_sec``) that the
+            # multi-run branch below uses too — the two branches had drifted ~6x
+            # apart on the price of a single extraction, and the cheaper number
+            # was the one that shipped for N-runs, so a batch slot that needed a
+            # transport retry (2 attempts) plus a silent-miss re-ask (2 more) was
+            # abandoned at ``timeout_sec + 10`` while the provider was still
+            # working on it.
+            run_t0 = time.perf_counter()
+            run_deadline = _extraction_wall_clock_budget_sec(timeout_sec)
             fut = _spawn_extract_thread(mode, common)
             try:
                 result = fut.result(timeout=run_deadline)
@@ -2341,7 +2686,16 @@ class Handler(BaseHTTPRequestHandler):
                         f"(timeout_sec={timeout_sec} x "
                         f"{_SINGLE_RUN_MAX_ATTEMPTS} attempts + slack)"),
                     "usage": {},
-                    "latency_ms": int(run_deadline * 1000),
+                    # REVIEW-2026-09-27 [item 2]: this used to report
+                    # ``run_deadline * 1000`` - a FABRICATED figure, not a
+                    # measurement. It is always the budget, whatever actually
+                    # elapsed, so the audit trail's duration_ms (fed from
+                    # latency_ms) and the UI's timing disagreed with reality by
+                    # up to the whole budget, and a "0.9 s" run that timed out
+                    # was recorded as a 21-minute one. Report what was measured
+                    # - the same ``perf_counter`` arithmetic the multi-run branch
+                    # uses for its own total_latency.
+                    "latency_ms": int((time.perf_counter() - run_t0) * 1000),
                     "warning": "",
                 })
                 return
@@ -2455,7 +2809,23 @@ class Handler(BaseHTTPRequestHandler):
         est_in, est_out = False, False
         max_run_latency = 0
         batch_t0 = time.perf_counter()
-        per_future_timeout = timeout_sec + _MULTI_RUN_TIMEOUT_SLACK_SEC
+        # REVIEW-2026-09-27 [item 2]: this was ``timeout_sec +
+        # _MULTI_RUN_TIMEOUT_SLACK_SEC`` - one outbound attempt plus slack for
+        # the WHOLE batch, while a single slot can spend up to ~4 x
+        # ``timeout_sec`` (a transport retry, then the extractor's silent-miss
+        # re-ask, each of which is itself a full ``timeout_sec`` call). A
+        # slow-but-successful slot was therefore abandoned and reported
+        # ``err.timeout`` while its daemon thread went on to finish, was still
+        # billed by the provider, and had its result dropped uncached, so the
+        # user's retry paid for the same extraction twice. The budget is now
+        # the single shared one (``_extraction_wall_clock_budget_sec``, the
+        # same value the runs==1 branch above waits on): the slots run
+        # CONCURRENTLY, so the batch is bounded by its SLOWEST slot, i.e. by
+        # one slot's worst case - never by N of them added together.
+        # Concurrency stays bounded by the POST rate limit (30 admitted
+        # extractions per IP per window, each on a worker of the capped pool),
+        # not by this timeout.
+        per_future_timeout = _extraction_wall_clock_budget_sec(timeout_sec)
 
         # CRITICAL fix (audit): each multi-run slot must have its OWN cache
         # key. Previously the per-slot loop produced identical keys
@@ -2983,6 +3353,20 @@ def _make_bounded_server(host: str, port: int, max_workers: int):
     except OSError as exc:
         raise SystemExit(
             f"cannot bind {host!r}:{port} ({exc}). "
+            "Try another --host / --port, or free the port."
+        ) from exc
+    except (OverflowError, ValueError) as exc:
+        # REVIEW-2026-09-27 [item 4b]: a port outside 0..65535 never reaches
+        # the OS — ``socket.bind(("127.0.0.1", 99999))`` raises OverflowError
+        # ("port must be 0-65535") from CPython's own argument check, and
+        # ``--port -1`` raises it too. ``except OSError`` did not catch
+        # either (OverflowError is an ArithmeticError, not an OSError), so
+        # ``python server.py --port 99999`` printed a raw traceback instead of
+        # the clean one-line message this function promises for every other
+        # bind failure. ValueError is caught alongside it because the family
+        # is reached through the same argument validation for a non-int host.
+        raise SystemExit(
+            f"cannot bind {host!r}:{port} ({type(exc).__name__}: {exc}). "
             "Try another --host / --port, or free the port."
         ) from exc
 

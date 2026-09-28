@@ -152,13 +152,27 @@ def test_multi_run_hung_extract_returns_err_timeout():
         from rca_core.extractor import ExtractResult
         return ExtractResult(ok=True, data={"sections": []})
 
-    # Shrink the batch budget: the inline clamp would otherwise force a
-    # >= 20 s wait (timeout_sec >= 10 plus 10 s slack).
+    # Shrink the batch budget. AUDIT-2026-09-27: the budget is no longer
+    # ``timeout_sec + _MULTI_RUN_TIMEOUT_SLACK_SEC`` — it is now ONE shared
+    # derivation, ``_extraction_wall_clock_budget_sec()`` =
+    # ``timeout_sec * _SINGLE_RUN_MAX_ATTEMPTS + slack``, because a single
+    # extraction can legitimately spend ~4 x timeout_sec (the transport retry
+    # plus the silent-miss re-ask) and the old batch number abandoned
+    # slow-but-successful runs while still billing them. So shrinking only the
+    # two old knobs left the budget at 31 s and the 3 s fake extract correctly
+    # completed instead of timing out. Shrink the attempt count too, which is
+    # what actually makes the budget 1 s.
     saved_min = srv._MIN_EXTRACT_TIMEOUT_SEC
     saved_slack = srv._MULTI_RUN_TIMEOUT_SLACK_SEC
+    saved_attempts = srv._SINGLE_RUN_MAX_ATTEMPTS
+    saved_deadline_slack = srv._SINGLE_RUN_DEADLINE_SLACK_SEC
     srv.extract = hung_extract
     srv._MIN_EXTRACT_TIMEOUT_SEC = 0
     srv._MULTI_RUN_TIMEOUT_SLACK_SEC = 0
+    srv._SINGLE_RUN_MAX_ATTEMPTS = 1
+    srv._SINGLE_RUN_DEADLINE_SLACK_SEC = 0
+    assert srv._extraction_wall_clock_budget_sec(1) == 1, \
+        "the shrink must actually produce a 1s budget"
     base, httpd, t = _start()
     try:
         t0 = time.monotonic()
@@ -182,6 +196,8 @@ def test_multi_run_hung_extract_returns_err_timeout():
         srv.extract = real_extract
         srv._MIN_EXTRACT_TIMEOUT_SEC = saved_min
         srv._MULTI_RUN_TIMEOUT_SLACK_SEC = saved_slack
+        srv._SINGLE_RUN_MAX_ATTEMPTS = saved_attempts
+        srv._SINGLE_RUN_DEADLINE_SLACK_SEC = saved_deadline_slack
         _stop(httpd, t)
 
 
