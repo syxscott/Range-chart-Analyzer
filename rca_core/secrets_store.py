@@ -596,5 +596,34 @@ def is_obfuscated(value: str) -> bool:
     return bool(value) and (value.startswith(_FER_TAG) or value.startswith(_OBF_TAG))
 
 
-__all__ = ["encrypt", "decrypt", "is_obfuscated", "write_private_bytes",
-           "encryption_status"]
+def decrypt_or_none(envelope: str, passphrase: str | None = None):
+    """Decrypt, or return ``None`` when the envelope cannot be read.
+
+    AUDIT-2026-09-27 P1: the module docstring has always promised a
+    "decrypt_or_fallback -> undecryptable values trigger a re-prompt" policy,
+    but the function did not exist, so callers had to write
+    ``try: decrypt(...) except ValueError: api_key = ""`` — and that is what
+    destroyed keys. The realistic trigger is a keyring that was AVAILABLE
+    when the key was written and UNAVAILABLE at the next launch (no D-Bus
+    secret service, a locked Windows Credential Locker, a headless run). The
+    ``fer:v1:`` envelope can then only be opened with the keyring key; the key
+    file and the legacy fingerprint key do not match. ``LlmProvider.from_dict``
+    blanked the key, and then the very next ``ProviderStore`` mutation called
+    ``save()``, whose ``to_dict()`` only re-encrypts a NON-EMPTY key — so the
+    ciphertext was replaced with ``""`` on disk and every provider's paid API
+    credential was gone, with no backup.
+
+    ``None`` is the honest answer for "there is a key but I cannot read it".
+    Callers must keep the envelope verbatim so it can be written back
+    unchanged, and prompt the user for a new key rather than inventing one.
+    """
+    if not envelope:
+        return envelope
+    try:
+        return decrypt(envelope, passphrase)
+    except Exception:
+        return None
+
+
+__all__ = ["encrypt", "decrypt", "decrypt_or_none", "is_obfuscated",
+           "write_private_bytes", "encryption_status"]

@@ -360,9 +360,29 @@ def clean_name_for_lookup(species: str) -> str:
                " ", s, flags=re.IGNORECASE)
     s = re.sub(r"(?i)\bsp\.?$", "", s.strip())
     s = re.sub(r"\?", "", s)
-    # abbreviated genus "P. asiaticus" -> the genus cannot be recovered,
-    # drop the abbreviation instead of querying a broken binomen.
-    s = re.sub(r"(^|\s)[A-Z]\.\s*(?=[a-z])", r"\1", s)
+    # abbreviated genus "P. asiaticus" -> the genus cannot be recovered.
+    #
+    # AUDIT-2026-09-27 P2: the comment here used to say the abbreviation is
+    # "dropped instead of querying a broken binomen", but dropping "P." leaves
+    # the NAKED EPITHET, which was then queried anyway:
+    # ``species/match?name=asiaticus``. GBIF answers that happily, often with a
+    # confident EXACT / HIGHERRANK match for an "asiaticus" in a completely
+    # DIFFERENT genus — so a block-abbreviated range chart (the norm: rows under
+    # a "Pseudotirolites" header read "P. hoenesi") could acquire a
+    # confidently WRONG canonical name and a green "verified" badge, which then
+    # travels into the Darwin Core / PBDB export. Verified against the real
+    # regex chain: "P. asiaticus" -> "asiaticus", "B. attenuatus" ->
+    # "attenuatus", "P. hoenesi Hoenes, 1891" -> "hoenesi".
+    #
+    # So: when an abbreviation was actually stripped, the remainder must still
+    # contain a genus. Otherwise the name is not queryable and the honest
+    # answer is "" — the caller reports `empty_after_clean` and the row keeps
+    # its printed value, unverified, rather than gaining a wrong one.
+    _ABBREV_RE = re.compile(r"(^|\s)([A-Z])\.\s*(?=[a-z])")
+    if _ABBREV_RE.search(s):
+        s = _ABBREV_RE.sub(r"\1", s)
+        if len([t for t in s.split() if t]) < 2:
+            return ""
     s = re.sub(r"\s+", " ", s).strip(" .,-")
     # A "name" longer than this is prose, not a taxon - querying it wastes
     # a request and can never match.

@@ -913,7 +913,17 @@ def test_be1_retry_gives_up_after_retries():
         )
         check("be1-gives-up-after-retries", attempts[0] == 3)
         check("be1-final-status-500", result[2] == 500)
-        check("be1-final-errbody-stamped", "retry" in (result[3] or ""))
+        # AUDIT-2026-09-27 P2: this used to be
+        #     check("be1-final-errbody-stamped", "retry" in (result[3] or ""))
+        # which passed ONLY because the final attempt appended
+        # "[retry 3/3 after 0.0s]" -- a retry and a delay that never
+        # happened. It pinned the defect. The stamp now reports the attempts
+        # actually made, and the assertion is on that.
+        check("be1-final-errbody-stamped", "giving up" in (result[3] or ""))
+        check("be1-final-errbody-counts-attempts", "3 attempts" in (result[3] or ""))
+        check("be1-final-errbody-names-the-status", "500" in (result[3] or ""))
+        check("be1-final-errbody-promises-no-retry",
+              "retry" not in (result[3] or "").lower())
     finally:
         time.sleep = orig_sleep
         L.call_llm_api = _saved_cll

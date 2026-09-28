@@ -81,18 +81,28 @@ def test_bug2_by_day_uses_local_offset():
             # by_day must be non-empty and have exactly 1 entry.
             check("bug2-by-day-single-bucket", len(s.by_day) == 1)
             if s.by_day:
-                # The bucket key must reflect local-midnight alignment:
-                # day_bucket = int(ts/86400)*86400 + local_offset_at_noon.
-                # REVIEW-2026-11-07: the 07-31 fix corrected the SIGN of
-                # tm_gmtoff (it is seconds EAST of UTC; local = UTC +
-                # offset). This expectation still carried the pre-fix
-                # negation, so it failed on every non-UTC zone (e.g.
-                # UTC+8). Match the implementation: no negation.
+                # The bucket key must be the epoch of LOCAL MIDNIGHT of the
+                # day holding the majority of this UTC day's rows.
+                # AUDIT-2026-09-27: the key used to be
+                # ``utc_midnight + local_offset`` — a SHIFTED timestamp —
+                # while the only consumer re-applies the zone
+                # (``time.strftime("%m-%d", time.localtime(d["day"]))`` in
+                # gui_fluent_pages.py), so the offset was counted twice. That
+                # is invisible east of UTC and wrong west of it, which is why
+                # the 2026-11-07 SIGN fix (tm_gmtoff is seconds EAST, so no
+                # negation — still asserted here) looked correct and the
+                # offset itself was never revisited.
                 import time as _t
-                local_offset = _t.localtime(86400 * 5 + 43200).tm_gmtoff
-                expected_day = int((86400 * 5 + 43200) // 86400) * 86400 + local_offset
-                check("bug2-by-day-key-uses-local-offset",
+                utc_day = (86400 * 5 + 43200) // 86400 * 86400
+                local_offset = _t.localtime(utc_day + 43200).tm_gmtoff
+                check("bug2-tm-gmtoff-not-negated", local_offset >= 0
+                      or local_offset == 0)
+                majority = utc_day + local_offset + 43200
+                expected_day = (majority // 86400) * 86400 - local_offset
+                check("bug2-by-day-key-is-local-midnight",
                       s.by_day[0]["day"] == expected_day)
+                check("bug2-by-day-local-midnight-invariant",
+                      (expected_day + local_offset) % 86400 == 0)
         finally:
             db.close()
 

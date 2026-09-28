@@ -436,7 +436,23 @@ class UsageStore:
             # so for UTC+8 all usage between 00:00-08:00 local landed on
             # the PREVIOUS day.
             local_offset = _time.localtime(ts_noon).tm_gmtoff
-            local_day = utc_day + local_offset
+            # AUDIT-2026-09-27 P2: the key used to be ``utc_day +
+            # local_offset``, i.e. a SHIFTED timestamp, while the only
+            # consumer re-applies the zone —
+            # ``time.strftime("%m-%d", time.localtime(d["day"]))`` in
+            # gui_fluent_pages.py — so the offset was counted twice. The
+            # author's own UTC+8 zone happens to land on the right date
+            # anyway, which is why this survived; executed for UTC-5 the
+            # daily bars were labelled one day EARLY, and a cost-per-day
+            # figure is something a user reconciles against an invoice.
+            #
+            # The key is now the epoch of LOCAL MIDNIGHT of the day that
+            # holds the MAJORITY of this UTC day's rows. A UTC day spans
+            # [D+off, D+off+24h) in local time, so the majority day is the
+            # local date of its midpoint — the same noon trick the DST rule
+            # above uses. Then localtime(key) is exactly 00:00 on that date.
+            majority_ts = utc_day + local_offset + 43200
+            local_day = (majority_ts // 86400) * 86400 - local_offset
             bucket = local_buckets.setdefault(
                 local_day, {"day": local_day, "count": 0, "tokens": 0}
             )

@@ -96,9 +96,26 @@ class TestUsageByDayTimezone:
         ))
         s = store.summary()
         day_keys = [d["day"] for d in s.by_day]
-        # Local day 2026-08-01 in UTC-day units = 2026-07-31 00:00 + 8h.
-        expected_day = (utc_ts // 86400) * 86400 + 8 * 3600
+        # AUDIT-2026-09-27 P2: the expected key is now the epoch of LOCAL
+        # MIDNIGHT of the day holding the majority of this UTC day, which is
+        # what the consumer (`time.strftime("%m-%d", time.localtime(d["day"]))`
+        # in gui_fluent_pages.py) needs in order to print the right date.
+        #
+        # It used to be `utc_midnight + offset`, i.e. a SHIFTED timestamp,
+        # while the consumer re-applies the zone — so the offset was counted
+        # TWICE. That is invisible east of UTC and wrong west of it, which is
+        # why REVIEW-2026-07-31's SIGN fix (east-positive, below) looked
+        # correct and this offset was never revisited. The sign itself is
+        # still right and is still asserted here.
+        off = _time.localtime(utc_ts + 43200).tm_gmtoff
+        majority = (utc_ts // 86400) * 86400 + off + 43200
+        expected_day = (majority // 86400) * 86400 - off
         assert expected_day in day_keys, day_keys
+        # The invariant the consumer depends on, stated without touching
+        # ``_time.localtime`` (this test monkeypatches it with a stub that
+        # carries only ``tm_gmtoff``): adding the zone offset to the key must
+        # land exactly on a UTC midnight, which is what "00:00 local" means.
+        assert (expected_day + off) % 86400 == 0, (expected_day, off)
         bucket = next(d for d in s.by_day if d["day"] == expected_day)
         assert bucket["count"] == 1
 
@@ -126,8 +143,23 @@ class TestUsageByDayTimezone:
         ))
         s = store.summary()
         day_keys = [d["day"] for d in s.by_day]
-        expected_day = (utc_ts // 86400) * 86400 - 5 * 3600
+        # AUDIT-2026-09-27 P2: see the east-offset test above - the key is the
+        # epoch of LOCAL MIDNIGHT, not a zone-shifted timestamp. West of UTC
+        # this is the case the old formula got wrong: with the double
+        # application, UTC 2026-07-31 22:00 was filed under 2026-07-30.
+        off = _time.localtime(utc_ts + 43200).tm_gmtoff
+        majority = (utc_ts // 86400) * 86400 + off + 43200
+        expected_day = (majority // 86400) * 86400 - off
         assert expected_day in day_keys, day_keys
+        # UTC 2026-07-31 22:00 in UTC-5 is 17:00 local on the SAME day, so the
+        # bucket must resolve to 2026-07-31 - which, with the old double-offset
+        # formula, came out as 2026-07-30. Pure arithmetic here because
+        # ``_time.localtime`` is stubbed in this test.
+        assert (expected_day + off) % 86400 == 0, (expected_day, off)
+        local_date = _time.strftime(
+            "%Y-%m-%d",
+            _time.gmtime(expected_day + off))     # +off == local wall clock
+        assert local_date == "2026-07-31", local_date
 
 
 class TestHistoryAtomicity:

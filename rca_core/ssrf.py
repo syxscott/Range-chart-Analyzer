@@ -516,8 +516,32 @@ def make_pinning_opener():
 
     class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         def https_open(self, req):
-            # Only reached for direct requests; ProxyHandler handles proxied
-            # ones before us, so req.host is the real target (host:port).
+            # AUDIT-2026-09-27 [item 5.2]. The comment below used to claim
+            # "ProxyHandler handles proxied ones before us", so req.host is
+            # always the real target. That is FALSE for https, and the cost was
+            # that no https request was ever proxied:
+            #
+            #   ProxyHandler exposes http_open/proxy_open, not https_open. For
+            #   an https URL it runs its `proxy_request` hook instead, which
+            #   calls req.set_proxy(proxy) — and set_proxy stores the ORIGINAL
+            #   host in `req._tunnel_host` before overwriting req.host with the
+            #   proxy address, so the request is tunnelled by do_open.
+            #
+            #   `_pin` then did `req.host = <pinned IP>`, clobbering the proxy
+            #   address that ProxyHandler had just installed. The request went
+            #   DIRECT to a resolved IP, which on a filtered network is a
+            #   hijacked one, and came back HTTP 418 with an empty body.
+            #
+            #   So the pin has to be skipped when the request is tunnelled —
+            #   which is also the only correct behaviour: a CONNECT tunnel
+            #   resolves the name at the proxy, so there is no DNS to pin here.
+            #   Verified by a real call: identical URL and headers returned 200
+            #   through a private proxying opener and 418 through this one.
+            if getattr(req, "_tunnel_host", None):
+                # Proxied: let the stock handler run the CONNECT tunnel, with
+                # no IP pinning. `_PinnedHTTPSHandler` is only about the direct
+                # path.
+                return super().https_open(req)
             sni = _pin(req, "https")
 
             def _conn_factory(host_arg, timeout=req.timeout, **kw):
@@ -539,7 +563,31 @@ def make_pinning_opener():
 
             return self.do_open(_conn_factory, req)
 
+    # AUDIT-2026-09-27 [item 5.1] (found by making a REAL call after the user
+    # asked for one — every attempt had returned HTTP 418 with an empty body,
+    # which read like a rejected credential). The real cause was this opener.
+    #
+    # `make_pinning_opener` is installed PROCESS-WIDE by llm.py, and it
+    # replaced the default urllib opener that DOES carry a ProxyHandler. So on
+    # any network that needs a proxy — which is most of mainland China, where
+    # this project is used — every outbound model call went DIRECT, landed on
+    # DNS that returns hijacked addresses, and came back 418 from a
+    # transparent filter. A key that works perfectly through the proxy was
+    # unreachable without it.
+    #
+    # The irony is exact: the module that exists to stop connections to
+    # UNSAFE hosts was the one preventing the legitimate one. The comment in
+    # _PinnedHTTPSHandler above already assumed a ProxyHandler sat in front of
+    # it ("ProxyHandler handles proxied ones before us") — it never did.
+    #
+    # `ProxyHandler()` with no argument reads HTTPS_PROXY / https_proxy (and
+    # NO_PROXY) from the environment via getproxies(), which is the standard
+    # behaviour the default opener had. Pinning still applies to DIRECT
+    # connections; for a proxied request the proxy resolves the name itself,
+    # so the pin is bypassed — the same tradeoff the comment describes, and the
+    # only behaviour a proxy can have.
     return urllib.request.build_opener(
+        urllib.request.ProxyHandler(),
         _PinnedHTTPSHandler(), _PinnedHTTPHandler(), _NoRedirect())
 
 
