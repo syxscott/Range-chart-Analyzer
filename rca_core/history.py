@@ -14,11 +14,30 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from .db import Database
+
+
+def _int_env(name: str, default: int) -> int:
+    """An int from the environment, falling back on anything unparsable.
+
+    AUDIT-2026-09-27 P1: introduced with ``MAX_HISTORY_ROWS`` so a researcher
+    who needs a different retention window sets one variable instead of
+    editing the source. A malformed or non-positive value is IGNORED rather
+    than honoured — a typo must not turn the cap into "delete everything".
+    """
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 # Bug-8 fix: cap thumbnail dimensions + byte size so the SQLite history
@@ -28,7 +47,22 @@ from .db import Database
 THUMBNAIL_MAX_EDGE = 200
 THUMBNAIL_JPEG_QUALITY = 70
 THUMBNAIL_MAX_BYTES = 20 * 1024
-MAX_HISTORY_ROWS = 500
+
+# AUDIT-2026-09-27 P1: the cap was a flat 500, and the DELETE cascaded.
+# `db.py` re-issues `PRAGMA foreign_keys=ON` on every open and both
+# `raw_responses` and `record_edits` declare `ON DELETE CASCADE`, so evicting a
+# history row destroyed that record's per-run raw LLM text AND its immutable
+# before/after edit log — irreversibly, with no export, no backup and no
+# on-screen notice, at roughly 3.5 months of ordinary use (5 extractions a day).
+# That is precisely the provenance this project advertises as a 5-year audit
+# trail, and `report.py` / `to_prov_jsonld` are built on it.
+#
+# Two changes, because the cap's own stated purpose is SIZE, not retention:
+#   1. it is now tunable, and the default is high enough to cover years;
+#   2. `_enforce_row_cap` sheds the THUMBNAIL BLOB first — the actual size
+#      driver the Bug-8 comment describes — and only deletes a row when the
+#      table is still over the cap.
+MAX_HISTORY_ROWS = _int_env("RCA_MAX_HISTORY_ROWS", 5000)
 
 # P1-1 (REVIEW-2026-07-25): single source of truth for the lock file path.
 # Previously app.py and gui_fluent_history_detail.py each hard-coded their own
@@ -160,7 +194,9 @@ class HistoryRecord:
     mode: str = "range_chart"  # range_chart | columnar_section
     runs: int = 1
     result: dict[str, Any] = field(default_factory=dict)
-    raw: str = ""            # raw model response (truncated to ~8KB on save; full text in raw_responses table)
+    raw: str = ""            # raw model response (capped at 8 KB of UTF-8 on save and
+                             # marked with a "[truncated: ...]" footer; the full
+                             # untruncated text is in the raw_responses table)
     confidence: float = 0.0
     partial_failures: int = 0
     duration_ms: int = 0
@@ -247,6 +283,53 @@ def _row_to_record(row) -> HistoryRecord:
 _MAX_RAW_BYTES = 8 * 1024
 
 
+def _truncate_raw(raw: str, cap_bytes: int = _MAX_RAW_BYTES) -> str:
+    """Cap the stored ``raw_json`` fragment, in BYTES, and say so when it bites.
+
+    AUDIT-2026-09-27 [item 1.6] (B-18). This was one line:
+
+        raw = rec.raw if len(rec.raw) <= _MAX_RAW_BYTES else rec.raw[:_MAX_RAW_BYTES]
+
+    with two defects in it.
+
+    WRONG MEASURE. ``len()`` on a ``str`` counts CHARACTERS, but the constant is
+    named ``_MAX_RAW_BYTES`` and exists to bound the DB. UTF-8 spends up to 4
+    bytes per character, so a Chinese or Japanese response — which is exactly
+    what this tool produces when ``chart_lang`` is zh/ja, and the users it was
+    built for — stored up to ~32 KB against an 8 KB cap. The cap silently did
+    a quarter of the job it was written for, and did so unevenly: the same
+    logical response could land anywhere between 8 KB and 32 KB depending
+    purely on its script.
+
+    SILENT. The clipped fragment was byte-identical to a complete response as
+    far as any reader could tell. ``js/table.js`` renders it behind the "raw"
+    toggle and the Qt detail dialog shows it as the raw model response, so a
+    reviewer auditing a long extraction had no way to know they were reading
+    the first 8 KB of something bigger. (The full text is not lost —
+    ``add(rec, raw_responses=...)`` persists it untruncated in the
+    ``raw_responses`` table — but nothing in the UI said so.)
+
+    Now the cut is measured in encoded bytes as documented, lands on a
+    character boundary so the audit trail never grows a replacement char, and
+    names the true size and where the rest lives. The marker is plain text and
+    lands inside the ``<pre>`` the raw toggle already escapes, so it is
+    display-safe and JSON.parse is never applied to this column.
+    """
+    if not raw:
+        return raw
+    encoded = raw.encode("utf-8")
+    if len(encoded) <= cap_bytes:
+        return raw
+    # errors="ignore" drops only the (at most 3-byte) partial character the
+    # byte slice landed in, so the stored text stays valid UTF-8.
+    head = encoded[:cap_bytes].decode("utf-8", errors="ignore")
+    return (
+        f"{head}\n\n[truncated: {len(encoded)} bytes of the model response were "
+        f"stored as the first {len(head.encode('utf-8'))}. The complete text "
+        f"is in the raw_responses table for this record.]"
+    )
+
+
 def _decode_audit_value(value: Any) -> Any:
     """Read back a ``record_edits.before`` / ``.after`` column value.
 
@@ -325,7 +408,7 @@ class HistoryStore:
                 rec.image_thumbnail = None
                 rec.image_width = None
                 rec.image_height = None
-        raw = rec.raw if len(rec.raw) <= _MAX_RAW_BYTES else rec.raw[:_MAX_RAW_BYTES]
+        raw = _truncate_raw(rec.raw)
         request_meta_json = json.dumps(rec.request_meta, ensure_ascii=False) if rec.request_meta else None
         cur = self.db.execute(
             """INSERT INTO history (
@@ -473,25 +556,54 @@ class HistoryStore:
         return out
 
     def _enforce_row_cap(self) -> None:
-        """Trim oldest rows when the table exceeds MAX_HISTORY_ROWS.
+        """Bound the table at MAX_HISTORY_ROWS, cheapest loss first.
 
-        Cheap COUNT + DELETE WHERE id IN (oldest excess). Best-effort:
-        if the cap is way off (e.g. user manually edited the DB), the
-        excess delete just runs in one statement and converges.
+        Cheap COUNT + a single UPDATE/DELETE. Best-effort: if the cap is way
+        off (e.g. the user hand-edited the DB) the statement still converges.
+
+        AUDIT-2026-09-27 P1: this used to go straight to
+        ``DELETE FROM history WHERE id IN (oldest N)``, and because both child
+        tables declare ``ON DELETE CASCADE`` under a permanently-on
+        ``PRAGMA foreign_keys`` that also destroyed the evicted rows'
+        ``raw_responses`` and ``record_edits`` — the per-run raw model text and
+        the immutable edit log, i.e. the whole point of the audit trail, gone
+        without a warning at ~3.5 months of ordinary use. The cap exists to
+        bound SIZE (see the Bug-8 comment on THUMBNAIL_*), and the thumbnail
+        BLOB is the size driver, so the thumbnail is now dropped from the
+        oldest excess rows first and the rows themselves are only deleted if
+        the table is STILL over the cap. A user who really wants the rows gone
+        can lower the cap via ``RCA_MAX_HISTORY_ROWS``.
         """
         try:
             n = self.count()
             if n <= MAX_HISTORY_ROWS:
                 return
             excess = n - MAX_HISTORY_ROWS
+            # Step 1 - shed the size driver, keep the provenance.
             self.db.execute(
-                "DELETE FROM history WHERE id IN ("
-                "  SELECT id FROM history ORDER BY timestamp ASC LIMIT ?"
-                ")",
+                "UPDATE history SET image_thumbnail = NULL WHERE id IN ("
+                "  SELECT id FROM history WHERE image_thumbnail IS NOT NULL"
+                "  ORDER BY timestamp ASC LIMIT ?)",
                 (excess,),
             )
+            # Step 2 - still over the hard cap? Then the rows really must go.
+            remaining = self.count()
+            if remaining > MAX_HISTORY_ROWS:
+                drop = remaining - MAX_HISTORY_ROWS
+                self.db.execute(
+                    "DELETE FROM history WHERE id IN ("
+                    "  SELECT id FROM history ORDER BY timestamp ASC LIMIT ?)",
+                    (drop,),
+                )
+                import sys
+                print(
+                    f"[history] evicted {drop} row(s) past "
+                    f"RCA_MAX_HISTORY_ROWS={MAX_HISTORY_ROWS}, including their "
+                    f"per-run raw responses and edit history (foreign keys "
+                    f"cascade). Raise the cap to keep the audit trail.",
+                    file=sys.stderr,
+                )
         except Exception:
-            # Eviction must never fail the user's save. Swallow + log.
             import sys
             print(f"[history] LRU eviction failed: {sys.exc_info()[1]}", file=sys.stderr)
 

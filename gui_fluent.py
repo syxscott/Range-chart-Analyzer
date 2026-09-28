@@ -11,12 +11,13 @@ thread crashes Qt). All LLM / merge / i18n logic is reused from rca_core.
 """
 from __future__ import annotations
 
+import base64  # AUDIT-2026-09-27 [item 2.4]: see _show_history_thumbnail
 import logging
 import os
 import sys
 import tempfile
 import time
-
+from typing import Any  # AUDIT-2026-09-27 [item 7.2]: used in annotations below
 # Bug-12 fix: module-level logger so bare `except Exception:` blocks
 # below have somewhere to report what they swallowed. Without this, a
 # silently failing callback leaves no trace.
@@ -49,6 +50,9 @@ from qfluentwidgets import (
     SpinBox, SwitchButton, TableWidget, BodyLabel, TitleLabel, SubtitleLabel,
     StrongBodyLabel, CaptionLabel, CardWidget, TextEdit, InfoBar, InfoBarPosition,
     ScrollArea, IndeterminateProgressRing, Pivot, MessageBox, setTheme, Theme, setThemeColor,
+    # imported locally in _show_figure_full, where the dialog is built.)
+    # image card's zoom row. (QDialog/QDialogButtonBox are Qt, and are
+    ToolButton,
 )
 
 from rca_core import (
@@ -101,6 +105,83 @@ EXTRACT_TIMEOUT_SEC = 120
 # and schedules deleteLater() for safe reclamation. No terminate() is
 # ever used.
 _orphaned_workers: list = []
+
+# AUDIT-2026-09-27 [item 8.1]: one named QWebEngineProfile per PROCESS,
+# parented to the QApplication rather than to any view. The profile has to
+# outlive every page built from it — Qt destroys child QObjects in the order
+# they were added, so a profile parented to the view was destroyed BEFORE the
+# page that used it, producing at teardown:
+#   "Release of profile requested but WebEnginePage still not deleted.
+#    Expect troubles!"
+# and then a native access violation. Parented to the application, it is
+# destroyed last, and every window in the process also shares one profile
+# instead of each creating its own under the same storage name (the test
+# suites build many windows per process).
+_shared_web_profile_obj = None
+
+
+def _shared_web_profile():
+    """Return the process-wide named profile, creating it on first use.
+
+    Returns ``None`` when QtWebEngineCore is unavailable, so the caller can
+    fall back to the default page exactly as before.
+    """
+    global _shared_web_profile_obj
+    if _shared_web_profile_obj is not None:
+        return _shared_web_profile_obj
+    from PySide6.QtCore import QStandardPaths
+    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWebEngineCore import QWebEngineProfile
+    app = QApplication.instance()
+    if app is None:
+        return None
+    storage = QStandardPaths.writableLocation(
+        QStandardPaths.AppDataLocation)
+    if not storage:
+        storage = os.path.join(os.path.expanduser("~"),
+                              ".range_chart_analyzer", "web")
+    prof = QWebEngineProfile("RangeChartAnalyzer", app)
+    prof.setPersistentStoragePath(os.path.join(storage, "web"))
+    _shared_web_profile_obj = prof
+    return prof
+
+
+def _wait_worker_briefly(w, budget_ms: int) -> bool:
+    """Wait up to *budget_ms* for *w*, WITHOUT freezing the GUI thread.
+
+    AUDIT-2026-09-27 P1: ``closeEvent`` used to call ``QThread.wait()``
+    directly, which blocks the Qt event loop — no repaint, no input, no
+    message pump — so closing the window during an in-flight extraction
+    produced a visible "Not Responding" window for the full budget. The worst
+    case was additive across workers: 5 s + 2 s for the extract worker, 3 s
+    for the settings connection test, then 2 s + 0.5 s for EVERY live provider
+    test, i.e. ~17.5 s with three probes running. The cooperative-cancel
+    checkpoint cannot help either: ``request_cancel`` sets a flag that is only
+    read *after* the blocking ``urllib`` call returns, so a single-run
+    extraction always burns the whole budget.
+
+    Pumping events inside the wait keeps the window responsive while still
+    giving a worker that is about to finish the chance to be reclaimed
+    cleanly. Callers pass a SHARE of one total budget rather than a per-worker
+    allowance, so N workers cannot multiply the freeze.
+
+    Returns True when the thread finished within the budget.
+    """
+    if w is None:
+        return True
+    try:
+        from PySide6.QtCore import QCoreApplication, QElapsedTimer
+    except Exception:  # pragma: no cover - Qt always present in this module
+        return not w.isRunning()
+    clock = QElapsedTimer()
+    clock.start()
+    while w.isRunning() and clock.elapsed() < budget_ms:
+        QCoreApplication.processEvents()
+        # Short slices: a long single processEvents() would block again.
+        if w.wait(min(50, max(1, budget_ms - clock.elapsed()))):
+            break
+    QCoreApplication.processEvents()
+    return not w.isRunning()
 
 
 def _park_orphaned_worker(w) -> None:
@@ -432,12 +513,58 @@ class ExtractWorker(QThread):
                     pass
                 self._emit_result(result)
                 return
+            # AUDIT-2026-09-27 [item 1.1] (P0): "never let exceptions kill the
+            # worker" used to be guaranteed by ONE `except`, the sibling of the
+            # `try` above — which therefore covered ONLY the `if runs <= 1:`
+            # branch (that branch `return`s from inside the try). The whole
+            # multi-run region that follows ran completely unguarded: the usage
+            # accumulation (`int(u.get("input_tokens") or 0)` raises ValueError
+            # on a non-numeric value), `merge_results(...)`, the merged
+            # `ExtractResult(...)`. A single raise there meant `finished_ok`
+            # never fired, so `_on_worker_result` / `_on_result` never ran,
+            # `self.busy` stayed True forever, the Extract button stayed
+            # disabled and the spinner turned permanently — and under PySide6 an
+            # exception escaping `QThread.run()` can abort the whole process.
+            #
+            # The fix is the delegating call below, NOT a second inline guard:
+            # the multi-run body moved verbatim into `_run_multi()`, whose body
+            # sits at the same 8-space indent, so no statement inside it was
+            # re-indented. The single `except` now spans BOTH paths, which is
+            # what its own comment always claimed. Two paths, one guard, no
+            # half-covered region.
+            self._run_multi(mode=mode, runs=runs, params=params)
+            return
         except Exception as exc:  # BUG13: never let exceptions kill the worker
             # Bug-12 fix: log so an unexpected exception doesn't disappear.
+            # AUDIT-2026-09-27 [item 1.1]: this handler now spans BOTH the
+            # single-run fast path and the multi-run merge, which it did not
+            # before — see the note above the `_run_multi` call. A raise in
+            # the merge used to leave the GUI permanently busy.
             log.exception("ExtractWorker.run failed")
             self._emit_result(ExtractResult(
                 ok=False, error_key="err.http", raw=str(exc)))
             return
+
+    def _run_multi(self, *, mode: str, runs: int, params: dict[str, Any]) -> None:
+        """The multi-run path of :meth:`run`, delegated so the one
+        ``except Exception`` in ``run()`` covers it too.
+
+        AUDIT-2026-09-27 [item 1.1]: extracted verbatim from ``run()``. A
+        method body is indented exactly like the old block was (8 spaces), so
+        this is a pure move — the safest way to widen an existing guard's
+        scope without re-indenting 150 lines and risking a silent change.
+        Emits the merged result through ``_emit_result``, or the collected
+        failure when every run failed.
+
+        ``concurrent`` is imported HERE, not inherited: the module has no
+        top-level ``import concurrent.futures`` — both existing users
+        (``_collect_extraction_futures`` and the old ``run``) import it
+        function-locally — so moving the body out of ``run()`` left the name
+        out of scope and every multi-run request died with
+        ``NameError: name 'concurrent' is not defined``.
+        """
+        import concurrent.futures
+
         ok_datas, last_fail, partial_fails, any_trunc, raws = [], None, 0, False, []
         done = 0
         # P1 fix (2026-08-06): keep the image fingerprint + per-request
@@ -650,15 +777,30 @@ if HAS_PHYLO_TREE_WIDGET:
             # storage is lost on close. Scoped under AppDataLocation so
             # settings/theme/key persistence works across launches. No
             # registerJsObject / QWebChannel is introduced (intentionally).
+            #
+            # AUDIT-2026-09-27 [item 8.1]: the profile used to be constructed
+            # with `self` (the view) as its QObject parent, immediately
+            # BEFORE the page that uses it. Qt destroys child QObjects in
+            # addition order, so the PROFILE was destroyed first while the
+            # PAGE was still alive. QtWebEngine says so at teardown —
+            # "Release of profile requested but WebEnginePage still not
+            # deleted. Expect troubles!" — and the process then dies with a
+            # native access violation. It was reproducible on a bare
+            # create-window / close / exit script, which is what finally
+            # separated it from the test suites it used to surface in.
+            #
+            # Two defects in one line: the ordering, and the fact that EVERY
+            # window built its own profile under the SAME storage name (the
+            # test suites create many windows per process). Both go away by
+            # building the named profile once per process, parented to the
+            # QApplication — which also matches the stated intent, since
+            # localStorage is supposed to survive the window closing.
             try:
                 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
                 from PySide6.QtCore import QStandardPaths
-                _storage = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
-                if not _storage:
-                    _storage = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer", "web")
-                _profile = QWebEngineProfile("RangeChartAnalyzer", self)
-                _profile.setPersistentStoragePath(os.path.join(_storage, "web"))
-                self.setPage(QWebEnginePage(_profile, self))
+                _profile = _shared_web_profile()
+                if _profile is not None:
+                    self.setPage(QWebEnginePage(_profile, self))
             except Exception:
                 # Defensive: if the Qt build lacks profile/page support, fall
                 # back to the default page; the attribute settings below still
@@ -756,15 +898,46 @@ if HAS_PHYLO_TREE_WIDGET:
             except (TypeError, ValueError) as exc:
                 log.error("PhyloTreeWidget: payload not JSON-serialisable: %s", exc)
                 return
+            # The payload becomes JS SOURCE, not a JSON document handed to
+            # JSON.parse, so the two line separators JSON allows raw must be
+            # escaped: they are literal newlines to a JS tokenizer.
+            payload = (payload.replace("\u2028", "\\u2028")
+                              .replace("\u2029", "\\u2029"))
             # Wrap in an IIFE so any exception inside setTreeData is
             # surfaced as a console error rather than silently swallowed
             # by runJavaScript's promise chain.
+            #
+            # AUDIT-2026-09-27 [item 2.5] (found only by a real run): the
+            # original built this by f-string brace doubling, and the `catch`
+            # half was a PLAIN string -- so its `}}` and `{{` were emitted
+            # literally instead of collapsing to one brace each. The result
+            # closed `try` one brace early and left `catch` orphaned:
+            #
+            #   (function(){try{...}return null;}}catch(e){{...}})()
+            #                             ^^^^^^^^^^ try already closed here
+            #
+            # WebEngine rejected that as "SyntaxError: Missing catch or
+            # finally after try" for EVERY payload -- 66/66 recorded real
+            # results, verified by re-generating each script and running
+            # `node --check`. PhyloTreeWidget had therefore never rendered a
+            # tree, for any input, since it was added. runJavaScript swallows
+            # the parse error into the JS console, so the Python side stayed
+            # green.
+            #
+            # Fixed by writing the script as PLAIN strings only: braces are
+            # then literal, so what you read is what runs, and the payload is
+            # concatenated rather than interpolated (no escape games at all).
             script = (
-                "(function(){try{if(typeof window.setTreeData==='function')"
-                f"{{window.setTreeData({payload});}}else{{console.error("
-                "'PhyloTreeWidget: window.setTreeData is not defined');"
-                "}}return null;}}catch(e){{console.error("
-                f"'PhyloTreeWidget setTreeData threw:',e);return null;}})()"
+                "(function(){"
+                "try{"
+                "if(typeof window.setTreeData==='function'){"
+                "window.setTreeData(" + payload + ");"
+                "}else{console.error("
+                "'PhyloTreeWidget: window.setTreeData is not defined');}"
+                "return null;"
+                "}catch(e){console.error("
+                "'PhyloTreeWidget setTreeData threw:',e);return null;}"
+                "})()"
             )
             self.page().runJavaScript(script)
 
@@ -778,6 +951,14 @@ class ExtractPage(ScrollArea):
         self.image_b64 = None
         self.media_type = None
         self._img_dims = (0, 0, False)
+        # AUDIT-2026-09-27 [item 2.1]: the stored history thumbnail, kept in a
+        # DISPLAY-ONLY slot. It must never land in `image_b64`: that field is
+        # what `_on_extract` sends to the model, and tests/test_gui_sprint_b.py
+        # pins `image_b64 is None` after load_result so the app cannot silently
+        # re-extract the PREVIOUS image ("ghost image"). Reviewing a past
+        # result and seeing no figure at all was the cost of that guarantee;
+        # this attribute removes the cost without touching the guarantee.
+        self._display_thumb_b64: str | None = None
         self.result = None
         self.raw_text = ""
         self._last_paste_tmp = None
@@ -842,6 +1023,10 @@ class ExtractPage(ScrollArea):
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setFixedHeight(180)
         self.preview.setCursor(Qt.PointingHandCursor)
+        # AUDIT-2026-09-27 [item 2.2] (U-01): the source pixmap and the
+        # user's magnification. See _render_pixmap / _fit_preview.
+        self._preview_src = None
+        self._preview_zoom = 1.0
         # UI-REVIEW-2026-09-05: the empty preview doubles as a dropzone —
         # dashed border + hint text + click-to-choose + drag-and-drop.
         # The previous flat bordered BodyLabel gave no affordance at all.
@@ -849,6 +1034,42 @@ class ExtractPage(ScrollArea):
         self._style_preview_empty()
         self.preview.mousePressEvent = lambda _e: self._choose_image()
         ic.addWidget(self.preview)
+
+        # AUDIT-2026-09-27 [item 2.2] (U-01): zoom + full-resolution view.
+        # A 172px thumbnail of a 2000-4000px range chart makes the taxon
+        # labels — the information the figure exists to convey — illegible.
+        # Three affordances, all keyboard-reachable and all no-ops until an
+        # image is loaded: zoom in, reset to fit, and a full-resolution
+        # scrollable dialog. Wheel-over-preview zooms too, with the same
+        # modifier-free mapping the web frontend uses.
+        zoom_row = QHBoxLayout()
+        zoom_row.setSpacing(6)
+        self.btn_zoom_in = ToolButton(FIF.ADD)
+        self.btn_zoom_in.setToolTip(self._t("image.zoomIn"))
+        self.btn_zoom_in.clicked.connect(lambda: self._zoom_preview(1.5))
+        zoom_row.addWidget(self.btn_zoom_in)
+        self.btn_zoom_out = ToolButton(FIF.REMOVE)
+        self.btn_zoom_out.setToolTip(self._t("image.zoomOut"))
+        self.btn_zoom_out.clicked.connect(lambda: self._zoom_preview(1 / 1.5))
+        zoom_row.addWidget(self.btn_zoom_out)
+        self.btn_zoom_fit = ToolButton(FIF.SYNC)
+        self.btn_zoom_fit.setToolTip(self._t("image.zoomFit"))
+        self.btn_zoom_fit.clicked.connect(lambda: self._zoom_preview(1 / 99))
+        zoom_row.addWidget(self.btn_zoom_fit)
+        zoom_row.addStretch(1)
+        self.btn_figure_full = PushButton(FIF.FULL_SCREEN, self._t("image.viewFull"))
+        self.btn_figure_full.clicked.connect(self._show_figure_full)
+        zoom_row.addWidget(self.btn_figure_full)
+        ic.addLayout(zoom_row)
+        # Rescale rather than clip when the panel is resized (B-15).
+        try:
+            self.preview.resizeEvent = lambda _e: self._on_preview_resize()
+        except Exception:
+            pass
+        # Gate the whole row on "is there a figure to look at".
+        for _b in (self.btn_zoom_in, self.btn_zoom_out, self.btn_zoom_fit,
+                    self.btn_figure_full):
+            _b.setEnabled(False)
         self.setAcceptDrops(True)
 
         # UI-REVIEW-2026-09-05: chart type / chart language inline next to
@@ -860,6 +1081,26 @@ class ExtractPage(ScrollArea):
         sel_row = QHBoxLayout()
         self.lbl_ctype_inline = CaptionLabel(self._t("settings.chartType"))
         self.cmb_ctype_inline = ComboBox()
+        # AUDIT-2026-09-27 [item 3.1] (D2): the canonical chart-type and
+        # chart-language tables now live HERE, next to the control the user
+        # actually touches. They used to live on SettingsPage, which made the
+        # contextually-right selector a pure view of a control the user had to
+        # go elsewhere to change — and the two-way mirror had to be kept
+        # honest by hand. SettingsPage keeps a hidden mirror (see
+        # set_selector_mirror_collapsed) so _cycle_lang's retranslate order and
+        # the existing tests that address settings_page.cmb_ctype still work.
+        self._ctype_codes = ["auto", "range_chart", "columnar_section",
+                             "abundance_diagram", "phylogenetic_tree",
+                             "zonation_chart"]
+        self._ctype_keys = ["settings.chartType.auto",
+                            "settings.chartType.rangeChart",
+                            "settings.chartType.columnarSection",
+                            "settings.chartType.abundanceDiagram",
+                            "settings.chartType.phylogeneticTree",
+                            "settings.chartType.zonationChart"]
+        self._clang_codes = ["auto", "zh", "en", "ja", "ru"]
+        self._clang_names = lambda: [self._t("chartLang.auto"), "中文", "English",
+                                     "日本語", "Русский"]
         self.lbl_clang_inline = CaptionLabel(self._t("settings.chartLang"))
         self.cmb_clang_inline = ComboBox()
         self.cmb_ctype_inline.currentIndexChanged.connect(self._on_inline_ctype)
@@ -884,6 +1125,19 @@ class ExtractPage(ScrollArea):
         left_lay.addWidget(cap_card)
 
         # Run row
+        #
+        # AUDIT-2026-09-27 [items 1.11 / 2.3 / 2.4]:
+        #  * a CANCEL button. `request_cancel` existed and was wired ONLY from
+        #    closeEvent, so a runs=5 extraction (5 x 20 s-2 min) could only be
+        #    abandoned by closing the window. It is cooperative: the flag is
+        #    read before each submit and between batches, so a single in-flight
+        #    request still has to return first — the button says so rather than
+        #    pretending to be instant.
+        #  * the two EXPORT buttons moved OUT of the run row. They are output
+        #    actions, not run actions, and sitting to the LEFT of the primary
+        #    Extract button meant the eye landed on two disabled controls
+        #    first. They now live in the right panel's header, next to the
+        #    result they belong to.
         run_row = QHBoxLayout()
         self.spinner = IndeterminateProgressRing()
         self.spinner.setFixedSize(24, 24)
@@ -891,15 +1145,14 @@ class ExtractPage(ScrollArea):
         self.lbl_status = CaptionLabel(self._t("status.ready"))
         self.btn_extract = PrimaryPushButton(FIF.PLAY, self._t("action.extract"))
         self.btn_extract.clicked.connect(self._on_extract)
+        self.btn_cancel = PushButton(FIF.CANCEL, self._t("action.cancel"))
+        self.btn_cancel.setToolTip(self._t("action.cancelHint"))
+        self.btn_cancel.clicked.connect(self._on_cancel)
+        self.btn_cancel.setVisible(False)
         run_row.addWidget(self.spinner)
         run_row.addWidget(self.lbl_status)
         run_row.addStretch(1)
-        self.btn_export = PushButton(FIF.SAVE, self._t("action.exportJson"))
-        self.btn_export.clicked.connect(self._export_json)
-        run_row.addWidget(self.btn_export)
-        self.btn_export_xlsx = PushButton(FIF.SAVE, self._t("export.xlsx"))
-        self.btn_export_xlsx.clicked.connect(self._export_xlsx)
-        run_row.addWidget(self.btn_export_xlsx)
+        run_row.addWidget(self.btn_cancel)
         run_row.addWidget(self.btn_extract)
         left_lay.addLayout(run_row)
         left_lay.addStretch(1)
@@ -912,8 +1165,37 @@ class ExtractPage(ScrollArea):
         right_lay.setContentsMargins(0, 0, 0, 0)
         right_lay.setSpacing(10)
 
+        # AUDIT-2026-09-27 [item 2.4] (U-04): the two export buttons move
+        # here from the run row. They are OUTPUT actions belonging to the
+        # result, and in the run row they sat immediately LEFT of the primary
+        # Extract button, so the eye met two disabled controls before the one
+        # control that starts work. Distinct icons too: both used FIF.SAVE, so
+        # they were told apart only by their labels.
+        self.result_head = QHBoxLayout()
+        self.result_head.setSpacing(8)
         self.lbl_conf = StrongBodyLabel("")
-        right_lay.addWidget(self.lbl_conf)
+        self.result_head.addWidget(self.lbl_conf)
+        self.result_head.addStretch(1)
+        self.btn_export = PushButton(FIF.DOCUMENT, self._t("action.exportJson"))
+        self.btn_export.setToolTip(self._t("action.exportJson"))
+        self.btn_export.clicked.connect(self._export_json)
+        self.result_head.addWidget(self.btn_export)
+        self.btn_export_xlsx = PushButton(FIF.SAVE_AS, self._t("export.xlsx"))
+        self.btn_export_xlsx.setToolTip(self._t("export.xlsx"))
+        self.btn_export_xlsx.clicked.connect(self._export_xlsx)
+        self.result_head.addWidget(self.btn_export_xlsx)
+        right_lay.addLayout(self.result_head)
+
+        # AUDIT-2026-09-27 [item 2.5] (U-03): a real empty state. Before this
+        # the right panel was ~55% of the window and completely blank on a
+        # fresh launch except for four greyed-out row-edit buttons with no
+        # explanation and no next step. `history.empty` / `history.emptyHint`
+        # already existed in all three locales and were wired to NOTHING.
+        self.empty_state = BodyLabel(self._t("extract.emptyHint"))
+        self.empty_state.setAlignment(Qt.AlignCenter)
+        self.empty_state.setWordWrap(True)
+        right_lay.addWidget(self.empty_state, 1)
+
         self.pivot = Pivot()
         # qfluentwidgets' Pivot fires `currentItemChanged(routeKey)` on
         # every selection change, including user clicks. The onClick
@@ -953,6 +1235,11 @@ class ExtractPage(ScrollArea):
         # (e.g. phylogenetic_tree, which has no row-level edits).
         self.edit_row_widget = QWidget()
         self.edit_row_widget.setLayout(edit_row)
+        # AUDIT-2026-09-27 [item 1.3] (B-03): hide it from the start. A fresh
+        # launch used to show four enabled-looking buttons above an empty
+        # result area, and every one of them returned silently. Visibility is
+        # owned solely by _update_result_actions() from here on.
+        self.edit_row_widget.setVisible(False)
         right_lay.addWidget(self.edit_row_widget)
 
         # Storage for the inner TableWidget per table id (so apply edits
@@ -964,6 +1251,12 @@ class ExtractPage(ScrollArea):
         # UI-REVIEW-2026-09-05: export + row-edit actions are meaningless
         # without a result — start disabled and let _update_result_actions()
         # drive them from the result lifecycle.
+        # AUDIT-2026-09-27 [item 1.3]: self.tables must exist BEFORE the
+        # gate runs. The gate consults it (a result with no rendered
+        # table cannot be row-edited), and the real initialisation sat
+        # nine lines further down with the QStackedLayout, so the first
+        # call raised AttributeError and the page never came up.
+        self.tables = {}
         self._update_result_actions()
 
         self.stack = QFrame()
@@ -973,7 +1266,6 @@ class ExtractPage(ScrollArea):
         # leaving the right panel empty after the first render.
         self.stack_lay = QStackedLayout(self.stack)
         self.stack_lay.setContentsMargins(0, 0, 0, 0)
-        self.tables = {}
         right_lay.addWidget(self.stack, 1)
 
         # Phylogenetic tree renderer: replaces the table stack when the
@@ -1018,35 +1310,104 @@ class ExtractPage(ScrollArea):
                 "border:1px solid rgba(0,0,0,0.08);border-radius:8px;")
 
     def dragEnterEvent(self, e) -> None:  # noqa: N802 (Qt naming)
-        if e.mimeData().hasUrls() or e.mimeData().hasImage():
+        # AUDIT-2026-09-27 [item 1.6] (B-06): this used to accept
+        # `hasUrls() or hasImage()`, but `dropEvent` returns immediately when
+        # there are no URLs — so dragging an <img> out of a browser showed the
+        # COPY cursor and then did nothing. Accept only what the drop handler
+        # can actually consume; `hasImage()` is honoured further down only if a
+        # caller materialises it to a temp file first.
+        if e.mimeData().hasUrls():
             e.acceptProposedAction()
 
     def dropEvent(self, e) -> None:  # noqa: N802 (Qt naming)
-        if not e.mimeData().hasUrls():
-            return
-        for url in e.mimeData().urls():
-            path = url.toLocalFile()
-            if path and os.path.isfile(path):
-                self._cleanup_paste_tmp()
-                self._load_image(path)
-                e.acceptProposedAction()
+        if e.mimeData().hasUrls():
+            for url in e.mimeData().urls():
+                path = url.toLocalFile()
+                if path and os.path.isfile(path):
+                    self._cleanup_paste_tmp()
+                    self._load_image(path)
+                    e.acceptProposedAction()
                 return
 
     def attach_settings_selectors(self, settings_page) -> None:
         """Fill the inline chart selector combos and wire two-way sync.
 
         Called by the main window after SettingsPage exists (ExtractPage is
-        constructed first). Settings stays the source of truth: both combo
-        pairs mirror each other and win.chart_type()/chart_lang() keep
-        reading the Settings page.
+        constructed first).
+
+        AUDIT-2026-09-27 [item 3.1] (D2): the INLINE combos on this page are
+        now the canonical state; the Settings page's pair became a hidden
+        mirror. The tables used to live on SettingsPage and
+        ``win.chart_type()`` read ``settings_page._ctype_codes[...]``, so the
+        contextually-right control (next to "choose an image") was a pure view
+        of a control the user had to go to Settings to change — and the two-way
+        mirror had to be kept honest by hand. Reversing it means the code
+        tables have exactly one owner, next to the action they affect.
+
+        The Settings copies are kept rather than deleted for two reasons:
+        ``_cycle_lang`` retranslate ordering depends on their ``clear()`` +
+        ``setCurrentIndex()`` pair running LAST (it is the self-heal), and
+        deleting a control the other page's tests address is a needless
+        compatibility risk. They are simply hidden and driven from here.
         """
         sp = settings_page
-        self.cmb_ctype_inline.addItems([self._t(k) for k in sp._ctype_keys])
-        self.cmb_ctype_inline.setCurrentIndex(sp.cmb_ctype.currentIndex())
-        self.cmb_clang_inline.addItems(sp._clang_names())
-        self.cmb_clang_inline.setCurrentIndex(sp.cmb_clang.currentIndex())
+        self.cmb_ctype_inline.addItems([self._t(k) for k in self._ctype_keys])
+        self.cmb_ctype_inline.setCurrentIndex(
+            self._ctype_codes.index(sp.cfg_chart_type())
+            if sp.cfg_chart_type() in self._ctype_codes else 0)
+        self.cmb_clang_inline.addItems(self._clang_names())
+        self.cmb_clang_inline.setCurrentIndex(
+            self._clang_codes.index(sp.cfg_chart_lang())
+            if sp.cfg_chart_lang() in self._clang_codes else 0)
+        # AUDIT-2026-09-27 [item 3.1] (D2): this pair was wired to
+        # _push_ctype_to_settings / _push_clang_to_settings, which is the
+        # INLINE->MIRROR direction — so a change to the hidden mirror fired a
+        # handler that read the inline index straight back and wrote it over
+        # the value the user had just set. The two copies could therefore
+        # drift, which is the exact failure D2 exists to remove. The real
+        # reverse handlers (_on_settings_ctype / _on_settings_clang, which
+        # carry the _selector_sync reentrancy guard) were already written and
+        # simply never connected.
         sp.cmb_ctype.currentIndexChanged.connect(self._on_settings_ctype)
         sp.cmb_clang.currentIndexChanged.connect(self._on_settings_clang)
+        sp.set_selector_mirror_collapsed(True)
+        # Seed the mirror from the canonical inline pair (not the other way
+        # round: the Extract page is the source of truth after D2).
+        self._push_ctype_to_settings()
+        self._push_clang_to_settings()
+
+    # ---- canonical chart-type / chart-language state (D2) ----
+
+    def chart_type_code(self) -> str:
+        """The selected chart-type code — the single source of truth (D2)."""
+        idx = self.cmb_ctype_inline.currentIndex()
+        if 0 <= idx < len(self._ctype_codes):
+            return self._ctype_codes[idx]
+        return self._ctype_codes[0] if self._ctype_codes else "auto"
+
+    def chart_lang_code(self) -> str:
+        """The selected chart-language code — the single source of truth (D2)."""
+        idx = self.cmb_clang_inline.currentIndex()
+        if 0 <= idx < len(self._clang_codes):
+            return self._clang_codes[idx]
+        return self._clang_codes[0] if self._clang_codes else "auto"
+
+    def _push_ctype_to_settings(self, *_a) -> None:
+        """Mirror the canonical inline chart type into the hidden Settings pair."""
+        sp = getattr(self.win, "settings_page", None)
+        if sp is None:
+            return
+        idx = self.cmb_ctype_inline.currentIndex()
+        if sp.cmb_ctype.currentIndex() != idx:
+            sp.cmb_ctype.setCurrentIndex(idx)
+
+    def _push_clang_to_settings(self, *_a) -> None:
+        sp = getattr(self.win, "settings_page", None)
+        if sp is None:
+            return
+        idx = self.cmb_clang_inline.currentIndex()
+        if sp.cmb_clang.currentIndex() != idx:
+            sp.cmb_clang.setCurrentIndex(idx)
 
     def _on_inline_ctype(self, idx: int) -> None:
         if self._selector_sync:
@@ -1090,13 +1451,269 @@ class ExtractPage(ScrollArea):
         finally:
             self._selector_sync = False
 
+    def _render_pixmap(self, pix) -> bool:
+        """Fit *pix* into the preview label and mark it loaded.
+
+        AUDIT-2026-09-27 [items 1.16 / 2.2] (U-01 / B-15). Two defects lived
+        here. The scale was computed ONCE, at load time, from
+        ``preview.width()`` — so dragging the splitter narrower pushed the label
+        below the pixmap's sizeHint and Qt CLIPPED it instead of rescaling. And
+        the result was a 172px-tall thumbnail, which for a 2000-4000px range
+        chart is a 13-15x downscale: the taxon labels, which carry most of the
+        information in such a figure, were simply illegible.
+
+        The SOURCE pixmap is now kept and re-fitted on every resize, and
+        ``_preview_zoom`` carries the user's chosen magnification. The widget is
+        deliberately NOT replaced with a QGraphicsView: nine call sites across
+        this file and the history detail dialog reference ``self.preview`` as a
+        QLabel, and swapping its type would ripple through all of them for no
+        extra capability here. ``_preview_zoom > 1`` routes the user to
+        ``_show_figure_full()`` for panning, which is where a canvas belongs.
+
+        Returns False for a null pixmap (caller falls back to the empty state).
+        """
+        try:
+            if pix is None or pix.isNull():
+                return False
+            self._preview_src = pix
+            self._preview_zoom = 1.0
+            self._style_preview_loaded()
+            self.preview.setText("")
+            self._fit_preview()
+            # The zoom / full-view row is a no-op until there is a figure.
+            for _b in (self.btn_zoom_in, self.btn_zoom_out, self.btn_zoom_fit,
+                       self.btn_figure_full):
+                try:
+                    _b.setEnabled(True)
+                except Exception:
+                    pass
+            return True
+        except Exception:
+            return False
+
+    def _fit_preview(self) -> None:
+        """Scale the stored source pixmap to the label at the current zoom.
+
+        Called on every resize, so narrowing the splitter (or the window)
+        RESCALES instead of clipping — that was the B-15 symptom.
+        """
+        src = getattr(self, "_preview_src", None)
+        if src is None or src.isNull():
+            return
+        avail_w = self.preview.width() if self.preview.width() > 0 else 300
+        fit_h = max(60, (self.preview.height() or 180) - 8)
+        scaled = src.scaled(
+            int(max(80, avail_w) * max(0.1, self._preview_zoom)),
+            int(fit_h * max(0.1, self._preview_zoom)),
+            Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.preview.setPixmap(scaled)
+        # A magnified view needs the label to be able to grow; a fit view does
+        # not, and must stay at its 180px so the panel layout is unchanged.
+        if self._preview_zoom <= 1.0:
+            self.preview.setFixedHeight(180)
+
+    def _on_preview_resize(self) -> None:
+        self._fit_preview()
+
+    def _zoom_preview(self, factor: float) -> None:
+        """Magnify / restore the preview in place (1.0 = fit)."""
+        if getattr(self, "_preview_src", None) is None:
+            return
+        self._preview_zoom = max(1.0, min(6.0, self._preview_zoom * factor))
+        if self._preview_zoom <= 1.0:
+            self.preview.setFixedHeight(180)
+        else:
+            self.preview.setFixedHeight(
+                int(max(180, self.preview.height() or 180) * min(3.0, factor)))
+        self._fit_preview()
+
+    def _show_figure_full(self) -> None:
+        """Open the stored figure at FULL resolution in a scrollable dialog.
+
+        AUDIT-2026-09-27 [item 2.2] (U-01). This is the audit surface the app
+        never had: the whole point is checking an extracted range against the
+        figure it came from, and the only view of that figure was a 172px
+        thumbnail — or, when reviewing a past record, nothing at all. A
+        full-resolution, zoomable, keyboard-scrollable dialog is the smallest
+        honest fix and needs no change to the extraction flow.
+
+        Best effort: a dialog that fails to build must not break the page.
+        """
+        src = getattr(self, "_preview_src", None)
+        if src is None or src.isNull():
+            return
+        try:
+            from PySide6.QtWidgets import QDialog, QDialogButtonBox, QScrollArea
+            dlg = QDialog(self)
+            dlg.setWindowTitle(self._t("image.fullTitle"))
+            lay = QVBoxLayout(dlg)
+            area = QScrollArea()
+            area.setWidgetResizable(True)
+            holder = BodyLabel()
+            holder.setAlignment(Qt.AlignCenter)
+            # Natural size: the FULL-resolution figure, scrollable.
+            holder.setPixmap(src)
+            area.setWidget(holder)
+            lay.addWidget(area, 1)
+            box = QDialogButtonBox(QDialogButtonBox.Close)
+            box.rejected.connect(dlg.reject)
+            box.accepted.connect(dlg.accept)
+            lay.addWidget(box)
+            dlg.resize(1000, 760)
+            dlg.exec()
+        except Exception as exc:
+            log.warning("full-figure dialog failed: %s", exc)
+
+    def _show_history_thumbnail(self, thumb_b64: str) -> None:
+        """Render a stored history thumbnail in the preview, clearly labelled.
+
+        AUDIT-2026-09-27 [item 2.1] (U-02). Reviewing a past extraction is the
+        core audit workflow and the figure was simply absent; the stored
+        ``image_thumbnail`` (~200-256px) makes it visible again. It is drawn
+        through the SAME preview path as a live image so the resize/zoom
+        behaviour stays identical, and the caption says it is a stored
+        thumbnail so nobody mistakes it for the file that was extracted.
+
+        Best effort: a corrupt blob must not break loading the result, so a
+        failure falls back to the ordinary "no image" state.
+
+        AUDIT-2026-09-27 [item 2.4] (found by the probe in item 2.1's own
+        test): this function was DEAD from the day it was added. It calls
+        ``base64.b64decode`` but the module never imported ``base64`` at
+        module level, so every call raised ``NameError`` on the very first
+        line of the try — and the blanket ``except Exception`` below caught
+        it and reset to the drop hint. The thumbnail therefore never
+        rendered, for any record, ever, and nothing failed visibly: the
+        broad except turned a missing import into a plausible-looking
+        "the blob was corrupt" outcome, which is exactly the class of bug a
+        silent-fallback path is supposed to be reviewed for.
+        """
+        try:
+            from PySide6.QtGui import QPixmap
+            pm = QPixmap()
+            if not pm.loadFromData(base64.b64decode(thumb_b64)):
+                raise ValueError("thumbnail blob did not decode")
+            self._render_pixmap(pm)
+            # Deliberately a distinct message from image.none: the reviewer
+            # must know this is a stored thumbnail, not a re-loadable file.
+            self.lbl_imginfo.setText(self._t("image.historyThumbnail"))
+        except Exception as exc:
+            # Now it cannot hide a defect in the code above: a bad blob is a
+            # ValueError from loadFromData, and everything else is logged.
+            log.warning("history thumbnail could not be shown: %s", exc)
+            self._display_thumb_b64 = None
+            self.lbl_imginfo.setText(self._t("image.none"))
+            self.preview.clear()
+            self.preview.setText(self._t("image.dropHint"))
+            self._style_preview_empty()
+
+    def _on_cancel(self) -> None:
+        """Ask the worker to stop (cooperative).
+
+        AUDIT-2026-09-27 [item 2.3] (B-16). ``request_cancel`` existed and was
+        reachable only from ``closeEvent``, so an extraction could be abandoned
+        only by closing the window. Two honest limitations, both already
+        documented on ``request_cancel`` and now surfaced in the UI rather
+        than discovered:
+
+        * the flag is read BEFORE each submit and between batches, so any run
+          already in flight still has to finish its HTTP request;
+        * a single-run extraction has no checkpoint at all inside the blocking
+          ``urllib`` call, so cancelling one waits out that request.
+
+        The button therefore disables itself and says it is waiting, instead
+        of leaving the user clicking a control that cannot act yet.
+        """
+        w = self._worker
+        if w is None or not w.isRunning():
+            return
+        try:
+            w.request_cancel()
+        except Exception as exc:
+            log.warning("request_cancel failed: %s", exc)
+            return
+        self.btn_cancel.setEnabled(False)
+        self.lbl_status.setText(self._t("status.cancelling"))
+
+    def has_pending_image(self) -> bool:
+        """True when an extractable image is armed.
+
+        AUDIT-2026-09-27 [items 1.3 / B-15]: ``load_image_b64`` could succeed
+        and then ``QPixmap(path)`` return null, so the preview reverted to the
+        drop hint — the UI said "no image" while the app was fully armed to
+        extract. Gating the actions on the DATA rather than on what the
+        preview happens to show removes that contradiction.
+        """
+        return bool(self.image_b64)
+
     def _update_result_actions(self) -> None:
-        """Enable export / row-edit actions only when a result exists."""
-        has = bool(self.result)
-        for b in (self.btn_export, self.btn_export_xlsx,
-                  self.btn_add_row, self.btn_del_row,
+        """The single gate for the six action buttons.
+
+        AUDIT-2026-09-27 [item 1.3] (B-03). This used to be
+        ``bool(self.result)`` for all six, with two more partial gates
+        elsewhere (``_sync_export_buttons`` for the exports, ``_set_busy`` for
+        the Extract button), which produced three wrong states:
+
+        * a ZERO-ROW result left Add / Delete / Discard / Apply enabled, and
+          every one of them returned silently — Apply iterated an empty dict
+          and showed no toast at all, so four live buttons did nothing;
+        * ``edit_row_widget`` was never hidden at construction, so a fresh
+          launch showed the whole row with four dead buttons;
+        * while an extraction was running, only the Extract and export buttons
+          were disabled — the four row-edit buttons stayed live and could
+          trigger ``_render_result()`` + ``_persist_edits_to_history()``
+          against the PREVIOUS result mid-flight.
+
+        Visibility AND enablement are both decided here now. The row is hidden
+        rather than deleted (``setVisible``), so the widgets stay parented and
+        ``isEnabled()`` remains the assertion surface the existing suite uses.
+        """
+        has_result = bool(self.result)
+        has_tables = bool(self.tables)
+        ready = has_result and has_tables and not self.busy
+
+        # Row-edit row: visible only when there is a result AND a rendered
+        # table. A result with no table is the zero-row case — showing four
+        # buttons over an empty area is exactly the B-03 complaint, and
+        # hiding only on `has_result` would have left that half-open.
+        try:
+            self.edit_row_widget.setVisible(has_result and has_tables)
+        except Exception:
+            pass
+        # AUDIT-2026-09-27 [item 2.5] (U-03): the empty state owns the
+        # right panel until there is something to show, and the Pivot is
+        # hidden with it — an empty Pivot renders as a stray tab strip.
+        try:
+            self.empty_state.setVisible(not has_result)
+            self.pivot.setVisible(has_result)
+        except Exception:
+            pass
+        for b in (self.btn_add_row, self.btn_del_row,
                   self.btn_discard, self.btn_apply_edits):
-            b.setEnabled(has)
+            b.setEnabled(ready)
+
+        # Exports: a result to export AND an image the app is actually armed
+        # with (B-15) AND not mid-run.
+        armed = bool(self.result) and self.has_pending_image() and not self.busy
+        self.btn_export.setEnabled(armed)
+        self.btn_export_xlsx.setEnabled(armed and self._xlsx_available())
+
+    def _xlsx_available(self) -> bool:
+        """Whether XLSX export can actually run, for a tooltip / disabled state.
+
+        AUDIT-2026-09-27 [item 1.7] (B-07): the button was never gated, and
+        its ``except ImportError`` pre-check was dead code — ``rca_core``
+        re-exports ``to_xlsx`` unconditionally and the real failure is a
+        ``RuntimeError`` raised INSIDE ``exporter.to_xlsx`` when openpyxl is
+        missing. So the user walked through a save dialog, typed a filename,
+        confirmed, and only then learned it could not work. Ask the exporter
+        instead of guessing.
+        """
+        try:
+            import openpyxl  # noqa: F401
+            return True
+        except Exception:
+            return False
 
     def _cleanup_paste_tmp(self):
         prev = self._last_paste_tmp
@@ -1125,11 +1742,7 @@ class ExtractPage(ScrollArea):
         pix = QPixmap(path)
         self.preview.setText("")
         if not pix.isNull():
-            self._style_preview_loaded()
-            w = max(80, self.preview.width()) if self.preview.width() > 0 else 300
-            self.preview.setPixmap(pix.scaled(
-                QSize(w, 172),
-                Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self._render_pixmap(pix)
         else:
             self.preview.setText(self._t("image.dropHint"))
             self._style_preview_empty()
@@ -1197,15 +1810,31 @@ class ExtractPage(ScrollArea):
     # ---- extraction ----
     def _set_busy(self, busy):
         self.btn_extract.setEnabled(not busy)
-        self._sync_export_buttons(busy)
+        # AUDIT-2026-09-27 [item 2.3]: the cancel control is offered exactly
+        # while a worker is running, and re-armed each time so a second run is
+        # cancellable too.
+        self.btn_cancel.setVisible(busy)
+        self.btn_cancel.setEnabled(busy)
+        # AUDIT-2026-09-27 [item 1.3]: the row-edit buttons used to keep
+        # their previous enabled state while a worker was in flight, so
+        # Add/Delete/Discard/Apply could fire _render_result() +
+        # _persist_edits_to_history() against the PREVIOUS result mid-run.
+        # Re-derive the whole set through the one gate.
+        self._update_result_actions()
         self.spinner.setVisible(busy)
         if busy:
             self.lbl_status.setText(self._t("status.loading"))
 
     def _sync_export_buttons(self, busy):
-        enabled = self.result is not None and not busy
-        self.btn_export.setEnabled(enabled)
-        self.btn_export_xlsx.setEnabled(enabled)
+        """Delegate to the single gate — kept so existing call sites work.
+
+        AUDIT-2026-09-27 [item 1.3]: this was a SECOND source of truth for
+        the two export buttons (``self.result is not None and not busy``),
+        which is how a partial update could leave them out of step with the
+        row-edit buttons. It now only forwards to
+        ``_update_result_actions()``, and the export rule itself lives there.
+        """
+        self._update_result_actions()
 
     def _bump_extract_gen(self) -> int:
         """Increment and return the stale-result generation counter.
@@ -1388,6 +2017,10 @@ class ExtractPage(ScrollArea):
         # Export still operates on the data).
         try:
             self._render_result()
+            # AUDIT-2026-09-27 [item 4.3]: re-gate AFTER the render, which is
+            # what fills self.tables. The gate ran before it above and so
+            # always saw an empty table dict.
+            self._update_result_actions()
         except Exception as exc:
             log.exception("ExtractPage._render_result raised in _on_result")
             msg = f"Render failed: {exc}"
@@ -1456,7 +2089,12 @@ class ExtractPage(ScrollArea):
             )
         except Exception as exc:
             # Persistence is best-effort: a failure here must not block the
-            # user from seeing their result.
+            # user from seeing their result. But it must not be SILENT
+            # either -- the handler bound `exc` and then discarded it, which
+            # is the same swallow that hid the missing-base64 NameError in
+            # _show_history_thumbnail. A history write that fails here looks
+            # identical, to the user and to a test, to one that succeeded.
+            log.exception("history/usage persistence failed: %s", exc)
             log.warning("persist post-result failed: %s", exc)
         # Auto-switch to Extract sub-interface + scroll so the result tables
         # are immediately visible (the user is looking at the loading spinner
@@ -1483,30 +2121,46 @@ class ExtractPage(ScrollArea):
 
         REVIEW-2026-09-20: read the LIVE chart-type selector
         (``win.chart_type()`` — the very value ``_on_extract()`` handed to the
-        worker) instead of ``win.cfg["chart_type"]``. cfg is only refreshed when
-        the user presses "Save settings", so extracting with the combo set to
-        e.g. abundance_diagram while cfg still said "auto" rendered the result
-        with the wrong table set AND wrote the wrong ``mode`` into the history
-        / usage records (the two views disagreed with each other).
+        worker) instead of ``win.cfg["chart_type"]``. AUDIT-2026-09-27
+        corrected this sentence: it said cfg is "only refreshed when the user
+        presses Save settings", which stopped being true when close-time
+        saving landed in ``closeEvent``. The reason for reading the LIVE
+        selector holds either way - a cfg lagging the combo rendered the
+        result with the wrong table set AND wrote the wrong ``mode`` into the
+        history / usage records (the two views disagreed with each other).
         Resolution order:
+          0. (added AUDIT-2026-09-27) a LOADED record's stored mode — the
+             result already exists, so its mode is a fact, not a preference;
           1. the live selector value, when it is a concrete mode;
           2. the mode the worker resolved for THIS result ("auto" path), or the
              mode a loaded history record was stored under;
           3. shape detection of the result payload (legacy / unknown).
+
+        AUDIT-2026-09-27 [item 1.4] (B-04): a LOADED record's stored mode now
+        wins outright, as step 0 above. The resolution order used to put the
+        LIVE combo first, which contradicted this docstring's own step 2 and
+        the comment in ``load_result`` ("the stored mode of the loaded record
+        IS the authoritative mode for this payload"). Concretely: open a
+        ``range_chart`` record from History, change the combo to
+        ``abundance_diagram`` for the NEXT run, press Export JSON — the file
+        was named ``abundance_diagram_result.json`` and the tree branch was
+        mis-evaluated. The combo describes what to extract NEXT; a loaded
+        result already exists and its mode is a fact about it.
         """
+        resolved = getattr(self, "_resolved_mode", None)
+        known = ("range_chart", "columnar_section", "abundance_diagram",
+                 "phylogenetic_tree", "zonation_chart")
+        if getattr(self, "_loaded_history_id", None) and resolved in known:
+            return resolved
         ct = None
         try:
             ct = self.win.chart_type()
         except Exception:
             ct = None
-        if ct not in ("range_chart", "columnar_section", "abundance_diagram",
-                      "phylogenetic_tree", "zonation_chart"):
+        if ct not in known:
             # "auto" (or an accessor failure / a combo value this build does
             # not know) → fall through to the resolved mode + shape detection.
-            resolved = getattr(self, "_resolved_mode", None)
-            if resolved in ("range_chart", "columnar_section",
-                            "abundance_diagram", "phylogenetic_tree",
-                            "zonation_chart"):
+            if resolved in known:
                 return resolved
         else:
             return ct
@@ -1600,7 +2254,20 @@ class ExtractPage(ScrollArea):
             if self.phylotree is not None:
                 self.phylotree.setVisible(False)
             self.pivot.setVisible(True)
-            self.edit_row_widget.setVisible(True)
+            # AUDIT-2026-09-27 [item 2.6] (found by a real run over 66
+            # recorded results, not by a test): this line used to be
+            # `self.edit_row_widget.setVisible(True)`, copied from the
+            # REVIEW-2026-09-10 "restore the table UI" intent. But this
+            # branch is reached when there are ZERO rows, so the row-edit
+            # controls (Add / Delete / Discard / Apply) had nothing to act
+            # on. The B-03 gate correctly disabled all four, which left the
+            # user staring at a permanently dead control strip — the very
+            # symptom B-03 was raised to remove, in the one state the gate
+            # had not been wired into. 29 of the 66 real recordings are
+            # map/paleomap payloads that land here, so this was the common
+            # case, not an edge case. Restore the pivot and the stack, but
+            # leave the edit row hidden: it is a control for rows.
+            self.edit_row_widget.setVisible(False)
             self.stack.setVisible(True)
             self.pivot.clear()
             self.pivot.addItem(
@@ -1610,8 +2277,38 @@ class ExtractPage(ScrollArea):
             )
             empty = BodyLabel(self._t("results.empty"))
             empty.setAlignment(Qt.AlignCenter)
-            hint = CaptionLabel(self._t("results.emptyHint"))
-            hint.setAlignment(Qt.AlignCenter)
+            # AUDIT-2026-09-27 [item 4.1] (measured over 66 recorded real
+            # responses): 7 of them carried genuinely useful tables that this
+            # view cannot display — paleomap results holding continents,
+            # tectonic_features, fossil_sites (with lat/lon) and more, 24
+            # tables in total. detect_tableless_mode() drops them because it
+            # matches on a whitelist of table KEYS, not on whether the payload
+            # actually contains any table, and those keys never appear in a
+            # palaeomap. The panel then said "No results yet" over data the
+            # user had paid for, and the only way back to it was the JSON
+            # export — which nothing on screen mentioned.
+            #
+            # Rendering those tables properly needs paleomap configs in
+            # exporter.py AND a matching branch in js/table.js (the browser
+            # currently falls through to the four range-chart shapes for the
+            # same payload, i.e. four EMPTY sheets). Shipping only the gate
+            # change would make this panel claim to have tables and show four
+            # blank ones, so until both surfaces carry the configs, the honest
+            # minimum is to SAY the data exists and where to get it.
+            _dropped = [k for k, v in (self.result or {}).items()
+                        if isinstance(v, list) and v
+                        and isinstance(v[0], dict)]
+            if _dropped:
+                # .replace("{n}", ...) matches results.chimera_warning, and
+                # unlike str.format it cannot trip over a stray brace in a
+                # translation.
+                hint = CaptionLabel(self._t("results.tablesNotShown").replace(
+                    "{n}", str(len(_dropped))))
+                hint.setAlignment(Qt.AlignCenter)
+                hint.setWordWrap(True)
+            else:
+                hint = CaptionLabel(self._t("results.emptyHint"))
+                hint.setAlignment(Qt.AlignCenter)
             # QStackedLayout has no addSpacing/addStretch; use a VBox widget
             # as the empty-state page so we can add spacing between the two
             # labels.
@@ -1900,8 +2597,9 @@ class ExtractPage(ScrollArea):
             return
         self.result = self._last_snapshot
         self._last_snapshot = None
-        self._update_result_actions()
         self._render_result()
+        # AUDIT-2026-09-27 [item 4.3]: ordering, see above.
+        self._update_result_actions()
         try:
             self.lbl_dirty.setText("")
         except Exception:
@@ -1946,6 +2644,8 @@ class ExtractPage(ScrollArea):
             # (e.g. split formations back to one cell, dropped placeholder
             # rows, etc.).
             self._render_result()
+            # AUDIT-2026-09-27 [item 4.3]: see above.
+            self._update_result_actions()
             # If a history record exists for the current result, push
             # the edits back so reloading the record from history shows
             # the latest version. The newest record for this image (if
@@ -2068,7 +2768,8 @@ class ExtractPage(ScrollArea):
         self.lbl_conf.setText(f"{self._t('status.confidence')}: {pct}%")
 
     def load_result(self, result: dict, mode: str = "range_chart",
-                    record_id: int | None = None) -> None:
+                    record_id: int | None = None,
+                    thumbnail_b64: str | None = None) -> None:
         """Restore a result dict (e.g. loaded from history) and re-render.
 
         When ``record_id`` is given (loaded from the History page), the next
@@ -2100,9 +2801,8 @@ class ExtractPage(ScrollArea):
             self.lbl_dirty.setText("")
         except Exception:
             pass
-        # The loaded record has no image of its own (we only stored the
-        # result JSON), so wipe the ENTIRE image state to keep "Export
-        # JSON" honest about which file the result came from.
+        # The loaded record has no extractable image FILE, so wipe the image
+        # state to keep "Export JSON" honest about where the result came from.
         # Sprint B (REVIEW-2026-09-04): only image_path used to be
         # cleared — image_b64 / media_type / dims stayed populated, so a
         # user could hit Extract in this apparently image-less state and
@@ -2112,14 +2812,41 @@ class ExtractPage(ScrollArea):
         self.image_b64 = None
         self.media_type = None
         self._img_dims = (0, 0, False)
-        self.lbl_imginfo.setText(self._t("image.none"))
-        self.preview.clear()
-        self.preview.setText(self._t("image.dropHint"))
-        self._style_preview_empty()
+        # AUDIT-2026-09-27 [item 2.1] (U-02): the comment above used to say
+        # "we only stored the result JSON" — FALSE, and stale since the
+        # thumbnail landed: `HistoryRecord.image_thumbnail` is written on every
+        # save and already rendered by the history detail dialog. The code then
+        # followed the wrong premise and threw the figure away, so the one
+        # screen where a user is most likely to AUDIT an old extraction was the
+        # only one with no figure on it. `image_thumbnail_b64` is only 200-256px
+        # and exists to orient the reviewer, not to be re-extracted — which is
+        # why it goes to the display-only slot and never to `image_b64`.
+        self._display_thumb_b64 = thumbnail_b64 or None
+        if self._display_thumb_b64:
+            self._show_history_thumbnail(self._display_thumb_b64)
+        else:
+            # AUDIT-2026-09-27 [item 2.2]: with no figure, the zoom / full-view
+            # row has nothing to act on — disable it rather than leaving four
+            # live buttons that silently do nothing.
+            self._preview_src = None
+            self._preview_zoom = 1.0
+            for _b in (self.btn_zoom_in, self.btn_zoom_out, self.btn_zoom_fit,
+                       self.btn_figure_full):
+                try:
+                    _b.setEnabled(False)
+                except Exception:
+                    pass
+            self.lbl_imginfo.setText(self._t("image.none"))
+            self.preview.clear()
+            self.preview.setText(self._t("image.dropHint"))
+            self._style_preview_empty()
         # If the loaded result is a columnar-section shape, update the
         # mode display so the user sees the right table set.
         try:
             self._render_result()
+            # AUDIT-2026-09-27 [item 4.3]: see _on_result — the gate above ran
+            # before self.tables existed.
+            self._update_result_actions()
         except Exception as exc:
             log.warning("load_result render failed: %s", exc)
 
@@ -2139,14 +2866,22 @@ class ExtractPage(ScrollArea):
     def _export_xlsx(self) -> None:
         if not self.result:
             return
-        try:
-            from rca_core import to_xlsx as _to_xlsx
-        except ImportError:
+        # AUDIT-2026-09-27 [item 1.7] (B-07): the old `except ImportError`
+        # around the next import was DEAD CODE — `rca_core/__init__.py`
+        # re-exports `to_xlsx` unconditionally, and the real failure is a
+        # `RuntimeError` raised INSIDE `exporter.to_xlsx` when openpyxl is
+        # missing. So the check never fired: the user walked through the save
+        # dialog, typed a filename, confirmed, and only then learned it could
+        # not work. Gate on the dependency itself, BEFORE the dialog. (The
+        # button is also disabled by _update_result_actions, but a keyboard
+        # route or a stale enabled state can still land here.)
+        if not self._xlsx_available():
             InfoBar.error(
                 "", self._t("export.xlsxMissingOpenpyxl"),
                 parent=self.win, position=InfoBarPosition.TOP, duration=5000,
             )
             return
+        from rca_core import to_xlsx as _to_xlsx
         path, _ = QFileDialog.getSaveFileName(
             self, self._t("export.xlsx"), self._export_prefix() + "result.xlsx",
             "Excel (*.xlsx)")
@@ -2258,6 +2993,8 @@ class ExtractPage(ScrollArea):
             # _rebuild_pivot() afterwards — that used to double-populate
             # the pivot and could crash on some qfluent builds (HIGH-1).
             self._render_result()
+            # AUDIT-2026-09-27 [item 4.3]: see above.
+            self._update_result_actions()
 
 
 class SettingsPage(ScrollArea):
@@ -2329,9 +3066,17 @@ class SettingsPage(ScrollArea):
         # Action row
         actions = QHBoxLayout()
         actions.setSpacing(8)
-        self.btn_save_key = PrimaryPushButton(FIF.SAVE, self._t("settings.save"))
-        self.btn_save_key.clicked.connect(self._save_key)
-        actions.addWidget(self.btn_save_key)
+        # AUDIT-2026-09-27 [item 1.2] (P0): the API key no longer has its own
+        # "Save settings" button. There were TWO identical PrimaryPushButtons
+        # labelled settings.save — one per card — and BOTH wrote the whole
+        # config, so the user could not tell which card a button saved, the
+        # key-card button silently persisted unrelated unsaved spinbox edits,
+        # and with "remember" off either button blanked cfg["api_key"]. An API
+        # key is not a document: it commits on Enter / focus-out, like a
+        # password field should. Nothing references `btn_save_key` any more —
+        # see the two call sites updated for this change (SettingsPage.
+        # retranslate and tests_gui_fluent.py's language-relabel check).
+        self.ipt_key.editingFinished.connect(self._save_key)
         self.btn_test = PushButton(FIF.SEND, self._t("settings.testConnection"))
         self.btn_test.clicked.connect(self._on_test_connection)
         actions.addWidget(self.btn_test)
@@ -2376,30 +3121,50 @@ class SettingsPage(ScrollArea):
         self.spin_runs.setValue(int(cfg.get("runs", 1)))
         g2.addWidget(self.lbl_runs, 2, 0); g2.addWidget(self.spin_runs, 2, 1)
 
+        # AUDIT-2026-09-27 [item 3.1] (D2): the chart-type and chart-language
+        # mirror rows had no parent at all once their g2.addWidget lines went
+        # away, so they were invisible-but-unowned and the collapse switch had
+        # nothing to act on. They are state, not a second editable control, so
+        # they live in their own holder that one call can hide. Not destroyed:
+        # _cycle_lang's retranslate still walks them and the tests still
+        # address settings_page.cmb_ctype.
+        self._selector_mirror_holder = QWidget()
+        mirror_lay = QVBoxLayout(self._selector_mirror_holder)
+        mirror_lay.setContentsMargins(0, 0, 0, 0)
+        mirror_lay.setSpacing(8)
+        mirror_grid = QGridLayout()
+        mirror_grid.setHorizontalSpacing(12)
+        mirror_grid.setVerticalSpacing(10)
+        mirror_grid.setColumnStretch(1, 1)
+        self._mirror_grid = mirror_grid
         self.lbl_ctype = StrongBodyLabel(self._t("settings.chartType"))
+        # AUDIT-2026-09-27 [item 3.1] (D2): this combo is now a HIDDEN
+        # MIRROR of the Extract page's canonical one. The code tables moved
+        # there; aliased here so the i18n retranslate path, which still
+        # walks both pages in order, keeps working.
         self.cmb_ctype = ComboBox()
-        # UI-REVIEW-2026-09-05: zonation_chart added (radiolarian
-        # biozonation / correlation charts) — full-stack mode.
-        self._ctype_codes = ["auto", "range_chart", "columnar_section", "abundance_diagram", "phylogenetic_tree", "zonation_chart"]
-        self._ctype_keys = ["settings.chartType.auto",
-                            "settings.chartType.rangeChart",
-                            "settings.chartType.columnarSection",
-                            "settings.chartType.abundanceDiagram",
-                            "settings.chartType.phylogeneticTree",
-                            "settings.chartType.zonationChart"]
+        self._ctype_codes = list(self.win.extract_page._ctype_codes)
+        self._ctype_keys = list(self.win.extract_page._ctype_keys)
         self.cmb_ctype.addItems([self._t(k) for k in self._ctype_keys])
         cur = cfg.get("chart_type", "auto")
-        self.cmb_ctype.setCurrentIndex(self._ctype_codes.index(cur) if cur in self._ctype_codes else 0)
-        g2.addWidget(self.lbl_ctype, 3, 0); g2.addWidget(self.cmb_ctype, 3, 1)
+        self.cmb_ctype.setCurrentIndex(
+            self._ctype_codes.index(cur) if cur in self._ctype_codes else 0)
 
         self.lbl_clang = StrongBodyLabel(self._t("settings.chartLang"))
+        # AUDIT-2026-09-27 [item 3.1] (D2): hidden mirror, as above.
         self.cmb_clang = ComboBox()
-        self._clang_codes = ["auto", "zh", "en", "ja", "ru"]
-        self._clang_names = lambda: [self._t("chartLang.auto"), "中文", "English", "日本語", "Русский"]
+        self._clang_codes = list(self.win.extract_page._clang_codes)
+        self._clang_names = self.win.extract_page._clang_names
         self.cmb_clang.addItems(self._clang_names())
         cur = cfg.get("chart_lang", "auto")
-        self.cmb_clang.setCurrentIndex(self._clang_codes.index(cur) if cur in self._clang_codes else 0)
-        g2.addWidget(self.lbl_clang, 4, 0); g2.addWidget(self.cmb_clang, 4, 1)
+        self.cmb_clang.setCurrentIndex(
+            self._clang_codes.index(cur) if cur in self._clang_codes else 0)
+        mirror_grid.addWidget(self.lbl_ctype, 0, 0)
+        mirror_grid.addWidget(self.cmb_ctype, 0, 1)
+        mirror_grid.addWidget(self.lbl_clang, 1, 0)
+        mirror_grid.addWidget(self.cmb_clang, 1, 1)
+        mirror_lay.addLayout(mirror_grid)
+        cv.addWidget(self._selector_mirror_holder)
 
         self.lbl_remember = StrongBodyLabel(self._t("settings.remember"))
         self.sw_remember = SwitchButton()
@@ -2452,7 +3217,15 @@ class SettingsPage(ScrollArea):
             self.ipt_key.setText(current.api_key or "")
 
     def _save_key(self) -> None:
-        """Write the new API key into the active provider and persist."""
+        """Commit the API key: into the active provider AND the legacy cfg field.
+
+        AUDIT-2026-09-27 [item 1.2]: wired to ``ipt_key.editingFinished``
+        instead of a "Save settings" button. Both halves are explicit now —
+        the generation settings are persisted through ``save_generation()``
+        and the secret through ``save_api_key()`` — so committing the key can
+        no longer be confused with saving a spinbox, and saving a spinbox can
+        no longer destroy the key.
+        """
         try:
             current = self.win.current_provider()
             if not current:
@@ -2468,9 +3241,11 @@ class SettingsPage(ScrollArea):
             ok = store.update(current) if store is not None else False
             if not ok:
                 raise RuntimeError("provider not found")
-            # Mirror the legacy cfg field so the Extract page can pick it up.
+            # Mirror the legacy cfg field so the Extract page can pick it up,
+            # then persist the two halves separately.
             self.win.cfg["api_key"] = current.api_key
-            self.win.save_all()
+            self.win.save_generation()
+            self.win.save_api_key()
             InfoBar.success(
                 "", self._t("settings.saved"), parent=self.win,
                 position=InfoBarPosition.TOP, duration=2000,
@@ -2609,20 +3384,65 @@ class SettingsPage(ScrollArea):
                 position=InfoBarPosition.TOP, duration=5000,
             )
 
+    def cfg_chart_type(self) -> str:
+        """The chart-type code currently persisted in the shared cfg."""
+        return (self.win.cfg or {}).get("chart_type", "auto")
+
+    def cfg_chart_lang(self) -> str:
+        """The chart-language code currently persisted in the shared cfg."""
+        return (self.win.cfg or {}).get("chart_lang", "auto")
+
+    def set_selector_mirror_collapsed(self, collapsed: bool = True) -> None:
+        """Hide / show the chart-type + chart-language mirror row.
+
+        AUDIT-2026-09-27 [item 3.1] (D2). Since the Extract page became the
+        canonical home for these two, the copies here are no longer a second
+        control the user is expected to edit — they are state, and showing
+        state as an editable control is how the two drifted in the first
+        place. The holder is COLLAPSED rather than the widgets destroyed,
+        because ``_cycle_lang`` retranslate still walks them and the existing
+        tests still address ``settings_page.cmb_ctype``.
+
+        The holder is built unconditionally in ``_build``, and the only caller
+        (``ExtractPage._adopt_chart_selectors``) runs after that, so the
+        previous ``getattr`` + blanket ``except: pass`` had nothing left to
+        guard and only hid real errors.
+        """
+        self._selector_mirror_holder.setVisible(not collapsed)
+
     def _save_advanced(self) -> None:
+        """Persist the generation parameters.
+
+        AUDIT-2026-09-27 [item 1.2]: calls ``save_generation()`` only. The old
+        combined ``save_all()`` also rewrote ``api_key`` from the live field,
+        so with "remember" off this button blanked the stored credential.
+
+        B-08: the combo indices are bound-checked here too, not only in the
+        accessors. ``retranslate`` calls ``clear()`` before re-adding items,
+        which drives ``currentIndex()`` to -1; indexing the code list with it
+        raised IndexError or silently selected the wrong mode. Today nothing
+        yields the event loop between those calls, so the -1 is only one
+        statement of luck away from being read here.
+        """
         try:
             ctype_idx = self.cmb_ctype.currentIndex()
             clang_idx = self.cmb_clang.currentIndex()
+            ctype_codes = self._ctype_codes
+            clang_codes = self._clang_codes
+            if not (0 <= ctype_idx < len(ctype_codes)):
+                ctype_idx = 0
+            if not (0 <= clang_idx < len(clang_codes)):
+                clang_idx = 0
             self.win.cfg.update({
                 "max_tokens": int(self.spin_maxtok.value()),
                 "max_edge": int(self.spin_maxedge.value()),
                 "runs": int(self.spin_runs.value()),
-                "chart_type": self._ctype_codes[ctype_idx],
-                "chart_lang": self._clang_codes[clang_idx],
+                "chart_type": ctype_codes[ctype_idx],
+                "chart_lang": clang_codes[clang_idx],
                 "remember": bool(self.sw_remember.isChecked()),
                 "enhance": bool(self.sw_enhance.isChecked()),
             })
-            self.win.save_all()
+            self.win.save_generation()
             InfoBar.success(
                 "", self._t("settings.saved"), parent=self.win,
                 position=InfoBarPosition.TOP, duration=2000,
@@ -2642,7 +3462,8 @@ class SettingsPage(ScrollArea):
         self.lbl_endpoint.setText(self._t("wizard.fieldEndpoint"))
         self.lbl_model.setText(self._t("settings.model"))
         self.lbl_key.setText(self._t("settings.apiKey"))
-        self.btn_save_key.setText(self._t("settings.save"))
+        # AUDIT-2026-09-27 [item 1.2]: btn_save_key no longer exists (the key
+        # field self-commits on Enter / focus-out), so drop its retranslate.
         self.btn_test.setText(self._t("settings.testConnection"))
         self.btn_open_providers.setText(self._t("settings.llmProvider"))
         self.lbl_advanced.setText(self._t("settings.advanced"))
@@ -2793,7 +3614,13 @@ class RangeChartFluentWindow(FluentWindow):
             )
             return
         try:
-            self.extract_page.load_result(rec.result, rec.mode or "range_chart", record_id=rec.id)
+            # AUDIT-2026-09-27 [item 2.1] (U-02): pass the record's stored
+            # thumbnail so the reviewer can see the figure the result came
+            # from. It is display-only (see _show_history_thumbnail) and does
+            # not re-arm extraction.
+            self.extract_page.load_result(
+                rec.result, rec.mode or "range_chart", record_id=rec.id,
+                thumbnail_b64=getattr(rec, "image_thumbnail_b64", None))
             self.switchTo(self.extract_page)
             InfoBar.success(
                 "", f"#{rec.id}", parent=self,
@@ -3041,10 +3868,26 @@ class RangeChartFluentWindow(FluentWindow):
         return max(1, min(int(val), 5)) if val is not None else 1
 
     def chart_type(self):
-        return self.settings_page._ctype_codes[self.settings_page.cmb_ctype.currentIndex()]
+        # AUDIT-2026-09-27 [item 3.1] (D2): the Extract page owns this.
+        page = getattr(self, "extract_page", None)
+        if page is not None:
+            return page.chart_type_code()
+        idx = self.settings_page.cmb_ctype.currentIndex()
+        codes = self.settings_page._ctype_codes
+        if 0 <= idx < len(codes):
+            return codes[idx]
+        return codes[0] if codes else "auto"
 
     def chart_lang(self):
-        return self.settings_page._clang_codes[self.settings_page.cmb_clang.currentIndex()]
+        # AUDIT-2026-09-27 [item 3.1] (D2): the Extract page owns this.
+        page = getattr(self, "extract_page", None)
+        if page is not None:
+            return page.chart_lang_code()
+        idx = self.settings_page.cmb_clang.currentIndex()
+        codes = self.settings_page._clang_codes
+        if 0 <= idx < len(codes):
+            return codes[idx]
+        return codes[0] if codes else "auto"
 
     def current_provider(self):
         try:
@@ -3115,19 +3958,28 @@ class RangeChartFluentWindow(FluentWindow):
         except Exception as exc:
             log.warning("sync ipt_key to provider: %s", exc)
 
-    def save_all(self):
-        """Persist the settings page into the shared config file.
+    def save_generation(self):
+        """Persist the NON-SECRET settings into the shared config file.
 
-        REVIEW-2026-09-20: ``save_config`` no longer swallows write errors —
-        they propagate to the caller, and every caller of this method already
-        runs inside a try/except that shows an InfoBar.error
-        (``_save_key`` / ``_save_advanced``), so "Settings saved" is only
-        claimed when the file really was written.
+        AUDIT-2026-09-27 [item 1.2] (P0): this is the former ``save_all`` with
+        the ``api_key`` line removed, and it is the ONLY thing the close path
+        and the "Save settings" button call. The old shape wrote all nine
+        keys from the live widgets on every save, which meant:
+
+        * pressing the button on the API-Key card also silently persisted
+          every spinbox / switch the user had edited but not yet saved;
+        * and because it wrote ``"api_key": ... if remember else ""``, pressing
+          ANY save while "remember" was off wiped ``cfg["api_key"]`` — the
+          user's stored credential destroyed by clicking an unrelated button.
+
+        Splitting the secret out is what makes "save the settings" and "save
+        the key" two different operations, so neither can surprise the other.
+        REVIEW-2026-09-20 still holds: ``save_config`` propagates write errors
+        and every caller shows an InfoBar, so "saved" is only claimed when the
+        file really was written.
         """
         s = self.settings_page
-        remember = s.sw_remember.isChecked()
         # endpoint / model live in the provider store, not in cfg.
-        # Only save api_key into cfg (the legacy field) when "remember" is on.
         self.cfg.update({
             "lang": self.tr.lang,
             "max_tokens": self.max_tokens(),
@@ -3135,16 +3987,33 @@ class RangeChartFluentWindow(FluentWindow):
             "runs": self.runs(),
             "chart_lang": self.chart_lang(),
             "chart_type": self.chart_type(),
-            "remember": remember,
+            "remember": s.sw_remember.isChecked(),
             "enhance": self.enhance(),
-            "api_key": s.ipt_key.text().strip() if remember else "",
         })
+        save_config(self.cfg)
+
+    def save_api_key(self):
+        """Mirror the live API-key field into ``cfg`` and persist it.
+
+        AUDIT-2026-09-27 [item 1.2]: separated from :meth:`save_generation` so
+        the key is written only when the user actually edited it (the field
+        commits on Enter / focus-out, or via the wizard). ``remember`` off
+        still means "do not store it", and that is now reached ONLY through
+        this explicit path rather than as a side effect of saving a spinbox.
+
+        The ``remember`` flag itself lives in the generation half; read it
+        from the persisted config so the two halves cannot disagree.
+        """
+        s = self.settings_page
+        remember = bool(self.cfg.get("remember"))
+        text = s.ipt_key.text().strip()
+        self.cfg["api_key"] = text if remember else ""
         save_config(self.cfg)
         # H3 fix (REVIEW-2026-11-07): the Tkinter GUI already warned (via
         # log) when at-rest protection is below Fernet; the Fluent save
         # path had no warning at all. Surface it once per session when a
         # key is actually being stored with the weaker protection.
-        if remember and s.ipt_key.text().strip():
+        if remember and text:
             try:
                 from rca_core.secrets_store import encryption_status
                 if encryption_status() in ("fingerprint", "plaintext") \
@@ -3156,20 +4025,34 @@ class RangeChartFluentWindow(FluentWindow):
             except Exception:
                 pass
 
+    def save_all(self):
+        """Backwards-compatible alias for :meth:`save_generation`.
+
+        AUDIT-2026-09-27 [item 1.2]: kept because external callers and older
+        tests still use this name, but it deliberately does NOT write the API
+        key any more — that is what made the old combined save destructive.
+        Use :meth:`save_api_key` when the key really changed.
+        """
+        self.save_generation()
+
     def closeEvent(self, event):
         try:
-            # Before save_all() writes the cfg blob, mirror the live
-            # ipt_key into the provider store. save_all() already
-            # copies it into cfg["api_key"] (so the legacy field stays
-            # populated), but the provider record is the one the next
-            # launch reads from when populating ipt_key. Without this
-            # sync a user who types a key and closes the app without
-            # hitting "Save settings" sees an empty field next time.
+            # Before the cfg blob is written, mirror the live ipt_key into the
+            # provider store. The provider record is the one the next launch
+            # reads from when populating ipt_key. Without this sync a user who
+            # types a key and closes the app without committing the field sees
+            # it empty next time.
+            #
+            # AUDIT-2026-09-27 [item 1.2]: the old comment here said
+            # "save_all() already copies it into cfg["api_key"]" — that is no
+            # longer true, and deliberately so: save_all() is now
+            # save_generation(), which never touches the secret. Closing the
+            # window must not be able to blank a stored API key.
             try:
                 self._sync_ipt_key_to_provider()
             except Exception:
                 pass
-            self.save_all()
+            self.save_generation()
             self.extract_page._cleanup_paste_tmp()
         except Exception as exc:
             # REVIEW-2026-09-20: save_all() now propagates write failures
@@ -3193,6 +4076,31 @@ class RangeChartFluentWindow(FluentWindow):
         # _orphaned_workers register which holds a strong reference until
         # the thread finishes naturally (then deleteLater()s it).
         # terminate() is never used.
+        #
+        # AUDIT-2026-09-27 P1: the waits below used to be bare
+        # ``QThread.wait()``, which blocks the event loop and froze the window
+        # for the whole budget — and the budget was ADDITIVE per worker
+        # (~17.5 s with the extract worker, the settings probe and three
+        # provider probes in flight). They now go through
+        # ``_wait_worker_briefly`` (which pumps events so the window keeps
+        # painting) and share ONE total allowance, so the number of workers
+        # can no longer multiply the freeze. Anything still running when its
+        # share runs out is parked, which was already the safe path.
+        _CLOSE_WAIT_TOTAL_MS = 2500
+        _spent_ms = 0
+
+        def _wait(w, default_ms: int) -> bool:
+            nonlocal _spent_ms
+            from PySide6.QtCore import QElapsedTimer
+            allowed = min(default_ms, max(0, _CLOSE_WAIT_TOTAL_MS - _spent_ms))
+            if allowed <= 0 or w is None:
+                return w is not None and not w.isRunning()
+            clock = QElapsedTimer()
+            clock.start()
+            done = _wait_worker_briefly(w, allowed)
+            _spent_ms += min(clock.elapsed(), allowed)
+            return done
+
         try:
             w = getattr(self.extract_page, "_worker", None)
             if w is not None:
@@ -3208,20 +4116,17 @@ class RangeChartFluentWindow(FluentWindow):
                         w.request_cancel()
                     except Exception:
                         pass
-                    if not w.wait(5000):
+                    if not _wait(w, 1500):
                         try:
                             log.warning(
-                                "ExtractWorker did not honour cancel within 5s; "
+                                "ExtractWorker did not honour cancel in time; "
                                 "leaving thread to finish without UI callbacks."
                             )
                         except Exception:
                             pass
-                        if not w.wait(2000):
-                            # Still inside urllib/ssl with no Python-side
-                            # cancellation point: park the worker so the
-                            # wrapper outlives the GC and the thread can
-                            # finish safely (no qFatal, no terminate()).
-                            _park_orphaned_worker(w)
+                    # Whatever happened, the register keeps the wrapper alive
+                    # so the thread can finish safely (no qFatal, no
+                    # terminate()) and deleteLater() reclaims it.
                     if w.isRunning():
                         _park_orphaned_worker(w)
         except Exception:
@@ -3237,8 +4142,7 @@ class RangeChartFluentWindow(FluentWindow):
                 except (TypeError, RuntimeError):
                     pass
                 if sw.isRunning():
-                    if not sw.wait(3000):
-                        _park_orphaned_worker(sw)
+                    _wait(sw, 500)
                 if sw.isRunning():
                     _park_orphaned_worker(sw)
         except Exception:
@@ -3260,7 +4164,9 @@ class RangeChartFluentWindow(FluentWindow):
                         pass
                 for tw in list(tw_dict.keys()):
                     if tw.isRunning():
-                        if not tw.wait(2000):
+                        # 500 ms each, and only from what is left of the
+                        # shared total — three probes must not cost 7.5 s.
+                        if not _wait(tw, 500):
                             try:
                                 log.warning(
                                     "Test worker did not finish in time; "
@@ -3268,10 +4174,8 @@ class RangeChartFluentWindow(FluentWindow):
                                 )
                             except Exception:
                                 pass
-                            if not tw.wait(500):
-                                _park_orphaned_worker(tw)
-                    if tw.isRunning():
-                        _park_orphaned_worker(tw)
+                        if tw.isRunning():
+                            _park_orphaned_worker(tw)
                 tw_dict.clear()
         except Exception:
             pass

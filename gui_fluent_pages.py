@@ -152,13 +152,28 @@ class HistoryPage(ScrollArea):
 
         self.btn_refresh = ToolButton(FIF.SYNC)
         self.btn_refresh.setToolTip(self._t("action.refresh"))
-        self.btn_refresh.clicked.connect(self.refresh)
+        # AUDIT-2026-09-27 [item 1.14]: the manual Refresh must apply a
+        # pending debounced search immediately (see _flush_search_timer).
+        self.btn_refresh.clicked.connect(lambda: self._manual_refresh())
         bar.addWidget(self.btn_refresh)
 
         self.btn_clear = PushButton(self._t("history.action.deleteAll"))
         self.btn_clear.clicked.connect(self._on_clear)
         bar.addWidget(self.btn_clear)
         v.addLayout(bar)
+
+        # AUDIT-2026-09-27 [item 1.14] (B-14): the empty state. With no
+        # records the page used to show a bare header row and ~420px of empty
+        # table. `history.empty` / `history.emptyHint` were added in all three
+        # locales and wired to nothing; they are used here, and the table is
+        # hidden so the message is the whole story.
+        self.empty_label = BodyLabel(self._t("history.empty"))
+        self.empty_label.setAlignment(Qt.AlignCenter)
+        self.empty_hint = CaptionLabel(self._t("history.emptyHint"))
+        self.empty_hint.setAlignment(Qt.AlignCenter)
+        self.empty_hint.setWordWrap(True)
+        v.addWidget(self.empty_label)
+        v.addWidget(self.empty_hint)
 
         # Table
         self.table = TableWidget()
@@ -198,6 +213,12 @@ class HistoryPage(ScrollArea):
         notes_btn_row.addStretch(1)
         notes_btn_row.addWidget(self.btn_save_notes)
         notes_v.addLayout(notes_btn_row)
+        # AUDIT-2026-09-27 [item 1.14] (B-14): the Notes card is added ONCE
+        # and never hidden, so an empty list still showed a live-looking
+        # editor with a permanently disabled Save — a form that looks
+        # actionable and does nothing. Show it only when a record is selected;
+        # `_on_row_selected` reveals it.
+        self.notes_card.setVisible(False)
         v.addWidget(self.notes_card)
 
         self.table.currentCellChanged.connect(self._on_row_selected)
@@ -254,6 +275,11 @@ class HistoryPage(ScrollArea):
 
     # ---- data ----
 
+    def _manual_refresh(self) -> None:
+        """Refresh button: flush any pending debounced search, then reload."""
+        self._flush_search_timer()
+        self.refresh()
+
     def refresh(self) -> None:
         try:
             self._records = self._store.list(
@@ -270,14 +296,35 @@ class HistoryPage(ScrollArea):
         self._populate_table()
 
     def _populate_table(self) -> None:
+        # AUDIT-2026-09-27 [item 1.14] (B-14): the empty case used to render
+        # a bare header row and nothing else. `history.empty` /
+        # `history.emptyHint` have existed in all three locales since they were
+        # added and were referenced by NOTHING — a project-wide grep found no
+        # consumer. Wire them, and keep the table hidden so the message is the
+        # whole story.
+        self.empty_label.setVisible(not self._records)
+        self.empty_hint.setVisible(not self._records)
+        self.table.setVisible(bool(self._records))
+        if not self._records:
+            # A stale selection must not survive an empty result set.
+            if getattr(self, "_selected_rec", None) is not None:
+                self._on_row_selected(-1, -1, -1, -1)
         self.table.setRowCount(len(self._records))
         for ri, rec in enumerate(self._records):
             ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(rec.timestamp or 0))
             # REVIEW-2026-11-07 (low): phylogenetic_tree was missing, so a
             # phylo record's mode cell rendered the raw code.
+            # AUDIT-2026-09-27 [item 1.5] (B-05): zonation_chart was missing
+            # from the very map that comment claims to have fixed — the same
+            # round added zonation to the FILTER (line ~146) but not to the
+            # LABEL, so a zonation record showed the raw string
+            # `zonation_chart` while every other record showed a short label.
+            # The two halves of that fix were both needed; neither the code
+            # nor any test covered the second half.
             mode_label = {"range_chart": "Range", "columnar_section": "Columnar",
                           "abundance_diagram": "Abundance",
-                          "phylogenetic_tree": "Phylo"}.get(rec.mode, rec.mode or "-")
+                          "phylogenetic_tree": "Phylo",
+                          "zonation_chart": "Zonation"}.get(rec.mode, rec.mode or "-")
             cells = [
                 str(rec.id),
                 ts,
@@ -328,8 +375,27 @@ class HistoryPage(ScrollArea):
         self.refresh()
 
     def _on_search(self, text: str) -> None:
+        # AUDIT-2026-09-27 [item 1.14] (B-14): this used to call refresh()
+        # on EVERY keystroke, and refresh() re-queries the store and rebuilds
+        # up to 200 rows x 4 widgets. Typing a 10-character query rebuilt
+        # everything ten times. Debounce instead, and flush the pending
+        # timer on a manual Refresh so the user is never looking at a stale
+        # table after pressing it.
         self._search_text = text.strip()
-        self.refresh()
+        if not hasattr(self, "_search_timer"):
+            from PySide6.QtCore import QTimer
+            self._search_timer = QTimer(self)
+            self._search_timer.setSingleShot(True)
+            self._search_timer.setInterval(300)
+            self._search_timer.timeout.connect(self.refresh)
+        self._search_timer.start()
+
+    def _flush_search_timer(self) -> None:
+        """Apply a pending debounced search immediately (manual refresh)."""
+        t = getattr(self, "_search_timer", None)
+        if t is not None and t.isActive():
+            t.stop()
+            self.refresh()
 
     def _on_clear(self) -> None:
         if not self._records:
@@ -356,6 +422,9 @@ class HistoryPage(ScrollArea):
                           position=InfoBarPosition.TOP, duration=4000)
 
     def _on_row_selected(self, row: int, _col: int, _prev_row: int, _prev_col: int) -> None:
+        # AUDIT-2026-09-27 [item 1.14] (B-14): reveal / hide the Notes card
+        # with the selection, so an empty list does not present a live-looking
+        # editor with a permanently disabled Save.
         if row < 0 or row >= len(self._records):
             # Clear the notes editor so it doesn't show stale data from a previously
             # selected row, and disable Save so the user can't accidentally overwrite it.
@@ -364,6 +433,7 @@ class HistoryPage(ScrollArea):
             self.notes_edit.setPlainText("")
             self.notes_edit.blockSignals(False)
             self.btn_save_notes.setEnabled(False)
+            self.notes_card.setVisible(False)
             return
         rec = self._records[row]
         # Block signals while we set the value so the textChanged handler
@@ -373,6 +443,7 @@ class HistoryPage(ScrollArea):
         self.notes_edit.blockSignals(False)
         self.btn_save_notes.setEnabled(False)
         self._selected_rec = rec
+        self.notes_card.setVisible(True)
 
     def _on_notes_changed(self) -> None:
         if not getattr(self, "_selected_rec", None):
@@ -666,9 +737,31 @@ class UsagePage(ScrollArea):
         if summary is not None:
             self._render_cards(summary)
             self._render_chart(summary)
+        else:
+            # AUDIT-2026-09-27 [item 1.9] (B-09): a store failure used to
+            # skip _render_cards / _render_chart while still clearing the
+            # table, so the six headline numbers kept showing the PREVIOUS
+            # date range's totals with nothing but a 4-second auto-dismissing
+            # InfoBar to say the query had failed. Those stale figures are
+            # worse than no figures: they read as current. Reset them to the
+            # em-dash placeholder instead.
+            self._render_cards(None)
+            self._render_chart(None)
         self._render_table(rows)
 
     def _render_cards(self, summary) -> None:
+        # AUDIT-2026-09-27 [item 1.9]: a falsy summary now renders the
+        # em-dash placeholder rather than leaving the previous range's
+        # numbers on screen. Zeros would read as "measured, nothing used";
+        # an em-dash reads as "nothing to show", which is the truth for a
+        # fresh install AND for a failed query.
+        # Each `card_*` is a (card, label_widget) pair.
+        pairs = (self.card_requests, self.card_success, self.card_input,
+                 self.card_output, self.card_cache, self.card_estimated)
+        if not summary:
+            for _card, lbl_value in pairs:
+                lbl_value.setText("—")
+            return
         cards_and_labels = (
             (self.card_requests[0], self.card_requests[1], str(summary.total_requests) if summary else "-"),
             (self.card_success[0], self.card_success[1], f"{summary.success_rate * 100:.1f}%" if summary else "-"),

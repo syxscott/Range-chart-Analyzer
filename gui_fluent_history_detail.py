@@ -323,11 +323,28 @@ def _thumbnail_widget(thumb_bytes: bytes) -> QWidget:
         v.addStretch(1)
         return w
     pix = QPixmap()
-    pix.loadFromData(thumb_bytes, "PNG")
-    if pix.isNull():
-        # Try JPEG fallback (HistoryStore stores JPEG or PNG depending on source).
-        pix.loadFromData(thumb_bytes, "JPG")
-    if pix.isNull():
+    # AUDIT-2026-09-27 [item 1.5] (B-17): this used to try "PNG" first and fall
+    # back to "JPG", under a comment claiming the store keeps "JPEG or PNG
+    # depending on source". That has been false since REVIEW-2026-09-20
+    # (finding 9): HistoryStore.add runs every thumbnail through
+    # make_thumbnail_with_size, which always re-encodes with
+    # ``img.save(..., format="JPEG")``. So the PNG attempt failed on EVERY row
+    # and the "fallback" was the only branch that ever ran — the nominal
+    # primary case was dead code, and the comment documented a storage
+    # behaviour that had not existed for months.
+    # Sniff the magic bytes instead: one comparison each, and a row written by
+    # any other producer (or before the re-encode landed) still decodes.
+    if thumb_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        fmt = "PNG"
+    elif thumb_bytes[:3] == b"\xff\xd8\xff":
+        fmt = "JPG"
+    else:
+        fmt = ""  # unrecognised header — let Qt sniff it
+    if fmt:
+        ok = pix.loadFromData(thumb_bytes, fmt)
+    else:
+        ok = pix.loadFromData(thumb_bytes)
+    if not ok or pix.isNull():
         lbl = CaptionLabel("(could not decode thumbnail)")
         v.addWidget(lbl)
         v.addStretch(1)

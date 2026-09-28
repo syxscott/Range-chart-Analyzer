@@ -109,6 +109,36 @@ TRANSLATIONS["zh"] = {
     "image.dropHint": "拖拽图片到此处，或点击选择",
     "image.dims": "尺寸",
     "image.resized": "（已压缩）",
+    # AUDIT-2026-09-27 [item 2.1] (U-02): shown when a HISTORY record is
+    # loaded and the preview shows its stored thumbnail rather than a live
+    # file. It must be explicit that this is a thumbnail, or a reviewer
+    # mistakes it for the extractable source. All three locales (C8).
+    "image.historyThumbnail": "历史记录缩略图（仅供核对）",
+    # AUDIT-2026-09-27 [item 2.2] (U-01): the preview was a fixed 172px
+    # thumbnail, i.e. a 13-15x downscale of a typical range chart, which
+    # makes the taxon labels — the reason the figure exists — illegible.
+    "image.zoomIn": "放大",
+    "image.zoomOut": "缩小",
+    "image.zoomFit": "适应窗口",
+    "image.viewFull": "查看原图",
+    "image.fullTitle": "原图（全分辨率）",
+    # AUDIT-2026-09-27 [item 2.3 / 2.5] (B-16 / U-03): the Extract page's
+    # right panel was a blank ~55% of the window on a fresh launch, with four
+    # greyed-out row-edit buttons and no indication of what to do next. These
+    # are its empty state and the cancel affordance, which existed ONLY in
+    # closeEvent — a runs=5 extraction could not be stopped without closing the
+    # window. All three locales (C8).
+    "extract.empty": "尚无提取结果",
+    "extract.emptyHint": "在左侧选择或拖入一张地层延限图，然后点击「开始提取」。结果会显示在这里。",
+    "action.cancel": "取消提取",
+    "action.cancelHint": "停止当前提取。已在进行中的请求需要先返回。",
+    "status.cancelling": "正在取消，等待当前请求结束…",
+    # AUDIT-2026-09-27 [item 1.15]: the ProviderWizard validated a form with a
+    # hardcoded English "Please fill in: " prefix, and reported a rejected
+    # extra_headers blob with a hardcoded English f-string. Both were
+    # user-visible strings bypassing the catalogue. All three locales (C8).
+    "wizard.fillRequired": "请填写：",
+    "wizard.extraHeadersIgnored": "已忽略 extra_headers：{reason}",
     "caption.label": "图注 / 备注（可选）",
     "action.extract": "开始提取",
     "action.extracting": "提取中…",
@@ -232,7 +262,22 @@ TRANSLATIONS["zh"] = {
     "dialog.saveJson": "保存 JSON 文件",
     "dialog.chooseImage": "选择地层沿线图",
     "results.empty": "暂无提取结果",
-    "results.emptyHint": "请在左侧选择或粘贴图片，然后点击「开始提取」",
+    "results.emptyHint": "本次提取已完成，但没有返回表格数据——该图件可能是地图或古地理图等不含表格结构的图。",
+    "results.tablesNotShown": "本次提取返回了 {n} 组表格数据，但当前表格视图尚不支持这种图件类型，数据未丢失：可用「导出全部 JSON」查看。",
+    # AUDIT-2026-09-27 [item 4.2]: palaeomap table support. These keys were
+    # not "new text" so much as previously unreachable — the tables existed in
+    # the extractor output all along and were discarded by the tableless gate.
+    "sec.continents": "大陆",
+    "sec.oceansSeas": "海洋与海",
+    "sec.tectonicFeatures": "构造要素",
+    "sec.biogeographicRealms": "生物地理区",
+    "sec.paleolatitudeIndicators": "古纬度指标",
+    "sec.fossilSites": "化石产地",
+    "col.type": "类型",
+    "col.paleolatitude": "古纬度",
+    "col.direction": "走向",
+    "col.description": "描述",
+    "col.characteristicFauna": "特征动物群",
     # Step 0 (8.0→9.5): chimera_warnings surfaced as user-visible warning
     "results.chimera_warning": "检测到 {n} 条嵌合共识行（自然界未观察到），已被自动丢弃",
     "results.phylogeneticTree": "系统发育树",
@@ -545,6 +590,21 @@ TRANSLATIONS["en"] = {
     "image.dropHint": "Drop an image here, or click to choose",
     "image.dims": "Dimensions",
     "image.resized": "(compressed)",
+    "image.historyThumbnail": "History thumbnail (review only)",
+    "image.zoomIn": "Zoom in",
+    "image.zoomOut": "Zoom out",
+    "image.zoomFit": "Fit to panel",
+    "image.viewFull": "View full figure",
+    "image.fullTitle": "Source figure (full resolution)",
+    "extract.empty": "No extraction result yet",
+    "extract.emptyHint": "Choose or drop a range chart on the left, then press "
+                         "Extract. The result appears here.",
+    "action.cancel": "Cancel",
+    "action.cancelHint": "Stop the current extraction. A request already in "
+                         "flight has to finish first.",
+    "status.cancelling": "Cancelling — waiting for the current request…",
+    "wizard.fillRequired": "Please fill in: ",
+    "wizard.extraHeadersIgnored": "extra_headers ignored: {reason}",
     "caption.label": "Caption / note (optional)",
     "action.extract": "Extract",
     "action.extracting": "Extracting...",
@@ -574,7 +634,7 @@ TRANSLATIONS["en"] = {
     "status.saved": "Saved",
     "status.historySaveUnavailable": "History storage is unavailable — the latest record was not saved. Check permissions on ~/.range_chart_analyzer.",
     "tab.sections": "Sections",
-        "tab.extract": "Extract",
+    "tab.extract": "Extract",
     "tab.about": "About",
     "about.desc": "Extract structured data from stratigraphic range charts.",
     "tab.species": "Species Ranges",
@@ -660,7 +720,20 @@ TRANSLATIONS["en"] = {
     "dialog.saveJson": "Save JSON file",
     "dialog.chooseImage": "Choose a range chart",
     "results.empty": "No results yet",
-    "results.emptyHint": "Select or paste an image on the left, then click Extract.",
+    "results.emptyHint": "This extraction returned no tables — the figure may be a map or paleomap, which has no tabular structure.",
+    "results.tablesNotShown": "This extraction returned {n} sets of tabular data, but the table view does not support this figure type yet. Nothing was lost — use Export all JSON to see it.",
+    # AUDIT-2026-09-27 [item 4.2]: palaeomap table support.
+    "sec.continents": "Continents",
+    "sec.oceansSeas": "Oceans & seas",
+    "sec.tectonicFeatures": "Tectonic features",
+    "sec.biogeographicRealms": "Biogeographic realms",
+    "sec.paleolatitudeIndicators": "Palaeolatitude indicators",
+    "sec.fossilSites": "Fossil sites",
+    "col.type": "Type",
+    "col.paleolatitude": "Palaeolatitude",
+    "col.direction": "Direction",
+    "col.description": "Description",
+    "col.characteristicFauna": "Characteristic fauna",
     # Step 0 (8.0→9.5): chimera_warnings surfaced as user-visible warning
     "results.chimera_warning": "Detected {n} chimeric consensus rows (not observed in any single run) — automatically dropped",
     "results.phylogeneticTree": "Phylogenetic Tree",
@@ -972,6 +1045,20 @@ TRANSLATIONS["ja"] = {
     "image.dropHint": "画像をここにドロップ、またはクリックして選択",
     "image.dims": "寸法",
     "image.resized": "（圧縮済み）",
+    "image.historyThumbnail": "履歴のサムネイル（照合用のみ）",
+    "image.zoomIn": "拡大",
+    "image.zoomOut": "縮小",
+    "image.zoomFit": "パネルに合わせる",
+    "image.viewFull": "原図を表示",
+    "image.fullTitle": "原図（フル解像度）",
+    "extract.empty": "まだ抽出結果がありません",
+    "extract.emptyHint": "左側で層序延限図を選択またはドラッグし、「抽出開始」を"
+                         "押してください。結果はここに表示されます。",
+    "action.cancel": "抽出を中止",
+    "action.cancelHint": "現在の抽出を停止します。進行中のリクエストは完了を待ちます。",
+    "status.cancelling": "中止しています — 現在のリクエストの完了を待っています…",
+    "wizard.fillRequired": "入力してください: ",
+    "wizard.extraHeadersIgnored": "extra_headers は無視されました: {reason}",
     "caption.label": "キャプション / メモ（任意）",
     "action.extract": "抽出開始",
     "action.extracting": "抽出中…",
@@ -1001,7 +1088,7 @@ TRANSLATIONS["ja"] = {
     "status.saved": "保存しました",
     "status.historySaveUnavailable": "履歴ストレージが利用できないため、今回のレコードは保存されませんでした。~/.range_chart_analyzer の権限を確認してください。",
     "tab.sections": "層序断面",
-        "tab.extract": "抽出",
+    "tab.extract": "抽出",
     "tab.about": "情報",
     "about.desc": "層序レンジチャートから構造化データを抽出するツール。",
     "tab.species": "種のレンジ",
@@ -1087,7 +1174,20 @@ TRANSLATIONS["ja"] = {
     "dialog.saveJson": "JSON ファイルを保存",
     "dialog.chooseImage": "レンジチャートを選択",
     "results.empty": "結果がありません",
-    "results.emptyHint": "左側で画像を選択または貼り付けてから、抽出をクリックしてください。",
+    "results.emptyHint": "今回の抽出は完了しましたが、表は返りませんでした。地図や古地理図など、表構造を持たない図の可能性があります。",
+    "results.tablesNotShown": "今回の抽出で {n} 件の表データを得ましたが、この図件の種類はまだ表ビューに対応していません。データは失われていません。「すべて JSON を書き出し」で確認できます。",
+    # AUDIT-2026-09-27 [item 4.2]: palaeomap table support.
+    "sec.continents": "大陸",
+    "sec.oceansSeas": "海洋と海",
+    "sec.tectonicFeatures": "テクトニック要素",
+    "sec.biogeographicRealms": "生物地理区",
+    "sec.paleolatitudeIndicators": "古緯度示準",
+    "sec.fossilSites": "化石産出地",
+    "col.type": "種類",
+    "col.paleolatitude": "古緯度",
+    "col.direction": "走向",
+    "col.description": "説明",
+    "col.characteristicFauna": "特徴的動物群",
     # Step 0 (8.0→9.5): chimera_warnings surfaced as user-visible warning
     "results.chimera_warning": "{n} 件のキメラ統合行を検出（単一ランでも観察されなかったため自動破棄）",
     "results.phylogeneticTree": "系統樹",

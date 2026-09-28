@@ -82,7 +82,18 @@ from rca_core.extractor import (  # noqa: E402
     clamp_max_tokens,
 )
 from rca_core import ProviderStore  # noqa: E402
-from rca_core.llm import ApiFormat, LlmProvider, PROVIDER_PRESETS  # noqa: E402
+# AUDIT-2026-09-27 [item 7.2]: ProviderPreset was missing from this import
+# while three annotations below named it (`selected_preset: ProviderPreset |
+# None`, `list[ProviderPreset]`, `_show_details(preset: ProviderPreset |
+# None)`). Harmless only because `from __future__ import annotations` makes
+# annotations strings; it breaks mypy and would become a live NameError the
+# moment anyone calls typing.get_type_hints() on this module.
+from rca_core.llm import (  # noqa: E402
+    ApiFormat,
+    LlmProvider,
+    PROVIDER_PRESETS,
+    ProviderPreset,
+)
 # Phase J: history audit-trail persistence (was previously a no-op on
 # the Tkinter path).
 try:
@@ -1116,13 +1127,27 @@ class RangeChartApp:
         for c, d in self._chart_type_map:
             if c == code:
                 return d
-        return self._chart_type_map[0][1]
+        # AUDIT-2026-09-27 [item 1.10] (B-10): this used to fall back to
+        # `_chart_type_map[0][1]` == "Auto". At startup the caller seeds the
+        # display variable with this value and the `<<ComboboxSelected>>` trace
+        # then maps it BACK to a code — so any code this build does not know
+        # was silently rewritten to "auto". The two front-ends' code tables
+        # happen to match exactly today, which is why it never bit; it is
+        # latent on the very path the Fluent GUI needs: configure a provider
+        # there, fall back to Tk (no PySide6), and the FIRST mode that exists
+        # in only one front-end vanishes with no error.
+        #
+        # Keep the raw code visible instead. An unrecognised value in the
+        # combo is a legible "I don't know this" and is preserved; silently
+        # substituting a different mode is not.
+        return str(code) if code else self._chart_type_map[0][1]
 
     def _code_to_chartlang_display(self, code: str) -> str:
         for c, d in self._chart_lang_map:
             if c == code:
                 return d
-        return self._chart_lang_map[0][1]
+        # AUDIT-2026-09-27 [item 1.10]: see _code_to_chart_type_display.
+        return str(code) if code else self._chart_lang_map[0][1]
 
     def _on_cmb_chart_type_change(self):
         # Combobox display var holds the localized label; map back to code.
