@@ -177,8 +177,20 @@ jobs:
           # metrics are meaningless there. Nothing asserted here depends on
           # glyphs; the full-resolution visual pass is a local concern and uses
           # QT_QPA_PLATFORM=windows instead.
-          python -m pytest tests/ -q --tb=short \
+          #
+          # AUDIT-2026-09-28: the scratch HOME is not paranoia about this
+          # runner -- it is about the developer who runs the same command
+          # locally. Constructing a RangeChartFluentWindow schedules
+          # maybe_show_onboarding (gui_fluent.py), whose closeEvent
+          # unconditionally calls mark_onboarding_seen, so this suite was
+          # writing ~/.range_chart_analyzer/onboarding_seen into the home of
+          # whoever ran it.
+          _scratch_home="$(mktemp -d)"
+          HOME="$_scratch_home" python -m pytest tests/ -q --tb=short \
             -k "gui or fluent or dwc_archive or table_widgets"
+          rc=$?
+          rm -rf "$_scratch_home"
+          exit $rc
 
       - name: Run root-level GUI suites standalone
         # AUDIT-2026-09-27: for these files the EXIT CODE is the only thing
@@ -190,7 +202,20 @@ jobs:
         run: |
           set -e
           for f in tests_gui_fluent.py tests_drag.py tests_history.py \
-                   tests_modern_ui.py tests_onboarding.py; do
+                   tests_modern_ui.py; do
             echo "=== $f ==="
             python "$f"
           done
+          # AUDIT-2026-09-28: tests_onboarding.py must NOT be in the loop
+          # above, and this is the reason the matrix job already takes it out
+          # of its loop too. `test_seen_round_trip` asserts `before is False`,
+          # i.e. that the onboarding marker does not yet exist -- but the Qt
+          # step in this very job has already created one, because every
+          # window that step builds marks onboarding as seen on close. Given
+          # the real HOME the assertion sees `before is True` and fails. The
+          # scratch HOME below is the fix the matrix job uses; this job
+          # originally reused the real one and went red on its first run.
+          echo "=== tests_onboarding.py (scratch HOME) ==="
+          _scratch_home="$(mktemp -d)"
+          HOME="$_scratch_home" python tests_onboarding.py
+          rm -rf "$_scratch_home"
