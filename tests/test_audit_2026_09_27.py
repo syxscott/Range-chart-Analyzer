@@ -2351,4 +2351,93 @@ class TestP2ResultCacheCreatesTheDirectoryItWasGiven:
         import rca_core.cache as C
         assert C._CACHE_DIR.endswith(".range_chart_analyzer")
         # the module constant is still exported for anything that reads it
-        assert isinstance(C._DB_PATH, str) and C._DB_PATH.endswith(".sqlite")
+        assert isinstance(C._DB_PATH, str) and C._DB_PATH.endswith(".sqlite")# ---------------------------------------------------------------------------
+# AUDIT-2026-09-29: the taxon-name parser, pinned on names that actually occur
+# on radiolarian range charts.
+# ---------------------------------------------------------------------------
+
+#: (name, genus, species, subgenus, subspecies) -- None where the rank is absent.
+#: Every entry is a real shape from this domain. The first two fixed bugs
+#: (the abbreviated subgenus "(L.)" and a doubt marker taking the subgenus
+#: with it) were found by READING the function; these are the cases that show
+#: whether the reading was right.
+_TAXON_NAME_CASES = (
+    # plain binomials, the overwhelmingly common case
+    ("Neoalbaillella optima", "Neoalbaillella", "optima", "", ""),
+    ("Palaeoscolecidia bispinosa", "Palaeoscolecidia", "bispinosa", "", ""),
+    # the abbreviated subgenus: kept, with the dot, BEFORE the species
+    ("Fusulina (L.) fusulina", "Fusulina", "fusulina", "L.", ""),
+    ("Fusulina (L.) elongata", "Fusulina", "elongata", "L.", ""),
+    # a spelled-out subgenus
+    ("Genus (Subgenus) species", "Genus", "species", "Subgenus", ""),
+    # doubt markers: the "?" belongs in the reso slot, not glued to the name,
+    # and it must NOT take the subgenus down with it
+    ("Genus (Subgenus?) species", "Genus", "species", "Subgenus", ""),
+    ("Barbarousia ?", "Barbarousia", "", "", ""),
+    ("Barbarousia cf. regularis", "Barbarousia", "regularis", "", ""),
+    # open nomenclature must not be mistaken for a real epithet
+    ("Genus sp.", "Genus", "", "", ""),
+    ("Genus sp", "Genus", "", "", ""),
+    ("Genus cf. species", "Genus", "species", "", ""),
+    ("Genus aff. species", "Genus", "species", "", ""),
+    # infraspecific: three tokens, and the middle one is the rank marker
+    ("Genus species ssp. trilobata", "Genus", "species", "", "trilobata"),
+    # a BARE rank word with no epithet is not a subspecies name
+    ("Genus species subspecies", "Genus", "species", "", ""),
+    # authorities are not epithets
+    ("Neoalbaillella optima De Wever & Dumitrica, 2002",
+     "Neoalbaillella", "optima", "", ""),
+    ("Fusulina (L.) fusulina Schwager, 1881",
+     "Fusulina", "fusulina", "L.", ""),
+    # whitespace
+    ("  Neoalbaillella   optima  ", "Neoalbaillella", "optima", "", ""),
+    # a single word is a group name and is kept as the genus; a chart labelled
+    # "Radiolaria" must not vanish
+    ("Radiolaria", "Radiolaria", "", "", ""),
+    # nothing at all
+    ("", "", "", "", ""),
+    (None, "", "", "", ""),
+)
+
+
+class TestPbdbTaxonNameParsing:
+    def test_every_real_name_splits_as_documented(self):
+        from rca_core.standards.pbdb import _split_taxon_name
+        bad = []
+        for name, genus, species, subgenus, subspecies in _TAXON_NAME_CASES:
+            got = _split_taxon_name(name)
+            actual = (got["genus_name"], got["species_name"],
+                      got["subgenus_name"], got["subspecies_name"])
+            want = (genus, species, subgenus, subspecies)
+            if actual != want:
+                bad.append((name, want, actual))
+        assert not bad, "\n".join(
+            f"  {n!r}\n    want {w}\n    got  {a}" for n, w, a in bad)
+
+    def test_the_doubt_marker_travels_in_reso_not_in_the_name(self):
+        # The AUDIT-2026-09-27 fix had two halves: stop the "?" from deleting
+        # the subgenus, and stop it from being glued to the name. Both are
+        # asserted separately here, because either alone would look right.
+        from rca_core.standards.pbdb import _split_taxon_name
+        r = _split_taxon_name("Genus (Subgenus?) species")
+        assert r["subgenus_name"] == "Subgenus", r
+        assert r["subgenus_reso"] == "?", r
+
+    def test_the_authoritative_string_is_not_split_into_names(self):
+        # "Schwager, 1881" must land in neither name field; a taxon that
+        # shipped "Fusulina / fusulina / Schwager" would break the join back.
+        from rca_core.standards.pbdb import _split_taxon_name
+        r = _split_taxon_name("Fusulina (L.) fusulina Schwager, 1881")
+        for field in ("genus_name", "species_name", "subgenus_name",
+                      "subspecies_name"):
+            assert "Schwager" not in r[field], (field, r)
+            assert "1881" not in r[field], (field, r)
+
+    def test_never_raises_on_junk(self):
+        from rca_core.standards.pbdb import _split_taxon_name
+        for junk in (123, 4.5, [], {}, object(), b"bytes", "()", "((("):
+            out = _split_taxon_name(junk)
+            assert isinstance(out, dict), (junk, out)
+            for field in ("genus_name", "species_name", "subgenus_name",
+                          "subspecies_name"):
+                assert isinstance(out[field], str), (junk, field, out[field])
