@@ -437,6 +437,17 @@ _add(
         "chart_type": "zonation_chart", "confidence": 0.87}),
     _case("chart_classification", "cc_non_dict", "range_chart"),
     _case("chart_classification", "cc_empty", {}),
+    # AUDIT-2026-09-30: the same NaN-clamp split rc_root_confidence_nan
+    # records, in a mode that had no case for it. The root/row NaN fixtures
+    # were both added under range_chart, so nothing exercised the identical
+    # `confidence` field on the classification path -- and measured here it
+    # diverges the same way (Python min()/max() do not propagate NaN, so
+    # "NaN" clamps to 1.0; JS Math.min/max do, so it becomes 0). Found by
+    # driving rcaNormalizeChartClassification directly, a function
+    # difffuzz_normalize never called because its MODES table lists only the
+    # five modes whose normaliser exists on BOTH engines.
+    _case("chart_classification", "cc_root_confidence_nan", {
+        "chart_type": "range_chart", "confidence": "NaN", "reason": "r"}),
 )
 
 # --- to_newick (over the NORMALIZED tree) ----------------------------------

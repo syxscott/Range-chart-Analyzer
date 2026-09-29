@@ -2912,6 +2912,21 @@
    }
   },
   {
+   "group": "chart_classification",
+   "id": "cc_root_confidence_nan",
+   "payload": {
+    "chart_type": "range_chart",
+    "confidence": "NaN",
+    "reason": "r"
+   },
+   "extra": null,
+   "python": {
+    "chart_type": "range_chart",
+    "reason": "r",
+    "confidence": 1.0
+   }
+  },
+  {
    "group": "to_newick",
    "id": "nw_plain",
    "payload": {

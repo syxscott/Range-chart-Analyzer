@@ -241,6 +241,11 @@ const EXPECTED_DIVERGENCES = {
   ag_35: 'Same Unicode-vs-ASCII digit split, full-width digits: resolves in rca_core/standards/ics.py, unresolvable in js/quality.js',
   rc_root_confidence_nan: 'Python min()/max() do not propagate NaN, JS Math.min/max do; confidence "NaN" clamps to 1.0 in rca_core and to 0 in the browser',
   rc_row_confidence_nan: 'Same NaN-clamp split on a per-species confidence: 1.0 in rca_core, absent in the browser',
+  // AUDIT-2026-09-30: the identical split on the chart-CLASSIFICATION
+  // confidence, a mode that had no NaN case at all -- both existing NaN
+  // fixtures sat under range_chart, so this field was never exercised on this
+  // path. Same root cause, so it parks here rather than failing the build.
+  cc_root_confidence_nan: 'Same NaN-clamp split on the classification confidence: 1.0 in rca_core, 0 in the browser',
 };
 
 function main() {
