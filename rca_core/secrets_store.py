@@ -392,17 +392,24 @@ _warned_obfuscation = False
 def encryption_status() -> str:
     """Report which key source would be used for NEW encryption.
 
-    REVIEW-2026-07-31: returns ``"passphrase"`` / ``"keyring"`` /
-    ``"fingerprint"`` / ``"plaintext"`` so the GUIs can surface the
-    at-rest protection level to the user (the RuntimeWarning from
-    ``_warn_obfuscation_only`` is invisible in a windowed app).
+    REVIEW-2026-07-31: returns ``"keyring"`` / ``"fingerprint"`` /
+    ``"plaintext"`` so the GUIs can surface the at-rest protection level to the
+    user (the RuntimeWarning from ``_warn_obfuscation_only`` is invisible in a
+    windowed app). AUDIT-2026-09-30: this list also claimed ``"passphrase"``,
+    which no code path returns -- a passphrase is a parameter of
+    ``_active_fernet_key``, not a state of this function -- so a reader was
+    looking for four states where there are three. The value set is now pinned
+    by tests/test_encryption_status_contract.py, which drives both feature
+    flags and requires every reachable value to be one the GUIs act on.
 
     REVIEW-2026-09-20: the ``"fingerprint"`` VALUE IS KEPT even though the
     source it names is now the random key file (item 18), because
     ``gui.py`` / ``gui_fluent.py`` branch on that exact string to show their
     "at-rest protection is weak" notice — renaming it would silently drop the
     warning. See the report: a follow-up should return ``"keyfile"`` and have
-    both GUIs accept ``("keyfile", "fingerprint", "plaintext")``.
+    both GUIs accept ``("keyfile", "fingerprint", "plaintext")``. Until that
+    coordinated change lands, the same guard test also reads the accepted
+    values out of the two GUI sources, so one side cannot move alone.
     """
     if not _HAS_FERNET:
         return "plaintext"
