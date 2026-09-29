@@ -13,6 +13,7 @@ auto-detect between range-chart and columnar-section using the row shape
 from __future__ import annotations
 
 import copy
+import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -137,8 +138,36 @@ def _str_for_merge(v: Any) -> str:
     """
     if isinstance(v, bool):  # bool is an int subclass - keep "True"/"False"
         return "True" if v else "False"
-    if isinstance(v, float) and v.is_integer():
-        return str(int(v))
+    if isinstance(v, float):
+        # AUDIT-2026-09-30 [non-finite vote keys]: Python renders float('nan')
+        # / float('inf') as "nan" / "inf" while JS String() gives "NaN" /
+        # "Infinity", so the two engines built DIFFERENT vote keys for the same
+        # value. A tie at the top count is broken by SORTING those keys, so the
+        # engines could select different runs and merge the field to different
+        # values. Concretely, on a tie between float('inf') and the string
+        # "info": Python sorted ["inf", "info"] -> "inf" (i-n-f beats i-n-f-o)
+        # while JS sorted ["Infinity", "info"] -> "Infinity" (uppercase I sorts
+        # before lowercase i), so the two engines returned different values.
+        # js/aggregate.js:rcaStrForMerge listed this as a known residual and
+        # called it "not fixable in JS" -- true of String(), but the PYTHON
+        # side is the one that can be made to match it. Checked before
+        # is_integer(), which is False for nan/inf anyway.
+        #
+        # NOTE: this is NOT what the difffuzz_aggregate.py mismatches were
+        # about. Those (py=nan/js=0.0, py=inf/js=0.75) came from the missing
+        # guards in _merge_confidence and merge_results, which are what actually
+        # made the engines disagree on the top-level confidence. This change
+        # closes a narrower tie-break divergence the fuzzer does not currently
+        # generate a case for, and is pinned by
+        # tests/test_aggregate_nonfinite_confidence.py.
+        if v != v:  # NaN
+            return "NaN"
+        if v == math.inf:
+            return "Infinity"
+        if v == -math.inf:
+            return "-Infinity"
+        if v.is_integer():
+            return str(int(v))
     return str(v)
 
 
@@ -370,6 +399,19 @@ def _merge_confidence(values):
         try:
             parsed = float(value)
         except (TypeError, ValueError):
+            continue
+        # AUDIT-2026-09-30 [NaN clamp]: Python's min()/max() do NOT propagate
+        # NaN -- min(1.0, nan) is 1.0, because `nan < 1.0` is False -- so a
+        # non-finite confidence used to be clamped to 1.0 and averaged in as
+        # MAXIMUM certainty. Measured: a row whose only confidence was "NaN"
+        # reported a perfect 1.0, [0.1, NaN] reported 0.55, and [0.5, NaN]
+        # reported 0.75. That contradicted this function's own docstring
+        # (missing values are EXCLUDED from the average, not counted) and
+        # js/aggregate.js mergeConfidenceField, which guards with
+        # Number.isFinite and drops non-finite values entirely. Mirror the
+        # guard so "unknown" can never be reported as certain, and so the two
+        # engines agree instead of diverging on the same input.
+        if not math.isfinite(parsed):
             continue
         valid.append(max(0.0, min(1.0, parsed)))
     if not valid:
@@ -1325,6 +1367,18 @@ def merge_results(
         try:
             c = float(raw)
         except (TypeError, ValueError):
+            continue
+        # AUDIT-2026-09-30 [non-finite poisons the mean]: `weight_sum += c * w`
+        # has no finite guard, and ONE non-finite run destroys the confidence
+        # of every OTHER run -- `weight_n` keeps counting while `weight_sum`
+        # becomes NaN, so a single "confidence": "NaN" out of three runs made
+        # the merged top-level confidence NaN and discarded the two legitimate
+        # values. That NaN then serialises as a bare NaN token (invalid JSON)
+        # into the export and the history record. js/aggregate.js guards the
+        # same accumulation with `if (!Number.isFinite(c)) continue;` (line
+        # 1200); this is the second site where the Python side had drifted from
+        # a guard the JS mirror already had, the first being _merge_confidence.
+        if not math.isfinite(c):
             continue
         try:
             w = int(r.get("runs") or 1)

@@ -99,7 +99,17 @@ process.stdout.write(JSON.stringify(out));
 PREFIX = ["bed 1", "bed 1 (rp13)", "zone b", "zone b2", "a", "aa", "a b", "a-b",
           "c,d", "e f", "e,f", "9", "10", "100", "2", "20", "p1", "p10",
           "Bed 7", "bed 7", "Bed 7 ", "  Bed 7", "Zone A", "Sample 1 (RP13)"]
-NUMS = [0.9, 0.5, 1.0, 0.80, "0.8", "high", None]
+# AUDIT-2026-09-30: the non-finite entries are STRINGS, not float("nan").
+# These cases cross into node as JSON via json.dump + JSON.parse, and Python
+# would emit a bare `NaN` token that JSON.parse rejects -- which kills the whole
+# driver rather than testing one value. "NaN" is the form the real payloads
+# actually carry (see gen_frontend_parity_fixtures.py rc_root_confidence_nan)
+# and both engines coerce it identically: Python float("NaN") and JS
+# Number("NaN") are both NaN. These were absent while _merge_confidence clamped
+# NaN to 1.0 and js/aggregate.js dropped it -- the one divergence in this file
+# that a merge-rule change could have introduced unnoticed.
+NUMS = [0.9, 0.5, 1.0, 0.80, "0.8", "high", None, "NaN", "Infinity",
+        "-Infinity"]
 
 
 def _pick(rng, pool, p=0.85):
