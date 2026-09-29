@@ -1552,22 +1552,31 @@ def geometry_from_row(src: dict[str, Any],
     rejected = False
     if not isinstance(src, dict):
         return None, False, consumed
-    for field, raw in src.items():
-        if not isinstance(field, str):
+    # AUDIT-2026-09-29 (ruff F402): the loop variable was named `field`,
+    # shadowing dataclasses.field -- imported at the top of this module and
+    # used by every dataclass here, including ExtractResult right above. Inside
+    # this loop `field` is a column name, so nothing broke: there is no
+    # field(...) call in these 16 lines. But a shadowed name that is "harmless
+    # right now" is exactly the one that bites when someone later adds a
+    # dataclass or a default_factory inside this function, and the failure
+    # would be `'str' object is not callable` far from the cause. Renamed to
+    # `name`, which is what it is.
+    for name, raw in src.items():
+        if not isinstance(name, str):
             continue
-        if not (field == POS_SCALE_KEY or field.endswith(POS_SUFFIX)):
+        if not (name == POS_SCALE_KEY or name.endswith(POS_SUFFIX)):
             continue
-        consumed.append(field)
-        entry, bad, axis = _geometry_point(field, raw, src_row, axes)
+        consumed.append(name)
+        entry, bad, axis = _geometry_point(name, raw, src_row, axes)
         if bad:
             rejected = True
         if entry is None:
             continue
         if axis and entry.get("value") is not None and axis not in used_axes:
-            domain = (axes or {}).get(axis) or (axes or {}).get(field)
+            domain = (axes or {}).get(axis) or (axes or {}).get(name)
             if domain is not None:
                 used_axes[axis] = domain
-        points[field] = entry
+        points[name] = entry
     if not points:
         return None, rejected, consumed
     geometry: dict[str, Any] = {

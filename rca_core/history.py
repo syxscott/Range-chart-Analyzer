@@ -68,7 +68,13 @@ MAX_HISTORY_ROWS = _int_env("RCA_MAX_HISTORY_ROWS", 5000)
 # Previously app.py and gui_fluent_history_detail.py each hard-coded their own
 # copy; any future path change would have to update all three sites. Centralise
 # here so callers can import it directly.
-import os
+#
+# AUDIT-2026-09-29 (ruff F811): the `import os` that used to sit on this line
+# is gone. It was a MODULE-level rebinding of a name this module had already
+# imported at line 17 -- PowerShell's own rendering of this file showed it
+# indented as if it were function-local, which is how a redundant import
+# survives this long. It resolved to the same standard-library module, so
+# removing it cannot change what `os` means anywhere below.
 LOCK_PATH = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer", "lock")
 
 
