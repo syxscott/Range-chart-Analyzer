@@ -6754,6 +6754,287 @@
    }
   },
   {
+   "group": "merge",
+   "id": "mrg_columnar_contract",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "s1",
+        "group": "g1",
+        "lithology_blocks": [
+         {
+          "name": "sand",
+          "top_depth_m": "10"
+         }
+        ],
+        "age_units": [
+         {
+          "name": "U1",
+          "top_depth_m": "5"
+         }
+        ],
+        "response_kind": "extracted",
+        "reason_codes": [
+         "inferred"
+        ]
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "s1",
+        "group": "g1",
+        "lithology_blocks": [
+         {
+          "name": "sand",
+          "top_depth_m": "10"
+         }
+        ],
+        "age_units": [
+         {
+          "name": "U1",
+          "top_depth_m": "5"
+         }
+        ],
+        "response_kind": "not_drawn",
+        "reason_codes": [
+         "not_drawn"
+        ]
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "s1",
+      "group": "g1",
+      "lithology_blocks": [
+       {
+        "name": "sand",
+        "top_depth_m": "10"
+       }
+      ],
+      "age_units": [
+       {
+        "name": "U1",
+        "top_depth_m": "5"
+       }
+      ],
+      "response_kind": "extracted",
+      "_warning": "response_kind_divergent",
+      "response_kind_votes": [
+       "extracted",
+       "not_drawn"
+      ],
+      "reason_codes": [
+       "inferred",
+       "not_drawn"
+      ],
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_zonation_contract",
+   "payload": {
+    "results": [
+     {
+      "zones": [
+       {
+        "name": "Z1",
+        "age": "290-280 Ma",
+        "level_range": "1-2",
+        "response_kind": "extracted",
+        "reason_codes": [
+         "inferred"
+        ]
+       }
+      ],
+      "zonations": [
+       {
+        "name": "bed 7"
+       }
+      ],
+      "correlations": [
+       {
+        "from_zone": "Z1",
+        "to_zone": "Z2"
+       }
+      ],
+      "confidence": 0.8
+     },
+     {
+      "zones": [
+       {
+        "name": "Z1",
+        "age": "290-280 Ma",
+        "level_range": "1-2",
+        "response_kind": "not_drawn",
+        "reason_codes": [
+         "not_drawn"
+        ]
+       }
+      ],
+      "zonations": [
+       {
+        "name": "bed 7"
+       }
+      ],
+      "correlations": [
+       {
+        "from_zone": "Z1",
+        "to_zone": "Z2"
+       }
+      ],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "zonation_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "zones": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "name": "Z1",
+      "age": "290-280 Ma",
+      "level_range": "1-2",
+      "response_kind": "extracted",
+      "_warning": "response_kind_divergent",
+      "response_kind_votes": [
+       "extracted",
+       "not_drawn"
+      ],
+      "reason_codes": [
+       "inferred",
+       "not_drawn"
+      ],
+      "zonation": "",
+      "rank": "",
+      "age_span": "",
+      "base_age": "",
+      "top_age": "",
+      "stage": "",
+      "defined_by": "",
+      "note": ""
+     }
+    ],
+    "zonations": [
+     {
+      "name": "bed 7"
+     }
+    ],
+    "correlations": [
+     {
+      "from_zone": "Z1",
+      "to_zone": "Z2"
+     }
+    ],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_phylo_contract",
+   "payload": {
+    "results": [
+     {
+      "nodes": [
+       {
+        "id": "n1",
+        "parent": null,
+        "name": "root",
+        "response_kind": "extracted"
+       }
+      ],
+      "root_ids": [
+       "n1"
+      ],
+      "metadata": {},
+      "legend": {},
+      "confidence": 0.7
+     },
+     {
+      "nodes": [
+       {
+        "id": "n1",
+        "parent": null,
+        "name": "root",
+        "response_kind": "not_drawn",
+        "reason_codes": [
+         "not_drawn"
+        ]
+       }
+      ],
+      "root_ids": [
+       "n1"
+      ],
+      "metadata": {},
+      "legend": {},
+      "confidence": 0.7
+     }
+    ],
+    "total_runs": 2,
+    "mode": "phylogenetic_tree"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "nodes": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "n1",
+      "name": "root",
+      "response_kind": "extracted",
+      "_warning": "response_kind_divergent",
+      "response_kind_votes": [
+       "extracted",
+       "not_drawn"
+      ],
+      "reason_codes": [
+       "not_drawn"
+      ]
+     }
+    ],
+    "root_ids": [
+     "n1"
+    ],
+    "metadata": {},
+    "legend": {},
+    "confidence": 0.7
+   }
+  },
+  {
    "group": "quality_coverage",
    "id": "qc_notdrawn",
    "payload": {

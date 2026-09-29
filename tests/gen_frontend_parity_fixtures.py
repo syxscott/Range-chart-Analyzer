@@ -870,6 +870,57 @@ _add(
                "range_base": "7"}),
         _mrun({"species": "B", "section": "S1", "range_top": "8"}),
     ]),
+    # AUDIT-2026-09-30: the merge group had 13 cases -- twelve range_chart and
+    # one abundance_diagram -- so rca_core/aggregate.py's mode dispatch
+    # (schema.primary_list_key) was never replayed for the other three
+    # schemas, on either engine. Both sides already carry all five keymaps
+    # (SCHEMA_BY_MODE / RCA_KEYMAP_BY_MODE); only the CASES were missing, which
+    # is why every structural check on the harness passed. difffuzz_aggregate.py
+    # does drive all five modes at 400 cases each, but it is deliberately not
+    # in CI, so this is the CI-visible coverage.
+    #
+    # Each case uses the divergent-vote shape (one run extracted, one
+    # not_drawn) because that is the path through the mode-specific row
+    # grouping, not the single-run passthrough.
+    _mg("mrg_columnar_contract", [
+        {"sections": [{"id": "s1", "group": "g1",
+                       "lithology_blocks": [{"name": "sand", "top_depth_m": "10"}],
+                       "age_units": [{"name": "U1", "top_depth_m": "5"}],
+                       "response_kind": "extracted",
+                       "reason_codes": ["inferred"]}],
+         "fossil_legend": [], "lithology_legend": [], "cross_beds": [],
+         "confidence": 0.9},
+        {"sections": [{"id": "s1", "group": "g1",
+                       "lithology_blocks": [{"name": "sand", "top_depth_m": "10"}],
+                       "age_units": [{"name": "U1", "top_depth_m": "5"}],
+                       "response_kind": "not_drawn",
+                       "reason_codes": ["not_drawn"]}],
+         "fossil_legend": [], "lithology_legend": [], "cross_beds": [],
+         "confidence": 0.9},
+    ], mode="columnar_section"),
+    _mg("mrg_zonation_contract", [
+        {"zones": [{"name": "Z1", "age": "290-280 Ma", "level_range": "1-2",
+                    "response_kind": "extracted",
+                    "reason_codes": ["inferred"]}],
+         "zonations": [{"name": "bed 7"}],
+         "correlations": [{"from_zone": "Z1", "to_zone": "Z2"}],
+         "confidence": 0.8},
+        {"zones": [{"name": "Z1", "age": "290-280 Ma", "level_range": "1-2",
+                    "response_kind": "not_drawn",
+                    "reason_codes": ["not_drawn"]}],
+         "zonations": [{"name": "bed 7"}],
+         "correlations": [{"from_zone": "Z1", "to_zone": "Z2"}],
+         "confidence": 0.8},
+    ], mode="zonation_chart"),
+    _mg("mrg_phylo_contract", [
+        {"nodes": [{"id": "n1", "parent": None, "name": "root",
+                    "response_kind": "extracted"}],
+         "root_ids": ["n1"], "metadata": {}, "legend": {}, "confidence": 0.7},
+        {"nodes": [{"id": "n1", "parent": None, "name": "root",
+                    "response_kind": "not_drawn",
+                    "reason_codes": ["not_drawn"]}],
+         "root_ids": ["n1"], "metadata": {}, "legend": {}, "confidence": 0.7},
+    ], mode="phylogenetic_tree"),
 )
 
 
