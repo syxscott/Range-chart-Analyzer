@@ -272,10 +272,16 @@ def _get_or_create_salt() -> bytes:
         raced = _read_private_bytes(path)
         if raced is not None and len(raced) >= 16:
             return raced
+        # AUDIT-2026-09-29 (ruff B904): `from None` deliberately, and this is
+        # the rule for the four translation-style raises in this module. The
+        # FileExistsError was EXPECTED and already handled -- that is what the
+        # read above is for -- so chaining it would present a normal race as an
+        # unexpected failure. The message already carries the one actionable
+        # thing: re-run once it settles.
         raise RuntimeError(
             f"secrets_store: another process created {path} but it is not "
             "readable/usable yet. Re-run once it settles."
-        )
+        ) from None
     except OSError as exc:
         # REVIEW-2026-09-20 (item 20): the old fallback derived the salt from
         # the machine fingerprint and RETURNED it without ever writing it, so
@@ -332,10 +338,12 @@ def _get_or_create_fernet_key() -> bytes:
         raced = _read_private_bytes(path)
         if raced:
             return raced
+        # Same `from None` rule as the salt path above: an expected race that
+        # was already handled, not an unexpected failure.
         raise RuntimeError(
             f"secrets_store: another process created {path} but it is not "
             "readable yet. Re-run once it settles."
-        )
+        ) from None
     except OSError as exc:
         raise RuntimeError(
             f"secrets_store: cannot create the key file at {path}: {exc}. "
@@ -537,13 +545,24 @@ def _legacy_decrypt(envelope: str) -> str:
     try:
         ct = base64.urlsafe_b64decode(b64.encode("ascii"))
     except Exception:
-        raise ValueError("secrets_store: corrupt envelope (base64)")
+        # `from None` for the same reason as the race handlers above, and with
+        # the same payoff: the caller is told exactly which envelope is broken
+        # and the only action available is to re-enter the key. A binascii
+        # "Invalid base64-encoded string: number of data characters (N) cannot
+        # be 1 more than a multiple of 4" adds nothing a user can act on, and
+        # this path is reachable from a corrupt providers.json -- so the lower
+        # traceback is noise at best.
+        raise ValueError("secrets_store: corrupt envelope (base64)") from None
     ks = _keystream(key, len(ct))
     pt = bytes(a ^ b for a, b in zip(ct, ks))
     try:
         return pt.decode("utf-8")
     except UnicodeDecodeError:
-        raise ValueError("secrets_store: corrupt envelope (utf-8)")
+        # Same reasoning: the keystream decoded to bytes that are not text,
+        # which means the envelope or the key is wrong. Naming which of the two
+        # is not something this layer can do, and the raw decode error says
+        # only which byte offset failed.
+        raise ValueError("secrets_store: corrupt envelope (utf-8)") from None
 
 
 def encrypt(plaintext: str, passphrase: str | None = None) -> str:

@@ -313,9 +313,17 @@ def pinned_endpoint_ip(endpoint: str) -> str:
         except (ValueError, IndexError):
             # An entry we cannot classify is treated as unsafe (fail closed),
             # matching is_private_host()'s handling of the same shape.
+            #
+            # AUDIT-2026-09-29 (ruff B904): `from None` on purpose. This is a
+            # deliberate refusal, not a crash, and the message already carries
+            # the one thing that matters -- the offending address. The chained
+            # ipaddress error ("does not appear to be an IPv4 or IPv6 address")
+            # restates the message without telling the caller anything they
+            # can do differently, and a security check that prints a traceback
+            # reads like a bug rather than a policy.
             raise ValueError(
                 f"host {bare!r} resolved to an unclassifiable address "
-                f"{addr!r}")
+                f"{addr!r}") from None
         if not loopback_ok and not _ALLOW_PRIVATE and _is_non_public_ip(ip):
             raise ValueError(
                 f"host {bare!r} resolves to non-public IP {ip}; "
