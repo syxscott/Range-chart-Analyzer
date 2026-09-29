@@ -364,10 +364,21 @@ class Database:
             "SELECT version FROM _schema_version LIMIT 1"
         ).fetchone()
         current = int(row["version"]) if row else 0
-        for from_v, _to_v, sql in self._MIGRATIONS:
+        for from_v, to_v, sql in self._MIGRATIONS:
             if current == from_v:
                 conn.executescript(sql)
-                current = from_v + 1
+                # AUDIT-2026-09-29: this advanced by ``from_v + 1`` and
+                # ignored ``to_v`` entirely (it was bound as ``_to_v``, the
+                # usual "deliberately unused" spelling, which is why no linter
+                # flagged it). Harmless today because the single migration is
+                # (0, 1) and 0 + 1 happens to equal its to_v. It stops being
+                # harmless the moment a migration spans more than one version
+                # -- a combined "(0, 2, ...)" would set current to 1, and the
+                # next migration's from_v would then never match, so it would
+                # be SILENTLY SKIPPED on every launch while _schema_version
+                # still got written as the final target. to_v is what the
+                # tuple actually declares; trust it.
+                current = to_v
         # Record the final state on disk. INSERT OR REPLACE handles both
         # first-launch (no row) and subsequent launches (idempotent).
         conn.execute(
@@ -458,6 +469,26 @@ class Database:
             return self._require_conn().execute(sql, params)
 
     def executemany(self, sql: str, params_list: list[Any]) -> sqlite3.Cursor:
+        """Run one statement for each parameter set and COMMIT immediately.
+
+        WARNING, identical in kind to ``execute()``'s and for the same reason
+        (finding 7): inside ``transaction()`` this commits the enclosing
+        ``BEGIN IMMEDIATE`` block after its first statement, so a later
+        failure cannot roll the earlier rows back.
+
+        AUDIT-2026-09-29: the warning existed on ``execute()`` and was simply
+        absent here, which made the safe-looking ``run()`` look like it had a
+        batch counterpart that it does not have. There is no ``run_many()``, so
+        a caller that needs a batch inside a transaction currently has no
+        correct method to reach for -- and the only alternative looks like the
+        obvious one.
+
+        The one production call site, HistoryStore._insert_raw_responses, is
+        NOT inside a transaction (verified: the only transaction() in
+        history.py is in update_result, which never calls it), so nothing is
+        broken today. Do not wrap ``HistoryStore.add`` in a transaction without
+        changing that call first.
+        """
         with self._lock:
             conn = self._require_conn()
             cur = conn.executemany(sql, params_list)
