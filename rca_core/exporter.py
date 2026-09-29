@@ -1825,29 +1825,26 @@ def _xlsx_sheet_name(title: str) -> str:
     and must not contain any of ``\\ / * ? [ ] :``. Invalid characters are
     replaced with underscores.
 
-    The limit is per code point, not per UTF-8 byte. CJK characters (each
-    1 code point, 3 bytes in UTF-8) are safe — Python 3 str indexing is by
-    Unicode code point, so ``s[:31]`` never splits inside a character.
-    We still validate by encoding to UTF-8 to confirm the result is <= 31 cp.
+    The limit is per code point, not per UTF-8 byte, and that is the whole
+    rule: Python 3 str slicing is by code point, so ``s[:31]`` never splits a
+    character and no second, byte-based pass is needed or wanted.
+
+    AUDIT-2026-10-01 [item 9.1]: there used to be a second pass here that
+    truncated to a 93-UTF-8-byte budget ("31 * 3 bytes max per CJK") whenever
+    the cleaned name exceeded it. The docstring above already said the limit is
+    not a byte limit and then the code applied one, and the two disagreed on
+    exactly the inputs where it mattered: a 31-emoji title is 31 code points
+    and legal, but the byte pass cut it to 23. Measured before removing it:
+    every title the exporter can actually emit is 2-23 code points and 6-31
+    bytes, so the branch never fired in production, and hand-feeding openpyxl
+    the same names with and without it produced identical verdicts for all of
+    them. So it was dead code that silently shortened a name it was supposed to
+    protect. Kept as a one-line comment rather than code.
     """
     cleaned = "".join("_" if c in "\\/*?[]:" else c for c in (title or ""))
     cleaned = cleaned or "Sheet"
-    # Python 3 str slicing is by Unicode code point, not byte. Enforce the
-    # 31-code-point OpenPyXL limit safely for all scripts.
     if len(cleaned) > 31:
         cleaned = cleaned[:31]
-    # Guard: if we somehow exceeded 31 code points after re-encoding
-    # (should never happen with valid Unicode), truncate by code point count.
-    if len(cleaned.encode("utf-8")) > 93:  # 31 * 3 bytes max per CJK
-        chars = []
-        byte_count = 0
-        for c in cleaned:
-            char_bytes = len(c.encode("utf-8"))
-            if byte_count + char_bytes > 93:
-                break
-            chars.append(c)
-            byte_count += char_bytes
-        cleaned = "".join(chars)
     return cleaned
 
 
