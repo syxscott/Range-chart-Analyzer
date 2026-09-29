@@ -3997,10 +3997,23 @@ function test_i18n_placeholder_parity() {
   }
   // The quality scorer must actually pass those params, or the placeholder
   // would render literally.
+  //
+  // AUDIT-2026-09-30: this used to be a fixed 200-character window after the
+  // msg_key, which is the wrong shape -- it asserts the params object is close
+  // to the key rather than that it is in the SAME issue object, so any
+  // explanatory comment added between them broke the build without any
+  // contract changing. Anchored on the next msg_key instead: `sample:` and
+  // `sum:` must appear between this key and the one that ends the object.
   const qsrc = require('fs').readFileSync(
     path.join(__dirname, 'js', 'quality.js'), 'utf8');
+  const _keyAt = qsrc.indexOf("msg_key: 'quality.abundance_sum_violation'");
+  const _nextKeyAt = _keyAt < 0 ? -1
+    : qsrc.indexOf('msg_key:', _keyAt + 10);
+  const _issueBody = (_keyAt < 0 || _nextKeyAt < 0) ? '' : qsrc.slice(_keyAt, _nextKeyAt);
   check('i18n-abundance-params-passed',
-    /abundance_sum_violation[\s\S]{0,200}sample:/.test(qsrc));
+    _keyAt >= 0 && /sample:/.test(_issueBody) && /sum:/.test(_issueBody),
+    'the abundance_sum_violation issue must pass both sample and sum params '
+    + 'inside its own object');
 }
 
 // (R5) The accuracy path reports inverted ranges as range_top_lt_base

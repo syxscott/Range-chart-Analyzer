@@ -819,6 +819,7 @@ function scoreAccuracy(data) {
   // deduct 0.05 each, capped at 0.3.
   const abSamples = (data && Array.isArray(data.abundances)) ? data.abundances : [];
   let sumViolCount = 0;
+  let sumDeduct = 0;
   if (abSamples.length > 0) {
     const levelSums = {};
     const levelIds = {};
@@ -839,14 +840,33 @@ function scoreAccuracy(data) {
       if (s < 95 || s > 105) violations.push({sample: levelIds[lvl], sum: s});
     }
     if (violations.length > 0) {
-      const deduction = Math.min(0.3, 0.05 * violations.length);
-      // Degrade the accuracy score by deduction.
-      passed = Math.max(0.0, passed - deduction);
+      // AUDIT-2026-09-30: the deduction is taken from the DIMENSION SCORE,
+      // not from `passed`. Subtracting it from the count made the penalty
+      // (passed - deduction) / checks, i.e. scaled by 1/checks, so the more
+      // completeness checks a result happened to have, the smaller the
+      // sum-to-100 penalty became -- a data-quality rule whose weight depended
+      // on an unrelated count. rca_core/quality.py subtracts from `score`
+      // after `score = passed / checks`, and "deduct 0.05 per violating level"
+      // reads as a deduction from the 0..1 dimension, so that is the semantics
+      // kept here. Measured: with two violating levels Python reported 0.98
+      // where the browser reported 1.
+      sumDeduct = Math.min(0.3, 0.05 * violations.length);
       sumViolCount = violations.length;
       for (const v of violations.slice(0, 5)) {
         issues.push({
           severity: 'warning', msg_key: 'quality.abundance_sum_violation',
-          params: {sample: v.sample, sum: String(Math.round(v.sum * 10) / 10)}
+          // AUDIT-2026-09-30: rcaPyRound, not Math.round(v.sum * 10) / 10.
+          // Same idiom js/reason-codes.js#rcaPyRound was written to replace
+          // -- it rounds halves away from zero, where
+          // rca_core/quality.py's `str(round(total, 1))` rounds them to even.
+          // At ONE decimal the ties are common, not exotic: measured, 8 of 16
+          // tie-shaped sums disagreed (2.25 -> 2.2 vs 2.3, 1.25 -> 1.2 vs 1.3,
+          // 100.25 -> 100.2 vs 100.3, 0.15 -> 0.1 vs 0.2), and this is the
+          // number the operator reads when the sum-to-100 check fires.
+          params: {sample: v.sample,
+                   sum: String((typeof rcaPyRound === 'function')
+                     ? rcaPyRound(v.sum, 1)
+                     : Math.round(v.sum * 10) / 10)}
         });
       }
       issues.push({
@@ -856,8 +876,22 @@ function scoreAccuracy(data) {
     }
   }
 
-  if (checks === 0) return [1.0, issues];
-  return [_clamp01(passed / checks), issues];
+  // The deduction is applied on BOTH paths, including checks === 0.
+  // rca_core/quality.py assigns `score = 1.0` when there are no checks and
+  // only then subtracts the sum-to-100 deduction; an early `return [1.0]`
+  // skipped it entirely, so a result whose accuracy checks were all vacuous
+  // but whose abundance percentages did not sum to 100 was graded A on the
+  // desktop and A-with-no-penalty in the browser.
+  if (checks === 0) return [_clamp01(1.0 - sumDeduct), issues];
+  // AUDIT-2026-09-30: the sum-to-100 deduction comes off the DIMENSION SCORE,
+  // not off `passed`. Subtracting it from the count made the penalty
+  // (passed - deduction) / checks, i.e. scaled by 1/checks, so a data-quality
+  // rule's weight depended on how many unrelated accuracy checks happened to
+  // run. rca_core/quality.py takes it from `score` after
+  // `score = passed / checks`, and "deduct 0.05 per violating level" reads as a
+  // deduction from the 0..1 dimension. Measured on
+  // qc_abundance_sum_violation: Python 0.98 where this returned 1.
+  return [_clamp01(_clamp01(passed / checks) - sumDeduct), issues];
 }
 
 /**

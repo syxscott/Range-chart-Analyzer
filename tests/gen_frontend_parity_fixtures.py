@@ -1018,6 +1018,27 @@ _add(
         ],
         "biozones": [], "other_fossils": [], "confidence": 0.8}),
     _case("quality_coverage", "qc_empty", {}),
+    # AUDIT-2026-09-30: NO quality_coverage payload carried abundance_unit "%"
+    # before this one, so the sum-to-100 check (P1-8) -- a named scientific
+    # rule with its own weight that emits a warning the operator reads -- had
+    # ZERO differential coverage while the group itself looked fully populated.
+    # The sums here are ties at the first decimal on purpose: the browser
+    # formatted them with Math.round(v.sum * 10) / 10, which rounds halves away
+    # from zero, while rca_core formats with round(total, 1), which rounds them
+    # to even. At one decimal those ties are common rather than exotic --
+    # measured 8 of 16 tie-shaped sums disagreed -- so a single non-tie case
+    # would have hidden it.
+    _case("quality_coverage", "qc_abundance_sum_violation", {
+        "sections": [{"name": "S1", "response_kind": "extracted"}],
+        "abundances": [
+            {"taxon": "A", "site": "S1", "level": "L1", "abundance": "1.25",
+             "abundance_unit": "%", "response_kind": "extracted"},
+            {"taxon": "B", "site": "S1", "level": "L1", "abundance": "1.0",
+             "abundance_unit": "%", "response_kind": "extracted"},
+            {"taxon": "C", "site": "S1", "level": "L2", "abundance": "100.25",
+             "abundance_unit": "%", "response_kind": "extracted"},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
     # AUDIT-2026-09-30: every case above resolved to range_chart. The group
     # existed, its runner existed, and it had eight cases -- so every structural
     # consistency check on the harness (GROUPS == RUNNERS == groups-with-cases)

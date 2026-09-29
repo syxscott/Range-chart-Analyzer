@@ -7910,6 +7910,147 @@
   },
   {
    "group": "quality_coverage",
+   "id": "qc_abundance_sum_violation",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1",
+      "response_kind": "extracted"
+     }
+    ],
+    "abundances": [
+     {
+      "taxon": "A",
+      "site": "S1",
+      "level": "L1",
+      "abundance": "1.25",
+      "abundance_unit": "%",
+      "response_kind": "extracted"
+     },
+     {
+      "taxon": "B",
+      "site": "S1",
+      "level": "L1",
+      "abundance": "1.0",
+      "abundance_unit": "%",
+      "response_kind": "extracted"
+     },
+     {
+      "taxon": "C",
+      "site": "S1",
+      "level": "L2",
+      "abundance": "100.25",
+      "abundance_unit": "%",
+      "response_kind": "extracted"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.98,
+    "grade": "A",
+    "issues": [
+     {
+      "severity": "warning",
+      "msg_key": "quality.abundance_sum_violation",
+      "params": {
+       "sample": "L1",
+       "sum": "2.2"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.abundance_sum_violation_count",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "3",
+       "cells": "3",
+       "not_drawn": "0",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      },
+      {
+       "column": "B",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      },
+      {
+       "column": "C",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 3,
+       "extracted": 3,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 3,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "totals": {
+      "cells": 3,
+      "extracted": 3,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 3,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0,
+      "explicit_responses": 3,
+      "row_count": 3,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 3,
+     "row_count": 3,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
    "id": "qc_zonation",
    "payload": {
     "zones": [
