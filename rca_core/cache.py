@@ -38,8 +38,33 @@ _SCHEMA_VERSION = 1
 _INIT_LOCK = threading.Lock()
 
 
-def _ensure_dir() -> None:
-    os.makedirs(_CACHE_DIR, exist_ok=True)
+def _ensure_dir(path: str) -> None:
+    """Create the parent directory of ``path``.
+
+    AUDIT-2026-09-29: this used to take no argument and create the MODULE
+    level ``_CACHE_DIR`` -- the directory of the default path, which has
+    nothing to do with whatever path the instance was actually given. So
+    ``ResultCache(db_path=".../does/not/exist/cache.sqlite")`` created
+    ``~/.range_chart_analyzer`` and then failed with::
+
+        sqlite3.OperationalError: unable to open database file
+
+    Measured, not inferred: the parent directory was still absent after the
+    failure. Nothing was broken for the default path, which is why it
+    survived -- and why every existing test passes a FLAT filename inside an
+    already-created tempdir, so no test ever reached it.
+
+    rca_core/db.py gets this right forty lines away in the same package::
+
+        _parent = os.path.dirname(self.path)
+        if _parent:
+            os.makedirs(_parent, exist_ok=True)
+
+    Two storage layers, one of them wrong, in the same codebase.
+    """
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
 
 
 def _rowid_for(conn: sqlite3.Connection, key: str) -> int | None:
@@ -80,7 +105,7 @@ class ResultCache:
         across instances; the instance lock covers same-instance re-entry.
         """
         with _INIT_LOCK, self._lock:
-            _ensure_dir()
+            _ensure_dir(self._path)
             self._conn = sqlite3.connect(self._path, check_same_thread=False)
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._create_table()

@@ -2269,4 +2269,86 @@ class TestP2RedactionIsSharedNotCopied:
     def test_non_strings_yield_empty_rather_than_raising(self):
         from rca_core.redact import redact_error_body
         for v in (None, 123, b"bytes", ["a"]):
-            assert redact_error_body(v) == ""
+            assert redact_error_body(v) == ""# ---------------------------------------------------------------------------
+# AUDIT-2026-09-29: ResultCache created the WRONG directory.
+# ---------------------------------------------------------------------------
+
+class TestP2ResultCacheCreatesTheDirectoryItWasGiven:
+    """``_ensure_dir()`` took no argument and created the module-level
+    ``_CACHE_DIR`` -- the parent of the DEFAULT path, which has nothing to do
+    with the path the instance was handed::
+
+        ResultCache(db_path=".../does/not/exist/cache.sqlite")
+          -> sqlite3.OperationalError: unable to open database file
+
+    and the missing directory was still missing afterwards, because the one
+    that got created was the unrelated module-level one.
+
+    The default path never exposed it (~/.range_chart_analyzer always
+    exists), and no test reached it either, because they all pass a flat
+    filename into an already-created tempdir.
+
+    rca_core/db.py does this correctly, forty lines away in the same package,
+    so the project contained two answers to the same question and the cache
+    held the wrong one.
+    """
+
+    @staticmethod
+    def _nested(db_root):
+        import os
+        return os.path.join(db_root, "does", "not", "exist", "cache.sqlite")
+
+    def test_a_nested_missing_directory_is_created(self, tmp_path):
+        import os
+        from rca_core.cache import ResultCache
+        path = self._nested(str(tmp_path))
+        assert not os.path.isdir(os.path.dirname(path))
+        cache = ResultCache(db_path=path)
+        try:
+            assert os.path.isdir(os.path.dirname(path))
+            # and it is a working cache, not just a directory
+            cache.put("k", {"a": 1})
+            assert cache.get("k") == {"a": 1}
+        finally:
+            cache.close()
+
+    def test_it_creates_the_GIVEN_parent_not_the_module_one(self, tmp_path,
+                                                            monkeypatch):
+        import rca_core.cache as C
+        made = []
+        real_makedirs = C.os.makedirs
+
+        def spy(path, *a, **kw):
+            made.append(path)
+            return real_makedirs(path, *a, **kw)
+
+        monkeypatch.setattr(C.os, "makedirs", spy)
+        cache = C.ResultCache(db_path=self._nested(str(tmp_path)))
+        cache.close()
+        assert made, "no directory was created at all"
+        for p in made:
+            assert p.startswith(str(tmp_path)), (
+                "created %r, which is not under the requested root" % p)
+
+    def test_a_bare_filename_still_works(self, tmp_path):
+        # dirname("") is "" and makedirs("") raises -- the shape db.py guards
+        # against. The relative-path contract must survive the fix.
+        import os
+        from rca_core.cache import ResultCache
+        cwd = os.getcwd()
+        os.chdir(str(tmp_path))
+        try:
+            cache = ResultCache(db_path="bare.sqlite")
+            try:
+                cache.put("k", {"b": 2})
+                assert cache.get("k") == {"b": 2}
+            finally:
+                cache.close()
+        finally:
+            os.chdir(cwd)
+
+    def test_the_default_path_is_unchanged(self):
+        import rca_core.cache as C
+        assert C._CACHE_DIR.endswith(".range_chart_analyzer")
+        # the module constant is still exported for anything that reads it
+        assert isinstance(C._DB_PATH, str) and C._DB_PATH.endswith(".sqlite")
