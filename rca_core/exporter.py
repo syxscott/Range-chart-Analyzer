@@ -1680,6 +1680,18 @@ def _apply_nested_table_edits(
 
 
 
+_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def _formula_triggered(s: str) -> bool:
+    """Does this text need the OWASP formula-injection guard?
+
+    Named so the XLSX path can ask the same question the sanitiser asked
+    instead of guessing the answer from the output (see ``_xlsx_cell``).
+    """
+    return bool(s) and s[0] in _FORMULA_TRIGGERS
+
+
 def _sanitize_formula_cell(v: Any) -> Any:
     """Mitigate CSV/TSV formula injection (OWASP): prefix a cell whose first
     character is a formula trigger (= + - @) or a tab/CR/LF with a single
@@ -1709,7 +1721,7 @@ def _sanitize_formula_cell(v: Any) -> Any:
     elif isinstance(v, (int, float, _Decimal)):
         return v
     s = str(v)
-    if s and s[0] in ("=", "+", "-", "@", "\t", "\r", "\n"):
+    if _formula_triggered(s):
         return "'" + s
     return v
 
@@ -1880,10 +1892,26 @@ def _xlsx_cell(v: Any) -> tuple[Any, bool]:
     # those loses the unit (documented behaviour of this function).
     if isinstance(sanitized, (int, float, _Decimal)):
         return sanitized, False
+    # AUDIT-2026-10-01 [item 9.3]: the guard used to be re-derived here as
+    # `text.startswith("'")`, which cannot tell "the sanitiser added an
+    # apostrophe" from "the DATA began with an apostrophe". Every legitimate
+    # leading apostrophe was therefore stripped from the value AND the cell
+    # styled as guarded, while the CSV path kept the text intact:
+    #
+    #   input   CSV        XLSX (before)   XLSX (now)
+    #   'Acacia 'Acacia    Acacia          'Acacia
+    #   'K      'K         K               'K
+    #   ''      ''         '               ''
+    #   '       '          None            '
+    #
+    # That last row is the severity: a one-character value became an EMPTY CELL.
+    # Ask the sanitiser's own question about the value it was given, so the two
+    # agree by construction instead of by coincidence. `str(v)` is the exact
+    # expression _sanitize_formula_cell tests, which is the point.
+    guard = _formula_triggered(str(v))
     text = _export_cell_text(sanitized)
     if _XLSX_ILLEGAL_CHARS_RE.search(text):
         text = _XLSX_ILLEGAL_CHARS_RE.sub("", text)
-    guard = text.startswith("'")
     if guard:
         text = text[1:]
     return text, guard
