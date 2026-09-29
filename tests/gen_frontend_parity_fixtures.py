@@ -939,6 +939,31 @@ _add(
         ],
         "biozones": [], "other_fossils": [], "confidence": 0.8}),
     _case("quality_coverage", "qc_empty", {}),
+    # AUDIT-2026-09-30: every case above resolved to range_chart. The group
+    # existed, its runner existed, and it had eight cases -- so every structural
+    # consistency check on the harness (GROUPS == RUNNERS == groups-with-cases)
+    # passed, while the group was missing two modes outright. That blind spot
+    # is where the real bug lived: js/quality.js's scoreStructure had no
+    # 'zonation' branch, so a zonation result was null-checked against
+    # range-chart keys, lost 0.5 on the structure dimension, and the browser
+    # graded a real published figure 0.89/B where rca_core said 0.94/A.
+    #
+    # The lesson is that "the group exists" is not "the group covers the
+    # modes", so these two cases exist to make the mode coverage explicit.
+    _case("quality_coverage", "qc_zonation", {
+        "zones": [{"name": "Z1", "age": "290-280 Ma", "level_range": "1-2",
+                   "response_kind": "extracted"}],
+        "correlations": [{"from_zone": "Z1", "to_zone": "Z2",
+                          "response_kind": "extracted"}],
+        "zonations": [{"name": "bed 7", "response_kind": "extracted"}],
+        "confidence": 0.8}),
+    _case("quality_coverage", "qc_columnar", {
+        "sections": [{"name": "S1", "age_range": "300-290 Ma",
+                      "response_kind": "extracted"}],
+        "cross_beds": [{"from": "S1", "to": "S2",
+                        "response_kind": "extracted"}],
+        "fossil_legend": [{"label": "A", "response_kind": "extracted"}],
+        "confidence": 0.8}),
 )
 
 

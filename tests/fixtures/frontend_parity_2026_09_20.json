@@ -7477,6 +7477,78 @@
      }
     ]
    }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_zonation",
+   "payload": {
+    "zones": [
+     {
+      "name": "Z1",
+      "age": "290-280 Ma",
+      "level_range": "1-2",
+      "response_kind": "extracted"
+     }
+    ],
+    "correlations": [
+     {
+      "from_zone": "Z1",
+      "to_zone": "Z2",
+      "response_kind": "extracted"
+     }
+    ],
+    "zonations": [
+     {
+      "name": "bed 7",
+      "response_kind": "extracted"
+     }
+    ],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 1.0,
+    "grade": "A",
+    "issues": []
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_columnar",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "300-290 Ma",
+      "response_kind": "extracted"
+     }
+    ],
+    "cross_beds": [
+     {
+      "from": "S1",
+      "to": "S2",
+      "response_kind": "extracted"
+     }
+    ],
+    "fossil_legend": [
+     {
+      "label": "A",
+      "response_kind": "extracted"
+     }
+    ],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.975,
+    "grade": "A",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.null_fields"
+     }
+    ]
+   }
   }
  ]
 }
