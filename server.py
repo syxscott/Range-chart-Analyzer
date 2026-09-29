@@ -1734,6 +1734,9 @@ class Handler(BaseHTTPRequestHandler):
         # Reject any traversal outright before computing the target.
         if ".." in rel.split("/"):
             return None
+        # NOTE: a NUL or an over-long path is also un-representable, but it is
+        # not checked here -- see the realpath call below for why one place
+        # handles both.
         # First path segment must be in the allowed-entries whitelist.
         first = rel.split("/", 1)[0]
         # FE-BORROW-2026-09-20 (域P): the whitelist is directory-level ("js",
@@ -1744,7 +1747,45 @@ class Handler(BaseHTTPRequestHandler):
             return None
         target = os.path.normpath(os.path.join(ROOT, rel))
         # Resolve symlinks + check the resolved path stays under ROOT.
-        real_target = os.path.realpath(target)
+        #
+        # AUDIT-2026-10-01 [item 8.1]: the docstring promises "or None if
+        # unsafe", but realpath is the one call here that touches the OS, and
+        # it answers a path it cannot represent by RAISING rather than by
+        # returning. Two such shapes were found, and both are reachable from a
+        # client, because CPython's request-line cap (65536 bytes) sits well
+        # above where Windows gives up:
+        #
+        #   embedded NUL   -> ValueError: embedded null character in path
+        #                      reached with a plain "GET /js/a%00b.js", and
+        #                      only via js/ css/ assets/ -- a bare "/%00" is
+        #                      refused by the whitelist above before realpath
+        #                      ever runs
+        #   path >= 32730  -> ValueError: path too long for Windows
+        #                      (the \\?\ prefix caps a path at 32767 chars and
+        #                      ROOT spends ~40 of them, so ~32791 bytes of
+        #                      headroom fit under the cap; measured 404 at
+        #                      rel=32716 vs. a dropped connection at rel=32757)
+        #
+        # Either one escaped do_GET as an unhandled exception: socketserver
+        # closed the socket, so the client got zero bytes of response while
+        # every neighbouring unusable path gets a well-formed 403/404, and the
+        # server logged a traceback.
+        #
+        # Fixing the first shape with an explicit `if "\x00" in rel` and
+        # shipping that is how the second one arrived as a fresh bug: the
+        # explicit check was then measured to be dead code (withdrawing it left
+        # the whole suite green) because this except already covers it. So it is
+        # not here. A path we cannot resolve is a path we will not serve.
+        # ValueError and OSError are unrelated classes (both realpath failures
+        # above are ValueError; ENAMETOOLONG and friends are OSError), so both
+        # are caught. normpath/join are pure string work and cannot raise, which
+        # is why only this call is wrapped -- and real_root below is
+        # deliberately left unwrapped, because if the repo root itself cannot
+        # be resolved, failing loudly beats answering 403 to every request.
+        try:
+            real_target = os.path.realpath(target)
+        except (ValueError, OSError):
+            return None
         real_root = os.path.realpath(ROOT)
         try:
             common = os.path.commonpath([real_target, real_root])
