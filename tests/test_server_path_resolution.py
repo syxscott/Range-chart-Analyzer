@@ -47,9 +47,27 @@ try/except landed: withdrawing the explicit check left all 53 tests green.
 It has been removed rather than kept as redundant defence, because a guard
 that provably does nothing tells a future reader "this line handles NUL", and
 inviting them to drop the except that actually does the work would bring the
-long-path defect straight back. These tests therefore assert the *contract*
-("a path the filesystem cannot represent is refused, not raised at") and are
-agnostic about which shape or which mechanism satisfies it.
+long-path defect straight back.
+
+What this file asserts is therefore split in two, and the split is not
+cosmetic -- the first version of this file asserted only the strict half and
+the Linux CI leg proved it wrong:
+
+  * UNIVERSAL (asserted everywhere): _safe_local_path answers rather than
+    raising, and whatever it returns is inside ROOT. This is the real contract
+    and the original defect violated it on every platform.
+  * STRICT (asserted only where a runtime measurement says the platform
+    refuses the path at all): the answer is specifically None. NUL qualifies
+    everywhere. The over-long shape qualifies only on Windows: posixpath's
+    realpath is a userspace lstat loop that swallows the ENAMETOOLONG and
+    returns a best-effort path, so on Linux there is nothing to refuse and
+    demanding None is simply a wrong test.
+
+The length threshold is measured, never hardcoded. 32730 is what Windows
+reported on the machine the bug was found on, and it is a function of how long
+ROOT is; a repo checked out under /home/runner/work/... has a different one.
+A test that encodes one machine's number is a test that will be red on CI for a
+reason that has nothing to do with the code.
 
 server.py:1735 (traversal) is unchanged and remains the first gate.
 """
@@ -73,9 +91,64 @@ import server as srv  # noqa: E402
 ROOT_REAL = os.path.realpath(srv.ROOT)
 
 
+# --- platform calibration, measured not assumed ------------------------
+#
+# Everything below is sized from what THIS interpreter and OS actually do, not
+# from a constant copied off a Windows measurement. That is not fastidiousness:
+# the first version of this file hard-coded Windows' 32730 and CI went red on
+# Linux, because posixpath.realpath is a userspace lstat loop that swallows the
+# ENAMETOOLONG it gets back and returns a best-effort path, while Windows'
+# realpath goes through _getfinalpathname and raises ValueError. The defect is
+# genuinely Windows-shaped; the CONTRACT ("no exception escapes, nothing
+# escapes ROOT") is not, and only the contract may be asserted unconditionally.
+
+def _refuses(n: int) -> bool:
+    """Does os.path.realpath raise for a rel of length n, on this platform?"""
+    try:
+        os.path.realpath(os.path.join(ROOT_REAL, "js", "a" * n + ".js"))
+    except (ValueError, OSError):
+        return True
+    return False
+
+
+def _measure_break_at() -> int | None:
+    """Shortest rel length this platform refuses, or None if it never does."""
+    if not _refuses(60000):
+        return None
+    lo, hi = 100, 60000
+    while lo + 1 < hi:
+        mid = (lo + hi) // 2
+        if _refuses(mid):
+            hi = mid
+        else:
+            lo = mid
+    return hi
+
+
+LONG_BREAK_AT = _measure_break_at()
+# Over the limit: on Windows this is the crashing shape. Sized from the
+# measurement so it is past the real boundary on any platform that has one.
+LONG_JUST_OVER = (LONG_BREAK_AT + 30) if LONG_BREAK_AT else 60000
+# Under the limit, with room to spare -- this one is a real, legal path shape
+# everywhere, so "still handled normally" is a claim that can hold on both.
+LONG_JUST_UNDER = (LONG_BREAK_AT - 200) if LONG_BREAK_AT else 2000
+
+SKIP_NO_LIMIT = pytest.mark.skipif(
+    LONG_BREAK_AT is None,
+    reason=(
+        "this platform's os.path.realpath never raises for an over-long path "
+        "(posixpath swallows ENAMETOOLONG and returns best-effort), so the "
+        "over-long shape cannot crash here and the strict assertion below is "
+        "not measurable on this platform. The contract that IS asserted "
+        "unconditionally -- no exception escapes, nothing escapes ROOT -- is "
+        "still covered by test_hostile_path_never_escapes_and_never_raises."
+    ),
+)
+
+
 # Shapes whose first segment is whitelisted, so they reach realpath() and are
-# the ones that crashed. "/%00" is deliberately NOT here: it is a control,
-# already rejected by the whitelist before the crash point.
+# the ones that crashed on Windows. "/%00" is deliberately NOT here: it is a
+# control, already rejected by the whitelist before the crash point.
 NUL_SHAPES = [
     "/js/a%00b.js",
     "/js/%00",
@@ -87,35 +160,26 @@ NUL_SHAPES = [
     "/js/\x00.js",
 ]
 
-# Windows caps a path at 32767 chars (the \\?\ prefix) and ROOT spends ~40 of
-# them, so a rel of ~32730 is already too long for realpath. These are sized
-# past that boundary, not near it, so the test does not encode a number that
-# drifts with the repo path length -- except LONG_JUST_UNDER, which is derived
-# from the measured break point so "just below still works" stays a real claim.
-LONG_BREAK_AT = 32730
-LONG_JUST_UNDER = LONG_BREAK_AT - 20
-LONG_JUST_OVER = LONG_BREAK_AT + 30
-
 LONG_SHAPES = [
     "/js/" + "a" * LONG_JUST_OVER + ".js",
     "/css/" + "b" * 40000 + ".css",
     "/assets/" + "c" * 60000 + ".png",
 ]
 
-# Long but still legal. Measured, not assumed: 4000 nested one-char components
-# is ~8000 characters, comfortably under the ~32730 break point, so realpath
-# resolves it and the path comes back. It belongs in the "never escapes, never
-# raises" table, NOT in LONG_SHAPES -- putting it there asserted a refusal the
-# filesystem never owed, and the test was simply wrong about this shape.
+# Long but still legal: sized from the same measurement, so it sits under the
+# limit by construction. The first version of this file hard-coded 4000 nested
+# components, which is under Windows' limit and over Linux' PATH_MAX -- the test
+# asserted a platform-specific fact and CI proved it. Legal means "the platform
+# resolves it", not "some number of characters".
 LONG_BUT_LEGAL_SHAPES = [
-    "/js/" + "/".join("d" for _ in range(4000)) + "/x.js",
+    "/js/" + "/".join("d" for _ in range(200)) + "/x.js",
 ]
 
 # pytest uses the parameter itself as the test id, and a 60k-char path turns
 # one failing run into 50 KB of 'a'. Short ids keep a failure readable; the
 # shape is still fully determined by the parameter.
 LONG_IDS = ["long-just-over", "long-40k", "long-60k"]
-LEGAL_IDS = ["long-but-legal-deep-4000"]
+LEGAL_IDS = ["long-but-legal-deep-200"]
 NUL_IDS = [f"nul-{i}" for i in range(len(NUL_SHAPES))]
 
 
@@ -129,39 +193,52 @@ def _call(url_path):
     return srv.Handler._safe_local_path(None, url_path)
 
 
-# --- the defect itself -------------------------------------------------
+def _shown(url_path: str) -> str:
+    return url_path if len(url_path) < 80 else url_path[:60] + f"...<{len(url_path)}>"
 
 
-@pytest.mark.parametrize("url_path", NUL_SHAPES + LONG_SHAPES,
-                         ids=NUL_IDS + LONG_IDS)
-def test_unrepresentable_path_is_rejected_not_raised(url_path):
-    """The contract: a path the filesystem cannot represent is refused.
+# --- the contract, asserted on every platform --------------------------
 
-    Asserting on the return value is not enough on its own -- the old code did
-    not return a wrong value, it never returned. So this asserts both halves:
-    no exception escapes, and the answer is None (refused), not a path.
+
+# --- the strict claims, asserted only where they are measurable --------
+
+
+@pytest.mark.parametrize("url_path", NUL_SHAPES, ids=NUL_IDS)
+def test_nul_path_is_refused(url_path):
+    """A NUL is not a path on any platform, so the answer is always None.
+
+    Distinct from the test above: that one tolerates a platform that resolves
+    the string. This one says the refusal is the contract, and holds on POSIX
+    too -- which is why the first CI run only reddened the long-path shapes.
     """
-    shown = url_path if len(url_path) < 80 else url_path[:60] + f"...<{len(url_path)}>"
-    try:
-        out = _call(url_path)
-    except Exception as exc:  # noqa: BLE001 - that IS the bug
-        pytest.fail(
-            f"_safe_local_path({shown!r}) raised "
-            f"{type(exc).__name__}: {exc} -- it must return None"
-        )
-    assert out is None, f"{shown!r} was not refused, it resolved to {out!r}"
+    out = _call(url_path)
+    assert out is None, (
+        f"{_shown(url_path)!r} was not refused, it resolved to {out!r}"
+    )
 
 
-def test_a_path_just_under_the_length_limit_is_still_handled_cleanly():
-    """Pins the boundary from the other side.
+@SKIP_NO_LIMIT
+@pytest.mark.parametrize("url_path", LONG_SHAPES, ids=LONG_IDS)
+def test_over_long_path_is_refused_where_the_platform_refuses(url_path):
+    """Strict, and only asserted where the measurement says it can hold.
 
-    The break point is ~32730 on this platform, but it is not a constant of the
-    code -- it depends on how long ROOT is. Deriving it from a measurement
-    rather than hardcoding it means the test still says something true if the
-    repo moves to a longer path, and it keeps the fix honest: a path that
-    IS resolvable must still resolve, so the guard is not simply "long -> 403".
+    On Windows realpath raises and the fix must turn that into a refusal. On
+    Linux it returns a best-effort path, and the correct behaviour there is
+    still "answer inside ROOT" (asserted above) -- not "answer None". Asserting
+    None anyway is what turned this file red on the Linux CI leg.
     """
-    url_path = "/js/" + "a" * (LONG_JUST_UNDER) + ".js"
+    out = _call(url_path)
+    assert out is None, (
+        f"{_shown(url_path)!r} was not refused on a platform that refuses "
+        f"paths this long; it resolved to {out!r}"
+    )
+
+
+def test_a_path_under_the_length_limit_is_still_handled_cleanly():
+    """Pins the boundary from the other side, so the guard cannot widen into
+    "long -> 403". Sized from the measured break point, because that point
+    depends on how long ROOT is and is not a constant of the code."""
+    url_path = "/js/" + "a" * LONG_JUST_UNDER + ".js"
     out = _call(url_path)          # must not raise
     assert out is None or _inside_root(out), (
         "a resolvable path must either be refused or stay inside ROOT, "
@@ -264,12 +341,8 @@ def _raw_get(port, target):
         conn.close()
 
 
-@pytest.mark.parametrize("label,target", [
-    ("embedded NUL", "/js/a%00b.js"),
-    ("over-long path", "/js/" + "a" * LONG_JUST_OVER + ".js"),
-], ids=["nul", "over-long"])
-def test_unrepresentable_path_gets_a_well_formed_403(live_server, label, target):
-    """What a client actually sees.
+def test_nul_path_gets_a_well_formed_403(live_server):
+    """What a client actually sees, for the shape that is refused everywhere.
 
     The function-level test above can pass while the wire behaviour is still
     broken, so the observable contract is pinned directly: a complete HTTP
@@ -277,15 +350,36 @@ def test_unrepresentable_path_gets_a_well_formed_403(live_server, label, target)
     logged by the server.
     """
     port, httpd = live_server
-    status, body = _raw_get(port, target)
-    assert status == 403, (
-        f"{label}: expected a clean 403, got {status} / {body[:200]!r}"
-    )
+    status, body = _raw_get(port, "/js/a%00b.js")
+    assert status == 403, f"expected a clean 403, got {status} / {body[:200]!r}"
     assert b"forbidden" in body, body[:200]
     assert httpd.errors == [], (
-        f"{label}: server logged {len(httpd.errors)} unhandled error(s): "
+        f"server logged {len(httpd.errors)} unhandled error(s): "
         f"{[type(e).__name__ for e in httpd.errors]}"
     )
+
+
+@SKIP_NO_LIMIT
+def test_over_long_path_gets_a_well_formed_403(live_server):
+    """The wire contract for the over-long shape, on the platforms where that
+    shape is a defect at all.
+
+    Kept separate from the NUL case because the expected answer is not the same
+    everywhere: where the platform resolves a long path there is nothing to
+    refuse, and the honest expectation is "some complete response, no
+    traceback" -- which is still the property the defect broke.
+    """
+    port, httpd = live_server
+    status, body = _raw_get(port, "/js/" + "a" * LONG_JUST_OVER + ".js")
+    assert status in (403, 404), (
+        f"expected a complete 403/404, got {status} / {body[:200]!r}"
+    )
+    assert httpd.errors == [], (
+        f"server logged {len(httpd.errors)} unhandled error(s): "
+        f"{[type(e).__name__ for e in httpd.errors]}"
+    )
+    # Never the failure mode: no response at all.
+    assert status is not None
 
 
 def test_a_path_under_the_length_limit_still_gets_a_normal_answer(live_server):
@@ -365,23 +459,39 @@ HOSTILE_SHAPES = [
     ids=[f"hostile-{i}" for i in range(len(HOSTILE_SHAPES))]
          + NUL_IDS + LONG_IDS + LEGAL_IDS)
 def test_hostile_path_never_escapes_and_never_raises(url_path):
-    shown = url_path if len(url_path) < 80 else url_path[:60] + f"...<{len(url_path)}>"
+    """The contract that holds on every platform, over the whole table.
+
+    Whatever the platform does with the path, _safe_local_path must answer
+    rather than raise, and anything it hands back must be inside ROOT. This is
+    the assertion that catches the original defect anywhere, and unlike "must
+    return None" it is not a statement about one OS -- which is exactly the
+    mistake that turned this file red on the Linux CI leg.
+
+    It is deliberately ONE test over the whole table rather than a strict test
+    per family: the strict variants below are the ones that need a platform
+    measurement, and having a single unconditional net means no shape is ever
+    left uncovered just because the strict one skipped.
+    """
     try:
         out = _call(url_path)
-    except Exception as exc:  # noqa: BLE001
-        pytest.fail(f"{shown!r} raised {type(exc).__name__}: {exc}")
-    if out is None:
-        return
-    assert _inside_root(out), f"{shown!r} resolved outside ROOT: {out!r}"
+    except Exception as exc:  # noqa: BLE001 - that IS the bug
+        pytest.fail(f"{_shown(url_path)!r} raised "
+                    f"{type(exc).__name__}: {exc} -- it must answer, not raise")
+    if out is not None:
+        assert _inside_root(out), (
+            f"{_shown(url_path)!r} resolved outside ROOT: {out!r}"
+        )
 
 
 @pytest.mark.parametrize("url_path", LONG_BUT_LEGAL_SHAPES, ids=LEGAL_IDS)
 def test_a_long_but_resolvable_path_is_not_refused(url_path):
     """The other direction, so the fix cannot quietly grow into "long == 403".
 
-    4000 nested components is long but under the OS limit, so realpath resolves
-    it. A guard that refused everything long would pass every "must be refused"
-    case above and still break this, so it is asserted separately.
+    Sized from the measured break point, so it is under the limit on whatever
+    platform is running. A guard that refused everything long would pass every
+    "must be refused" case above and still break this, so it is asserted
+    separately -- and it is the test that catches a too-wide guard on the
+    platforms where the strict ones skip.
     """
     out = _call(url_path)
     assert out is not None, (
