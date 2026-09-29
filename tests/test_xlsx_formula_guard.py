@@ -155,11 +155,55 @@ def test_csv_and_xlsx_agree_on_a_leading_apostrophe(v):
 # --- the direction that must NOT change ---------------------------------
 
 
+# A workbook is an XML document, and XML 1.0 normalises line endings at PARSE
+# time -- a CRLF pair and a bare CR both become LF -- but the rule applies to
+# LITERAL characters only, not to a `&#13;` character reference. Whether the CR
+# arrives as one or the other is decided inside openpyxl/lxml, and it is NOT
+# the same on both CI legs:
+#
+#   Windows leg  round trip preserves  "\r=1+1"  (observed, tests green)
+#   Linux leg    round trip normalises to "\n=1+1" (observed, CI red with
+#                assert '\n=1+1' == '\r=1+1')
+#
+# The likely cause is the writer escaping CR as `&#13;` on one platform and
+# emitting it literally on the other; that part is NOT separately verified and
+# is not load-bearing here. What is load-bearing is that neither behaviour is
+# something this module controls or should assert as universal -- so the
+# accepted set is stated as "preserved, or normalised", and the assertion that
+# IS universal (the cell is guarded, and no apostrophe leaked into the value)
+# is asserted on its own.
+#
+# CSV is unaffected: csv.writer/reader round a bare CR through untouched on
+# both legs, which is why those assertions are exact.
+_WORKBOOK_CR_FORMS = lambda s: (s, s.replace("\r\n", "\n").replace("\r", "\n"))  # noqa: E731
+
+
 @pytest.mark.parametrize("v", REAL_TRIGGERS)
 def test_real_triggers_are_still_guarded_in_the_workbook(v):
     value, guard = _round_trip(v)
     assert guard is True, f"{v!r} was not guarded -- that is the security fix"
-    assert value == v, f"guard must hide the apostrophe, not alter the text: {value!r}"
+    assert value in _WORKBOOK_CR_FORMS(v), (
+        f"guard must hide the apostrophe, not alter the text: {value!r} "
+        f"(input {v!r}); only an XML line-ending difference is tolerated"
+    )
+
+
+def test_a_guarded_trigger_keeps_its_text_apart_from_line_endings():
+    """The part that is universal: the apostrophe is a display flag, so the
+    stored value is the ORIGINAL trigger, not "'" + the trigger."""
+    for v in ("=CMD(calc)", "\r=1+1", "\n=1+1", "\t=1+1"):
+        value, guard = _round_trip(v)
+        assert guard is True, v
+        assert not value.startswith("'"), f"the guard leaked into the value: {value!r}"
+        assert value.replace("\r\n", "\n").replace("\r", "\n") == \
+            v.replace("\r\n", "\n").replace("\r", "\n"), f"{value!r} != {v!r}"
+
+
+def test_csv_preserves_a_bare_carriage_return_exactly():
+    """CSV has no such normalisation, so this one is asserted exactly -- and
+    it is what makes the workbook's tolerance above look like a real difference
+    rather than a test that gives up."""
+    assert _csv_cell("\r=1+1") == "'\r=1+1", _csv_cell("\r=1+1")
 
 
 @pytest.mark.parametrize("v", REAL_TRIGGERS)
