@@ -19,14 +19,19 @@ the CURRENT behavior:
 from __future__ import annotations
 
 import os, re, sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# AUDIT-2026-09-30: the three `open("app.py")` reads below were RELATIVE, so all
+# of this file's tests failed when pytest was started from anywhere but the repo
+# root. CI happens to run from the root, which is why nobody noticed. Same root
+# the module already computed for sys.path, now named so both uses agree.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_ROOT)
 
 
 class TestAppPyLocalOnly:
     def test_app_binds_to_loopback_only(self):
         """app.py must call into server.py with host=127.0.0.1 (default)
         so the PyWebView window is same-origin with the API."""
-        with open("app.py", "r", encoding="utf-8") as f:
+        with open(os.path.join(REPO_ROOT, "app.py"), "r", encoding="utf-8") as f:
             src = f.read()
         # Look for either an explicit --host 127.0.0.1 or a default.
         # The simplest check: server.py is invoked with the default host
@@ -41,7 +46,7 @@ class TestAppPyLocalOnly:
         before binding so the CSRF Origin check is anchored to a real
         allowlist instead of failing closed (empty set) — the local
         flow works WITH the allowlist, not without it."""
-        with open("app.py", "r", encoding="utf-8") as f:
+        with open(os.path.join(REPO_ROOT, "app.py"), "r", encoding="utf-8") as f:
             src = f.read()
         assert "populate_expected_hosts" in src, (
             "app.py must call server.populate_expected_hosts(host, port) "
@@ -54,7 +59,7 @@ class TestAppPyLocalOnly:
         server._BoundedThreadingHTTPServer (not a bare ThreadingHTTPServer)
         so the concurrent-thread cap and bounded submit queue apply here
         too."""
-        with open("app.py", "r", encoding="utf-8") as f:
+        with open(os.path.join(REPO_ROOT, "app.py"), "r", encoding="utf-8") as f:
             src = f.read()
         assert "_BoundedThreadingHTTPServer" in src, (
             "app.py must build the server via "

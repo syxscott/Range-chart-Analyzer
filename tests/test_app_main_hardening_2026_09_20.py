@@ -26,7 +26,8 @@ import types
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_ROOT)
 
 import app  # noqa: E402
 import main as launcher  # noqa: E402
@@ -398,7 +399,7 @@ class TestProbeUsesRealHost:
         assert app._socket_family_for("127.0.0.1") == socket.AF_INET
 
     def test_no_hardcoded_loopback_left_in_the_probe(self):
-        src = open("app.py", encoding="utf-8").read()
+        src = open(os.path.join(REPO_ROOT, "app.py"), encoding="utf-8").read()
         assert 's.bind(("127.0.0.1"' not in src, (
             "the probe must bind the caller's host, not a hardcoded loopback"
         )
@@ -448,7 +449,7 @@ class TestBrowserFallbackShutdown:
     def test_main_has_no_bare_return_after_keyboardinterrupt(self):
         """Source-level guard: no browser-fallback branch may `return` right
         after a KeyboardInterrupt without going through the shutdown helper."""
-        src = open("app.py", encoding="utf-8").read()
+        src = open(os.path.join(REPO_ROOT, "app.py"), encoding="utf-8").read()
         assert "httpd.shutdown()" in src and "httpd.server_close()" in src
         assert src.count("_wait_for_backend_browser_mode(t, httpd)") >= 2, (
             "both pywebview-missing and engine-unavailable branches must park "
