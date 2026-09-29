@@ -247,6 +247,17 @@ TRANSLATIONS["zh"] = {
     "err.noEndpoint": "请先选择并配置一个端点。",
     "err.imageRead": "无法读取图片文件。",
     "err.401": "API Key 无效或已过期（401）。",
+    # AUDIT-2026-09-29: this key is emitted by server.py and the
+    # desktop GUI renders it through this catalogue, but no locale
+    # carried it, so the user saw the literal "err.X". See the
+    # commit message for the three that already existed only in
+    # js/i18n.js.
+    "err.badRequest": "\u8bf7\u6c42\u4e0d\u5b8c\u6574\uff08411\uff09\u3002\u8bf7\u53d1\u9001 Content-Length\uff0c\u4e0d\u652f\u6301\u5206\u5757\u4f20\u8f93\u7f16\u7801\u3002",
+    "err.methodNotAllowed": "\u8bf7\u6c42\u65b9\u6cd5\u4e0d\u88ab\u5141\u8bb8\uff08405\uff09\u3002\u6b64\u7aef\u70b9\u4e0d\u652f\u6301 HEAD \u8bf7\u6c42\u3002",
+    "err.serverBusy": "\u670d\u52a1\u5668\u7e41\u5fd9\uff08503\uff09\u3002\u6b63\u5728\u8fdb\u884c\u7684\u5927\u6587\u4ef6\u4e0a\u4f20\u8fc7\u591a\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+    "err.badContentType": "\u8bf7\u6c42 Content-Type \u4e0d\u88ab\u63a5\u53d7\uff0c\u8bf7\u4f7f\u7528 application/json \u91cd\u8bd5\u3002",
+    "err.forbidden": "\u8bbf\u95ee\u88ab\u62d2\u7edd\uff08403\uff09\u3002\u8bf7\u786e\u8ba4\u6765\u6e90 / CSRF \u4ee4\u724c\u662f\u5426\u6709\u6548\u3002",
+    "err.rateLimit": "\u8bf7\u6c42\u8fc7\u4e8e\u9891\u7e41\uff08429\uff09\u3002\u8bf7\u7a0d\u540e\u518d\u8bd5\u6216\u964d\u4f4e\u8fd0\u884c\u6b21\u6570\u3002",
     "err.403": "访问被拒绝（403）。请检查密钥权限与端点。",
     "err.429": "请求过于频繁或额度不足（429）。请稍后再试。",
     "err.timeout": "请求超时。图片可能过大或网络不稳定，请重试。",
@@ -705,6 +716,17 @@ TRANSLATIONS["en"] = {
     "err.noEndpoint": "Please select and configure an endpoint first.",
     "err.imageRead": "Could not read the image file.",
     "err.401": "API key is invalid or expired (401).",
+    # AUDIT-2026-09-29: this key is emitted by server.py and the
+    # desktop GUI renders it through this catalogue, but no locale
+    # carried it, so the user saw the literal "err.X". See the
+    # commit message for the three that already existed only in
+    # js/i18n.js.
+    "err.badRequest": "Malformed request (411). Send a Content-Length; chunked transfer encoding is not supported.",
+    "err.methodNotAllowed": "Method not allowed (405). This endpoint does not support HEAD.",
+    "err.serverBusy": "Server busy (503). Too many large uploads in progress; retry shortly.",
+    "err.badContentType": "Content-Type not accepted. Retry with application/json.",
+    "err.forbidden": "Access denied (403). Verify the origin / CSRF token are valid.",
+    "err.rateLimit": "Too many requests (429). Please retry later or reduce the runs count.",
     "err.403": "Access denied (403). Check key permissions and endpoint.",
     "err.429": "Too many requests or insufficient quota (429). Try later.",
     "err.timeout": "Request timed out. The image may be too large or network unstable.",
@@ -916,7 +938,23 @@ TRANSLATIONS["en"] = {
     "quality.abundance_sum_violation": "Abundance percentages for '{sample}' sum to {sum}% (should be 100%)",
     "quality.abundance_sum_violation_count": "{count} level(s) have abundance sums not equal to 100%",
     # M-1 fix: previously emitted but missing in the en table.
-    "quality.range_top_lt_base": "Some species have range top younger than their range base (LAD before FAD)",
+    #
+    # AUDIT-2026-09-29: the sentence said "range top younger than their range
+    # base", which is the NORMAL ordering -- a younger top is what a range IS.
+    # The check fires on the opposite condition: the bed branch on `top < base`
+    # (beds are 1-indexed from the bottom, so a smaller top index is an OLDER
+    # top) and the age branch on `base_ma < top_ma` (FAD younger than LAD).
+    # An English researcher reading a real FAD/LAD inversion was told it
+    # described a harmless case, and would have had no reason to look again.
+    # The trailing "(LAD before FAD)" tried to patch the main clause and only
+    # made the sentence contradict itself.
+    #
+    # js/i18n.js already carries the correct wording ("Some taxa have LAD
+    # (last appearance) earlier than FAD (first appearance)") -- this finding
+    # was recorded as CONFIRMED in docs/FRONTEND-REVIEW-2026-08-19.json and
+    # only the browser half of the mirror was ever fixed. Same semantics as the
+    # mirror, "species" rather than "taxa" to match this file's other entries.
+    "quality.range_top_lt_base": "Some species have LAD (last appearance) earlier than FAD (first appearance)",
     "quality.ages_inconsistent": "{count} section(s) span eras (e.g. Paleozoic + Mesozoic); legitimate for boundary sections",
     "quality.stage_order_reversed": "Stage order reversed in section {section}: {detail}",
     "quality.bed_index_order_invalid": "Some lithology / age-unit blocks have invalid bed index order",
@@ -1159,6 +1197,17 @@ TRANSLATIONS["ja"] = {
     "err.noEndpoint": "先にエンドポイントを選択肢して設定してください。",
     "err.imageRead": "画像ファイルを読み込めませんでした。",
     "err.401": "API キーが無効または期限切れです（401）。",
+    # AUDIT-2026-09-29: this key is emitted by server.py and the
+    # desktop GUI renders it through this catalogue, but no locale
+    # carried it, so the user saw the literal "err.X". See the
+    # commit message for the three that already existed only in
+    # js/i18n.js.
+    "err.badRequest": "\u4e0d\u6b63\u306a\u30ea\u30af\u30a8\u30b9\u30c8\u3067\u3059\uff08411\uff09\u3002\u30c1\u30e3\u30f3\u30af\u8ee2\u9001\u306e\u4ee3\u308f\u308a\u306b Content-Length \u3092\u9001\u4fe1\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+    "err.methodNotAllowed": "\u8a31\u53ef\u3055\u308c\u3066\u3044\u306a\u3044\u30e1\u30bd\u30c3\u30c9\u3067\u3059\uff08405\uff09\u3002\u3053\u306e\u30a8\u30f3\u30c9\u30dd\u30a4\u30f3\u30c8\u306f HEAD \u306b\u5bfe\u5fdc\u3057\u3066\u3044\u307e\u305b\u3093\u3002",
+    "err.serverBusy": "\u30b5\u30fc\u30d0\u30fc\u304c\u6df7\u307f\u5408\u3063\u3066\u3044\u307e\u3059\uff08503\uff09\u3002\u5927\u898f\u6a21\u306e\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9\u304c\u96c6\u4e2d\u3057\u3066\u3044\u307e\u3059\u3002\u3057\u3070\u3089\u304f\u3057\u3066\u304b\u3089\u518d\u8a66\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+    "err.badContentType": "Content-Type \u304c\u53d7\u3051\u4ed8\u3051\u3089\u308c\u307e\u305b\u3093\u3002application/json \u3067\u518d\u8a66\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+    "err.forbidden": "\u30a2\u30af\u30bb\u30b9\u304c\u62d2\u5426\u3055\u308c\u307e\u3057\u305f\uff08403\uff09\u3002\u30aa\u30ea\u30b8\u30f3 / CSRF \u30c8\u30fc\u30af\u30f3\u304c\u6709\u52b9\u304b\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+    "err.rateLimit": "\u30ea\u30af\u30a8\u30b9\u30c8\u904e\u591a\u3067\u3059\uff08429\uff09\u3002\u3057\u3070\u3089\u304f\u3057\u3066\u304b\u3089\u518d\u8a66\u884c\u3059\u308b\u304b\u3001\u5b9f\u884c\u56de\u6570\u3092\u6e1b\u3089\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
     "err.403": "アクセスが拒否されました（403）。権限とエンドポイントを確認してください。",
     "err.429": "リクエスト過多またはクォータ不足です（429）。後で再試行してください。",
     "err.timeout": "リクエストがタイムアウトしました。画像が大きすぎるか通信が不安定です。",

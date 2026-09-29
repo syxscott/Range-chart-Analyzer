@@ -2440,4 +2440,151 @@ class TestPbdbTaxonNameParsing:
             assert isinstance(out, dict), (junk, out)
             for field in ("genus_name", "species_name", "subgenus_name",
                           "subspecies_name"):
-                assert isinstance(out[field], str), (junk, field, out[field])
+                assert isinstance(out[field], str), (junk, field, out[field])# ---------------------------------------------------------------------------
+# AUDIT-2026-09-29: an error_key with no translation renders as the raw dotted
+# key on BOTH ends, and one message told the user its warning was normal.
+# ---------------------------------------------------------------------------
+
+#: Read from the source at run time, deliberately NOT restated here. Two
+#: earlier drafts hard-coded a copy of RCA_KNOWN_ERROR_KEYS into this module
+#: and both went stale within the same hour -- a list duplicated next to its
+#: origin is a second place to forget to update. Same for the emitted keys
+#: below: they are collected from the sources rather than typed.
+def _js_error_gate():
+    import re
+    minimax = (REPO / "js" / "minimax.js").read_text(encoding="utf-8")
+    m = re.search(r"RCA_KNOWN_ERROR_KEYS\s*=\s*new Set\(\[(.*?)\]\)",
+                  minimax, re.S)
+    assert m, "RCA_KNOWN_ERROR_KEYS not found -- was the gate renamed?"
+    return set(re.findall(r"'([A-Za-z0-9_.\-]+)'", m.group(1)))
+
+
+def _error_keys_the_backend_emits():
+    """Every error_key literal in server.py / rca_core, collected."""
+    import re
+    pat = re.compile(
+        r"""["']error_key["']\s*[":]\s*["']([A-Za-z0-9_.\-]+)["']""")
+    found = set()
+    files = [REPO / "server.py"] + [
+        f for f in (REPO / "rca_core").rglob("*.py") if f.name != "i18n.py"]
+    for f in files:
+        text = f.read_text(encoding="utf-8", errors="ignore")
+        found |= set(pat.findall(text))
+        found |= set(re.findall(
+            r"""\.?error_key\s*=\s*["']([A-Za-z0-9_.\-]+)["']""", text))
+    return found
+
+
+def _js_i18n_blocks():
+    """(zh, en, ja) text blocks, sliced by the file's OWN markers.
+
+    The order is zh, en, ja -- NOT en, zh, ja (RCA_I18N = {zh: ...},
+    RCA_I18N.en = ..., RCA_I18N.ja = ...). Reading them as file order
+    silently swaps two locales, which is how an audit that "confirmed" a
+    wording fix mistook the Chinese string for the English one.
+    """
+    import re
+    from pathlib import Path
+    lines = Path(REPO / "js" / "i18n.js").read_text(encoding="utf-8").splitlines()
+    zh = next(i for i, l in enumerate(lines) if l.strip() == "zh: {")
+    en = next(i for i, l in enumerate(lines) if "RCA_I18N.en = {" in l)
+    ja = next(i for i, l in enumerate(lines) if "RCA_I18N.ja = {" in l)
+    end = next(i for i, l in enumerate(lines) if "i18n runtime" in l and i > ja)
+    return ("\n".join(lines[zh:en]), "\n".join(lines[en:ja]),
+            "\n".join(lines[ja:end]))
+
+
+class TestEveryErrorKeyTheServerEmitsIsRenderable:
+    """server.py answers with ``{"ok": false, "error_key": "err.X"}``. The
+    browser then renders t(errorKey) and the desktop renders the same key
+    through its own catalogue. With no entry, the user sees the literal
+    "err.badRequest" -- the failure docs/FRONTEND-REVIEW-2026-08-19.json
+    records for quality.fad_lt_lad.
+
+    Three keys were missing from EVERY locale on both sides
+    (err.badRequest / err.methodNotAllowed / err.serverBusy) and three more
+    existed only in js/i18n.js (err.badContentType / err.forbidden /
+    err.rateLimit), so the desktop showed a raw key for those too.
+    """
+
+    def test_python_catalogue_has_all_three_locales(self):
+        from rca_core.i18n import TRANSLATIONS
+        missing = []
+        for key in _error_keys_the_backend_emits():
+            for loc in ("en", "zh", "ja"):
+                value = TRANSLATIONS.get(loc, {}).get(key)
+                if not isinstance(value, str) or not value.strip():
+                    missing.append(f"{key}[{loc}]")
+        assert not missing, "unrenderable in the desktop GUI: " + ", ".join(missing)
+
+    def test_every_emitted_key_is_in_the_browser_catalogue(self):
+        # The real invariant, and it is about EMITTED keys, not whitelisted
+        # ones: a key the backend can send must have text in js/i18n.js, or
+        # t() hands back the raw dotted key. The whitelist being WIDER than the
+        # catalogue is safe -- those keys fall back -- so it is deliberately
+        # not asserted to be a subset.
+        import re
+        zh, en, ja = _js_i18n_blocks()
+        for key in _error_keys_the_backend_emits():
+            for loc, block in (("zh", zh), ("en", en), ("ja", ja)):
+                m = re.search(r"'%s':\s*'((?:[^'\\]|\\.)*)'" % re.escape(key),
+                              block)
+                assert m, f"{key} is emitted by the backend but has no {loc} text"
+                assert m.group(1).strip(), f"{key}[{loc}] is empty"
+
+    def test_the_gate_is_not_narrower_than_the_emitter(self):
+        # err.methodNotAllowed is emitted by the server but is NOT in
+        # RCA_KNOWN_ERROR_KEYS. That is safe today (the gate substitutes a
+        # fallback), and it is asserted as a fact rather than left to be
+        # rediscovered -- if it ever lands in the gate, the string is already
+        # in the catalogue (the test above), so nothing breaks.
+        import re
+        minimax = (REPO / "js" / "minimax.js").read_text(encoding="utf-8")
+        m = re.search(r"RCA_KNOWN_ERROR_KEYS\s*=\s*new Set\(\[(.*?)\]\)",
+                      minimax, re.S)
+        assert m, "RCA_KNOWN_ERROR_KEYS not found -- the gate was renamed?"
+        gate = set(re.findall(r"'([A-Za-z0-9_.\-]+)'", m.group(1)))
+        assert "err.methodNotAllowed" not in gate, (
+            "it is now whitelisted; the string exists, so this is fine -- but "
+            "the gate comment in minimax.js should say so")
+        assert set(_js_error_gate()) == gate, (
+            "RCA_KNOWN_ERROR_KEYS changed; update _js_error_gate() from the "
+            f"source: gate-only={sorted(gate - set(_js_error_gate()))} "
+            f"test-only={sorted(set(_js_error_gate()) - gate)}")
+
+
+class TestTheFadLadWarningDescribesTheViolation:
+    """The check fires on an INVERSION -- the bed branch on `top < base`
+    (beds count up from the bottom, so a smaller top index is an OLDER top) and
+    the age branch on `base_ma < top_ma` (FAD younger than LAD). The English
+    string used to say "range top younger than their range base", which is the
+    NORMAL ordering, with a contradictory "(LAD before FAD)" appended.
+
+    docs/FRONTEND-REVIEW-2026-08-19.json records this as CONFIRMED; the
+    browser half was fixed and the Python half was not, so the desktop GUI
+    still told an English researcher that a real inversion was routine.
+    """
+
+    KEY = "quality.range_top_lt_base"
+
+    def test_english_text_names_the_earlier_lad(self):
+        from rca_core.i18n import TRANSLATIONS
+        en = TRANSLATIONS["en"][self.KEY]
+        assert "LAD" in en and "FAD" in en, en
+        low = en.lower()
+        for wrong in ("younger than their range base",
+                      "younger than the range base"):
+            assert wrong not in low, (
+                f"the string still describes the NORMAL ordering: {en!r}")
+
+    def test_the_browser_says_the_same_thing(self):
+        import re
+        zh, en, ja = _js_i18n_blocks()
+        m = re.search(r"'%s':\s*'((?:[^'\\]|\\.)*)'" % re.escape(self.KEY), en)
+        assert m, "the key is gone from the en block"
+        en_js = m.group(1)
+        from rca_core.i18n import TRANSLATIONS
+        assert "LAD" in en_js and "FAD" in en_js, en_js
+        assert en_js.split("(")[0].strip() != \
+            TRANSLATIONS["en"][self.KEY].split("(")[0].strip(), (
+            "the two catalogues now disagree on this message's subject")
