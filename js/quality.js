@@ -131,6 +131,14 @@ function _detectMode(data) {
   // list. Mirrors rca_core/quality.py:_detect_mode's final branch (the JS
   // mirror used to stop at 'range_chart', so a zonation result was scored
   // with range-chart expectations).
+  //
+  // AUDIT-2026-09-30: detecting the mode was only half of that fix. This
+  // function has two consumers in this file -- scoreCompleteness and
+  // scoreStructure -- and only the first got a 'zonation' branch, so a zonation
+  // payload was still null-checked against range-chart keys in the second and
+  // lost 0.5 on the structure dimension. A guard test now asserts that EVERY
+  // consumer of this function handles 'zonation', because "the detector knows
+  // about it" is not the same as "the code that acts on it does".
   if ('correlations' in data || ('zones' in data && 'zonations' in data)) {
     if (!('species_ranges' in data) && !('abundances' in data)) return 'zonation';
   }
@@ -1110,6 +1118,19 @@ function scoreStructure(data) {
     nullCheckKeys = ['sections', 'cross_beds', 'lithology_legend', 'fossil_legend', 'confidence'];
   } else if (mode === 'abundance') {
     nullCheckKeys = ['sections', 'abundances', 'confidence'];
+  } else if (mode === 'zonation') {
+    // AUDIT-2026-09-30: this branch was MISSING, and _detectMode has returned
+    // 'zonation' since UI-REVIEW-2026-09-05 -- so a zonation result fell into
+    // the range_chart `else` below and was null-checked against
+    // sections/biozones/other_fossils, none of which a zonation payload emits.
+    // All three counted as null, the check failed, and the structure dimension
+    // dropped to 0.5. Measured on the committed real payload
+    // Hollis_et_al_2020_Austrral_radiolarian_biozone_p003_ra2.json: the browser
+    // graded the same extraction 0.89 / B while rca_core graded it 0.94 / A --
+    // a full letter grade apart. The other _detectMode consumer in this file,
+    // scoreCompleteness, has had its zonation branch all along, which is why
+    // the detection half of the 2026-09-05 fix looked complete.
+    nullCheckKeys = ['zones', 'correlations', 'zonations', 'confidence'];
   } else {
     nullCheckKeys = ['sections', 'biozones', 'other_fossils', 'confidence'];
   }
