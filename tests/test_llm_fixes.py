@@ -41,6 +41,42 @@ from rca_core.llm import (  # noqa: E402
     _read_response,
 )
 
+import pytest  # noqa: E402
+
+
+# AUDIT-2026-09-30: every _call_* / _probe_* entry point below validates the
+# endpoint BEFORE the request, and ssrf.is_private_host does a LIVE DNS lookup
+# of the provider host. These tests fake the HTTP call but not that validation,
+# so they silently depended on the machine resolving api.openai.com and
+# generativelanguage.googleapis.com at that instant. When resolution failed the
+# call returned early, the fake urlopen was never invoked, and the tests died on
+# KeyError('body') / KeyError('url') -- intermittently, with no relation to the
+# code under test. Simulating the resolver failure reproduced exactly this set.
+#
+# The fixture removes the network dependency without weakening the policy: bare
+# hostnames are answered as public without a resolver, literal IPs and localhost
+# still go through the real predicate. The policy itself is covered by
+# tests/test_ssrf.py.
+@pytest.fixture(autouse=True)
+def _no_dns_lookup_for_hostnames(monkeypatch):
+    import ipaddress
+    import rca_core.ssrf as ssrf
+
+    real = ssrf.is_private_host
+
+    def stub(host):
+        name = str(host).strip("[]")
+        low = name.lower()
+        if low == "localhost" or low.endswith(".localhost"):
+            return real(host)
+        try:
+            ipaddress.ip_address(name)
+        except ValueError:
+            return False        # a NAME: assume public, never touch DNS
+        return real(host)       # a literal IP: real policy, no lookup needed
+
+    monkeypatch.setattr(ssrf, "is_private_host", stub)
+
 
 _pass = 0
 _fail = 0
@@ -264,13 +300,29 @@ def test_openai_reasoning_omits_system_role():
             endpoint="https://api.openai.com/v1",
             api_key="sk-test", model="o1-mini",
         )
-        _call_openai(
+        result = _call_openai(
             provider=prov, system_prompt="system-prompt-X",
             image_b64="QUFB", media_type="image/png",
             user_text="hi", max_tokens=100, timeout_sec=5,
         )
     finally:
         urllib.request.urlopen = orig
+
+    # AUDIT-2026-09-30: this and test_openai_reasoning_omits_system_role
+    # intermittently failed in a FULL-suite run with KeyError('body') below --
+    # the fake was never called, and the KeyError pointed at a local dict
+    # instead of at what the call did. _call_openai returns
+    # (text, truncated, status, err_body, usage) and folds transport errors into
+    # err_body, so the reason is in the return value. Assert on it first so the
+    # next occurrence is diagnosable. Same guard as
+    # test_sprint_b_pipeline.py::_capture_openai_call, which failed the same
+    # way. Root cause still open -- a pytest plugin snapshotting
+    # urllib.request globals after every test proved urlopen is never leaked,
+    # and 200 direct calls never failed to POST.
+    assert "body" in captured, (
+        "_call_openai did not issue a request; "
+        f"status={result[2]!r} err_body={result[3]!r} text={result[0]!r}"
+    )
 
     msgs = captured["body"]["messages"]
     roles = [m["role"] for m in msgs]
@@ -304,13 +356,18 @@ def test_openai_non_reasoning_keeps_system_role():
             endpoint="https://api.openai.com/v1",
             api_key="sk-test", model="gpt-4o",
         )
-        _call_openai(
+        result = _call_openai(
             provider=prov, system_prompt="system-prompt-X",
             image_b64="QUFB", media_type="image/png",
             user_text="hi", max_tokens=100, timeout_sec=5,
         )
     finally:
         urllib.request.urlopen = orig
+
+    assert "body" in captured, (
+        "_call_openai did not issue a request; "
+        f"status={result[2]!r} err_body={result[3]!r} text={result[0]!r}"
+    )
 
     msgs = captured["body"]["messages"]
     roles = [m["role"] for m in msgs]

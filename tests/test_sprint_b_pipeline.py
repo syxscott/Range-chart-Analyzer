@@ -49,6 +49,41 @@ from rca_core.llm import ApiFormat, LlmProvider, _call_openai  # noqa: E402
 from rca_core.ssrf import pinned_endpoint_ip, validate_endpoint  # noqa: E402
 
 
+# AUDIT-2026-09-30: the _call_* entry points validate the endpoint BEFORE the
+# POST, and that validation calls ssrf.is_private_host, which does a LIVE DNS
+# lookup of the provider host. These tests fake the HTTP request but not the
+# validation, so they silently depended on the machine being able to resolve
+# api.openai.com at that instant. When resolution failed the call returned
+# early, the fake urlopen was never invoked, and the tests died on
+# KeyError('body') -- intermittently, roughly 2 runs in 7, with no relation to
+# the code under test.
+#
+# This fixture removes that network dependency WITHOUT weakening the policy:
+# a bare hostname is answered as public without a resolver, while literal IPs
+# and localhost names still go through the real predicate, so
+# TestPinningLoopbackExemption in this file keeps testing real behaviour. The
+# policy itself is covered by tests/test_ssrf.py.
+@pytest.fixture(autouse=True)
+def _no_dns_lookup_for_hostnames(monkeypatch):
+    import ipaddress
+    import rca_core.ssrf as ssrf
+
+    real = ssrf.is_private_host
+
+    def stub(host):
+        name = str(host).strip("[]")
+        low = name.lower()
+        if low == "localhost" or low.endswith(".localhost"):
+            return real(host)
+        try:
+            ipaddress.ip_address(name)
+        except ValueError:
+            return False        # a NAME: assume public, never touch DNS
+        return real(host)       # a literal IP: real policy, no lookup needed
+
+    monkeypatch.setattr(ssrf, "is_private_host", stub)
+
+
 # ---------------------------------------------------------------------------
 # 1. exporter: has_biozone_or_age removed
 # ---------------------------------------------------------------------------
@@ -230,13 +265,27 @@ def _capture_openai_call(model, system_prompt):
             endpoint="https://api.openai.com/v1",
             api_key="sk-test", model=model,
         )
-        _call_openai(
+        result = _call_openai(
             provider=prov, system_prompt=system_prompt,
             image_b64="QUFB", media_type="image/png",
             user_text="hi", max_tokens=100, timeout_sec=5,
         )
     finally:
         urllib.request.urlopen = orig
+    # AUDIT-2026-09-30: these four _call_openai tests (two here, two in
+    # test_llm_fixes.py) intermittently failed in a FULL-suite run with
+    # KeyError('body') on this line -- the fake urlopen was never called, and
+    # the KeyError named a local dict instead of saying what the call did.
+    # _call_openai returns (text, truncated, status, err_body, usage) and
+    # swallows transport errors into err_body, so the reason is IN the return
+    # value. Assert on it first, so the next occurrence is diagnosable instead
+    # of undiagnosable. Root cause is still open: a pytest plugin that
+    # snapshots urllib.request globals after every test proved urlopen itself
+    # is never leaked, and 200 direct calls never failed to POST.
+    assert "body" in captured, (
+        f"_call_openai did not issue a request for model={model!r}; "
+        f"status={result[2]!r} err_body={result[3]!r} text={result[0]!r}"
+    )
     return captured["body"]
 
 
