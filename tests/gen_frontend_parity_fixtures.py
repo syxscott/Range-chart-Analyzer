@@ -419,6 +419,34 @@ _add(
         "root_ids": ["r"],
         "nodes": ["r"],
     }),
+    # AUDIT-2026-09-30: `metadata` and `legend` are the two OPTIONAL mappings
+    # on a tree, and a model can put a string in either. `raw.get("metadata") or
+    # {}` only rejects FALSY non-mappings, so a truthy string reached
+    # `metadata_raw.get("title", "")` and raised AttributeError on the Python
+    # side, while js/minimax.js's `rcaPyOr` let it through to `Object.keys`,
+    # which yielded ["0","1","2"] and emitted {"0": "s", "1": "t", "2": "r"} --
+    # a string's character positions treated as metadata keys. Found by
+    # difffuzz_normalize.py, whose phylogenetic_tree generator had been raising
+    # on 400/400 cases and scoring that as agreement. Both sides now treat a
+    # non-mapping as absent, matching the `legend` line that was already
+    # guarded. `ph_non_dict_legend` pins that sibling so the two cannot drift
+    # apart again.
+    _case("phylogenetic_tree", "ph_non_dict_metadata", {
+        "root_ids": ["r"],
+        "nodes": [{"id": "r", "parent": None, "name": "A"}],
+        "metadata": "str",
+        "confidence": 0.9,
+    }),
+    _case("phylogenetic_tree", "ph_non_dict_legend", {
+        "root_ids": ["r"],
+        "nodes": [{"id": "r", "parent": None, "name": "A"}],
+        "legend": ["a", "b"],
+    }),
+    _case("phylogenetic_tree", "ph_metadata_list", {
+        "root_ids": ["r"],
+        "nodes": [{"id": "r", "parent": None, "name": "A"}],
+        "metadata": [{"title": "T"}],
+    }),
 )
 
 # --- chart_classification --------------------------------------------------

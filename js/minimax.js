@@ -2560,7 +2560,15 @@ function rcaNormalizePhylogeneticTreeResult(parsed) {
     nodesOut.push(row);
   }
 
-  const metaRaw = rcaPyOr(raw.metadata, {});
+  // AUDIT-2026-09-30: `rcaPyOr(raw.metadata, {})` rejected only FALSY
+  // non-mappings, so a truthy string reached `Object.keys(...)` and produced
+  // {"0": "s", "1": "t", "2": "r"} -- a string's character positions treated
+  // as metadata keys. The Python mirror raised AttributeError on the same
+  // payload. Neither is useful; a non-mapping is not a mapping. Guarded to
+  // match the `legend` line below, which was already right on both engines,
+  // and to match rca_core/extractor.py, which now does the same.
+  const metaRaw = (raw.metadata && typeof raw.metadata === 'object'
+    && !Array.isArray(raw.metadata)) ? raw.metadata : {};
   const metadata = {
     title: rcaStringifyScalar(Object.prototype.hasOwnProperty.call(metaRaw, 'title')
       ? metaRaw.title : ''),

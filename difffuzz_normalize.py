@@ -225,12 +225,56 @@ def zonation_payload(rng):
 
 
 def phylo_payload(rng):
+    # AUDIT-2026-09-30: this used to be 400/400 vacuous. The tool reported
+    # "MISMATCHED=0 ... engines agree" for the phylogenetic_tree mode while
+    # actually comparing NOTHING: agreed=0, agreed_refusal=400, py_raised=400,
+    # js_raised=400. Two independent reasons, both in the GENERATOR, not in the
+    # code under test:
+    #
+    #   * node ids were sc(rng) -- an arbitrary scalar, so the chosen root_ids
+    #     (["n1"], "n1", ...) almost never named a real node, and
+    #   * the parent key was spelled "parent_id", which
+    #     _normalize_phylogenetic_tree_into does not read. It reads "parent",
+    #     so every node came in parentless and any non-root raised
+    #     "Non-root node must have a parent".
+    #
+    # Either one alone would have made the whole mode raise before reaching a
+    # single line of normalisation. "Both engines refused" was being counted
+    # as agreement, which is the same blind spot as a group that exists but
+    # covers nothing.
     p = {"confidence": rng.choice(SCALARS)}
-    p["nodes"] = ([{
-        "id": sc(rng), "name": sc(rng), "parent_id": sc(rng),
-        "branch_length": sc(rng), "legend": sc(rng),
-    } for _ in range(rng.randint(0, 4))] if rng.random() < 0.9 else rng.choice(LISTS))
-    p["root_ids"] = rng.choice([[], ["n1"], ["n1", "n2"], "n1", None, 42])
+    if rng.random() < 0.10:
+        # Keep a MINORITY of deliberately unusable payloads, so the
+        # "both engines refuse the same input" path stays exercised -- as a
+        # minority, which is the point.
+        p["nodes"] = ([{"id": sc(rng), "parent": sc(rng)}]
+                      if rng.random() < 0.5 else [])
+        p["root_ids"] = rng.choice([[], None, 42, "nope", "n1"])
+        p["metadata"] = rng.choice([{}, None, "str", [1]])
+        p["legend"] = rng.choice([{}, None, "str", [1]])
+        return p
+
+    # A well-formed tree: ids are generated first so root_ids and parents can
+    # only reference nodes that exist, and the first node is the root.
+    n = rng.randint(1, 5)
+    ids = ["n%d" % i for i in range(1, n + 1)]
+    nodes = []
+    for i, nid in enumerate(ids):
+        nodes.append({
+            "id": nid,
+            "parent": None if i == 0 else rng.choice(ids[:i]),
+            "name": rng.choice([nid, "taxon " + nid, "", None, sc(rng)]),
+            "is_leaf": rng.choice([True, False, None, "yes"]),
+            # branch_length / node_age_ma / support go through float coercion;
+            # support is range-checked, so keep it in [0, 100] here and let
+            # the degenerate branch above be the one that exercises the guard.
+            "branch_length": rng.choice([0.0, 0.5, 1.5, "1.5", "", None]),
+            "node_age_ma": rng.choice([300.0, 250.5, "250", "", None]),
+            "support": rng.choice([100, 95.5, 0, None, ""]),
+        })
+    p["nodes"] = nodes
+    p["root_ids"] = ([ids[0]] if rng.random() < 0.8
+                     else [rng.choice(ids) for _ in range(rng.randint(1, n))])
     p["metadata"] = rng.choice([{}, {"title": "x"}, None, "str", [1]])
     p["legend"] = rng.choice([{}, {"a": 1}, None, "str", [1]])
     return p

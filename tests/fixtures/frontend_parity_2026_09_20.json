@@ -2802,6 +2802,155 @@
    "python_message": "root_ids contains unknown node id: r"
   },
   {
+   "group": "phylogenetic_tree",
+   "id": "ph_non_dict_metadata",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A"
+     }
+    ],
+    "metadata": "str",
+    "confidence": 0.9
+   },
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "",
+     "extraction_timestamp": "",
+     "tree_type": "",
+     "scale": "",
+     "rooted": true,
+     "source": ""
+    },
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     }
+    ],
+    "legend": {},
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_non_dict_legend",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A"
+     }
+    ],
+    "legend": [
+     "a",
+     "b"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "",
+     "extraction_timestamp": "",
+     "tree_type": "",
+     "scale": "",
+     "rooted": true,
+     "source": ""
+    },
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     }
+    ],
+    "legend": {},
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "phylogenetic_tree",
+   "id": "ph_metadata_list",
+   "payload": {
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A"
+     }
+    ],
+    "metadata": [
+     {
+      "title": "T"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "metadata": {
+     "title": "",
+     "extraction_timestamp": "",
+     "tree_type": "",
+     "scale": "",
+     "rooted": true,
+     "source": ""
+    },
+    "root_ids": [
+     "r"
+    ],
+    "nodes": [
+     {
+      "id": "r",
+      "parent": null,
+      "name": "A",
+      "is_leaf": true,
+      "branch_length": null,
+      "node_age_ma": null,
+      "support": null,
+      "metadata": {
+       "_is_leaf_corrected": true
+      }
+     }
+    ],
+    "legend": {},
+    "confidence": 0.0
+   }
+  },
+  {
    "group": "chart_classification",
    "id": "cc_percent",
    "payload": {

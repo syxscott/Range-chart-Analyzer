@@ -3075,7 +3075,28 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
             row["metadata"] = extras
         nodes_out.append(row)
 
-    metadata_raw = raw.get("metadata") or {}
+    # AUDIT-2026-09-30: `raw.get("metadata") or {}` only rejects FALSY
+    # non-mappings, so a truthy string / list / number went straight through
+    # and `metadata_raw.get("title", "")` raised
+    # AttributeError: 'str' object has no attribute 'get'. That escapes the
+    # ValueError contract this function keeps everywhere else, and the user
+    # saw "normalize failed: 'str' object has no attribute 'get'" -- an
+    # implementation detail instead of anything about their figure. Found by
+    # difffuzz_normalize.py once its phylogenetic_tree generator stopped
+    # raising on every single case (see that file: node ids were random
+    # scalars and the parent key was spelled "parent_id", which this function
+    # does not read, so 400/400 cases died before reaching one line of
+    # normalisation and "both engines refused" was scored as agreement).
+    #
+    # The browser mirror failed the same payload differently, and no better:
+    # `rcaPyOr(raw.metadata, {})` then `Object.keys("str")` yields ["0","1","2"],
+    # so it emitted {"0": "s", "1": "t", "2": "r"} as if a string's character
+    # positions were metadata keys. A non-mapping is not a mapping, so both
+    # sides now take the SAME shape as the `legend` line three lines below,
+    # which was already guarded on both engines: a non-dict is not metadata.
+    metadata_raw = raw.get("metadata")
+    if not isinstance(metadata_raw, dict):
+        metadata_raw = {}
     # Preserve raw fields not in the new schema (taxon_group, root_name,
     # total_nodes) so existing tests and downstream consumers that read
     # those fields continue to work.
