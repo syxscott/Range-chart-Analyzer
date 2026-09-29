@@ -166,7 +166,18 @@ class Database:
         # rca_core), so this affected callers outside the app too.
         _parent = os.path.dirname(self.path)
         if _parent:
-            os.makedirs(_parent, exist_ok=True)
+            # AUDIT-2026-09-30: mode=0o700 added. rca.db sits in the same
+            # ~/.range_chart_analyzer as providers.json, fernet_key.fek and the
+            # PBKDF2 salt, and secrets_store._base_dir() states the invariant
+            # explicitly: that directory "used to be created with
+            # os.makedirs(..., exist_ok=True) and left at the process umask
+            # default (0777 & ~umask, i.e. usually 0755). Everything this
+            # module stores in it is key material". It enforced that at its own
+            # two call sites while this one -- which on a fresh install is a
+            # perfectly ordinary first thing to run -- created it with no mode,
+            # and whichever writer ran first fixed the mode for every other.
+            # No-op on Windows, where mode bits are advisory.
+            os.makedirs(_parent, mode=0o700, exist_ok=True)
         self._lock = threading.RLock()
         # REVIEW-2026-09-20 (finding 6/7): explicit lifecycle + transaction
         # nesting state. ``_closed`` turns the post-close AttributeError into

@@ -865,7 +865,22 @@ class ProviderStore:
         # concurrent saves across instances; the per-instance RLock still
         # serializes nested CRUD within a single store.
         with _PROVIDER_STORE_SAVE_LOCK:
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            # AUDIT-2026-09-30: mode=0o700 added. This is the same directory
+            # rca_core/secrets_store.py::_base_dir() creates, and that function
+            # states the invariant in its own docstring: the directory "used to
+            # be created with os.makedirs(..., exist_ok=True) and left at the
+            # process umask default (0777 & ~umask, i.e. usually 0755).
+            # Everything this module stores in it is key material, so it is now
+            # 0700 best-effort." It was enforcing that for its own two call
+            # sites while this one -- which is quite likely the FIRST to run on
+            # a fresh install, since saving a provider needs no key material --
+            # created it with no mode at all. Whichever writer ran first decided
+            # the mode for the whole install, and this one handed a 0755
+            # directory to the module holding the Fernet key and the salt.
+            # No-op on Windows, where mode bits are advisory (the real ACL comes
+            # from the profile directory); the existing _chmod_user_only call
+            # further down documents the same caveat.
+            os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
             data = {
                 "version": 1,
                 "current_id": self.current_id,

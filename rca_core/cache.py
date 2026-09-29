@@ -64,7 +64,15 @@ def _ensure_dir(path: str) -> None:
     """
     parent = os.path.dirname(path)
     if parent:
-        os.makedirs(parent, exist_ok=True)
+        # AUDIT-2026-09-30: mode=0o700 added. The default cache lives in the
+        # same ~/.range_chart_analyzer as providers.json, fernet_key.fek and the
+        # PBKDF2 salt; secrets_store._base_dir() states the invariant for that
+        # directory ("Everything this module stores in it is key material, so
+        # it is now 0700 best-effort") and enforced it at its own two call
+        # sites, but three writers created it with no mode at all. Whichever
+        # ran first decided the mode for the whole install. No-op on Windows,
+        # where mode bits are advisory.
+        os.makedirs(parent, mode=0o700, exist_ok=True)
 
 
 def _rowid_for(conn: sqlite3.Connection, key: str) -> int | None:
