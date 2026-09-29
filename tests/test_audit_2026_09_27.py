@@ -2587,4 +2587,91 @@ class TestTheFadLadWarningDescribesTheViolation:
         assert "LAD" in en_js and "FAD" in en_js, en_js
         assert en_js.split("(")[0].strip() != \
             TRANSLATIONS["en"][self.KEY].split("(")[0].strip(), (
-            "the two catalogues now disagree on this message's subject")
+            "the two catalogues now disagree on this message's subject")# ---------------------------------------------------------------------------
+# AUDIT-2026-09-30: the two engines ship DIFFERENT ICS tables, on purpose, and
+# the comment in js/ics_table.js said the opposite.
+# ---------------------------------------------------------------------------
+
+#: The eleven stages update_ics.py added. They are in ics_current.json and in
+#: the JS mirror; they are NOT in ics_2024.json, which is what the Python core
+#: actually loads.
+_ELEVEN_UNPROMOTED_STAGES = (
+    "Aeronian", "Rhuddanian", "Telychian", "Homerian", "Gorstian",
+    "Sheinwoodian", "Ludfordian", "Greenlandian", "Meghalayan",
+    "Northgrippian", "Late Pleistocene",
+)
+
+
+class TestTheIcsTableSplitIsDocumentedNotAccidental:
+    """js/ics_table.js claimed its eleven added stages were needed "while
+    Python placed them". Python does not place them: ics.py:53 loads
+    rca_core/resources/ics_2024.json (98 stages) and ics_current.json (109) is
+    update_ics.py's un-promoted refresh output with zero runtime consumers.
+
+    The gap is deliberate -- tests/test_ics_current_json_2026_09_22.py records
+    the switch as "a research backlog item, NOT an accident to be fixed here"
+    -- but the comment stated the opposite, and a comment that says the two
+    ends agree is exactly what would prompt someone to "fix" the Python side
+    by pointing it at ics_current.json, silently promoting research data past
+    the gate update_ics.py puts behind --write-canonical.
+
+    Measured, because the failure is worse than a miss:
+
+        ics_resolve_age_bound("Aeronian") -> (None, None)
+        ics_era("Aeronian")               -> None
+        ics_stage_from_age(439.5)         -> 'Llandovery'   # a WRONG stage,
+                                                          # not None
+    """
+
+    def test_python_loads_the_promoted_canonical_not_the_refresh_output(self):
+        import ast
+        from pathlib import Path
+        src = (REPO / "rca_core" / "standards" / "ics.py").read_text(
+            encoding="utf-8")
+        tree = ast.parse(src)
+        loaded = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                    and node.value.endswith(".json"):
+                loaded = node.value
+                break
+        assert loaded == "ics_2024.json", (
+            f"rca_core/standards/ics.py now loads {loaded!r}. Promoting "
+            "ics_current.json is a deliberate research decision gated behind "
+            "scripts/update_ics.py --write-canonical; if that happened, "
+            "ICS_VERSION and this test both have to change together.")
+
+    def test_the_eleven_are_in_the_js_mirror_and_not_in_the_python_table(self):
+        from rca_core.standards.ics import ICS_2024
+        import json
+        js = (REPO / "js" / "ics_table.js").read_text(encoding="utf-8")
+        for stage in _ELEVEN_UNPROMOTED_STAGES:
+            assert f'"{stage}"' in js, f"{stage} vanished from the JS mirror"
+            assert stage not in ICS_2024, (
+                f"{stage} is now in the Python table too -- the split has "
+                "closed, so the comment in js/ics_table.js and this test are "
+                "both stale")
+
+    def test_the_split_has_a_visible_cost_not_just_a_miss(self):
+        # Recorded because it is the part that would make someone force the
+        # change: the desktop does not merely fail to resolve these, it
+        # resolves them to the WRONG neighbouring series.
+        from rca_core.standards.ics import ics_stage_from_age
+        assert ics_stage_from_age(439.5) == "Llandovery", (
+            "ics_stage_from_age no longer falls back to the neighbour; if the "
+            "Aeronian is now in the table this should be 'Aeronian' and the "
+            "comment above needs revising")
+
+    def test_era_and_resolve_report_the_gap_rather_than_guessing(self):
+        from rca_core.standards.ics import ics_era, ics_resolve_age_bound
+        assert ics_era("Aeronian") is None
+        assert ics_resolve_age_bound("Aeronian") == (None, None)
+
+    def test_the_refresh_output_still_exists_and_stays_unpromoted(self):
+        # If this file is ever deleted the record of what the next promotion
+        # is reviewing disappears with it.
+        path = REPO / "rca_core" / "resources" / "ics_current.json"
+        assert path.exists(), "ics_current.json was removed"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for stage in _ELEVEN_UNPROMOTED_STAGES:
+            assert stage in data, f"{stage} missing from the refresh output"

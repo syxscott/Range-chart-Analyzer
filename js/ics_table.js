@@ -12,9 +12,32 @@
 // were missing here (Aeronian, Rhuddanian, Telychian, Homerian, Gorstian,
 // Sheinwoodian, Ludfordian, Greenlandian, Meghalayan, Northgrippian, Late
 // Pleistocene), so viz.js rcaVizStageBounds returned null for them and they
-// were unplaceable in the browser while Python placed them. Added with ages
-// copied byte-for-byte from the JSON (authority). tests_frontend.js now pins
-// full JSON<->table parity.
+// were unplaceable in the browser. Added with ages copied byte-for-byte from
+// the JSON (authority). tests_frontend.js now pins full JSON<->table parity.
+//
+// AUDIT-2026-09-30: the previous version of this comment ended "while Python
+// placed them". Python does NOT place them. rca_core/standards/ics.py:53 loads
+// rca_core/resources/**ics_2024.json** (98 stages), which does not contain any
+// of the eleven; ics_current.json (109) is update_ics.py's un-promoted refresh
+// output and has no runtime consumer at all -- see the module docstring of
+// tests/test_ics_current_json_2026_09_22.py, which records "switching
+// rca_core/standards/ics.py to load it is a deliberate research backlog item,
+// NOT an accident to be fixed here".
+//
+// So the two ends genuinely differ right now, and the difference is not
+// cosmetic. Measured on the Python side: ICS_2024 has 98 stages;
+// ics_resolve_age_bound("Aeronian") -> (None, None); ics_era("Aeronian") ->
+// None. Worse than a miss: ics_stage_from_age(439.5) returns 'Llandovery',
+// a plausible-looking WRONG stage, where this table returns 'Aeronian'.
+// Silurian/Quaternary charts therefore export a neighbouring series name
+// into DwC/PBDB on the desktop while the browser shows the right one.
+//
+// The JS mirror deliberately tracks ics_current.json (the newer data) while
+// the Python runtime deliberately tracks the promoted canonical; the test
+// suite pins JS against current, so the two assertions below are not in
+// conflict -- they are pinned to different files on purpose. Do not "fix" the
+// Python side by pointing it at current without the canonical promotion that
+// update_ics.py gates behind --write-canonical.
 'use strict';
 
 globalThis.RCA_ICS_TABLE = {
