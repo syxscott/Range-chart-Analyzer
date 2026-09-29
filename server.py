@@ -181,31 +181,15 @@ def _extraction_wall_clock_budget_sec(timeout_sec: int) -> int:
 # diagnosis is worth less than a visible one.
 # `\bkey` does not match inside "monkey", so a `key=` alternative cannot
 # swallow it.
-_API_KEY_RE = re.compile(
-    r"(?:"
-    r"sk-|ccs-|pk-|Bearer\s+"
-    r"|(?:x-)?(?:api|access|auth|session|secret|private)[_-]?key[\"']?\s*[:=]\s*[\"']?"
-    r"|(?:x-)?(?:auth|access|session|bearer|api)[_-]?token[\"']?\s*[:=]\s*[\"']?"
-    r"|secret[\"']?\s*[:=]\s*[\"']?"
-    r"|\btoken[\"']?\s*[:=]\s*[\"']?"
-    r"|\bkey[\"']?\s*[:=]\s*[\"']?"
-    r"|authorization[\"']?\s*[:=]\s*[\"']?"
-    r")[A-Za-z0-9._+\-/=]{8,}"
-    r"|AIza[0-9A-Za-z_\-]{20,}"
-    r"|AKIA[0-9A-Z]{16}",
-    re.IGNORECASE,
-)
-
-
-def _redact_error_body(body):
-    """Remove API-key-like tokens from a string before sending to the client."""
-    if not isinstance(body, str):
-        return ""
-    # REVIEW-2026-09-10: the pattern no longer has a capture group (the
-    # alternation covers whole tokens), so replace the whole match. Keeping
-    # the old `\1` reference would raise "invalid group reference" on every
-    # call.
-    return _API_KEY_RE.sub('[REDACTED]', body)
+# AUDIT-2026-09-29: the pattern and the helper moved to rca_core/redact.py,
+# which the provider connection probe in rca_core/llm.py now shares. They were
+# defined HERE, and a guard that exists on one path reads as "handled" while
+# the path that actually echoes a rejected key back has none. The five call
+# sites below are unchanged because the local alias keeps the old name; the
+# rationale for the pattern (including the two ways it has been wrong before)
+# moved with it. Kept a short pointer so nobody re-derives a second copy:
+#   from rca_core.redact import redact_error_body as _redact_error_body
+from rca_core.redact import redact_error_body as _redact_error_body  # noqa: E402
 
 
 # Issue-2 fix: validate base64 format and size for image_b64.
@@ -1672,6 +1656,15 @@ class Handler(BaseHTTPRequestHandler):
         origin = (self.headers.get("Origin") or "").strip()
         referer = (self.headers.get("Referer") or "").strip()
         x_req = (self.headers.get("X-Requested-With") or "").strip()
+        # AUDIT-2026-09-29 (ruff F841): `host_hdr` is read and never used,
+        # like nothing else in this block -- Origin, Referer and
+        # X-Requested-With all take part in the decision below. It is
+        # DELIBERATELY left in place rather than deleted, because a dead
+        # variable that sits inside a CSRF check is a signal, not litter:
+        # a Host check is what a DNS-rebinding guard would assert, and
+        # adding one is a security decision (it can start rejecting requests
+        # that work today) rather than a cleanup. So the intent stays
+        # visible here instead of being silently deleted by a linter sweep.
         host_hdr = (self.headers.get("Host") or "").strip()
 
         def _netloc_matches(value: str) -> bool:
@@ -2299,7 +2292,12 @@ class Handler(BaseHTTPRequestHandler):
             # (see _body_pending / _send_json).
             self._request_body_consumed = True
             req = json.loads(raw.decode("utf-8"))
-        except Exception as exc:
+        except Exception:
+            # AUDIT-2026-09-29 (ruff F841): `as exc` bound a name nothing
+            # read. The wording stays deliberately generic: this handler's
+            # sibling at the top of the file documents why a client's own
+            # bytes are not echoed back, and a json decoder message is the
+            # same kind of detail.
             self._send_json(400, {
                 "ok": False,
                 "error_key": "err.parse",

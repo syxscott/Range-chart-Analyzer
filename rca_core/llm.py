@@ -38,6 +38,10 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
+# AUDIT-2026-09-29: shared with server.py on purpose -- see
+# rca_core/redact.py for why a second copy of that pattern is a liability.
+from .redact import redact_error_body
+
 from .ssrf import (
     _NoRedirect,
     make_pinning_opener,
@@ -2027,6 +2031,20 @@ class ConnectionResult:
     latency_ms: int = 0
     status: int | None = None
     error_key: str | None = None
+    # AUDIT-2026-09-29: the upstream's own words, REDACTED, for the failure
+    # case only. The probe already had this string -- `_do_probe` returns it
+    # and the loop assigned it to `last_err_body` on every candidate -- and
+    # the function then dropped it, so a failed connection test could only
+    # say "err.http (HTTP 400)" while the server had actually said "the model
+    # does not exist" or "your quota is exhausted". For a feature whose entire
+    # job is diagnosing a CONFIGURATION, that is the wrong default.
+    #
+    # Redacted, not raw: this body is where a rejected key comes back echoed.
+    # It shares rca_core/redact.py with the server, which is the whole reason
+    # that module exists -- a second copy of that regex is how the AUDIT-
+    # 2026-09-27 `|`-precedence narrowing would have come back. Empty on
+    # success, and empty whenever there was no body to redact.
+    error_body: str = ""
     models_sample: list[str] = field(default_factory=list)
     # Consecutive failures count — used to badge card health and for retry
     # decisions in the UI layer.
@@ -2115,7 +2133,11 @@ def _probe_gemini_models(provider: LlmProvider, timeout_sec: int) -> ConnectionR
     # /v1beta/models is a GET-only listing endpoint. Same fix as the OpenAI
     # probe: the previous POST implementation 405'd against the official
     # Google Generative Language gateway.
-    model = provider.model or "gemini-2.5-pro"
+    #
+    # AUDIT-2026-09-29: `model = provider.model or "gemini-2.5-pro"` sat here
+    # and was never read (ruff F841). A listing endpoint takes no model
+    # parameter, so the binding was inert; it is removed rather than "used",
+    # because there is nothing to pass it to.
     base = _api_base(provider.endpoint)
     # C4: put API key in x-api-key header (same as _call_gemini). Earlier
     # this function put it in the URL via ?key=... which leaked the key
@@ -2267,7 +2289,21 @@ def _probe_minimal_generate(
             pass
 
     # All candidates exhausted.
-    res = ConnectionResult(ok=False, latency_ms=last_latency, status=last_status or None)
+    res = ConnectionResult(ok=False, latency_ms=last_latency,
+                           status=last_status or None)
+    # AUDIT-2026-09-29: `last_err_body` was tracked through every candidate
+    # and then dropped on the floor. This is the same shape as the
+    # `best_latency` bug REVIEW-2026-11-07 fixed one line above it -- a
+    # measurement taken carefully and never reported -- and the fix is the
+    # same: report the LAST probe's value. Redacted on the way in, because an
+    # upstream error body is exactly where a rejected key comes back.
+    #
+    # _decode_err_body first, and that is not cosmetic: _post_json returns the
+    # body as BYTES, and redact_error_body answers "" for anything that is not
+    # a str (it is a shared helper and refuses to guess). Passing the bytes
+    # straight in produced a redacted-to-nothing string -- the fix looked
+    # present and was inert. Caught by the end-to-end probe, not by reading.
+    res.error_body = redact_error_body(_decode_err_body(last_err_body))
     if last_status == 401:
         res.error_key = "err.401"
     elif last_status == 403:

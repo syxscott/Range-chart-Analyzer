@@ -194,7 +194,15 @@ def _build_webengine_html(rec: HistoryRecord, tr: Translator) -> str:
     # without changing the parsed value. This is the standard inline-JSON defense
     # recommended by Google/Mozilla.
     _defuse = lambda s: s.replace("</", "<\\/")
-    i18n_payload = _defuse(json.dumps(getattr(tr, "translations", {}) or {}, ensure_ascii=False))
+    # AUDIT-2026-09-29: an `i18n_payload` binding used to sit here, holding
+    # json.dumps(tr.translations). It was never injected (ruff F841), and the
+    # bootstrap below documents exactly why injecting it would BREAK the page:
+    # the inlined js/i18n.js already declares RCA_I18N at module top level, so
+    # a second declaration raises SyntaxError in WebEngine and aborts the
+    # render. The page translates from the JS mirror with the right language
+    # code (RCA_LANG = lang_code), and the two catalogues are pinned by the
+    # parity tests -- so the correct fix is to NOT inject it. Left as a
+    # comment because "obvious improvement" is exactly the wrong move here.
     lang_code = getattr(tr, "lang", "zh")
     result_payload = _defuse(json.dumps(rec.result or {}, ensure_ascii=False, default=str))
     raw_payload = _defuse(json.dumps(rec.raw or "", ensure_ascii=False))

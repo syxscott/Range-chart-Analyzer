@@ -180,7 +180,13 @@ def _make_ico(images: Iterable["Image.Image"]) -> bytes:
     entries = b""
     data = b""
     for size, blob in zip(sizes, blobs):
-        h = w = size if size >= 32 else 32  # OS width/height bytes (0 means 256, no smaller)
+        # AUDIT-2026-09-29 (ruff F841): `h = w = size if size >= 32 else 32`
+        # sat here, unused -- and worse, MISLEADING. The width/height bytes
+        # actually written below are `bw`, which carries the real size with 0
+        # standing for 256, exactly as the ICO spec requires. The dead line
+        # claimed a floor of 32 that the code never applies, so anyone reading
+        # it would have believed the clamping happened. Removed rather than
+        # "used": there is no field for it to go into.
         # ICO directory entries use a single byte for size; 0 means 256.
         bw = 0 if size >= 256 else size
         entries += struct.pack(
@@ -200,7 +206,8 @@ def generate(out_dir: str | None = None) -> dict[str, str]:
     out_dir = out_dir or DEFAULT_OUT_DIR
     os.makedirs(out_dir, exist_ok=True)
     png_path = os.path.join(out_dir, "logo.png")
-    ico_path = os.path.join(out_dir, "logo.ico")
+    # AUDIT-2026-09-29 (ruff F841): a dead `ico_path` computed the same value
+    # that `ico_path_str` below computes again and actually returns.
 
     # Master 256x256 PNG.
     master = _draw(256)

@@ -793,7 +793,11 @@ def _other_fossils_from(raw: Any) -> list[str]:
                     return value.strip()
             # No recognisable label: keep the record as JSON text rather
             # than dropping it (_stringify_scalar renders dicts as "").
-            extras = {k: v for k, v in item.items() if k not in ("label", "species", "taxon", "name")}
+            #
+            # AUDIT-2026-09-29: the `extras` dict built here was assigned and
+            # never read (ruff F841) -- a leftover from an earlier design that
+            # folded unrecognised keys into a sidecar. The behaviour below is
+            # the intended one, so the dead binding is simply gone.
             try:
                 return json.dumps(item, ensure_ascii=False, sort_keys=True)
             except (TypeError, ValueError):

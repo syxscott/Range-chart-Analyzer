@@ -2113,4 +2113,160 @@ class TestP1MultiRunRequestMetaResolvesItsPromptVersion:
         from rca_core.prompt import prompt_version_for_mode
         assert prompt_version_for_mode("range_chart") == "v5"
         assert prompt_version_for_mode("abundance_diagram") == "v4"
-        assert prompt_version_for_mode("no_such_mode") == "v3"
+        assert prompt_version_for_mode("no_such_mode") == "v3"# ---------------------------------------------------------------------------
+# AUDIT-2026-09-29: the provider connection test discarded the upstream's own
+# error message, and the fix had to survive a bytes/str mismatch.
+# ---------------------------------------------------------------------------
+
+_SECRET = "sk-proj-AAAABBBBCCCCDDDDEEEEFFFF"
+_UPSTREAM = (
+    '{"error": {"type": "invalid_request_error", "message": '
+    '"The model `claude-x` does not exist. key=' + _SECRET + '"}}'
+)
+
+
+def _install_failing_probe(monkeypatch, body=_UPSTREAM, status=404):
+    """Make every urlopen raise HTTPError carrying ``body``.
+
+    A real urlopen RAISES on 4xx. A fake that RETURNS a response object makes
+    _post_json take its success branch instead, which looks exactly like the
+    bug being hunted (ok=True, empty error_body) and sends you hunting in the
+    wrong file.
+    """
+    import io
+    import urllib.error
+    import urllib.request
+
+    def fake(req, timeout=None):
+        raise urllib.error.HTTPError(
+            getattr(req, "full_url", str(req)), status, "probe failed",
+            {}, io.BytesIO(body.encode("utf-8")))
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+
+
+class TestP2ConnectionTestSurfacesTheUpstreamReason:
+    """`_probe_minimal_generate` tracked the upstream error body through every
+    candidate model into `last_err_body` and then returned a ConnectionResult
+    that could not carry it. The GUI rendered exactly two facts --
+    ``✗ err.http (HTTP 400)`` -- while the server had said "the model does not
+    exist" or "your quota is exhausted".
+
+    For a feature whose entire job is diagnosing a CONFIGURATION, that is the
+    wrong default, and it is the same shape as the `best_latency` bug that
+    REVIEW-2026-11-07 fixed two lines above: a measurement taken carefully and
+    never reported.
+    """
+
+    def _probe(self, monkeypatch, body=_UPSTREAM, status=404):
+        import rca_core.llm as L
+        _install_failing_probe(monkeypatch, body, status)
+        prov = L.LlmProvider(
+            name="X", api_format=L.ApiFormat.ANTHROPIC,
+            # loopback is whitelisted by _is_safe_endpoint, and the probe is
+            # reached at all; a public name would fail DNS in a sandbox and
+            # come back as err.badEndpoint before anything is probed.
+            endpoint="http://127.0.0.1:9/",
+            api_key="sk-test-key-0000000000", model="claude-x")
+        return L.test_llm_connection(prov, timeout_sec=3)
+
+    def test_the_failure_still_reports_its_status_and_key(self, monkeypatch):
+        res = self._probe(monkeypatch)
+        assert res.ok is False
+        assert res.status == 404
+        assert res.error_key == "err.http"
+
+    def test_the_upstream_message_reaches_the_result(self, monkeypatch):
+        res = self._probe(monkeypatch)
+        assert res.error_body, "the upstream body was dropped again"
+        assert "does not exist" in res.error_body, res.error_body
+
+    def test_a_rejected_key_is_redacted_out_of_it(self, monkeypatch):
+        # This is the whole reason the field is not just `err_body`: an
+        # upstream error is where a rejected key comes back echoed.
+        res = self._probe(monkeypatch)
+        assert _SECRET not in res.error_body, res.error_body
+        assert "[REDACTED]" in res.error_body, res.error_body
+
+    def test_the_bytes_slash_str_mismatch_is_pinned(self, monkeypatch):
+        """_post_json returns the body as BYTES and redact_error_body answers
+        "" for anything that is not a str, so the first version of the fix
+        decoded to nothing and looked correct. This asserts on a body that is
+        NOT valid utf-8-decodable in the strict sense only -- i.e. it exercises
+        _decode_err_body, which is what keeps the value from being empty."""
+        import rca_core.llm as L
+        # latin-1 bytes: _decode_err_body falls back for these
+        body = '{"msg": "café denied"}'.encode("latin-1")
+        res = self._probe(monkeypatch, body=body.decode("latin-1"), status=500)
+        assert res.ok is False
+        # whether the decode lands on utf-8-with-replace or latin-1, the point
+        # is that it is NON-EMPTY -- a bytes passthrough would be "".
+        assert res.error_body, "the body did not survive decode+redact"
+        assert L._decode_err_body(body), "the decoder itself returned nothing"
+
+    def test_success_carries_no_error_body(self):
+        import rca_core.llm as L
+        assert L.ConnectionResult(ok=True, latency_ms=5).error_body == ""
+
+    def test_the_new_field_is_optional_for_every_existing_caller(self):
+        import rca_core.llm as L
+        # constructed positionally elsewhere in the codebase / by callers
+        p = L.ConnectionResult(False, 0, None, "err.http")
+        assert p.error_key == "err.http"
+        assert p.error_body == ""
+        assert L.ConnectionResult().error_body == ""
+
+    def test_a_bodyless_failure_is_not_an_error(self, monkeypatch):
+        # 401 with no body must still work -- the field is optional input.
+        res = self._probe(monkeypatch, body="", status=401)
+        assert res.ok is False
+        assert res.error_body == ""
+
+
+class TestP2RedactionIsSharedNotCopied:
+    """`rca_core/redact.py` exists because a guard that lives on one path reads
+    as "handled" while the path that actually echoes a key has none. The
+    server had the pattern; the connection probe now needs the same one, and a
+    second copy is how the AUDIT-2026-09-27 `|`-precedence narrowing would have
+    come back.
+    """
+
+    def test_server_uses_the_shared_function_not_a_local_copy(self):
+        import server
+        from rca_core.redact import redact_error_body
+        assert server._redact_error_body is redact_error_body
+
+    def test_llm_uses_the_shared_function(self):
+        import rca_core.llm as L
+        from rca_core.redact import redact_error_body
+        assert L.redact_error_body is redact_error_body
+
+    def test_the_value_class_is_inside_the_alternation_group(self):
+        # `|` binds loosest, so a value class written as a SIBLING branch means
+        # every branch but the last silently lost its value matcher. Asserted
+        # on behaviour instead of on the pattern text, because the text is
+        # what people get wrong.
+        from rca_core.redact import redact_error_body
+        for body, leaked in (
+            ("x-api-key=sk-abc.defghijklmnop", "sk-abc.defghijklmnop"),
+            ("Authorization: Bearer eyJhbGciOi.eyJzdWIiOi.SflKxwRJSM", "SflKxwRJSM"),
+            ('{"api_key": "Zq7Xw9Kp2LmN4Qr"}', "Zq7Xw9Kp2LmN4Qr"),
+            ("?key=Zq7Xw9Kp2LmN4Qr&x=1", "Zq7Xw9Kp2LmN4Qr"),
+        ):
+            out = redact_error_body(body)
+            assert leaked not in out, (body, out)
+            assert "[REDACTED]" in out, (body, out)
+
+    def test_ordinary_prose_survives(self):
+        # The over-redaction half: a redacted diagnosis is worth less than a
+        # visible one, and test_review_2026_09_10.py pins this for the server.
+        from rca_core.redact import redact_error_body
+        for text in ("plain error message",
+                     "The model `claude-x` does not exist",
+                     "the monkey sat on a key"):
+            assert redact_error_body(text) == text, text
+
+    def test_non_strings_yield_empty_rather_than_raising(self):
+        from rca_core.redact import redact_error_body
+        for v in (None, 123, b"bytes", ["a"]):
+            assert redact_error_body(v) == ""

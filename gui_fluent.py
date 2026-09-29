@@ -1921,7 +1921,18 @@ class ExtractPage(ScrollArea):
         # and performs the same gen check on the GUI thread.
         launch_gen = self._bump_extract_gen()
         self._worker = ExtractWorker(params, mode, runs,
-                                     auto_filename=(self.image_path or ""),
+                                     # AUDIT-2026-09-29 (ruff F841): the
+                                     # binding above was read by nobody while
+                                     # this line recomputed the same
+                                     # expression, 26 lines later. Reusing it
+                                     # keeps the value AND the moment it is
+                                     # read identical -- the worker stores it
+                                     # as _auto_filename and uses it for the
+                                     # auto-mode caption match and for the
+                                     # history record's filename, so a
+                                     # recomputation here would be a second
+                                     # chance for the two to disagree.
+                                     auto_filename=auto_filename,
                                      gen=launch_gen)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished_ok.connect(self._on_worker_result)

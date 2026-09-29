@@ -497,8 +497,13 @@ def to_darwin_core_archive(result: dict, output_path: str) -> str:
         "https://range-chart-analyzer.local/terms/ladMa",
     ]
 
-    tab = "\t"
-    newline = "\n"
+    # AUDIT-2026-09-29 (ruff F841): `tab`/`newline` bindings sat here unused.
+    # The delimiters that matter are the literals further down --
+    # `fieldsTerminatedBy="\t" / linesTerminatedBy="\n"` in the meta.xml below
+    # and `delimiter="\t", lineterminator="\n"` on the csv writer (the H4 fix,
+    # REVIEW-2026-07-25, for archives that declared tab and shipped commas).
+    # Declaration and writer are the two places that must agree, and they do;
+    # these two names agreed with neither and were read by nobody.
 
     meta_xml_lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',

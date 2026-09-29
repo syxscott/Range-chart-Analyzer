@@ -1327,6 +1327,25 @@ class ProvidersPage(ScrollArea):
             txt = "✗  " + self._t(getattr(res, 'error_key', None) or "err.http")
             if getattr(res, 'status', None):
                 txt += f"  (HTTP {res.status})"
+        # AUDIT-2026-09-29: on failure, put the provider's own words in a
+        # tooltip. The badge is deliberately left as the short form -- a
+        # multi-sentence upstream error in a card label would reflow every
+        # card in the list -- but "err.http (HTTP 400)" on its own cannot tell
+        # a user whether to fix the model name, the key, or their quota, and
+        # that is the entire question this feature exists to answer. The body
+        # arrives already redacted (llm.ConnectionResult.error_body), because
+        # it is where a rejected key comes back echoed. Truncated so a
+        # multi-KB HTML error page cannot build a giant tooltip, and cleared
+        # on success so a previous failure never lingers.
+        detail = ""
+        if not getattr(res, "ok", False):
+            detail = (getattr(res, "error_body", "") or "").strip()
+            if len(detail) > 200:
+                detail = detail[:200] + "…"
+        try:
+            self.lbl_test.setToolTip(detail)
+        except Exception:
+            pass
         # Persist the streak to the provider store so the badge survives
         # an app restart. Write the live by-id record (not card.provider,
         # which may be stale if a concurrent rename/edit rebuilt the cards)
