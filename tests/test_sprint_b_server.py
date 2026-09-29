@@ -53,6 +53,44 @@ def _reset_server_rate_limit():
         srv._rate_history = saved
 
 
+@pytest.fixture(autouse=True)
+def _no_dns_lookup_for_hostnames(monkeypatch):
+    """Do not let these tests depend on the machine's resolver.
+
+    server.py's _handle_extract_body validates the provider endpoint BEFORE it
+    dispatches to srv.extract (server.py:2439 -> ssrf.validate_endpoint ->
+    is_private_host), and the default endpoint is a real public host. The tests
+    below fake srv.extract, but not that validation, so they were doing a LIVE
+    DNS lookup of api.minimaxi.com on every run. When resolution failed the
+    request failed with err.badEndpoint instead of the timeout / partial-run
+    behaviour each test is actually about.
+
+    Same fixture as tests/test_llm_fixes.py and
+    tests/test_sprint_b_pipeline.py (commit 30e8428), and the loopback servers
+    this file starts are unaffected because literal IPs and localhost still go
+    through the real predicate. The policy itself stays covered by
+    tests/test_ssrf.py, which still fails when the network is genuinely dead --
+    as it should.
+    """
+    import ipaddress
+    import rca_core.ssrf as ssrf
+
+    real = ssrf.is_private_host
+
+    def stub(host):
+        name = str(host).strip("[]")
+        low = name.lower()
+        if low == "localhost" or low.endswith(".localhost"):
+            return real(host)
+        try:
+            ipaddress.ip_address(name)
+        except ValueError:
+            return False        # a NAME: assume public, never touch DNS
+        return real(host)       # a literal IP: real policy, no lookup needed
+
+    monkeypatch.setattr(ssrf, "is_private_host", stub)
+
+
 class _Handler(srv.Handler):
     def log_message(self, *args, **kwargs):
         pass
