@@ -107,9 +107,20 @@ _COLUMNAR_MARKERS: tuple[str, ...] = (
 def _detect_mode(data: dict[str, Any]) -> str:
     """Identify which extraction mode the data belongs to.
 
-    Returns one of: ``"columnar"``, ``"abundance"``, ``"range_chart"``.
+    Returns one of: ``"columnar"``, ``"abundance"``, ``"zonation"``,
+    ``"range_chart"``.
     Columnar wins ties because cross_beds / lithology_legend are unique
-    markers that can't appear in range-chart output."""
+    markers that can't appear in range-chart output.
+
+    AUDIT-2026-09-30: this list omitted ``"zonation"``, which the function has
+    returned since UI-REVIEW-2026-09-05 -- the branch and its comment were added
+    below, the contract above them was not. A caller trusting the docstring
+    would treat a zonation result as impossible, which is the same class of
+    stale-claim bug as js/quality.js's _detectMode comment claiming the zonation
+    problem was solved while one consumer still ignored the mode. This
+    vocabulary is pinned by tests/test_quality_engine_parity.py, which requires
+    both engines' detectors to return the same set.
+    """
     if not isinstance(data, dict):
         return "range_chart"
     for key in _COLUMNAR_MARKERS:

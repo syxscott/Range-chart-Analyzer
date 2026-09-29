@@ -188,3 +188,93 @@ def test_every_detectmode_consumer_handles_zonation():
         "A detector that returns a mode is not enough; every consumer must "
         "act on it, or that mode falls through to range-chart defaults."
     )
+
+
+_MODE_RE = re.compile(r"mode === '(\w+)'")
+
+
+def _js_detector_modes():
+    src = open(QUALITY_JS, encoding="utf-8").read()
+    start = src.index("function _detectMode(")
+    i = src.index("{", start)
+    depth = 0
+    for j in range(i, len(src)):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return set(re.findall(r"return '(\w+)'", src[start:j + 1]))
+    raise AssertionError("unbalanced braces in _detectMode")
+
+
+def test_both_detectors_return_the_same_mode_vocabulary():
+    """A zonation fix that taught only ONE engine about zonation is the bug
+    this file is about, one level down. Pin the vocabulary itself.
+
+    The docstring of rca_core/quality.py::_detect_mode listed only columnar /
+    abundance / range_chart and omitted zonation, which it has returned since
+    UI-REVIEW-2026-09-05 -- the contract above the branch, not the branch
+    itself, was stale.
+    """
+    from rca_core.quality import _detect_mode as py_detect
+
+    py_modes = set()
+    for probe in (
+        {}, {"abundances": []}, {"sections": []},
+        {"cross_beds": ["a"]}, {"correlations": []},
+        {"zones": [], "zonations": []}, {"species_ranges": []},
+        {"correlations": [], "species_ranges": []},
+    ):
+        py_modes.add(py_detect(probe))
+    js_modes = _js_detector_modes()
+
+    assert "zonation" in py_modes, (
+        "the Python detector no longer classifies a zonation payload as "
+        "'zonation' -- the whole scorer dispatch depends on it"
+    )
+    assert py_modes == js_modes, (
+        f"the two detectors disagree on the mode vocabulary: "
+        f"python={sorted(py_modes)} js={sorted(js_modes)}"
+    )
+
+
+def test_every_detectmode_consumer_handles_every_mode_it_can_receive():
+    """Generalisation of the zonation guard: the invariant is not "handles
+    zonation", it is "handles every mode the detector can return". Naming one
+    mode in the test means the next mode someone adds ships unhandled."""
+    src = open(QUALITY_JS, encoding="utf-8").read()
+
+    def body_of(name):
+        start = src.index(f"function {name}(")
+        i = src.index("{", start)
+        depth = 0
+        for j in range(i, len(src)):
+            if src[j] == "{":
+                depth += 1
+            elif src[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return src[start:j + 1]
+        raise AssertionError(f"unbalanced braces in {name}")
+
+    consumers = {n for n in re.findall(r"function (\w+)\(", src)
+                 if n != "_detectMode" and "_detectMode(" in body_of(n)}
+    assert consumers, "no _detectMode consumers found -- the parse is wrong"
+
+    all_modes = _js_detector_modes()
+    # range_chart is the `else` of every chain, so it is handled by
+    # construction; anything else must appear as an explicit comparison.
+    explicit_required = all_modes - {"range_chart"}
+    assert explicit_required, "the detector returns nothing but range_chart?"
+
+    incomplete = {}
+    for fn in sorted(consumers):
+        handled = set(_MODE_RE.findall(body_of(fn)))
+        missing = explicit_required - handled
+        if missing:
+            incomplete[fn] = sorted(missing)
+    assert not incomplete, (
+        f"these _detectMode consumers do not handle every mode: {incomplete}. "
+        f"Required explicitly: {sorted(explicit_required)}."
+    )
