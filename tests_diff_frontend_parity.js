@@ -233,19 +233,25 @@ function diff(a, b, trail, out) {
 //    keep insertion order, so the two engines emit the same three rows in a
 //    different sequence. Values, `wrapper_key` stamps and warnings all match;
 //    only the row sequence differs, and only for a numeric-looking wrapper key.
-//  * rc_section_formations_string — `coordinates: {"lat": 1}`.
-//    rca_core/extractor.py still calls a BARE `str(v)` in six local `s()`
-//    closures (normalize_result's section/species/biozone builders and friends,
-//    extractor.py:902/986/1052/1108/1572/3143) while the other normalizers use
-//    `_stringify_scalar`. Server-side the dict therefore leaks the Python repr
-//    "{'lat': 1}" into a scientific field; js/minimax.js mirrors
-//    `_stringify_scalar` there ("" for containers). Fixing this means changing
-//    rca_core (out of this round's scope: the Python side is the frozen oracle)
-//    or writing a full Python-repr serializer in the browser for a value no
-//    renderer can use. Tracked as a contract point for the app/table owner.
+//  * rc_section_formations_string — RESOLVED, removed 2026-09-30. This entry
+//    was the second stale one in this table: it described rca_core/extractor.py
+//    as still calling a BARE `str(v)` in six local `s()` closures "at lines
+//    902/986/1052/1108/1572/3143", leaking a Python repr like "{'lat': 1}"
+//    into a scientific field. Measured rather than believed: normalize_result's
+//    `s()` now delegates to `_stringify_scalar` and contains zero bare
+//    `str(v)` calls, and the case agrees --
+//        node tests_diff_frontend_parity.js rc_section_formations_string
+//        -> 1 matched, 0 documented, 0 diverged
+//    The fix landed at some point and the table entry did not. An agreeing
+//    case in EXPECTED_DIVERGENCES is harmless to the exit code, but it is
+//    exactly the kind of stale claim this file is supposed to be the record
+//    against, and the next reader would go looking for a bug that is gone.
+//
+//    The other two survivors were re-measured the same way and ARE still
+//    diverged, so they stay: rc_dict_shaped_sections (row ORDER only) and
+//    ag_34 / ag_35 (Unicode-vs-ASCII digits).
 const EXPECTED_DIVERGENCES = {
   rc_dict_shaped_sections: 'JS enumerates integer-like object keys first (ECMAScript ordinary-object order); row ORDER only',
-  rc_section_formations_string: 'Python still calls bare str() in normalize_result; containers leak a repr where _stringify_scalar yields ""',
   ag_34: 'Python \\d/float() accept Unicode decimal digits, JS \\d is [0-9] only; Arabic-Indic digit age label resolves in rca_core and not in the browser',
   ag_35: 'Same Unicode-vs-ASCII digit split, full-width digits: resolves in rca_core/standards/ics.py, unresolvable in js/quality.js',
   // AUDIT-2026-09-30: rc_root_confidence_nan, rc_row_confidence_nan and

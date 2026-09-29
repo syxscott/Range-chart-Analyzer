@@ -111,9 +111,35 @@ def write_private_bytes(path: str, data: bytes, *, exclusive: bool = False) -> N
     Raises ``OSError`` (or ``FileExistsError``) on failure; callers must treat
     that as fatal rather than continue with unsaved key material.
 
-    NOTE: ``rca_core/llm.py`` (providers.json writer) still uses the old
-    open+chmod pattern and should call this helper — see the review report; it
-    is outside this change's allowed file set.
+    NOTE (corrected 2026-09-30): this note used to read "rca_core/llm.py
+    (providers.json writer) still uses the old open+chmod pattern and should
+    call this helper". That was half wrong. llm.py's ``ProviderStore.save``
+    is NOT a plain open+chmod -- it already does tmp + ``os.fsync`` +
+    ``os.replace``, under a module-level lock, with a ``finally`` that removes
+    the tmp file on every path (REVIEW-2026-09-20 #25). So the "half-written
+    file on crash" hole this helper's first paragraph describes was closed
+    there by other means.
+
+    What is still true is narrower, and worth keeping: llm.py does not call
+    this helper. It writes a FIXED ``providers.json.tmp`` with a plain
+    ``open(tmp, "w")``, so on POSIX that file exists at the umask default
+    (0644) for the whole duration of the write and is tightened only
+    afterwards, and a plain open FOLLOWS a symlink -- a local attacker who
+    pre-creates that path as a symlink redirects the write out of the home
+    directory. Both are what this helper exists to close.
+
+    NOT MEASURED, read off the source: those two holes are POSIX-only (on
+    Windows ``_chmod_user_only`` is a documented no-op and the ACL model
+    differs, and creating a symlink needs extra privilege), so the numbers
+    above could not be reproduced on the Windows dev box this note was
+    corrected from -- ``stat`` there reports 0o666/0o777 for any file. Treat
+    the claim as a code-reading, and re-measure on a POSIX host before
+    deciding it is worth changing.
+
+    Switching the call site over also means preserving the concurrent-save
+    behaviour its fixed tmp name and module lock currently provide, which is
+    why this has stayed a TODO rather than a one-line edit. Verified by
+    reading llm.py:862-898.
     """
     directory = os.path.dirname(path) or "."
     if directory:
