@@ -2674,4 +2674,153 @@ class TestTheIcsTableSplitIsDocumentedNotAccidental:
         assert path.exists(), "ics_current.json was removed"
         data = json.loads(path.read_text(encoding="utf-8"))
         for stage in _ELEVEN_UNPROMOTED_STAGES:
-            assert stage in data, f"{stage} missing from the refresh output"
+            assert stage in data, f"{stage} missing from the refresh output"# ---------------------------------------------------------------------------
+# AUDIT-2026-09-30: eight hand-synced lookup tables, and nothing tested the
+# two engines against EACH OTHER.
+# ---------------------------------------------------------------------------
+
+_JS_ICS = REPO / "js" / "ics_table.js"
+
+
+def _js_block(name):
+    """The body of a `globalThis.<name> = { ... };` literal."""
+    import re
+    text = _JS_ICS.read_text(encoding="utf-8")
+    m = re.search(r"globalThis\.%s = \{(.*?)\n\};" % re.escape(name), text, re.S)
+    assert m, f"{name} not found in js/ics_table.js"
+    return m.group(1)
+
+
+def _js_flat(body, quoted):
+    import re
+    pat = (r"'([^']+)':\s*'([^']+)'" if quoted else r"([A-Za-z_]+):\s*'([^']+)'")
+    return {m.group(1): m.group(2) for m in re.finditer(pat, body)}
+
+
+def _js_series(body):
+    import re
+    out = {}
+    for m in re.finditer(
+            r"'([^']+)':\s*\{name:\s*'([^']+)',\s*stages:\s*\[([^\]]*)\]", body):
+        out[m.group(1)] = (m.group(2), re.findall(r"'([^']+)'", m.group(3)))
+    return out
+
+
+def _js_bounds(body):
+    import re
+    return {m.group(1): (float(m.group(2)), float(m.group(3)))
+            for m in re.finditer(r"'?([A-Za-z_一-鿿]+)'?:\s*"
+                                 r"\[([-\d.]+),\s*([-\d.]+)\]", body)}
+
+
+class TestTheSevenLookupTablesMatchAcrossEngines:
+    """js/ics_table.js holds eight globals. Exactly one -- the AGE table --
+    is deliberately split (ics_2024.json on the Python side, ics_current.json
+    on the browser side, gated behind update_ics.py --write-canonical; see
+    TestTheIcsTableSplitIsDocumentedNotAccidental).
+
+    The other seven are hand-synced copies of tables in
+    rca_core/standards/ics.py, and NOTHING compared the two engines. The
+    existing checks all compare the JS table against a JSON FILE, not against
+    the Python module:
+
+      tests/test_ics_invariants.py::TestJsMirror  -> ics_current.json
+      tests_frontend.js::test_ics_table_vs_ics_current_json -> same file
+
+    so a one-sided edit to any of the seven -- a stage appended to
+    _CN_STAGE_ALIASES, a label retargeted, a stage dropped from a series list --
+    would have been invisible to CI while the desktop and the browser
+    resolved the same Chinese label to different intervals.
+
+    All seven are identical today. Verified 2026-09-30 by extraction, not by
+    reading.
+    """
+
+    def test_chinese_stage_aliases(self):
+        import rca_core.standards.ics as IC
+        js = _js_flat(_js_block("RCA_ICS_CN_STAGES"), True)
+        assert js == IC._CN_STAGE_ALIASES, (
+            "Chinese stage aliases drifted: "
+            f"py-only={sorted(set(IC._CN_STAGE_ALIASES) - set(js))} "
+            f"js-only={sorted(set(js) - set(IC._CN_STAGE_ALIASES))}")
+
+    def test_chinese_series_aliases(self):
+        import rca_core.standards.ics as IC
+        js = _js_flat(_js_block("RCA_ICS_CN_SERIES"), True)
+        assert js == IC._CN_SERIES_ALIASES, (
+            "Chinese series aliases drifted: "
+            f"py-only={sorted(set(IC._CN_SERIES_ALIASES) - set(js))} "
+            f"js-only={sorted(set(js) - set(IC._CN_SERIES_ALIASES))}")
+
+    def test_series_stage_lists(self):
+        import rca_core.standards.ics as IC
+        py = {k: (v[0], list(v[1])) for k, v in IC._SERIES_STAGE_LISTS.items()}
+        js = _js_series(_js_block("RCA_ICS_SERIES"))
+        assert js == py, (
+            "series -> (canonical name, stage list) drifted: "
+            f"py-only={sorted(set(py) - set(js))} "
+            f"js-only={sorted(set(js) - set(py))} "
+            f"changed={sorted(k for k in set(py) & set(js) if py[k] != js[k])}")
+
+    def test_period_bounds(self):
+        # Python derives these from the table at import; JS hard-codes them.
+        # A divergence here means one side was promoted and the other was not.
+        import rca_core.standards.ics as IC
+        py = {k.lower(): v for k, v in IC._PERIOD_BOUNDS.items()}
+        js = _js_bounds(_js_block("RCA_ICS_PERIODS"))
+        assert js == py, (
+            f"period bounds drifted: py={py} js={js}")
+
+    def test_english_period_names(self):
+        import rca_core.standards.ics as IC
+        js = _js_flat(_js_block("RCA_ICS_PERIOD_NAMES"), False)
+        assert js == IC._EN_PERIOD_ALIASES
+
+    def test_chinese_period_bounds(self):
+        # Caught by the coverage guard below on the first run: the Chinese
+        # BOUNDS table is a separate global from the English one, and it was
+        # the one table this file had not yet compared.
+        import rca_core.standards.ics as IC
+        py = {label: IC._PERIOD_BOUNDS.get(period)
+              for label, period in IC._CN_PERIOD_ALIASES.items()}
+        js = _js_bounds(_js_block("RCA_ICS_CN_PERIODS"))
+        assert js == py, (
+            "Chinese period bounds drifted (label -> the bounds of the "
+            f"canonical period): py={py} js={js}")
+
+    def test_chinese_period_names(self):
+        import rca_core.standards.ics as IC
+        js = _js_flat(_js_block("RCA_ICS_CN_PERIOD_NAMES"), True)
+        assert js == IC._CN_PERIOD_ALIASES
+
+    def test_every_alias_target_resolves_on_both_engines(self):
+        # A target that is absent from the table is a silent dead mapping: the
+        # label "resolves" to an interval the scorer cannot then place.
+        import rca_core.standards.ics as IC
+        from rca_core.standards.ics import ICS_2024
+        dead = sorted({v for v in IC._CN_STAGE_ALIASES.values()
+                       if v not in ICS_2024})
+        assert not dead, f"aliases point at stages absent from the table: {dead}"
+
+    def test_the_guard_covers_every_table_the_file_assigns(self):
+        # If someone adds a ninth lookup table, this list must grow with it,
+        # otherwise the new table is silently unguarded. It earned its keep on
+        # the first run: it caught RCA_ICS_CN_PERIODS, the one table the
+        # comparisons above had missed.
+        import re
+        text = _JS_ICS.read_text(encoding="utf-8")
+        assigned = set(re.findall(r"globalThis\.(RCA_ICS[A-Z_]*) =", text))
+        guarded = {
+            "RCA_ICS_TABLE",          # deliberately split, guarded elsewhere
+            "RCA_ICS_CN_STAGES",
+            "RCA_ICS_SERIES",
+            "RCA_ICS_CN_SERIES",
+            "RCA_ICS_PERIODS",
+            "RCA_ICS_CN_PERIODS",
+            "RCA_ICS_PERIOD_NAMES",
+            "RCA_ICS_CN_PERIOD_NAMES",
+        }
+        assert assigned == guarded, (
+            "js/ics_table.js gained/lost a table: "
+            f"unguarded={sorted(assigned - guarded)} "
+            f"stale={sorted(guarded - assigned)}")
