@@ -2049,13 +2049,26 @@ def to_xlsx(
             # not.
             italic_col -= 1
 
+        written = 0
         for raw in raw_rows:
             data_cells = raw[1:] if include_index else raw
             if not any(_export_cell_text(v).strip() for v in data_cells):
                 # Blank placeholder row (an empty other_fossils entry, a Qt
                 # phantom): not written, and NOT counted.
                 continue
-            sheet_row = _write_row(ws, sheet_row, raw, italic_col=italic_col)
+            # AUDIT-2026-10-01 [item 9.2]: "NOT counted" was not true. The
+            # index cell comes from _export_grid, which numbers rows over the
+            # UNFILTERED sequence, so dropping a blank here left a hole:
+            # other_fossils = ["Brachiopod", "", "   ", "Trilobite"] produced a
+            # workbook whose index column read 1, 4. A workbook numbered 1, 4
+            # reads as "two rows were deleted", which is a different -- and
+            # wrong -- story from "two blank rows were omitted". The counter
+            # below is over rows actually written, which is what the comment
+            # always claimed. include_index=False has no index cell to fix, so
+            # it is left on the pre-baked value it never had.
+            written += 1
+            cells = ([written] + list(raw[1:])) if include_index else list(raw)
+            sheet_row = _write_row(ws, sheet_row, cells, italic_col=italic_col)
 
         # Auto-size columns: min 10, max 60 (capped so a single long cell
         # doesn't blow the column out across multiple screen widths).
