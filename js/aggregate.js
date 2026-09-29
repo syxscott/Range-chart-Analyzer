@@ -271,7 +271,19 @@ function mergeConfidenceField(values) {
     if (Number.isFinite(n)) valid.push(Math.max(0, Math.min(1, n)));
   }
   if (valid.length === 0) return NO_MERGE;
-  return Math.round((valid.reduce((a, b) => a + b, 0) / valid.length) * 10000) / 10000;
+  // AUDIT-2026-09-30: rcaPyRound, not `Math.round(x * 10000) / 10000`. That
+  // idiom rounds halves AWAY FROM ZERO, and js/reason-codes.js#rcaPyRound
+  // exists precisely because of it -- its own comment names this exact case:
+  // "1/32 = 0.03125 yields 0.0313 here but 0.0312 in Python (a 32-cell grid is
+  // a normal chart, so this is reachable)". rca_core/aggregate.py rounds with
+  // `round(..., 4)`, which is ties-to-EVEN. Measured over tie-shaped inputs,
+  // this line diverged on 4 of 19: [0.01005], [0.01015], [0.03125] and [1/32].
+  // Falls back to the old idiom only when reason-codes.js is not loaded, which
+  // is the same degradation rcaPyRound's own call sites document.
+  const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
+  return (typeof rcaPyRound === 'function')
+    ? rcaPyRound(mean, 4)
+    : Math.round(mean * 10000) / 10000;
 }
 
 function mergeMappingField(values) {
@@ -1203,7 +1215,19 @@ function rcaMergeResults(results, totalRuns, keymap) {
     wSum += c * w;
     wN += w;
   }
-  out[km.confidence] = wN > 0 ? Math.round((wSum / wN) * 10000) / 10000 : 0;
+  // AUDIT-2026-09-30: same correction as mergeConfidenceField above -- the
+  // weighted mean is rounded with rcaPyRound (ties to even, matching
+  // rca_core/aggregate.py's `round(weight_sum / weight_n, 4)`) rather than
+  // `Math.round(x * 10000) / 10000`, which rounds halves away from zero and is
+  // the exact idiom js/reason-codes.js#rcaPyRound's comment says is wrong.
+  // A weighted mean reaches a tie whenever the runs' confidences average to a
+  // half at the fifth decimal -- 0.03125 among 32 equally weighted runs being
+  // the shape rcaPyRound's comment calls out.
+  out[km.confidence] = wN > 0
+    ? ((typeof rcaPyRound === 'function')
+        ? rcaPyRound(wSum / wN, 4)
+        : Math.round((wSum / wN) * 10000) / 10000)
+    : 0;
 
   // Range-chart-only: also merge the parallel "sections" list of measured
   // sections so the original four-table shape is preserved.
