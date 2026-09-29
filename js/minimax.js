@@ -695,6 +695,19 @@ function rcaStringifyScalar(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (Array.isArray(value) || typeof value === 'object') return '';
+  // AUDIT-2026-09-30: a non-finite number stringifies to Python's repr
+  // spelling, not JavaScript's. rca_core/extractor.py:_stringify_scalar -- the
+  // function this mirrors -- yields "nan" / "inf" / "-inf", while
+  // String(NaN) is "NaN" and String(Infinity) is "Infinity", so the same
+  // payload rendered as `nan` on the desktop and `NaN` in the browser. This
+  // file's own js/table.js#rcaPyFloatStr already made that choice for the
+  // export path, with a comment saying it reproduces repr(float('nan')); two
+  // functions in the same product were spelling the same number two ways.
+  if (typeof value === 'number') {
+    if (Number.isNaN(value)) return 'nan';
+    if (value === Infinity) return 'inf';
+    if (value === -Infinity) return '-inf';
+  }
   return String(value);
 }
 
@@ -1291,11 +1304,26 @@ function rcaBedIndex(value) {
 // exponents as `1e-07`; `String(1.0)` gives "1". Only reachable through the
 // Newick serializer (support / branch_length), where the two spellings produce
 // two different tree files from the same payload.
-function rcaPyFloatStr(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return String(value);
-  if (Number.isInteger(value) && Math.abs(value) < 1e21) return value.toFixed(1);
-  return String(value);
-}
+// AUDIT-2026-09-30: the local `rcaPyFloatStr` that used to sit here is
+// GONE, deliberately. It was a 3-line stub --
+//     if (typeof value !== 'number' || !Number.isFinite(value)) return String(value);
+//     if (Number.isInteger(value) && Math.abs(value) < 1e21) return value.toFixed(1);
+//
+// -- carrying the same name as js/table.js's 50-line reproduction of Python's
+// repr(), and the two disagreed about every non-finite value: this one spelled
+// NaN as "NaN" and Infinity as "Infinity", the other as "nan" and "inf", which
+// is what a function named rcaPyFloatStr is supposed to produce. Which one ran
+// was decided only by <script> order, and index.html happens to load
+// table.js AFTER this file -- so the app was correct BY ACCIDENT, while
+// difffuzz_normalize.py and difffuzz_aggregate.py load minimax.js last and were
+// therefore measuring the WRONG one. A whole-family hazard: the four call sites
+// below write a phylo row's `support` and the branch lengths inside the
+// exported Newick string.
+//
+// js/table.js was the only correct definition of the 438 global functions in
+// js/, and this was the only one defined twice, so deleting the stub leaves a
+// single definition that every load order agrees on.
+// See tests/test_nonfinite_spelling.py.
 
 // Mirror of _quote_newick_label: Newick tokens `( ) [ ] ; ,` (and a `:`, which
 // would otherwise split `name:branch_length`) force single quotes, embedded

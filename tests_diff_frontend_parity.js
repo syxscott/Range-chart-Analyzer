@@ -37,6 +37,22 @@ const SCRIPTS = [
   'js/quality.js',
   'js/aggregate.js',
   'js/minimax.js',
+  // AUDIT-2026-09-30: js/table.js was MISSING here, so this harness was not
+  // the environment the app runs in. It surfaced as a hard failure the moment
+  // minimax.js's duplicate `rcaPyFloatStr` stub was deleted: the to_newick
+  // group threw "rcaPyFloatStr is not defined", because the real 50-line
+  // definition lives in table.js and only the stub was being loaded.
+  //
+  // Two things were wrong with that, and only the second is visible in a test
+  // count. (1) rcaPyFloatStr, whose name promises Python's repr(), resolved
+  // to a 3-line stub that spelled NaN as "NaN" -- while index.html loads
+  // table.js AFTER minimax.js and therefore got the correct one. The harness
+  // was measuring a function the app never runs. (2) js/aggregate.js consults
+  // table.js's exporter predicates through a `typeof` guard, so with the file
+  // absent that entire branch was inert here and live in the app.
+  //
+  // Order follows index.html so the context matches the product.
+  'js/table.js',
 ];
 
 function buildContext() {
