@@ -40,6 +40,16 @@ _BARE_NUM_RE = re.compile(r"^(\d+)\s*([a-zA-Z]*)")
 # from the exporter's range_base_le_range_top constraint. A trailing unit is
 # therefore an explicit rejection, and a bare-number form only accepts a
 # SINGLE-letter subscript (what bed labels use: 23c, 27a).
+# AUDIT-2026-09-29: the trailing ``a`` in the alternation is DEAD, and that is
+# deliberate rather than an oversight. The only call site guards on
+# ``len(sub) > 1`` before consulting this table (single letters are decided
+# earlier, by the "m" check and then by _SUB_RE), so "a" can never match here
+# and "27a" stays a bed label -- which is what the _sub_is_bed_label docstring
+# says and what real range charts mean by it. It is kept in the list so the
+# table reads as a complete inventory of the suffixes this domain uses, and so
+# that lifting the len>1 guard does not silently change "a" from bed to unit.
+# The alternative -- deleting the entry -- leaves the next reader wondering
+# why annus is missing from a table of time units.
 _UNIT_WORDS_RE = re.compile(
     r"^(ma|myr|mya|m\.y\.|m\.y\.?|ka|kyr|ga|gyr|yr|cm|mm|km|ft|a)$",
     re.IGNORECASE,
