@@ -1570,7 +1570,29 @@ def apply_table_edits(
             # happened to sit at this index — a deleted row's _extras landed on
             # its successor.
             d = {}
-        d.update(edited)
+        # AUDIT-2026-10-01 [item 9.4]: `d.update(edited)` wrote EVERY column of
+        # the table onto every row, including columns that model row never had.
+        # An untouched Apply-edits pass therefore ADDED keys to the model.
+        # Measured on the gold fixtures: every range_chart section gained
+        # "formation_thickness_m": "", every biozone gained "thickness_m": None,
+        # every phylo node gained "node_age_ma": None.
+        #
+        # Nothing was corrupted and no value was lost, but the operator clicked
+        # Apply on an unchanged table and the JSON export came back with a
+        # different shape -- and any consumer using `"k" in row` rather than
+        # `row.get("k")` starts matching rows that never had the key. An
+        # operation with zero edits should not change the data.
+        #
+        # The rule has two halves and both are load-bearing. Write the key when
+        # the row already HAD it -- that is what keeps "the operator cleared
+        # this field" working, since the empty value is then the new intended
+        # state. Write it also when the new value is non-empty -- that keeps a
+        # real edit to a previously absent field. Only "absent AND empty" is
+        # skipped, and that case carries no information: the cell was blank
+        # precisely because the field was never there.
+        for k, v in edited.items():
+            if k in d or v not in (None, ""):
+                d[k] = v
         out.append(d)
     data[table_id] = out
     return data
