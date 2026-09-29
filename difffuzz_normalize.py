@@ -273,6 +273,45 @@ def norm(v):
                     % (type(v).__name__, v))
 
 
+#: Field paths whose divergence is an ALREADY-ADJUDICATED open decision, not
+#: a fresh finding. Kept in lockstep with EXPECTED_DIVERGENCES in
+#: tests_diff_frontend_parity.js, which registers the same two as
+#: rc_root_confidence_nan and rc_row_confidence_nan.
+#:
+#: Both are the same defect in two costumes: Python clamps a confidence it
+#: cannot parse to 1.0 -- FULL CERTAINTY -- while the JS mirror clamps to 0.0
+#: at the root and None per row. "Unmeasurable" reading as "maximally
+#: certain" is precisely the blind spot this whole review wave is about, and
+#: it is why the direction is a product decision rather than a patch: fixing
+#: it here would silently invalidate 200+ recorded parity fixtures.
+EXPECTED_FIELD_DIVERGENCES = (
+    ".confidence",                  # root-level confidence
+    ".species_ranges[N].confidence",  # per-row confidence
+)
+
+_ROW_CONFIDENCE_SUFFIX = ".confidence"
+
+
+def is_expected_divergence(path):
+    """True when `path` is a parked, deliberately-unaligned field.
+
+    `path` is one entry of a ``diff_paths`` result, i.e. the field PATH with
+    the observed values already appended ("`confidence: py=1.0 js=0.0`"), so
+    the path is taken as everything before the first ": ".
+
+    Compares by shape rather than by regex, so it does not need `re` imported
+    above this point, and so an index in the path (species_ranges[7]) cannot
+    hide a divergence that the same field at another index would report.
+    """
+    head = path.split(": ", 1)[0].strip()
+    if head in EXPECTED_FIELD_DIVERGENCES:
+        return True
+    prefix, sep, _tail = head.rpartition(_ROW_CONFIDENCE_SUFFIX)
+    if not sep or not prefix.startswith(".species_ranges["):
+        return False
+    return prefix.endswith("]") and prefix[16:-1].isdigit()
+
+
 def diff_paths(a, b, path="", out=None, limit=10):
     if out is None:
         out = []
@@ -323,6 +362,7 @@ def run_mode(mode, n, seed, show_all):
     js_out = json.loads(proc.stdout)
 
     mismatch = py_raised = js_raised = agree = agree_refuse = 0
+    expected = 0
     examples = []
     for c, jr in zip(cases, js_out):
         try:
@@ -337,9 +377,21 @@ def run_mode(mode, n, seed, show_all):
         if py_ok and jr.get("ok"):
             d_ = diff_paths(pr, norm(jr["v"]))
             if d_:
-                mismatch += 1
-                if show_all or len(examples) < 3:
-                    examples.append((c, d_, pr, jr["v"]))
+                # AUDIT-2026-09-29: a permanently-red tool is a tool nobody
+                # runs twice. The two confidence-clamping paths are already
+                # adjudicated as open product decisions (EXPECTED_DIVERGENCES
+                # in tests_diff_frontend_parity.js, as rc_root_confidence_nan
+                # and rc_row_confidence_nan), so they are counted separately
+                # instead of as fresh findings. exit 0 now means "nothing NEW
+                # diverged" rather than "the two known ones happened again".
+                new_d = [p for p in d_ if not is_expected_divergence(p)]
+                expected += len(d_) - len(new_d)
+                if new_d:
+                    mismatch += 1
+                    if show_all or len(examples) < 3:
+                        examples.append((c, new_d, pr, jr["v"]))
+                else:
+                    agree += 1
             else:
                 agree += 1
         elif (not py_ok) and (not jr.get("ok")):
@@ -361,8 +413,9 @@ def run_mode(mode, n, seed, show_all):
                                     % (py_ok, jr.get("ok"))], pr,
                                  jr.get("e") if not jr.get("ok") else jr.get("v")))
     print("[%s] cases=%d seed=%d agreed=%d agreed_refusal=%d py_raised=%d "
-          "js_raised=%d MISMATCHED=%d"
-          % (mode, n, seed, agree, agree_refuse, py_raised, js_raised, mismatch))
+          "js_raised=%d MISMATCHED=%d expected_parked=%d"
+          % (mode, n, seed, agree, agree_refuse, py_raised, js_raised,
+             mismatch, expected))
     for c, d_, pr, jv in examples:
         print("=" * 72)
         print("  #%d  payload=%s" % (c["i"], json.dumps(c["payload"], ensure_ascii=False)[:400]))
@@ -390,6 +443,18 @@ def main(argv):
     print("overall: %s" % ("DIVERGENT" if rc else "engines agree"))
     return rc
 
+
+def _rca_crashproof_stdout():
+    """Dev tool: payloads are printed verbatim and can hold any character.
+    On a GBK console that is a fatal UnicodeEncodeError, which reads like
+    "the fuzzer found something" when it found nothing. Make stdout lossy."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
+_rca_crashproof_stdout()
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))

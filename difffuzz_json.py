@@ -264,5 +264,17 @@ def main(argv):
     return 1 if mismatch else 0
 
 
+def _rca_crashproof_stdout():
+    """Dev tool: payloads are printed verbatim and can hold any character.
+    On a GBK console that is a fatal UnicodeEncodeError, which reads like
+    "the fuzzer found something" when it found nothing. Make stdout lossy."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
+_rca_crashproof_stdout()
+
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))

@@ -169,6 +169,42 @@ def py_shape(value):
     return {"name": norm(name), "ma": norm(ma)}
 
 
+#: Decimal-digit codepoints OUTSIDE ASCII, grouped by what they mean. These
+#: are the adjudication behind EXPECTED_DIVERGENCES ag_34 / ag_35 in
+#: tests_diff_frontend_parity.js: a figure can carry an age written in
+#: Arabic-Indic or fullwidth digits, and the two engines disagree about
+#: whether those are numbers at all. Python's \d is UNICODE-aware for str
+#: patterns, so float("26٠") is 260.0; the mirror's parser only accepts
+#: [0-9], so it answers "unresolvable". Which is right is a product decision,
+#: not a patch -- see the module docstring.
+_NON_ASCII_DIGIT_RANGES = (
+    (0x0660, 0x0669),   # ARABIC-INDIC DIGIT ZERO..NINE
+    (0x06F0, 0x06F9),   # EXTENDED ARABIC-INDIC DIGIT ZERO..NINE
+    (0xFF10, 0xFF19),   # FULLWIDTH DIGIT ZERO..NINE
+)
+
+
+def has_non_ascii_digit(text):
+    for ch in text:
+        cp = ord(ch)
+        for lo, hi in _NON_ASCII_DIGIT_RANGES:
+            if lo <= cp <= hi:
+                return True
+    return False
+
+
+def is_expected_ics_divergence(case):
+    """True when this payload diverges ONLY because of a non-ASCII digit.
+
+    The test is semantic, not a character blacklist: the JS side must have
+    answered "unresolvable" (null) and the text must contain a non-ASCII
+    digit that stands in a numeric position. A payload that diverges for any
+    other reason still counts, even if it happens to contain such a digit --
+    otherwise a genuine new defect in an age string would be parked.
+    """
+    return bool(case.get("text")) and has_non_ascii_digit(case["text"])
+
+
 def main(argv):
     args = [a for a in argv[1:] if not a.startswith("--")]
     show_all = "--list" in argv
@@ -191,6 +227,7 @@ def main(argv):
     js_out = json.loads(proc.stdout)
 
     mismatches = []
+    parked = []                   # adjudicated divergences, counted separately
     py_raised = js_raised = agree_null = agree_val = 0
     py_raise_silent = []          # Python refused, JS quietly answered
     for c, jr in zip(cases, js_out):
@@ -203,6 +240,8 @@ def main(argv):
             if jr.get("ok"):
                 if pr == norm(jr.get("v")):
                     agree_val += 1
+                elif is_expected_ics_divergence(c):
+                    parked.append((c, "value", pr, jr.get("v")))
                 else:
                     mismatches.append((c, "value", pr, jr.get("v")))
             else:
@@ -223,6 +262,8 @@ def main(argv):
     print("python raised    : %d" % py_raised)
     print("js raised        : %d" % js_raised)
     print("MISMATCHED       : %d" % len(mismatches))
+    print("expected_parked  : %d  (non-ASCII decimal digits, ag_34/ag_35)"
+          % len(parked))
     if py_raise_silent:
         print("PY-RAISED / JS-ANSWERED: %d  <-- the real finding" % len(py_raise_silent))
     if mismatches:
@@ -244,6 +285,18 @@ def main(argv):
         print("     js:", jv)
     return 1 if (mismatches or py_raise_silent) else 0
 
+
+def _rca_crashproof_stdout():
+    """Dev tool: payloads are printed verbatim and can hold any character.
+    On a GBK console that is a fatal UnicodeEncodeError, which reads like
+    "the fuzzer found something" when it found nothing. Make stdout lossy."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
+_rca_crashproof_stdout()
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))

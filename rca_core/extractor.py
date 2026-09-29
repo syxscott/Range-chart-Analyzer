@@ -2903,7 +2903,31 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
     # {"root_ids": [1], "nodes": [{"id": "1", "parent": null, ...}]}
     # mis-classified its only root as a non-root node and raised
     # "Non-root node 1 must have a parent".
-    root_ids = [str(r) for r in (raw.get("root_ids") or [])]
+    #
+    # AUDIT-2026-09-29: the comprehension was the ONE rejection path in this
+    # function that could raise TypeError instead of ValueError. A model that
+    # writes a scalar there —
+    #     {"root_ids": 42, "nodes": [...]}
+    # — made `raw.get("root_ids") or []` yield 42, and iterating an int raises
+    # TypeError: 'int' object is not iterable. That escaped every
+    # `pytest.raises(ValueError)` contract in tests/test_phylo_parent_null.py
+    # and surfaced to the user as `normalize failed: 'int' object is not
+    # iterable` (extractor.py catches Exception at the call site), which names
+    # an implementation detail instead of anything about their figure.
+    #
+    # The JS mirror already had this right and handled four shapes explicitly
+    # (js/minimax.js:2507-2516): array, string, object (its keys), and
+    # anything else -> empty. A scalar is in the last group there, so the
+    # browser reported "root_ids is empty" while the desktop raised TypeError
+    # on the same payload. Mirroring the branch list keeps the two engines
+    # refusing the same payloads for the same stated reason, and restores the
+    # ValueError contract this function otherwise keeps everywhere.
+    _raw_root_ids = raw.get("root_ids")
+    if isinstance(_raw_root_ids, (list, tuple, str, dict)):
+        root_ids = [str(r) for r in (_raw_root_ids or [])]
+    else:
+        # None / int / float / bool: the JS mirror's "anything else" branch.
+        root_ids = []
     if not root_ids:
         raise ValueError("root_ids is empty")
 

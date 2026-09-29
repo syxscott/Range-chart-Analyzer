@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -1674,3 +1675,288 @@ class TestP2ChartModeBoundaryMeansTheSameThingInBothEngines:
             mode, matched = auto_detect_chart_mode_ex(text)
             assert matched is False, (text, mode)
             assert mode == "range_chart", (text, mode)
+# ---------------------------------------------------------------------------
+# AUDIT-2026-09-29 [P2] estimate_skew_angle refused every search window at or
+# below the module's own MIN_USEFUL_ANGLE.
+# ---------------------------------------------------------------------------
+
+def _deskew_plate(width=260, height=260, period=9):
+    from PIL import Image, ImageDraw
+    im = Image.new("L", (width, height), 255)
+    d = ImageDraw.Draw(im)
+    for y in range(0, height, period):
+        d.line([(0, y), (width - 1, y)], fill=0, width=1)
+    return im
+
+
+class TestP2SmallSearchWindowIsUsable:
+    """``estimate_skew_angle`` is the function whose docstring promises a
+    caller can see a sub-threshold skew. It could not be called that way.
+
+    It passed ``MIN_USEFUL_ANGLE`` as the ``min_angle`` argument purely to
+    satisfy ``_check_params``' signature, and that function requires
+    ``min_angle < max_angle``. So every ``max_angle`` at or below 0.15 was
+    rejected with
+
+        DeskewError: min_angle must satisfy 0 <= min_angle < max_angle (0.1)
+
+    although ``max_angle=0.1`` is a perfectly legal search window under
+    ``_check_params``' own rule (0, 45], and although this function does no
+    min_angle filtering at all -- ``_min_angle`` was discarded on the same
+    line. The sub-threshold caller the docstring advertises was the one
+    caller that could not call it.
+    """
+
+    def test_windows_at_or_below_the_constant_are_accepted(self):
+        import pytest
+        from rca_core.deskew import DeskewError, estimate_skew_angle
+        plate = _deskew_plate()
+        for max_angle in (0.15, 0.1, 0.05, 0.01):
+            try:
+                angle = estimate_skew_angle(
+                    plate, max_angle=max_angle, method="projection")
+            except DeskewError as exc:  # pragma: no cover - the regression
+                raise AssertionError(
+                    "estimate_skew_angle rejected the legal search window "
+                    f"max_angle={max_angle}: {exc}") from None
+            assert -max_angle <= angle <= max_angle, (max_angle, angle)
+
+    def test_the_constant_itself_is_still_usable(self):
+        # MIN_USEFUL_ANGLE is the documented "below this, do not bother
+        # rotating" cut. Being able to ASK about that regime is the point.
+        import rca_core.deskew as ds
+        assert ds.MIN_USEFUL_ANGLE == 0.15
+        angle = ds.estimate_skew_angle(_deskew_plate(),
+                                      max_angle=ds.MIN_USEFUL_ANGLE,
+                                      method="projection")
+        assert abs(angle) <= ds.MIN_USEFUL_ANGLE
+
+    def test_default_window_is_unchanged(self):
+        # The fix must not move the default path: same plate, same answer.
+        from rca_core.deskew import estimate_skew_angle
+        plate = _deskew_plate()
+        assert estimate_skew_angle(plate, method="projection") == \
+            estimate_skew_angle(plate, 5.0, method="projection")
+
+    def test_illegal_windows_are_still_rejected(self):
+        # Relaxing the internal sentinel must not relax the real rules.
+        from rca_core.deskew import DeskewError, estimate_skew_angle
+        plate = _deskew_plate()
+        for bad in (0.0, -1.0, 45.1, 90.0):
+            try:
+                estimate_skew_angle(plate, max_angle=bad, method="projection")
+            except DeskewError:
+                continue
+            raise AssertionError(f"max_angle={bad} should have been rejected")
+
+    def test_other_parameters_are_still_validated(self):
+        from rca_core.deskew import DeskewError, estimate_skew_angle
+        plate = _deskew_plate()
+        for kwargs in ({"downsample": 0}, {"axis": "sideways"},
+                       {"method": "magic"}):
+            try:
+                estimate_skew_angle(plate, max_angle=1.0, **kwargs)
+            except DeskewError:
+                continue
+            raise AssertionError(f"{kwargs} should have been rejected")
+
+    def test_deskew_image_still_reports_a_contradictory_min_angle(self):
+        # deskew_image has no such excuse: there a min_angle >= max_angle IS
+        # a caller contradiction, and the guard must stay in place. This is
+        # the sibling path -- it is the reason the fix was made in
+        # estimate_skew_angle alone rather than in _check_params.
+        from rca_core.deskew import DeskewError, deskew_image
+        plate = _deskew_plate()
+        try:
+            deskew_image(plate, max_angle=2.0, min_angle=2.0,
+                         method="projection")
+        except DeskewError:
+            return
+        raise AssertionError(
+            "deskew_image accepted min_angle == max_angle; the real "
+            "contradiction check was lost")# ---------------------------------------------------------------------------
+# AUDIT-2026-09-29: the prompt's JSON-schema blocks hand-write the three
+# response kinds, so "generated from the single source of truth" only held for
+# half of the paths.
+# ---------------------------------------------------------------------------
+
+_SCHEMA_LINE = re.compile(
+    r'"response_kind":\s*"(\w+)"\s*\(string, REQUIRED: one of '
+    r'"(\w+)", "(\w+)", "(\w+)"'
+)
+
+#: The prompts that carry the three-state answer, i.e. the ones whose
+#: ``species_ranges`` / ``abundances`` / ... rows are digested by the contract
+#: source keys. Each of these ALSO prints a JSON-schema example of a row, and
+#: in that example the three kinds are written out as string literals.
+_CONTRACT_SCHEMA_PROMPTS = (
+    "RANGE_CHART_SYSTEM_PROMPT",
+    "ABUNDANCE_DIAGRAM_SYSTEM_PROMPT",
+    "CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT",
+    "SCATTER_PLOT_SYSTEM_PROMPT",
+)
+
+
+class TestPromptSchemaKindsAreTheModulesKinds:
+    """``prompt.py``'s header says the contract clauses are GENERATED from
+    ``rca_core.reason_codes.py`` "never transcribed". That is true of
+    ``_coverage_contract_clause``, which interpolates the module constants --
+    and it is NOT true of the JSON-schema example block printed above it,
+    where the three kinds are typed out by hand.
+
+    So a rename in ``reason_codes.py`` would move the rule and leave the
+    example behind: the shipped prompt would tell the model, in one place,
+    that the allowed values are A | B | C and, a few lines earlier, that they
+    are x | y | z. Nothing caught that --
+    ``test_kinds_come_from_the_module_not_a_literal`` asserts
+    ``RESPONSE_KIND_LIST`` equals the expression that DEFINES it, which is
+    true no matter what the constants become, and ``RESPONSE_KIND_LIST`` is
+    referenced by no production code at all (the prompt writes the kinds
+    quoted, so the unquoted list is not even a substring of it).
+
+    The values agree today. This pins the agreement so it cannot stop being
+    true quietly.
+    """
+
+    def test_every_contract_prompt_carries_a_schema_line(self):
+        import rca_core.prompt as P
+        for name in _CONTRACT_SCHEMA_PROMPTS:
+            text = getattr(P, name)
+            assert _SCHEMA_LINE.search(text), (
+                f"{name} no longer matches the expected schema line shape; if "
+                "the wording changed, update _SCHEMA_LINE in this test "
+                "rather than let it go unchecked")
+
+    def test_schema_literals_are_the_module_values(self):
+        import rca_core.prompt as P
+        from rca_core.reason_codes import (
+            RESPONSE_EXTRACTED, RESPONSE_NOT_DRAWN, RESPONSE_UNCERTAIN,
+        )
+        want = (RESPONSE_EXTRACTED, RESPONSE_NOT_DRAWN, RESPONSE_UNCERTAIN)
+        for name in _CONTRACT_SCHEMA_PROMPTS:
+            hit = _SCHEMA_LINE.search(getattr(P, name))
+            assert hit, name
+            default, *listed = hit.groups()
+            assert tuple(listed) == want, (
+                f"{name} advertises kinds {tuple(listed)} but "
+                f"reason_codes.py defines {want}")
+            assert default == RESPONSE_EXTRACTED, (
+                f"{name} shows the example response_kind as {default!r}, "
+                f"expected {RESPONSE_EXTRACTED!r}")
+
+    def test_the_generated_clause_agrees_with_the_schema_blocks(self):
+        # The two paths -- interpolated clause vs hand-written example -- are
+        # checked against each other here, so neither can drift alone.
+        import rca_core.prompt as P
+        from rca_core.reason_codes import (
+            RESPONSE_EXTRACTED, RESPONSE_NOT_DRAWN, RESPONSE_UNCERTAIN,
+        )
+        clause = P._coverage_contract_clause("species_ranges", "unit", "eg")
+        for kind in (RESPONSE_EXTRACTED, RESPONSE_NOT_DRAWN, RESPONSE_UNCERTAIN):
+            assert f'"{kind}"' in clause, kind
+            assert f'"{kind}"' in P.RANGE_CHART_SYSTEM_PROMPT, kind
+
+    def test_response_kind_list_is_not_a_second_source_of_truth(self):
+        """Pins the current (harmless) state instead of pretending the
+        variable does work: it is unreferenced by production code, and the
+        existing test only restates its own definition. If a future change
+        makes the clause interpolate it, this test is the place to notice."""
+        import rca_core.prompt as P
+        from rca_core.reason_codes import (
+            RESPONSE_EXTRACTED, RESPONSE_NOT_DRAWN, RESPONSE_UNCERTAIN,
+        )
+        assert P.RESPONSE_KIND_LIST == " | ".join(
+            (RESPONSE_EXTRACTED, RESPONSE_NOT_DRAWN, RESPONSE_UNCERTAIN))
+        # The prompt writes the kinds quoted, so the bare list is NOT a
+        # substring of the shipped text -- which is why interpolating it
+        # would be a real (if small) behaviour change, not a refactor.
+        assert P.RESPONSE_KIND_LIST not in P.RANGE_CHART_SYSTEM_PROMPT# ---------------------------------------------------------------------------
+# AUDIT-2026-09-29: the phylo normalizer had exactly one rejection path that
+# raised TypeError instead of ValueError, and the JS mirror had no such path
+# at all.
+# ---------------------------------------------------------------------------
+
+class TestScalarRootIdsRefuseLikeTheMirrorDoes:
+    """``_normalize_phylogenetic_tree_into`` raises ValueError for every
+    unusable payload it documents -- empty root_ids, an unknown root id, a
+    non-root with a null parent, a root with a parent. ``tests/
+    test_phylo_parent_null.py`` pins all four with ``pytest.raises
+    (ValueError)``.
+
+    There was one more, and it raised the wrong class. ``[str(r) for r in
+    (raw.get("root_ids") or [])]`` iterates whatever it is handed, so a model
+    that wrote a scalar there::
+
+        {"root_ids": 42, "nodes": [...]}
+
+    raised ``TypeError: 'int' object is not iterable``. The call site catches
+    ``Exception`` (extractor.py:3226), so nothing crashed -- the user saw
+    ``normalize failed: 'int' object is not iterable``, which names an
+    implementation detail instead of anything about their figure.
+
+    It was also a cross-engine split. ``js/minimax.js:2507-2516`` enumerates
+    four shapes explicitly -- array, string, object (its keys), everything
+    else -> empty -- so the browser refused the same payload with
+    "root_ids is empty" while the desktop raised TypeError. The differential
+    fuzzer caught it as 79 "refusal text differs" per run, and its own
+    comment says that class is a REAL difference in failure mode rather than
+    two spellings of one refusal.
+    """
+
+    BASE = {
+        "metadata": {"taxon_group": "Radiolaria"},
+        "nodes": [{"id": "n0", "parent": None, "name": "Root", "is_leaf": False},
+                  {"id": "n1", "parent": "n0", "name": "Leaf", "is_leaf": True}],
+    }
+
+    def _payload(self, root_ids):
+        p = dict(self.BASE)
+        p["root_ids"] = root_ids
+        return p
+
+    def test_scalar_root_ids_raise_value_error_not_type_error(self):
+        from rca_core.extractor import _normalize_phylogenetic_tree_into as N
+        for bad in (42, 0, 1.5, True, 3 + 0j):
+            with pytest.raises(ValueError) as ei:
+                N(self._payload(bad))
+            # The mirror's wording, so both engines refuse for the same stated
+            # reason rather than one of them leaking a TypeError.
+            assert "root_ids is empty" in str(ei.value), (bad, str(ei.value))
+
+    def test_the_empty_forms_still_read_the_same(self):
+        # None / [] / "" were already empty before the fix and must stay so;
+        # the guard is not allowed to change the existing contract.
+        from rca_core.extractor import _normalize_phylogenetic_tree_into as N
+        for empty in (None, [], "", {}):
+            with pytest.raises(ValueError, match="root_ids is empty"):
+                N(self._payload(empty))
+
+    def test_the_accepted_shapes_are_untouched(self):
+        # array / string / dict are the three shapes the JS mirror accepts, and
+        # a dict contributes its KEYS on both sides. Refusing a scalar must not
+        # have narrowed any of these.
+        from rca_core.extractor import _normalize_phylogenetic_tree_into as N
+        listed = N(self._payload(["n0"]))
+        assert [n["id"] for n in listed["nodes"]] == ["n0", "n1"]
+        by_key = N(self._payload({"n0": True}))
+        assert [n["id"] for n in by_key["nodes"]] == ["n0", "n1"]
+        # a string iterates per character, exactly as the mirror's
+        # Array.from(rootIdsRaw) does -- "n" and "0" are both unknown ids, so
+        # the refusal is about the ids, not about the shape.
+        with pytest.raises(ValueError, match="unknown node id"):
+            N(self._payload("n0"))
+
+    def test_numeric_ids_inside_a_list_still_work(self):
+        # The Sprint B fix this line was written for must survive: root_ids
+        # are stringified once, so [1] matches a node whose id is "1".
+        from rca_core.extractor import _normalize_phylogenetic_tree_into as N
+        out = N({
+            "root_ids": [1],
+            "nodes": [{"id": "1", "parent": None, "name": "A", "is_leaf": True}],
+        })
+        assert out["nodes"][0]["id"] == "1"
+
+    def test_unknown_root_id_still_names_the_id(self):
+        from rca_core.extractor import _normalize_phylogenetic_tree_into as N
+        with pytest.raises(ValueError, match="unknown node id: n9"):
+            N(self._payload(["n9"]))
