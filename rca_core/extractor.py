@@ -22,6 +22,33 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+# AUDIT-2026-09-29: the two enhance helpers annotate their argument and return
+# as `"Image.Image"`, but Pillow was imported FUNCTION-LOCALLY everywhere in
+# this module, so `Image` was never a name in the module namespace.
+# `from __future__ import annotations` made that invisible at runtime, and
+# `ruff --select F821` was the only thing that ever looked. It bites in two
+# places that are easy to miss: typing.get_type_hints() on either helper
+# raises NameError (verified, not assumed), and any type checker reports the
+# annotation as undefined. Same shape as the missing `Optional` import that
+# rca_core/quality.py carried until this review wave.
+#
+# Not a TYPE_CHECKING block: that would satisfy the type checker and leave
+# get_type_hints() still raising, which is the half that actually bites at
+# runtime. The fallback to Any keeps the annotations resolvable when Pillow
+# really is absent, so the module still imports -- the same "rca_core works
+# without Pillow" contract deskew.py states.
+try:
+    from PIL import Image
+except Exception:  # pragma: no cover - exercised only without Pillow
+    # `Image = Any` is NOT enough: the annotations say "Image.Image", and
+    # Any.Image does not exist, so get_type_hints() would trade a NameError
+    # for an AttributeError. A one-attribute stand-in keeps both spellings
+    # resolvable and lands on Any.
+    class _ImageStub:  # noqa: N801 - stands in for the PIL module
+        Image = Any
+
+    Image = _ImageStub  # type: ignore[misc,assignment]
+
 from .image_hash import compute_image_sha256_from_b64
 from .json_utils import safe_json_loads
 from .llm import ApiFormat, LlmProvider, call_llm_api

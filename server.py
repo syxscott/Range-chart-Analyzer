@@ -1437,7 +1437,17 @@ class Handler(BaseHTTPRequestHandler):
             # would serialize as literal Infinity and break every
             # response.json() consumer. Sanitise instead of emitting
             # invalid JSON (RFC 8259).
-            body = json.dumps(_strip_nonfinite_shallow(payload),
+            #
+            # AUDIT-2026-09-29: the call was UNQUALIFIED, but
+            # _strip_nonfinite_shallow is a @staticmethod ON THIS CLASS, so it
+            # is not a module-level name and the name never resolved.
+            # Measured before the fix: a payload carrying NaN/Infinity raised
+            # NameError right here instead of being sanitised -- the fallback
+            # introduced for exactly those payloads had therefore never run
+            # once, and _send_json, which has 50 call sites, turned any
+            # non-finite response into a 500. The helper's own `import math`
+            # is function-local and could not have covered it either.
+            body = json.dumps(self._strip_nonfinite_shallow(payload),
                               ensure_ascii=False, allow_nan=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -3124,6 +3134,16 @@ class Handler(BaseHTTPRequestHandler):
                 image_sha256=first_ok_sha,
             )
             # Build a complete request_meta for this multi-run batch.
+            #
+            # AUDIT-2026-09-29: prompt_version_for_mode was used below with no
+            # binding in scope. The only import of it in this file lives inside
+            # _write_history_record (line ~496), a function-local import, so the
+            # server module namespace never had the name -- the multi-run branch
+            # raised NameError while assembling request_meta, i.e. every batched
+            # extraction (runs > 1) died after the runs had already been paid
+            # for. A function-local import here matches how the two
+            # prompt_version_for_cache_key sites in this same branch do it.
+            from rca_core.prompt import prompt_version_for_mode
             multi_meta = {
                 "mode": mode,
                 "runs": runs,

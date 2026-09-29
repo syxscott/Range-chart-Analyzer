@@ -83,11 +83,6 @@ class TestExtractRangeChartNeverRaises(unittest.TestCase):
     call_llm_api path so a malformed provider config returns a clean error
     result instead of propagating."""
 
-    def _patched_call_llm_api(self, exc):
-        def _raise(*args, **kwargs):
-            raise exc
-        return _patched_call_llm_api
-
     def test_extract_handles_malformed_provider_config(self):
         # Simulate a malformed extra_body: dict.update([]) raises TypeError.
         def fake_call(*args, **kwargs):

@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest
+          pip install pytest ruff
           # Optional deps used by tests (at-rest encryption, XLSX,
           # image enhancement). UI-REVIEW-2026-09-07: Pillow added -
           # tests/test_enhance.py used to error the whole collection
@@ -45,6 +45,35 @@ jobs:
 
       - name: Run full pytest suite
         run: python -m pytest tests/ tests_core.py -q --tb=short
+
+      # AUDIT-2026-09-29: F821 (undefined name) only, deliberately.
+      #
+      # Three rounds of line-by-line review had gone through server.py and
+      # extractor.py without seeing either of these, and neither had a test:
+      #
+      #   server.py  _send_json called `_strip_nonfinite_shallow` unqualified
+      #              while it is a @staticmethod ON THE CLASS, so the name
+      #              never resolved and the NaN/Infinity fallback FIX-2026-09-22
+      #              added for exactly those payloads had never once run --
+      #              50 call sites, every non-finite response a 500.
+      #   server.py  _handle_extract_body used prompt_version_for_mode with no
+      #              binding in scope; the file's only import of it is inside
+      #              another function, so every batched (runs > 1) extraction
+      #              died while stamping its own provenance.
+      #   extractor.py  the enhance helpers annotate "Image.Image" but Pillow
+      #              was only ever imported function-locally, so
+      #              typing.get_type_hints() raised NameError.
+      #
+      # F821 is the narrowest useful rule here: it is pure dead-name
+      # detection with no style opinions, so it will not fight the codebase
+      # the way the full default rule set does (176 unused-imports, most of
+      # them __init__.py re-exports). A new F821 is a runtime NameError
+      # waiting for the right input, which is exactly the class that shipped.
+      - name: No undefined names (F821)
+        run: |
+          ruff check . --select F821 \
+            --exclude node_modules,outputs,proxy,references \
+            --output-format concise
 
       - name: Run tests_core standalone (exit code reflects failures)
         run: python tests_core.py

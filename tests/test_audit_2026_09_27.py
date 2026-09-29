@@ -1959,4 +1959,158 @@ class TestScalarRootIdsRefuseLikeTheMirrorDoes:
     def test_unknown_root_id_still_names_the_id(self):
         from rca_core.extractor import _normalize_phylogenetic_tree_into as N
         with pytest.raises(ValueError, match="unknown node id: n9"):
-            N(self._payload(["n9"]))
+            N(self._payload(["n9"]))# ---------------------------------------------------------------------------
+# AUDIT-2026-09-29: two NameErrors in server.py, both on live request paths.
+# Found by `ruff check --select F821`, not by reading: three rounds of
+# line-by-line review had gone through this file without seeing either, and
+# neither had a test.
+# ---------------------------------------------------------------------------
+
+def _handler_class():
+    import server
+    return server, server.Handler
+
+
+class _RecordingHandler:
+    """Minimal stand-in for BaseHTTPRequestHandler's output surface.
+
+    ``wfile`` is an ATTRIBUTE on BaseHTTPRequestHandler (socket.makefile()),
+    not a method -- an earlier version of this probe defined it as a method
+    and failed with "'function' object has no attribute 'write'", which
+    looked like a product failure and was not one.
+    """
+
+    @staticmethod
+    def build(handler_cls):
+        import io
+
+        class Probe(handler_cls):
+            def send_response(self, code, msg=None):
+                self.captured_code = code
+
+            def send_header(self, k, v):
+                self.captured_headers = getattr(self, "captured_headers", [])
+                self.captured_headers.append((k, v))
+
+            def end_headers(self):
+                self.captured_ended = True
+
+        probe = Probe.__new__(Probe)
+        probe.wfile = io.BytesIO()
+        return probe
+
+
+class TestP1NonFiniteResponsePayloadIsSanitisedNotFatal:
+    """Handler._send_json's fallback for a payload carrying NaN/Infinity
+    called ``_strip_nonfinite_shallow`` unqualified, but that helper is a
+    @staticmethod ON THE CLASS -- not a module-level name.
+
+    The name therefore never resolved, and the fallback introduced by
+    FIX-2026-09-22 for precisely these payloads had never run once.
+    _send_json has 50 call sites, so every response whose payload happened to
+    carry a non-finite float became a 500 rather than a sanitised 200 --
+    which inverts the intent of the comment three lines above it: the
+    handler is meant to survive the very JSON it cannot serialise.
+    """
+
+    PAYLOAD = {"ok": True,
+               "usage": {"input_tokens": 1, "junk": float("nan")},
+               "data": {"confidence": float("inf")}}
+
+    def _send(self):
+        _server, handler = _handler_class()
+        probe = _RecordingHandler.build(handler)
+        probe._send_json(200, dict(self.PAYLOAD))
+        return probe
+
+    def test_it_does_not_raise(self):
+        # Before the fix this was NameError: name '_strip_nonfinite_shallow'
+        # is not defined.
+        probe = self._send()
+        assert probe.captured_code == 200
+
+    def test_the_client_receives_parsable_json(self):
+        import json
+        probe = self._send()
+        text = probe.wfile.getvalue().decode("utf-8")
+        parsed = json.loads(text)          # raises if invalid JSON was served
+        assert parsed["ok"] is True
+        assert "NaN" not in text and "Infinity" not in text, text
+
+    def test_the_non_finite_values_became_null_not_a_crash(self):
+        probe = self._send()
+        import json
+        parsed = json.loads(probe.wfile.getvalue().decode("utf-8"))
+        assert parsed["usage"]["junk"] is None
+        assert parsed["data"]["confidence"] is None
+
+    def test_a_clean_payload_still_takes_the_fast_path(self):
+        # The guard must not have changed the ordinary case: no sanitising,
+        # exact bytes out.
+        _server, handler = _handler_class()
+        probe = _RecordingHandler.build(handler)
+        payload = {"ok": True, "data": {"confidence": 0.5}}
+        probe._send_json(200, payload)
+        import json
+        assert json.loads(probe.wfile.getvalue().decode("utf-8")) == payload
+
+    def test_the_helper_is_reachable_as_a_method(self):
+        # The staticmethod may be called unbound too; both spellings must
+        # work, because the fix chose the bound one.
+        _server, handler = _handler_class()
+        out = handler._strip_nonfinite_shallow(
+            {"a": float("nan"), "b": [float("inf"), 1.0]})
+        assert out["a"] is None
+        assert out["b"][0] is None and out["b"][1] == 1.0
+
+
+class TestP1MultiRunRequestMetaResolvesItsPromptVersion:
+    """``_handle_extract_body`` builds ``request_meta`` for a multi-run batch
+    using ``prompt_version_for_mode``, which server.py never bound at module
+    level. The file's only import of it lives inside
+    ``_write_history_record`` -- a function-local import -- so the name simply
+    was not there.
+
+    The batch had already been extracted by then: the runs were paid for, the
+    merged result was assembled, and the request died while stamping its own
+    provenance. Every batched extraction (runs > 1) hit it.
+    """
+
+    def test_the_method_binds_the_name_it_uses(self):
+        import ast
+        from pathlib import Path
+        import server
+        tree = ast.parse(Path(server.__file__).read_text(encoding="utf-8"))
+        fn = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and \
+                    node.name == "_handle_extract_body":
+                fn = node
+                break
+        assert fn is not None, "_handle_extract_body disappeared"
+        imports = [n.lineno for n in ast.walk(fn)
+                   if isinstance(n, ast.ImportFrom) and any(
+                       a.name == "prompt_version_for_mode" for a in n.names)]
+        loads = [n.lineno for n in ast.walk(fn)
+                 if isinstance(n, ast.Name) and n.id == "prompt_version_for_mode"
+                 and isinstance(n.ctx, ast.Load)]
+        assert loads, "the multi-run branch no longer reads the prompt version"
+        assert imports, ("prompt_version_for_mode is used in "
+                         "_handle_extract_body with no binding in scope")
+        assert imports[0] < loads[0], (
+            "the import must precede the use; got import at %s, use at %s"
+            % (imports, loads))
+
+    def test_the_module_namespace_does_not_rely_on_a_sibling_import(self):
+        # Guards the shape of the bug: a function-local import in ONE function
+        # is not a module binding, which is what made this invisible.
+        import server
+        assert "prompt_version_for_mode" not in vars(server), (
+            "if this is now a module-level import, drop the local one and "
+            "update this test -- two bindings is how the confusion started")
+
+    def test_the_imported_function_is_the_one_the_parser_uses(self):
+        from rca_core.prompt import prompt_version_for_mode
+        assert prompt_version_for_mode("range_chart") == "v5"
+        assert prompt_version_for_mode("abundance_diagram") == "v4"
+        assert prompt_version_for_mode("no_such_mode") == "v3"
