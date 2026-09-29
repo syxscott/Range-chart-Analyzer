@@ -187,9 +187,21 @@ function rcaVizNum(raw) {
   if (typeof raw !== 'string') return null;
   var text = raw.trim().replace(/,/g, '.');
   if (!text) return null;
-  if (/^[+-]?\d+(\.\d+)?$/.test(text)) return Number(text);
-  var m = /^([+-]?\d+(?:\.\d+)?)\s*(?:ma|m\.a\.|megaa)?$/i.exec(text);
-  return m ? Number(m[1]) : null;
+  // AUDIT-2026-09-30: Number() FIRST. The hand-rolled regexes below rejected
+  // "1.2e2", "1e5", ".5" and "5." which rca_core's _to_float_opt accepted, and
+  // the two disagreed on 11 of 42 probed inputs. "260 Ma" went the other way:
+  // the mirror returned null and _axis_domain() then dropped the WHOLE
+  // calibration, so {"at_0": "0 Ma", "at_999": "120 Ma"} produced a
+  // calibrated chart here and an uncalibrated one on the desktop.
+  // Number() is not enough on its own -- it rejects the unit suffix -- so the
+  // suffix form is still matched explicitly, now with Python's number grammar
+  // underneath it so both sides accept the same set.
+  var n = Number(text);
+  if (isFinite(n)) return n;
+  var m = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:_\d+)*)\s*(?:ma|m\.a\.|megaa)?$/i.exec(text);
+  if (!m) return null;
+  var v = Number(m[1].replace(/_/g, ''));
+  return isFinite(v) ? v : null;
 }
 
 // ---------------------------------------------------------------------------

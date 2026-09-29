@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import math
 import mimetypes
 import os
 import re
@@ -1305,11 +1306,39 @@ def _add_row_flag(row: dict[str, Any], tag: str) -> None:
 
 
 def _to_float_opt(value: Any) -> float | None:
-    """Best-effort float for a scientific value; non-numeric text -> ``None``."""
+    """Best-effort float for a scientific value; non-numeric text -> ``None``.
+
+    AUDIT-2026-09-30: js/viz.js#rcaVizNum is documented as the mirror of this
+    function, and the two disagreed on 11 of 42 probed inputs. The worst was
+    ``"260 Ma"`` -- the most ordinary age notation there is -- which this side
+    refused while the browser read 260 and drew the endpoint. That is not a
+    rounding difference: ``_axis_domain`` returns None when EITHER end fails
+    to parse, so a model that wrote ``{"at_0": "0 Ma", "at_999": "120 Ma"}``
+    produced a calibrated chart in the browser and an UNcalibrated one on the
+    desktop, with the row's point geometry dropped for want of a domain.
+
+    The mirror was also the stricter side on plain numeric text: ``"1.2e2"``,
+    ``"1e5"``, ``".5"`` and ``"5."`` all parse here and returned null there.
+    The browser's mirror now tries ``Number()`` first for the same reason.
+
+    So each side now accepts what the other already accepted, and nothing
+    more: the number grammar is Python's, and the unit suffix is the mirror's
+    explicit ``ma | m.a. | megaa`` list, which is age notation this module
+    legitimately meets in ``at_0`` / ``top_age_ma`` positions.
+    """
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
+        # AUDIT-2026-09-30: a non-finite number is not a number, and the
+        # mirror already said so -- js/viz.js#rcaVizNum returns null for NaN
+        # and +-Infinity because it tests isFinite. Here they went straight
+        # through `float(value)`, and this function feeds the plot-frame
+        # maths: one NaN endpoint poisons _axis_domain, the whole calibration
+        # is dropped, and a NaN that does survive into a position breaks the
+        # render rather than degrading it. Same class as the confidence-clamp
+        # and the phylo metadata defects, one layer down.
+        f = float(value)
+        return f if math.isfinite(f) else None
     if not isinstance(value, str):
         return None
     text = value.strip().replace(",", ".")
@@ -1318,8 +1347,14 @@ def _to_float_opt(value: Any) -> float | None:
     try:
         return float(text)
     except ValueError:
-        # "Bed 9" / "120 cm" / "4.2-6.8": not a single number, not our business.
-        m = re.fullmatch(r"\s*([+-]?\d+(?:\.\d+)?)\s*", text)
+        # "260 Ma" / "120 m.a." / "1e5 Ma" / "1_000 Ma": float() rejects the
+        # unit suffix, and the mirror accepts it. Numbers with an exponent or
+        # an underscore separator are spelled the way float() already takes
+        # them, so they only need the suffix stripped.
+        m = re.fullmatch(
+            r"\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:_\d+)*)"
+            r"\s*(?:ma|m\.a\.|megaa)?\s*",
+            text, re.IGNORECASE)
         return float(m.group(1)) if m else None
 
 
