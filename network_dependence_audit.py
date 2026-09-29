@@ -1,66 +1,79 @@
-"""Enumerate the tests that depend on the machine's resolver.
+"""Does the test suite depend on the network? Run it and read the list.
 
-NOT IN CI, DELIBERATELY -- like the other audit tools at the repo root. It is a
-pytest plugin you opt into, and it makes the suite RED on purpose, so wiring it
-into a build would be a self-inflicted outage. Run it when you add tests that
-touch a provider endpoint, or after any change to the SSRF path.
+NOT IN CI, DELIBERATELY -- it is an audit, not a gate, and the correct answer
+is not always "none". Like the other root-level audit tools it is opt-in:
 
-WHAT IT DOES
-------------
-Kills external name resolution for the whole run -- ``socket.getaddrinfo``
-raises for every name that is not ``localhost``, a ``*.localhost`` name, or a
-literal IP -- then reports which tests failed. The calibration matters: a real
-resolver outage does NOT break localhost (it comes from the hosts file) or
-literal addresses, so a blanket kill produces failures for the wrong reason and
-teaches you the wrong thing.
+    python -m pytest tests/ tests_core.py -q -p network_dependence_audit
 
-WHY
----
-Every ``_call_openai`` / ``_call_gemini`` entry point, and
-``server.py``'s ``_handle_extract_body``, validate the provider endpoint BEFORE
-doing any I/O, and that validation calls ``ssrf.is_private_host``, which
-resolves the host. A test that fakes the HTTP layer but not the validation is
-therefore a test that quietly needs the internet. This happened three times in
-one session (tests/test_llm_fixes.py, tests/test_sprint_b_pipeline.py,
-tests/test_sprint_b_server.py), each time surfacing as an intermittent
-KeyError on a local dict with no explanation.
+WHY THIS EXISTS
+---------------
+Four to six `_call_openai` tests used to fail intermittently (~2 full-suite
+runs in 7) with ``KeyError('body')`` -- a name that points at a local dict
+rather than at anything that went wrong. The cause was not flakiness in the
+code: every ``_call_openai`` / ``_call_gemini`` entry point validates the
+provider endpoint BEFORE the request, ``ssrf.validate_endpoint`` calls
+``is_private_host``, and that does a real DNS lookup. The tests faked the HTTP
+call and not the validation, so a resolver hiccup turned into an early return
+and then a KeyError. Fixed in 30e8428 by making the request-shape tests skip
+the resolver.
 
-USAGE
------
-    python -m pytest tests/ -q -p network_dependence_audit
+Finding that one file at a time is slow, and "I did not find more" is a much
+weaker statement than a measurement. This makes the whole question one run.
 
-READING THE OUTPUT
-------------------
-Anything that fails is a test whose result depends on the network. Sort them:
+THE ANSWER TODAY
+----------------
+Five tests, and every one of them is, by name, a claim that a PUBLIC HOSTNAME
+IS ACCEPTED:
 
-  * EXPECTED -- tests/test_ssrf.py, tests/test_ssrf_shared.py,
-    tests/test_gui_endpoint_validation.py, tests/test_gui_fluent_ssrf.py.
-    These assert that a PUBLIC https endpoint is ACCEPTED, which is a claim
-    about name resolution and cannot be made without it. They are the reason
-    the audit has an answer at all, and they should go red when it runs.
-  * A BUG -- everything else. A test whose subject is request shape, export,
-    merge, quality, the editor, or a server response does not need a resolver.
-    Give it the same autouse fixture the three fixed files use: answer bare
-    hostnames as public without a lookup, and leave literal IPs and localhost
-    on the real predicate so the policy suites keep testing real behaviour.
+    tests/test_ssrf.py::test_public_https_accepted
+    tests/test_ssrf.py::test_public_hostname_accepted
+    tests/test_ssrf_shared.py::test_public_https_accepted
+    tests/test_gui_endpoint_validation.py::test_validate_endpoint_accepts_https_public
+    tests/test_gui_fluent_ssrf.py::test_validate_endpoint_accepts_https_public
+
+That is the right place for the dependency. "A hostname that resolves to a
+public address is accepted" is a claim about name resolution; it cannot be made
+offline, and rca_core/ssrf.py deliberately fails closed when resolution fails
+("don't let an attacker bypass the check by passing an unresolvable name"). So
+these five are expected here, and nothing else is.
+
+CALIBRATION, which cost one wrong run
+--------------------------------------
+The stub must raise ``socket.gaierror``, NOT a bare ``OSError``.
+``gaierror`` is a SUBCLASS of ``OSError``, and ``is_private_host`` catches
+exactly ``socket.gaierror`` around ``getaddrinfo``. A bare OSError therefore
+escapes that handler and propagates as an exception instead of being treated as
+"unresolvable -> private -> refuse", which is not what a resolver outage looks
+like. The first version of this sweep raised OSError and reported eight
+failers, three of which (``test_ipv4_cloud_metadata_rejected`` and the two
+``test_validate_endpoint_is_called_in_*``) never touch the network at all --
+``is_private_host`` parses a literal IP and returns before resolving.
+
+For the same reason the stub spares localhost and loopback: a real outage does
+not break them, they come from the hosts file. Stubbing them would manufacture
+failures and teach the wrong lesson.
 """
 from __future__ import annotations
 
 import ipaddress
 import socket
+import sys
 
-__all__ = ["EXPECTED_NETWORK_DEPENDENT"]
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+# The tests that are SUPPOSED to be listed. If this list and the measured list
+# disagree, one of them changed and the diff is the interesting part.
+EXPECTED = {
+    "tests/test_ssrf.py::TestSSRF::test_public_https_accepted",
+    "tests/test_ssrf.py::TestSSRF::test_public_hostname_accepted",
+    "tests/test_ssrf_shared.py::TestSharedSSRF::test_public_https_accepted",
+    "tests/test_gui_endpoint_validation.py::TestGuiEndpointValidation"
+    "::test_validate_endpoint_accepts_https_public",
+    "tests/test_gui_fluent_ssrf.py::TestFluentSSRF::test_validate_endpoint_accepts_https_public",
+}
 
 _real_getaddrinfo = socket.getaddrinfo
-
-# Suites whose subject IS name resolution. Listed explicitly so that a NEW
-# unexpected failure stands out, instead of hiding among the known ones.
-EXPECTED_NETWORK_DEPENDENT = (
-    "tests/test_ssrf.py",
-    "tests/test_ssrf_shared.py",
-    "tests/test_gui_endpoint_validation.py",
-    "tests/test_gui_fluent_ssrf.py",
-)
+_failures: list[str] = []
 
 
 def _is_local(name: str) -> bool:
@@ -76,7 +89,8 @@ def _selective(host, *args, **kwargs):
     name = str(host).strip("[]").lower()
     if _is_local(name):
         return _real_getaddrinfo(host, *args, **kwargs)
-    raise OSError("network_dependence_audit: external name resolution disabled")
+    raise socket.gaierror(
+        f"network_dependence_audit: external resolution disabled ({name})")
 
 
 def pytest_configure(config):
@@ -89,18 +103,23 @@ def pytest_unconfigure(config):
 
 def pytest_runtest_logreport(report):
     if report.when == "call" and report.failed:
-        item = report.nodeid
-        path = item.split("::", 1)[0].replace("\\", "/")
-        kind = "EXPECTED" if path in EXPECTED_NETWORK_DEPENDENT else "A BUG"
-        print(f"\n[netdep] {kind}: {item}")
+        _failures.append(report.nodeid)
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     tw = terminalreporter.write_line
+    measured = set(_failures)
     tw("")
     tw("=" * 72)
-    tw("network_dependence_audit: ran with external name resolution disabled.")
-    tw("Failures in the EXPECTED suites are correct -- they test DNS policy.")
-    tw("Any A BUG failure is a unit test that does not need a resolver but")
-    tw("got one anyway. See the module docstring for the fix.")
+    tw("network_dependence_audit: external name resolution was disabled.")
+    tw(f"{len(measured)} test(s) needed it:")
+    for nodeid in sorted(measured):
+        mark = "  (expected)" if nodeid in EXPECTED else "  <== UNEXPECTED"
+        tw(f"  {nodeid}{mark}")
+    unexpected = measured - EXPECTED
+    missing = EXPECTED - measured
+    for nodeid in sorted(unexpected):
+        tw(f"  NEW network dependency: {nodeid}")
+    for nodeid in sorted(missing):
+        tw(f"  no longer network-dependent: {nodeid}")
     tw("=" * 72)
