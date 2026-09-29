@@ -907,7 +907,7 @@
     "species_ranges": [],
     "biozones": [],
     "other_fossils": [],
-    "confidence": 1.0
+    "confidence": 0.0
    }
   },
   {
@@ -944,7 +944,7 @@
       "range_base_idx": null,
       "endpoint_kind": "unknown",
       "occurrence_mode": "unknown",
-      "confidence": 1.0,
+      "confidence": null,
       "note": ""
      }
     ],
@@ -2923,7 +2923,7 @@
    "python": {
     "chart_type": "range_chart",
     "reason": "r",
-    "confidence": 1.0
+    "confidence": 0.0
    }
   },
   {

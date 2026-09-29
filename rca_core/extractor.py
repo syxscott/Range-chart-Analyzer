@@ -1140,15 +1140,56 @@ def _normalize_optional_int(value: Any) -> int | None:
     return None
 
 
+def _confidence_clamped(value: float) -> float:
+    """Clamp a confidence to [0, 1]; NaN becomes 0.0.
+
+    AUDIT-2026-09-30: this is the single gate for every ROOT confidence in this
+    module, and it exists because the JS mirror already had one.
+
+    Python's min()/max() do not propagate NaN -- ``min(1.0, nan)`` is 1.0,
+    because ``nan < 1.0`` is False -- so a model that emitted
+    ``"confidence": "NaN"`` was reported as a PERFECT 1.0 in every mode
+    (13 hand-copied unguarded clamps across all 10 normalizers, found by AST
+    enumeration rather than grep). js/minimax.js routes all eight of its root
+    call sites through ONE function, ``rcaConfidenceClamped``, which guards
+    ``Number.isNaN(n) -> return 0.0``; the same payload showed 0 in the
+    browser and 1.0 on the desktop.
+
+    Only NaN is remapped. +Infinity still clamps to 1.0 and -Infinity to 0.0,
+    which is what BOTH engines already did and what the JS helper does too --
+    writing ``if not math.isfinite(v): return 0.0`` here would silently create
+    a NEW divergence on +Infinity, so the guard is deliberately isnan, not
+    isfinite.
+
+    Honest reporting is also the project's own stance: tests_real_corpus.py
+    INV5 treats "empty arrays + confidence 0" as a correct refusal. A NaN is
+    the same kind of "the model could not say", and 1.0 asserts the opposite.
+    """
+    if value != value:  # NaN
+        return 0.0
+    return max(0.0, min(1.0, value))
+
+
 def _normalize_confidence(value: Any) -> float | None:
-    """Normalize an optional per-row confidence to the closed interval [0, 1]."""
+    """Normalize an optional per-row confidence to the closed interval [0, 1].
+
+    AUDIT-2026-09-30: NaN returns None, not 0.0 -- the ROW variant of the
+    contract. js/minimax.js rcaOptionalConfidence (the mirror of this
+    function, used for ``species_ranges``/``confidence``) ends with
+    ``if (n === null || Number.isNaN(n)) return null``, so an unstateable
+    per-row confidence makes the browser OMIT the key while Python used to
+    write a confident 1.0. Same root cause as _confidence_clamped, different
+    fallback because this one is nullable.
+    """
     if value is None or value == "" or isinstance(value, bool):
         return None
     try:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    return max(0.0, min(1.0, parsed))
+    if parsed != parsed:  # NaN
+        return None
+    return _confidence_clamped(parsed)
 
 
 # ---------------------------------------------------------------------------
@@ -1950,7 +1991,7 @@ def normalize_result(parsed):
         conf = float(parsed.get("confidence", 0.0))
     except (TypeError, ValueError):
         conf = 0.0
-    out["confidence"] = max(0.0, min(1.0, conf))
+    out["confidence"] = _confidence_clamped(conf)
     # LOW fix: drop _array_root (and its _note companion) from top-level
     # extras - the per-item rows are already distributed, so the raw
     # payload would be a duplicate.
@@ -2472,7 +2513,7 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "samples": norm_samples(sec.get("samples")),
             "coordinates_text": s(sec.get("coordinates_text")),
             "thickness_m": s(sec.get("thickness_m")),
-            "confidence_by_section": max(0.0, min(1.0, conf_v)),
+            "confidence_by_section": _confidence_clamped(conf_v),
         }
         _carry_extras(sec, _KNOWN_COLUMNAR_SECTION_KEYS, row)
         sections.append(row)
@@ -2494,7 +2535,7 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
         overall = float(_overall_raw)
     except (TypeError, ValueError):
         overall = 0.0
-    overall = max(0.0, min(1.0, overall))
+    overall = _confidence_clamped(overall)
 
     # Issue-1 fix: unpack tuple return from norm_legend (returns (list, warning))
     fossil_legend, fossil_legend_warn = norm_legend(parsed.get("fossil_legend"))
@@ -2713,7 +2754,7 @@ def normalize_abundance_result(parsed: dict[str, Any]) -> dict[str, Any]:
         conf = float(parsed.get("confidence", 0.0))
     except (TypeError, ValueError):
         conf = 0.0
-    out["confidence"] = max(0.0, min(1.0, conf))
+    out["confidence"] = _confidence_clamped(conf)
     top_extras = _pop_array_root_extras(
         {k: v for k, v in parsed.items() if k not in _KNOWN_ABUNDANCE_ROOT_KEYS})
     # BORROW-2026-09-20 (B): hoist the calibration; absent -> no new key.
@@ -3064,7 +3105,7 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
         conf = float(raw.get("confidence", 0.0))
     except (TypeError, ValueError):
         conf = 0.0
-    conf = max(0.0, min(1.0, conf))
+    conf = _confidence_clamped(conf)
 
     root_extras = _pop_array_root_extras(
         {k: v for k, v in raw.items()
@@ -3466,7 +3507,7 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
         conf = float(parsed.get("confidence", 0.0))
     except (TypeError, ValueError):
         conf = 0.0
-    out["confidence"] = max(0.0, min(1.0, conf))
+    out["confidence"] = _confidence_clamped(conf)
     extras_src = _pop_array_root_extras(
         {k: v for k, v in parsed.items()
          if k not in _KNOWN_CHEMICAL_STRAT_ROOT_KEYS})
@@ -3851,7 +3892,7 @@ def normalize_paleomap_result(parsed: dict[str, Any]) -> dict[str, Any]:
         conf = float(parsed.get("confidence", 0.0))
     except (TypeError, ValueError):
         conf = 0.0
-    out["confidence"] = max(0.0, min(1.0, conf))
+    out["confidence"] = _confidence_clamped(conf)
 
     extras_src = _pop_array_root_extras(
         {k: v for k, v in parsed.items() if k not in _KNOWN_PALEOMAP_ROOT_KEYS})
@@ -4098,7 +4139,7 @@ def normalize_scatter_plot_result(parsed: dict[str, Any]) -> dict[str, Any]:
         conf = float(parsed.get("confidence", 0.0))
     except (TypeError, ValueError):
         conf = 0.0
-    out["confidence"] = max(0.0, min(1.0, conf))
+    out["confidence"] = _confidence_clamped(conf)
     extras_src = _pop_array_root_extras(
         {k: v for k, v in parsed.items() if k not in _KNOWN_SCATTER_PLOT_ROOT_KEYS})
     # BORROW-2026-09-20 (B): hoist the calibration; absent -> no new key.
@@ -4309,7 +4350,8 @@ def normalize_zonation_chart_result(parsed: dict[str, Any]) -> dict[str, Any]:
         _carry_extras(c, _KNOWN_CORRELATION_KEYS, row)
         out["correlations"].append(row)
     try:
-        out["confidence"] = max(0.0, min(1.0, float(parsed.get("confidence", 0.0) or 0.0)))
+        out["confidence"] = _confidence_clamped(
+            float(parsed.get("confidence", 0.0) or 0.0))
     except (TypeError, ValueError):
         out["confidence"] = 0.0
     extras_src = _pop_array_root_extras(
@@ -4450,7 +4492,8 @@ def normalize_chart_classification(parsed: dict[str, Any]) -> dict[str, Any]:
     if chart_type not in KNOWN_CHART_TYPES:
         chart_type = "unknown"
     try:
-        conf = max(0.0, min(1.0, float(parsed.get("confidence", 0.0) or 0.0)))
+        conf = _confidence_clamped(
+            float(parsed.get("confidence", 0.0) or 0.0))
     except (TypeError, ValueError):
         conf = 0.0
     return {

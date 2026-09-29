@@ -204,14 +204,23 @@ function diff(a, b, trail, out) {
 //    a behaviour change on BOTH engines (fold Unicode digits in JS, or
 //    tighten the Python regex to ASCII), so it needs an owner decision;
 //    until then it is tracked here rather than left invisible.
-//  * rc_root_confidence_nan / rc_row_confidence_nan — the literal "NaN" as a
-//    confidence. Both engines accept it as a float, then clamp it with the
-//    same intent and opposite results: Python's min(1.0, nan) is 1.0 (Python
-//    does not propagate NaN through min/max), JS's Math.min(1, NaN) is NaN and
-//    stays NaN until the falsy fallback makes it 0. One model output becomes a
-//    perfect 1.0 in the desktop app and a 0 in the browser. Found by
-//    difffuzz_normalize.py; every other unparseable confidence agrees.
-// Five cases stay diverged ON PURPOSE. All are recorded here instead of being
+//  * rc_root_confidence_nan / rc_row_confidence_nan / cc_root_confidence_nan —
+//    RESOLVED 2026-09-30, no longer parked. These were the literal "NaN" as a
+//    confidence: both engines accept it as a float, then clamped it with the
+//    same intent and opposite results, because Python's min/max do not
+//    propagate NaN (min(1.0, nan) is 1.0) while JS's Math.min does. One model
+//    output became a PERFECT 1.0 in the desktop app and a 0 in the browser.
+//    js/minimax.js already had the right answer in two shared helpers
+//    (rcaConfidenceClamped -> 0.0 for a root value, rcaOptionalConfidence ->
+//    null for a row value); rca_core had 13 hand-copied unguarded clamps across
+//    all 10 normalizers instead of one gate. Python now routes every site
+//    through rca_core.extractor._confidence_clamped, the fixture records 0.0 /
+//    null, and these three cases are ordinary matches. Kept here as a record
+//    because the parked-divergence mechanism is what made the fix findable.
+//    NOTE the guard is deliberately `isnan`, NOT `isfinite`: +Infinity clamps to
+//    1.0 and -Infinity to 0.0 on BOTH engines, so a blanket isfinite->0.0
+//    would have introduced a fresh divergence on +Infinity.
+// Three cases stay diverged ON PURPOSE. All are recorded here instead of being
 // papered over, so the suite still exits 0 and a future drift shows up as a NEW
 // failure rather than as noise that everyone learned to skim.
 //
@@ -239,13 +248,14 @@ const EXPECTED_DIVERGENCES = {
   rc_section_formations_string: 'Python still calls bare str() in normalize_result; containers leak a repr where _stringify_scalar yields ""',
   ag_34: 'Python \\d/float() accept Unicode decimal digits, JS \\d is [0-9] only; Arabic-Indic digit age label resolves in rca_core and not in the browser',
   ag_35: 'Same Unicode-vs-ASCII digit split, full-width digits: resolves in rca_core/standards/ics.py, unresolvable in js/quality.js',
-  rc_root_confidence_nan: 'Python min()/max() do not propagate NaN, JS Math.min/max do; confidence "NaN" clamps to 1.0 in rca_core and to 0 in the browser',
-  rc_row_confidence_nan: 'Same NaN-clamp split on a per-species confidence: 1.0 in rca_core, absent in the browser',
-  // AUDIT-2026-09-30: the identical split on the chart-CLASSIFICATION
-  // confidence, a mode that had no NaN case at all -- both existing NaN
-  // fixtures sat under range_chart, so this field was never exercised on this
-  // path. Same root cause, so it parks here rather than failing the build.
-  cc_root_confidence_nan: 'Same NaN-clamp split on the classification confidence: 1.0 in rca_core, 0 in the browser',
+  // AUDIT-2026-09-30: rc_root_confidence_nan, rc_row_confidence_nan and
+  // cc_root_confidence_nan were REMOVED from this table. They are ordinary
+  // matches now: rca_core.extractor._confidence_clamped is the single gate for
+  // every root confidence, and _normalize_confidence returns None for a NaN
+  // row value, which is what js/minimax.js rcaConfidenceClamped (0.0) and
+  // rcaOptionalConfidence (null) already did. If a NaN divergence ever comes
+  // back it will now FAIL the build instead of being absorbed here, which is
+  // the whole point of the table being checked rather than trusted.
 };
 
 function main() {
