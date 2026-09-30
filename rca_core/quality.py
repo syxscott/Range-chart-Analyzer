@@ -957,7 +957,28 @@ def _score_biozone_order(species: list, sections: list) -> tuple[int, list[dict[
             if bed_n is None:
                 continue
             kinds.add("bed")
-            positioned.append((float(bed_n), sp))
+            # AUDIT-2026-10-01 [item 9.12]: use the shared position, not the
+            # bare bed number. With "23a" and "23c" both at 23.0 the sort fell
+            # through to its tie-break --
+            #
+            #     positioned.sort(key=lambda item:
+            #         (item[0], str(item[1].get("species") or "")))
+            #
+            # -- so which of two same-bed species landed in the "younger" slot
+            # was decided ALPHABETICALLY. Measured, that produced both error
+            # directions: species A at 23c / B at 23a, with the younger
+            # biozone on A, was not flagged when the whole-bed equivalent
+            # (A@24 / B@23) is; and A at 23a / B at 23c with the older biozone
+            # on A WAS flagged when the equivalent (A@23 / B@24) is not.
+            #
+            # Different shape from the FAD/LAD gap fixed in the two previous
+            # commits: there the COMPARISON dropped the subscript, here the
+            # ORDER did.
+            from .bed_parser import bed_position as _bed_pos
+            pos = _bed_pos(raw_top)
+            if pos is None:
+                continue
+            positioned.append((pos, sp))
         if len(positioned) < 2 or len(kinds) > 1:
             # Unpositioned rows are excluded rather than invented; a mixed
             # bed/age section has no single ordering scale.
