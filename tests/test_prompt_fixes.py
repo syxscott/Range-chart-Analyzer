@@ -389,17 +389,37 @@ def test_author_year_requested():
 def test_byte_identical_python_vs_js():
     """HIGH: the Python and JS range-chart prompts MUST be byte-identical.
 
-    After all fixes, the joined string on both sides must match exactly.
+    AUDIT-2026-10-01 (item 32): this used to compare the Python prompt against
+    ``_extract_js_prompt_const``, a raw-SOURCE scraper that only collects
+    literal ``'...'` array lines.  The contract clause, the 0-999 axis clause
+    and the degradation clause are FUNCTION CALLS inside that array, so the
+    scraper dropped all three and handed back a truncated string -- the check
+    could never pass, and reported "drift detected: py len=14781 js
+    len=10337" on a tree where the two prompts are in fact byte-identical.
+    Measured with the real evaluator: 14781 == 14781.
+
+    So it was a false alarm that had been red for as long as it existed, and
+    nobody could tell it apart from a genuine prompt drift.
+
+    Two changes, both following this file's own precedent
+    (test_contract_modes_python_vs_js, added 2026-09-20):
+
+    1. Compare the EVALUATED js/prompt.js constant via
+       ``_eval_js_prompt_consts`` -- the same node + vm path tests_frontend.js
+       uses, and the only way to see a clause generated at runtime.
+    2. Make it a hard ``assert`` instead of ``check()``.  ``check()`` only
+       PRINTS under pytest, so even a correct comparison would not fail the
+       suite -- the drift would stay silent, which is what this HIGH check
+       exists to prevent.  The range chart is the most-used mode; its prompt
+       parity must be a gate, not a log line.
+
+    A missing node toolchain raises from ``_eval_js_prompt_consts`` rather than
+    silently skipping, so an environment problem can never read as parity.
     """
-    js_prompt = _extract_js_prompt_const(_read_js_source(), "RANGE_CHART_SYSTEM_PROMPT")
-    check(
-        "py-vs-js-range-prompt-byte-identical",
-        RANGE_CHART_SYSTEM_PROMPT == js_prompt,
-        evidence=(
-            "drift detected: "
-            f"py len={len(RANGE_CHART_SYSTEM_PROMPT)} js len={len(js_prompt)}"
-        ),
-    )
+    (js_prompt,) = _eval_js_prompt_consts(["RANGE_CHART_SYSTEM_PROMPT"])
+    assert RANGE_CHART_SYSTEM_PROMPT == js_prompt, (
+        "range-chart prompt drift between rca_core/prompt.py and "
+        "js/prompt.js:\n" + _diff_report(RANGE_CHART_SYSTEM_PROMPT, js_prompt))
 
 
 def test_prompt_version_both_sides():
