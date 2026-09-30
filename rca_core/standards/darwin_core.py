@@ -442,6 +442,35 @@ def _build_eml_xml(result: dict, n_occurrences: int) -> str:
     )
 
 
+def _dwca_cell(value: Any) -> str:
+    """One occurrence.txt cell that cannot break the format meta.xml declares.
+
+    AUDIT-2026-10-01 [item 29].  meta.xml declares
+    ``fieldsTerminatedBy="\\t"``, ``linesTerminatedBy="\\n"`` and
+    ``fieldsEnclosedBy=""`` -- plain TSV with no enclosure character.  A
+    consumer therefore may only split on TAB and newlines; anything else in a
+    cell shifts every later column.
+
+    * TAB, CR and LF become a single space.  They are the characters that
+      actually break the format, and none of them is meaningful inside a
+      scientific name -- a model that wrapped the name across two lines is
+      repaired rather than truncated, so no content is lost.
+    * ``"`` is removed, because ``csv.QUOTE_NONE`` raises instead of escaping
+      it when it is present, and a quote character is never meaningful in any
+      DwC field either.
+
+    ``None`` stays an empty cell, matching what ``csv.writer`` did before this
+    helper existed (``str(None)`` would have written the literal "None" into
+    an occurrence record).
+    """
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+    for ch in ("\t", "\r", "\n"):
+        text = text.replace(ch, " ")
+    return text.replace('"', "")
+
+
 def to_darwin_core_archive(result: dict, output_path: str) -> str:
     """Create DwC-A ZIP file.
 
@@ -526,11 +555,29 @@ def to_darwin_core_archive(result: dict, output_path: str) -> str:
         # default comma delimiter while meta.xml declared
         # fieldsTerminatedBy="\t", producing a file strict consumers
         # (GBIF, iDigBio) couldn't parse.
+        #
+        # AUDIT-2026-10-01 [item 29]: the delimiter was fixed but the
+        # ENCLOSURE was not, and the two disagreed exactly when it mattered.
+        # meta.xml declares ``fieldsEnclosedBy=""`` -- this format has no
+        # enclosure character, so a consumer may only split on the declared
+        # TAB.  ``csv.writer`` defaults to QUOTE_MINIMAL with quotechar='"',
+        # so a value containing the delimiter, a line break, or a quote was
+        # wrapped in real quote characters the declaration disclaims.  The
+        # model wraps a species name whenever the chart text wraps, and
+        # ``extractor._stringify_scalar`` returns ``str(value)`` with no
+        # strip, so it survives normalisation verbatim; the shipped row then
+        # parsed as 20 fields under an 18-field declaration (every column
+        # from the second onward shifted) or split across physical lines
+        # (1/2/17/18-field "rows"), silently, into a public repository.
+        #
+        # QUOTE_NONE + _dwca_cell makes the declaration true by construction:
+        # nothing that could require an enclosure reaches the writer.
         output = io.StringIO()
-        writer = csv.writer(output, delimiter="\t", lineterminator="\n")
-        writer.writerow(fields)
+        writer = csv.writer(output, delimiter="\t", lineterminator="\n",
+                            quoting=csv.QUOTE_NONE)
+        writer.writerow([_dwca_cell(f) for f in fields])
         for occ in occurrences:
-            row = [occ.get(f, "") for f in fields]
+            row = [_dwca_cell(occ.get(f, "")) for f in fields]
             writer.writerow(row)
         zf.writestr("occurrence.txt", output.getvalue())
 
