@@ -1037,7 +1037,16 @@ class TestPromptVersioning:
         assert PROMPT_VERSION["scatter_plot"] == "v2"
         assert PROMPT_VERSION["columnar_section"] == "v3"
         assert PROMPT_VERSION["zonation_chart"] == "v1"
-        assert PROMPT_VERSION["phylogenetic_tree"] == "v1"
+        # AUDIT-2026-10-01 (item 31): phylogenetic_tree v1->v2.  The tree
+        # prompt stopped using the generic degradation clause (it told the
+        # model to write a per-row `confidence` / `note` that a node does not
+        # have), so the prompt text changed and a cached v1 answer -- which can
+        # carry exactly the out-of-schema node keys the old clause invited --
+        # must not be served under the new prompt.  The version moves with the
+        # text on both transports, per the parity note at the foot of
+        # rca_core/prompt.py.  It was v1 here because the tree mode carries no
+        # extraction contract, not because its prompt never changes.
+        assert PROMPT_VERSION["phylogenetic_tree"] == "v2"
 
     def test_abundance_alias_still_tracks_the_canonical_key(self):
         assert PROMPT_VERSION["abundance"] == PROMPT_VERSION["abundance_diagram"]

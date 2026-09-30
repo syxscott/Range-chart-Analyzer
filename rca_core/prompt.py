@@ -53,7 +53,10 @@ PROMPT_VERSION = {
     "columnar_section": "v3",
     "abundance_diagram": "v4",
     "abundance": "v4",  # legacy alias — the canonical key is above
-    "phylogenetic_tree": "v1",
+    "phylogenetic_tree": "v2",  # v1->v2: the tree degradation clause was
+    # replaced (AUDIT-2026-10-01 item 31).  A cached v1 answer can carry the
+    # out-of-schema node keys the old clause invited, so it must not be served
+    # under the new prompt.  Mirrored in js/prompt.js in the same commit.
     # NEW chart types
     "chemical_stratigraphy": "v2",
     "paleomap": "v2",
@@ -322,6 +325,49 @@ def _degradation_clause() -> str:
     )
 
 
+def _phylogenetic_degradation_clause() -> str:
+    """Tree-specific counterpart of :func:`_degradation_clause`.
+
+    The generic clause is correct for the seven ROW-TABLE modes, where every
+    row really does carry a ``confidence`` and a ``note`` field.  A
+    phylogenetic tree node has neither: the node schema in
+    :data:`PHYLOGENETIC_TREE_SYSTEM_PROMPT` defines exactly ``id``, ``name``,
+    ``support``, ``support_confidence``, ``branch_length``, ``depth_range_m``,
+    ``depth_confidence``, ``sequence_count``, ``is_leaf`` and ``parent``.
+
+    The generic clause was copied into the tree prompt without adaptation, so
+    the model was told to lower a ``confidence`` and set a ``note`` that its
+    own schema does not define.  The only two possible behaviours are both
+    bad: the model injects out-of-schema keys into node objects -- which the
+    normaliser sweeps into ``node.metadata`` and the exporter never reads --
+    or it ignores the clause, and either way the uncertainty has nowhere to
+    land.  That undercuts the exact guarantee the clause exists to make.
+
+    So a tree degrades through the fields it actually has: lower the
+    confidence floats the schema defines, and leave an unreadable value EMPTY
+    rather than inventing it.  (docs/FRONTEND-REVIEW-2026-08-19.json, verdict
+    CONFIRMED, filed 2026-08-19.)
+
+    The text is duplicated verbatim in ``js/prompt.js``; the two must instruct
+    the model identically, and
+    ``tests/test_prompt_schema_consistency.py`` asserts the JS copy contains
+    this exact string.
+    """
+    return (
+        "- DEGRADE GRACEFULLY. Uncertainty in a tree is carried by the two "
+        "`support_confidence` / `depth_confidence` floats and by leaving a "
+        "value empty — a node has no other place to record it, so do not "
+        "invent extra keys. When a support value, depth-band colour or branch "
+        "length is ambiguous or partially unreadable, leave that node's value "
+        "empty and LOWER the matching `support_confidence` or "
+        "`depth_confidence` (e.g. 0.3–0.5); a low-confidence reading is far "
+        "more useful than a confident fabrication. When the taxon `name` "
+        "itself is unreadable, leave `name` empty rather than guessing a "
+        "taxon. Never relax `is_leaf` or `parent` to paper over an ambiguous "
+        "reading — the tree invariants must hold even where a label does not."
+    )
+
+
 RANGE_CHART_SYSTEM_PROMPT = "\n".join([
     "You are an expert in radiolarian (and general micropaleontology) biostratigraphy reading a stratigraphic range chart (also called a species distribution chart).",
     "",
@@ -584,7 +630,7 @@ PHYLOGENETIC_TREE_SYSTEM_PROMPT = "\n".join([
     "- Only extract what you can READ from the figure. Do not invent topology, support values, or taxa that are not present.",
     "- If the figure is NOT a phylogenetic tree / cladogram / phylogram, return all arrays empty and confidence 0.0.",
     "- Return JSON only, no markdown fences, no commentary.",
-    _degradation_clause(),
+    _phylogenetic_degradation_clause(),
 ])
 
 COLUMNAR_SECTION_SYSTEM_PROMPT = "\n".join([

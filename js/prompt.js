@@ -28,7 +28,7 @@ const PROMPT_VERSION = {
   columnar_section: 'v3',
   abundance_diagram: 'v4',
   abundance: 'v4',        // legacy alias — canonical key is above
-  phylogenetic_tree: 'v1',
+  phylogenetic_tree: 'v2',   // v1->v2 AUDIT-2026-10-01 [item 31]: tree clause fix
   // NEW chart types
   chemical_stratigraphy: 'v2',
   paleomap: 'v2',
@@ -47,6 +47,21 @@ function promptVersionForMode(mode) {
 // hallucinating when a value is ambiguous/unreadable.
 function _degradationClause() {
   return '- DEGRADE GRACEFULLY. If a species name, range boundary, bed number, or other value is ambiguous or partially unreadable, still emit your best guess but lower the per-row `confidence` field (e.g. 0.3–0.5) AND set the per-row `note` field to a short string such as "unclear" or "partially obscured". NEVER invent a plausible-looking value with high confidence — a low-confidence guess is far more useful than a confident fabrication. NEVER embed the note inside the species name or other structured fields; notes live in the dedicated `note` field only. If a value is completely unreadable, leave the field empty string, lower the row `confidence`, and put "unclear" in the row `note`.';
+}
+
+// Mirror of rca_core/prompt.py::_phylogenetic_degradation_clause.
+//
+// AUDIT-2026-10-01 [item 31]: the generic clause above is correct for the
+// seven ROW-TABLE modes, but a tree node has no per-row confidence/note
+// field, so appending it here asked the model for two fields its own schema
+// does not define (docs/FRONTEND-REVIEW-2026-08-19.json, verdict CONFIRMED,
+// filed 2026-08-19).  The string below is the Python value verbatim --
+// GENERATED, not retyped, because the last hardcoded copy here drifted from
+// the shared helper on a dash.  Double-quoted because the clause contains
+// apostrophes; escaping them would put backslashes inside the very text
+// tests/test_prompt_schema_consistency.py compares byte for byte.
+function _phylogeneticDegradationClause() {
+  return "- DEGRADE GRACEFULLY. Uncertainty in a tree is carried by the two `support_confidence` / `depth_confidence` floats and by leaving a value empty — a node has no other place to record it, so do not invent extra keys. When a support value, depth-band colour or branch length is ambiguous or partially unreadable, leave that node's value empty and LOWER the matching `support_confidence` or `depth_confidence` (e.g. 0.3–0.5); a low-confidence reading is far more useful than a confident fabrication. When the taxon `name` itself is unreadable, leave `name` empty rather than guessing a taxon. Never relax `is_leaf` or `parent` to paper over an ambiguous reading — the tree invariants must hold even where a label does not.";
 }
 
 // ---------------------------------------------------------------------------
@@ -513,7 +528,7 @@ const PHYLOGENETIC_TREE_SYSTEM_PROMPT = [
 // This slot previously held a hardcoded copy of the clause written with
 // ASCII hyphens ("0.3-0.5"), which had drifted from the shared helper and
 // from rca_core/prompt.py (which calls _degradation_clause here).
-_degradationClause()
+_phylogeneticDegradationClause()
 ].join('\n');
 
 // NEW: Chemical Stratigraphy Chart (isotopic curves, elemental data)
