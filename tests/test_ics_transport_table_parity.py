@@ -52,11 +52,14 @@ module becomes the standing guard that the two transports stay in step.
 from __future__ import annotations
 
 import json
+import re
+import zipfile
 from pathlib import Path
 
 import pytest
 
 from rca_core.standards import ics
+from rca_core.standards.darwin_core import to_darwin_core_archive
 
 REPO = Path(__file__).resolve().parent.parent
 RESOURCES = REPO / "rca_core" / "resources"
@@ -138,3 +141,58 @@ def test_the_loaded_table_cannot_attest_the_stamped_version():
             "the canonical table is promoted but its rows do not carry the "
             "version this module stamps into reports (%r vs %r)"
             % (sorted(stamps), ics.ICS_VERSION))
+
+
+#: A Ludlow conodont zone: the case a micropalaeontologist's range chart
+#: actually prints, and the one this module says the desktop cannot date.
+_SILURIAN_EXPORT_CASE = ("Gorstian", "Ludfordian")
+#: Famennian is present in BOTH tables, so it is the control that proves the
+#: empty result below is about the missing stages and not about the pipeline.
+_CONTROL_EXPORT_CASE = ("Famennian", "Famennian")
+
+
+@pytest.mark.parametrize("label,stages,expect_numbers", [
+    ("silurian (undatable on the python transport)",
+     _SILURIAN_EXPORT_CASE, not _EXPECTED_MISSING),
+    ("control: a stage in both tables", _CONTROL_EXPORT_CASE, True),
+])
+def test_the_shipped_archive_carries_no_age_for_an_undatable_stage(
+        tmp_path, label, stages, expect_numbers):
+    """The consequence, asserted on the ARTIFACT rather than on the table.
+
+    A missing key in a lookup table is easy to under-rate.  What a researcher
+    receives is the DwC-A archive, so this reads it: the stage NAME survives
+    (``earliestAgeOrLowestStage`` keeps ``'Gorstian'``) while the numeric Ma
+    columns come out EMPTY, and a record with a name and no age has no
+    temporal resolution once it lands in GBIF / iDigBio.
+
+    Flip ``expect_numbers`` with ``_EXPECTED_MISSING`` when the promote lands.
+    """
+    base, top = stages
+    out = tmp_path / "dwca.zip"
+    to_darwin_core_archive({
+        "sections": [{"name": "SecA", "coordinates": "31N, 117E"}],
+        "species_ranges": [{
+            "species": "Ozarkodina munda", "section": "SecA",
+            "biozone": "Ozarkodina Zone",
+            "range_base": base, "range_top": top,
+        }],
+    }, str(out))
+
+    with zipfile.ZipFile(str(out)) as zf:
+        raw = zf.read("occurrence.txt").decode("utf-8")
+        meta = zf.read("meta.xml").decode("utf-8")
+    delim = re.search(r'fieldsTerminatedBy="([^"]*)"', meta).group(1)
+    lines = [ln for ln in raw.split("\n") if ln]
+    row = dict(zip(lines[0].split(delim), lines[1].split(delim)))
+
+    # The stage NAME is echoed either way -- that is the point of the case.
+    assert row["earliestAgeOrLowestStage"], (
+        "the stage name should survive regardless of the age lookup; got %r"
+        % row["earliestAgeOrLowestStage"])
+
+    has_numbers = bool(row.get("fad_ma") and row.get("lad_ma"))
+    assert has_numbers is expect_numbers, (
+        "%s: fad_ma/lad_ma = %r/%r, expected numeric ages=%s"
+        % (label, row.get("fad_ma"), row.get("lad_ma"), expect_numbers))
+
