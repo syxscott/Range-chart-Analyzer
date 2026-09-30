@@ -1315,7 +1315,20 @@ COL_TYPES: dict[str, dict[str, str]] = {
     "nodes": {
         "branch_length": "float",
         "node_age_ma": "float",
-        "support": "float",
+        # AUDIT-2026-10-01 [item 9.5]: "float" turned the model's bootstrap
+        # percentage into a float on EVERY Apply-edits pass, including one with
+        # zero edits: support is an int in the model (84 / 94 / 76 in the gold
+        # fixtures, rng.randint(75, 98) in tests/fixtures/synthetic_data.py),
+        # the cell renders str(84) = "84", and float("84") = 84.0.
+        #
+        # Numerically identical, so nothing looked broken -- but
+        # _build_newick_node formats support as f"{support}", so the exported
+        # Newick read "(...)84;" and then read "(...)84.0;" after a pass in
+        # which the operator changed nothing. "number" reproduces the model's
+        # own type distribution exactly (measured: model {None: 5, int: 3},
+        # "float" -> {None: 5, float: 3}, "number" -> {None: 5, int: 3}) and
+        # still yields a float for the genuinely fractional case.
+        "support": "number",
         # REVIEW-2026-09-10: the nodes table renders is_leaf as the display
         # strings "Y"/"N" and parent None as "", but without a COL_TYPES entry
         # _coerce_cell's default ("str") wrote those DISPLAY strings back into
