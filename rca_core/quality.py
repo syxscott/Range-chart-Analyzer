@@ -191,6 +191,33 @@ def _warning_flags(value: Any) -> set:
     return {str(value)}
 
 
+def _subbed_inverted(top_raw: Any, base_raw: Any) -> bool:
+    """Same bed number, and the SUBSCRIPT says the range runs backwards.
+
+    A subscript letters upward, so "23a" is BELOW "23b" and BELOW the bare
+    "23". base="23b" / top="23a" is therefore an inverted range even though
+    _parse_bed_n reports 23 for both, and an empty subscript sorts below every
+    letter -- which is what makes base="23a" / top="23" inverted too.
+
+    Routes through the shared rca_core.bed_parser, which is the whole reason
+    that module exists: its docstring records that "a predicted Bed 23c and
+    ground truth Bed 23d would both score as integer 23 -> false positive
+    accuracy". quality.py kept a third, weaker parser; this is where the two
+    dimensions in this file stop re-deriving the comparison for themselves.
+
+    Returns False for anything the shared parser cannot read, or when the two
+    sides are not the same bed -- those cases belong to the other branches.
+    """
+    from .bed_parser import parse_bed
+    top = parse_bed(top_raw)
+    base = parse_bed(base_raw)
+    if not top or not base:
+        return False
+    if top["bed_num"] != base["bed_num"]:
+        return False
+    return bool(top["bed_sub"] < base["bed_sub"])
+
+
 def _parse_bed_n(value: Any) -> int | None:
     """Parse a bed indicator like ``"Bed 9"``, ``"bed-7"``, ``"5"``, or ``5``
     into an integer.  Returns ``None`` for empty / unparsable values."""
@@ -444,6 +471,19 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
             # must have the smaller index than LAD (top).
             fad_lad_total += 1
             if top < base:
+                fad_lad_violations += 1
+                issues.append({"severity": "warning",
+                               "msg_key": "quality.range_top_lt_base"})
+            elif _subbed_inverted(top_raw, base_raw):
+                # AUDIT-2026-10-01 [item 9.11]: same bed NUMBER, and the
+                # SUBSCRIPT decides. _parse_bed_n read "23a" and "23b" as 23
+                # both, so base="23b" / top="23a" passed while the exporter's
+                # range_base_le_range_top -- the check that makes to_xlsx
+                # RAISE -- rejected it. This is the same disease the previous
+                # commit removed from the consistency dimension, and it is
+                # WORSE here: accuracy is weighted 0.40 against consistency's
+                # 0.20, so the un-flagged inversions were costing twice as
+                # much of the grade.
                 fad_lad_violations += 1
                 issues.append({"severity": "warning",
                                "msg_key": "quality.range_top_lt_base"})
@@ -730,12 +770,7 @@ def _score_consistency(data: dict[str, Any]) -> tuple[float, list[dict[str, str]
             # validation error while the quality report -- the thing that is
             # supposed to explain it -- said everything was fine and the grade
             # was not penalised.
-            from .bed_parser import parse_bed as _parse_bed_sub
-            top_b = _parse_bed_sub(top)
-            base_b = _parse_bed_sub(base)
-            if (top_b and base_b
-                    and top_b["bed_num"] == base_b["bed_num"]
-                    and top_b["bed_sub"] < base_b["bed_sub"]):
+            if _subbed_inverted(top, base):
                 fad_violations += 1
         if fad_violations:
             score -= min(0.3, 0.1 * fad_violations)

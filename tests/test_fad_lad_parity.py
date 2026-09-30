@@ -83,6 +83,18 @@ def _quality(base, top):
     return any(i.get("msg_key") == "quality.fad_lt_lad" for i in issues)
 
 
+def _accuracy(base, top):
+    """The 0.40-weighted dimension. It made the SAME judgement as the exporter
+    and, like the consistency check, forgave exactly the sub-bed inversions."""
+    _score, issues = Q._score_accuracy({
+        "species_ranges": [{
+            "species": "S", "section": "X",
+            "range_base": base, "range_top": top,
+        }],
+    })
+    return any(i.get("msg_key") == "quality.range_top_lt_base" for i in issues)
+
+
 @pytest.mark.parametrize("base,top", SHAPES,
                          ids=[f"{b}-to-{t}" for b, t in SHAPES])
 def test_the_two_fad_lad_checks_agree(base, top):
@@ -123,6 +135,68 @@ def test_a_sub_bed_inversion_is_reported(base, top):
 def test_a_sub_bed_in_ascending_order_is_not_reported(base, top):
     assert _quality(base, top) is False, f"{base!r} -> {top!r} was false-flagged"
     assert _exporter(base, top) is False
+
+
+# --- the same judgement in the 0.40-weighted dimension -----------------
+
+
+@pytest.mark.parametrize("base,top", [
+    ("23b", "23a"), ("23a", "23"), ("23c", "23"), ("23z", "23a"),
+])
+def test_accuracy_dimension_reports_the_sub_bed_inversion(base, top):
+    assert _accuracy(base, top) is True, (
+        f"{base!r} -> {top!r}: the exporter blocks this and the 0.40-weighted "
+        f"accuracy dimension reported nothing"
+    )
+    assert _exporter(base, top) is True
+
+
+@pytest.mark.parametrize("base,top", [
+    ("23a", "23b"), ("23b", "23c"), ("23", "23a"), ("23a", "24"),
+])
+def test_accuracy_dimension_does_not_false_flag_sub_beds(base, top):
+    assert _accuracy(base, top) is False, f"{base!r} -> {top!r} was false-flagged"
+
+
+def test_both_quality_dimensions_agree_where_they_overlap():
+    """On the cases BOTH dimensions cover, they must not drift apart.
+
+    They reached this by different edits -- consistency first, accuracy a
+    commit later -- and only two calls to one shared helper keep a third edit
+    from being needed.
+
+    Scoped to BED-shaped endpoints on purpose. A first draft asserted agreement
+    over the whole table and failed on base="250 Ma" / top="300 Ma", where
+    accuracy flags and consistency does not. That is not a drift: the accuracy
+    dimension checks AGES (its convention is base=FAD=OLDER=LARGER Ma, so
+    250 -> 300 is a genuine inversion) while the consistency dimension
+    deliberately covers only "cross-field / per-row invariants that the other
+    three dimensions do NOT cover", as its own docstring says. Overlap is the
+    thing being asserted, so the non-overlapping shapes are excluded rather
+    than quietly counted as agreement.
+    """
+    non_bed = ("", "Ma", "myr", "kyr")
+    for base, top in SHAPES:
+        if any(u in base for u in non_bed) or any(u in top for u in non_bed):
+            continue
+        assert _accuracy(base, top) == _quality(base, top), (
+            f"{base!r} -> {top!r}: accuracy={_accuracy(base, top)} "
+            f"consistency={_quality(base, top)}"
+        )
+
+
+def test_the_accuracy_dimension_is_the_only_one_that_checks_ages():
+    """Stated so the asymmetry reads as design rather than as a gap nobody
+    noticed -- and so that if accuracy ever stops checking ages, someone sees
+    the coverage disappear here."""
+    assert _accuracy("250 Ma", "300 Ma") is True, (
+        "250 Ma -> 300 Ma is inverted (base must be the LARGER Ma) and the "
+        "accuracy dimension is the one that knows it"
+    )
+    assert _quality("250 Ma", "300 Ma") is False
+    assert _exporter("250 Ma", "300 Ma") is False, (
+        "the exporter cannot read an age as a bed and skips it"
+    )
 
 
 def test_the_comparison_is_not_vacuous():
