@@ -38,7 +38,7 @@ from __future__ import annotations
 import math
 from typing import Any, Optional
 
-from .bed_parser import parse_bed_int
+from .bed_parser import bed_position, parse_bed_int
 
 __all__ = ["redraw_range_chart", "resolve_species_range_rows"]
 
@@ -106,6 +106,60 @@ def _locate_endpoint(row: dict[str, Any], which: str) -> tuple[Optional[float], 
     return None, SOURCE_NONE
 
 
+def _order_key(
+    row: dict[str, Any],
+    which: str,
+    plotted: Optional[float],
+    source: str,
+) -> Optional[float]:
+    """Comparable up-section position for the ORDERING test, subscript-aware.
+
+    AUDIT-2026-10-01. ``_locate_endpoint`` resolves a bed LABEL through
+    parse_bed_int, which is correct for DRAWING -- the redraw is a plot on the
+    extracted integer grid, and 23b and 23 really are one point on it -- but it
+    drops the subscript, so ``23b`` and ``23`` both became 23. The ``inverted``
+    flag was computed from those plotted floats, so the subscript was gone by
+    the time the comparison happened, and this module contradicted its own
+    docstring ("inverted follows the project-wide convention: the exporter's
+    range_base_le_range_top constraint, quality.py's FAD/LAD check").
+
+    Measured, three modules on one row (``range_base="Bed 23b"``,
+    ``range_top="Bed 23"``): the redraw called it fine, quality.py flagged it,
+    and the exporter REFUSED to export it. And bed_parser's own docstring had
+    already named this exact cost of the lossy integer -- "code that sorts or
+    compares on that number cannot tell 23a from 23b -- so it either forgave a
+    real inversion or invented one". Here it forgave one.
+
+    The fix is deliberately narrow, and the narrowness is the point:
+
+      * Nothing about the DRAWING changes -- the plotted values and their
+        sources are untouched, so every existing figure is identical.
+      * It applies ONLY when the endpoint came from the LABEL
+        (``source == SOURCE_BED``), because that is the only path where the
+        subscript was dropped and there is no better source to defer to. A
+        first version consulted the label unconditionally and was caught by
+        tests/test_review_2026_09_20_redraw_eval_names_usage.py::
+        test_index_fields_win_over_labels, which pins a deliberate decision:
+        "Priority matters for the verdict too: the labels read inverted, the
+        indices do not, and the indices are what the row claims." When the
+        extractor supplied structured indices they stay authoritative for the
+        verdict, not only for the drawing.
+    """
+    if plotted is None or source != SOURCE_BED:
+        return plotted
+    for key in (f"range_{which}", f"range_{which}_bed"):
+        raw = row.get(key)
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            continue
+        try:
+            pos = bed_position(raw)
+        except Exception:  # pragma: no cover - bed_position never raises
+            pos = None
+        if pos is not None:
+            return pos
+    return plotted
+
+
 def _label(value: Any, fallback: str) -> str:
     """Read a species label without ever raising (an OCR payload can hold any
     type, and this module is documented never to propagate)."""
@@ -153,8 +207,15 @@ def resolve_species_range_rows(
         base, base_src = _locate_endpoint(r, "base")
         top, top_src = _locate_endpoint(r, "top")
         species = _label(r.get("species"), f"row {i}")
+        # The ORDERING test is subscript-aware, but ONLY for endpoints that came
+        # from the label (see _order_key): structured indices stay authoritative
+        # for the verdict as well as for the drawing.
+        base_key = _order_key(r, "base", base, base_src)
+        top_key = _order_key(r, "top", top, top_src)
         inverted = (
-            base is not None and top is not None and base > top
+            base is not None and top is not None
+            and base_key is not None and top_key is not None
+            and base_key > top_key
         )
         resolved.append({
             "row": i,
