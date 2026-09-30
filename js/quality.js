@@ -192,8 +192,18 @@ function _parseBedN(value) {
 // "ma" and a thickness would read as a bed, which is the exact split
 // rca_core/bed_parser.py was written to end.
 // ---------------------------------------------------------------------------
-const _BED_FULL_RE = /^Bed\s*(\d+)\s*([a-zA-Z]*)/i;
-const _BARE_BED_RE = /^(\d+)\s*([a-zA-Z]*)/;
+// The grammar of Python's str-pattern \d, expressed for ECMAScript. Python's
+// \d is Unicode-aware (every Unicode Nd decimal digit); ECMAScript's is [0-9]
+// and nothing else. AUDIT-2026-10-01: the bed parser is the THIRD site of this
+// split, after ag_34 / ag_35 (the age resolver) and the \b fix in this same
+// file. Measured: "９" (full-width nine) parsed as bed 9 by
+// rca_core/bed_parser.py and as NOTHING here, so a Chinese-language figure
+// whose bed labels are full-width digits was scored on the desktop while the
+// browser had no bed to check. [\p{Nd}] is exactly the class Python's \d
+// matches.
+const _BED_DIGITS = '[\\p{Nd}]';
+const _BED_FULL_RE = new RegExp('^Bed\\s*(' + _BED_DIGITS + '+)\\s*([a-zA-Z]*)', 'iu');
+const _BARE_BED_RE = new RegExp('^(' + _BED_DIGITS + '+)\\s*([a-zA-Z]*)', 'u');
 const _BED_UNIT_RE = /^(ma|myr|mya|m\.y\.|m\.y\.?|ka|kyr|ga|gyr|yr|cm|mm|km|ft|a)$/i;
 const _BED_SUB_RE = /^[a-ln-z]$/i;
 
@@ -210,6 +220,38 @@ function _bedStrayResidue(s, end) {
   return Boolean(rest) && rest.charAt(0) !== '(' && rest.charAt(0) !== '[';
 }
 
+/**
+ * Fold a run of Unicode decimal digits to ASCII, so parseInt can read it.
+ *
+ * AUDIT-2026-10-01: the regexes above now match the same digits Python's \d
+ * does, and that was only half of it -- parseInt("９") is NaN, so the match
+ * produced bed_num: null instead of 9. NFKC covers the compatibility digits
+ * (full-width ９ -> 9, the case that matters for a Chinese-language figure);
+ * the remaining Nd scripts (Arabic-Indic, Devanagari, ...) are not
+ * compatibility-equivalent and are folded by subtracting their block's zero
+ * code point, found by probing rather than from a table.
+ */
+function _asciiDigits(s) {
+  const nfkc = String(s).normalize('NFKC');
+  let out = '';
+  for (const ch of nfkc) {
+    const cp = ch.codePointAt(0);
+    if (cp >= 0x30 && cp <= 0x39) { out += ch; continue; }
+    if (!/\p{Nd}/u.test(ch)) { out += ch; continue; }
+    // Find z such that z..z+9 are all Nd and ch sits inside it: the block zero.
+    let folded = ch;
+    for (let z = cp; z > cp - 10; z -= 1) {
+      let all = true;
+      for (let d = 0; d <= 9; d += 1) {
+        if (!/\p{Nd}/u.test(String.fromCodePoint(z + d))) { all = false; break; }
+      }
+      if (all) { folded = String.fromCodePoint(0x30 + (cp - z)); break; }
+    }
+    out += folded;
+  }
+  return out;
+}
+
 /** Mirror of rca_core.bed_parser.parse_bed: {bed_num, bed_sub, raw} | null. */
 function rcaParseBed(value) {
   if (value === undefined || value === null || value === '') return null;
@@ -221,14 +263,14 @@ function rcaParseBed(value) {
     const sub = m[2];
     if (!_subIsBedLabel(sub, true)) return null;
     if (_bedStrayResidue(s, m[0].length)) return null;
-    return { bed_num: parseInt(m[1], 10), bed_sub: sub.toLowerCase(), raw: s };
+    return { bed_num: parseInt(_asciiDigits(m[1]), 10), bed_sub: sub.toLowerCase(), raw: s };
   }
   m = _BARE_BED_RE.exec(s);
   if (m) {
     const sub = m[2];
     if (!_subIsBedLabel(sub, false)) return null;
     if (_bedStrayResidue(s, m[0].length)) return null;
-    return { bed_num: parseInt(m[1], 10), bed_sub: sub.toLowerCase(), raw: s };
+    return { bed_num: parseInt(_asciiDigits(m[1]), 10), bed_sub: sub.toLowerCase(), raw: s };
   }
   return null;
 }

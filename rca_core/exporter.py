@@ -36,8 +36,17 @@ def _parse_bed(value):
     return _parse_bed_impl(value)
 
 
-# Backward-compat alias kept for tests that import ``_BED_PATTERN``.
-_BED_PATTERN = re.compile(r"^Bed\s*(\d+)\s*([a-zA-Z]*)$|^(?:Bed\s*)?(\d+)\s*([a-zA-Z]*)$")
+# AUDIT-2026-10-01: REMOVED ``_BED_PATTERN``. It was documented as "kept for
+# tests that import _BED_PATTERN", and nothing does -- no test, no module, not
+# even this file. It was a SECOND bed regex (``$``-anchored, with none of the
+# unit rejection, the subscript handling or the stray-residue check that
+# rca_core/bed_parser.py applies), so it was both dead and a trap: it reads
+# like the bed pattern, it is not the bed pattern, and because nothing imported
+# it no coverage tool could see it. rca_core/bed_parser.py's own docstring
+# records what happens when two of these coexist -- "a predicted Bed 23c and
+# ground truth Bed 23d would both score as integer 23 -> false positive
+# accuracy". tests/test_single_bed_parser_invariant.py now fails if anything
+# resembling a bed parser appears outside the shared module again.
 
 # P2-5 (REVIEW-2026-07-25): scientific invariants that all exported
 # range-chart data MUST satisfy before being written to CSV / xlsx /
