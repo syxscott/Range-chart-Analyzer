@@ -517,14 +517,30 @@ function emptyFor(km, n) {
 //
 // P0-5: include section so the same species across different sections
 // are NOT flagged as chimeras (they are legitimate multi-section obs).
-function rcaIsChimericRow(group, merged) {
+function rcaIsChimericRow(group, merged, keys) {
   if (!Array.isArray(group) || group.length < 2) return false;
-  const keys = ['range_base', 'range_top', 'biozone', 'section'];
-  const mergedTuple = keys.map((k) => rcaAggNorm(merged ? merged[k] : ''));
+  // AUDIT-2026-10-01 [item 9.13]: this used to hardcode the range-chart field
+  // names, so for every other keymap the tuple came out all-empty and the
+  // `some()` guard below returned false for EVERY row — the safeguard was
+  // inert outside range charts. On an abundance construction where each
+  // field's 2-of-3 mode came from a different run, a fabricated row (an
+  // abundance value and a unit that never co-occurred) was reported as
+  // "3/3" consensus with no warning. Mirrors
+  // rca_core/aggregate.py:_is_chimeric_row, which was fixed in the same commit
+  // — the parity fixture is what proved the two sides had to move together.
+  //
+  // `keys` is the keymap's strModeFields, i.e. by definition the fields this
+  // schema mode-merges, which is exactly the set whose combination can be
+  // fabricated. For range charts it is a strict superset of the old hardcoded
+  // key (species is part of the primary identity there, so the verdict is
+  // unchanged).
+  const ks = keys || RCA_RECOMBINATION_KEYS;
+  if (!ks || !ks.length) return false;
+  const mergedTuple = ks.map((k) => rcaAggNorm(merged ? merged[k] : ''));
   if (!mergedTuple.some((v) => v)) return false;  // no scientific content
   for (const g of group) {
     if (!g || typeof g !== 'object') continue;
-    const itemTuple = keys.map((k) => rcaAggNorm(g[k]));
+    const itemTuple = ks.map((k) => rcaAggNorm(g[k]));
     if (itemTuple.length === mergedTuple.length
         && itemTuple.every((v, i) => v === mergedTuple[i])) {
       return false;  // at least one source run observed this tuple
@@ -919,9 +935,9 @@ function mergePrimaryList(runs, km, n) {
     // Raising `runs`, the documented way to make an extraction MORE
     // reliable, was deleting taxa. The row is now kept, flagged
     // `recombined_consensus`, and carries the ballots.
-    if (rcaIsChimericRow(group, aggr)) {
+    if (rcaIsChimericRow(group, aggr, km.strModeFields)) {
       rcaAddRowWarning(aggr, 'recombined_consensus');
-      aggr._recombination_ballots = rcaRecombinationBallots(group);
+      aggr._recombination_ballots = rcaRecombinationBallots(group, km.strModeFields);
       aggr._chimera_recombined = true;
     }
     merged.push(aggr);

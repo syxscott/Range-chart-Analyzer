@@ -733,7 +733,7 @@ def _empty_for(schema: MergeSchema, runs_n: int) -> dict[str, Any]:
     return out
 
 
-def _is_chimeric_row(group: list, merged: dict) -> bool:
+def _is_chimeric_row(group: list, merged: dict, keys: tuple) -> bool:
     """P1-1 (REVIEW-2026-07-25): return True if the merged row's
     (range_base, range_top, biozone, section) tuple never appears in any
     single source run — i.e. the per-field mode vote produced a
@@ -749,12 +749,35 @@ def _is_chimeric_row(group: list, merged: dict) -> bool:
     consistent (base ≤ top, biozone plausible for that range), but it
     is not what the chart showed. Mark it so the caller can drop or
     surface it explicitly.
+
+    AUDIT-2026-10-01 [item 9.13]: the key was HARDCODED to those four
+    range-chart field names, so for every other schema the tuple came out
+    all-empty and the ``not any(...)`` guard returned False for EVERY row —
+    the safeguard was inert outside range charts. Measured, on an abundance
+    construction where each field's 2-of-3 mode came from a different run:
+
+        r1 (depth 120cm, abundance 35, unit %)
+        r2 (depth 120cm, abundance 40, unit ind)
+        r3 (depth 150cm, abundance 35, unit ind)
+
+    no run ever saw (120cm, 35, ind), and the merged row was reported as
+    ``agreement: "3/3"`` with no warning and no ballot record — a fabricated
+    data point, labelled as unanimous consensus, in the very column a
+    researcher would cite.
+
+    ``keys`` is now the schema's ``primary_str_mode_fields``, which is by
+    definition "the fields this schema mode-merges" — precisely the set whose
+    combination can be fabricated. For range charts it is a strict superset of
+    the old key (species is in it, and species is part of the primary identity,
+    so the verdict is unchanged); for the others it is the first correct key
+    they have had.
     """
     if len(group) < 2:
         return False
+    if not keys:
+        return False
     # P0-5 fix: include section so same species across different sections
     # are NOT flagged as chimeras (they are legitimate multi-section obs).
-    keys = ("range_base", "range_top", "biozone", "section")
     merged_tuple = tuple(_norm(merged.get(k, "")) for k in keys)
     if not any(merged_tuple):
         return False  # no scientific content to compare
@@ -767,8 +790,7 @@ def _is_chimeric_row(group: list, merged: dict) -> bool:
     return True
 
 
-def _recombination_ballots(group: list, keys: tuple = (
-        "range_base", "range_top", "biozone", "section")) -> list:
+def _recombination_ballots(group: list, keys: tuple) -> list:
     """The distinct readings a group of runs produced, with a vote count each.
 
     AUDIT-2026-09-27 P1: the honest replacement for DELETING a recombined row.
@@ -1028,9 +1050,10 @@ def _merge_primary_list(runs, schema, n):
         # (>=2 runs of the same figure) into the corpus, then measure the
         # dissent rate before choosing a threshold. Do not re-implement the
         # flag against synthetic data and assume the rate transfers.
-        if _is_chimeric_row(group, aggr):
+        if _is_chimeric_row(group, aggr, schema.primary_str_mode_fields):
             _add_row_warning(aggr, "recombined_consensus")
-            aggr["_recombination_ballots"] = _recombination_ballots(group)
+            aggr["_recombination_ballots"] = _recombination_ballots(
+                group, schema.primary_str_mode_fields)
             aggr["_chimera_recombined"] = True
 
         merged.append(aggr)

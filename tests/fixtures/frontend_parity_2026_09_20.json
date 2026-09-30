@@ -6269,17 +6269,19 @@
       "_warning": "recombined_consensus",
       "_recombination_ballots": [
        {
+        "species": "a",
+        "section": "s1",
         "range_base": "bed 1",
         "range_top": "bed 9",
         "biozone": "zone c",
-        "section": "s1",
         "votes": 1
        },
        {
+        "species": "a",
+        "section": "s1",
         "range_base": "bed 1 (rp13)",
         "range_top": "bed 9",
         "biozone": "zone b",
-        "section": "s1",
         "votes": 1
        }
       ]
@@ -6312,17 +6314,19 @@
       "reason": "runs disagreed on the (FAD/LAD/biozone) tuple; row kept and flagged, not dropped",
       "ballots": [
        {
+        "species": "a",
+        "section": "s1",
         "range_base": "bed 1",
         "range_top": "bed 9",
         "biozone": "zone c",
-        "section": "s1",
         "votes": 1
        },
        {
+        "species": "a",
+        "section": "s1",
         "range_base": "bed 1 (rp13)",
         "range_top": "bed 9",
         "biozone": "zone b",
-        "section": "s1",
         "votes": 1
        }
       ]
@@ -6430,24 +6434,27 @@
       "_warning": "recombined_consensus",
       "_recombination_ballots": [
        {
+        "species": "a",
+        "section": "s1",
         "range_base": "bed 9",
         "range_top": "bed 9",
         "biozone": "zone b",
-        "section": "s1",
         "votes": 2
        },
        {
+        "species": "a",
+        "section": "s1",
         "range_base": "bed 3",
         "range_top": "bed 8",
         "biozone": "zone a",
-        "section": "s1",
         "votes": 1
        },
        {
+        "species": "a",
+        "section": "s1",
         "range_base": "bed 4",
         "range_top": "bed 8",
         "biozone": "zone a",
-        "section": "s1",
         "votes": 1
        }
       ]
@@ -6480,24 +6487,27 @@
       "reason": "runs disagreed on the (FAD/LAD/biozone) tuple; row kept and flagged, not dropped",
       "ballots": [
        {
+        "species": "a",
+        "section": "s1",
         "range_base": "bed 9",
         "range_top": "bed 9",
         "biozone": "zone b",
-        "section": "s1",
         "votes": 2
        },
        {
+        "species": "a",
+        "section": "s1",
         "range_base": "bed 3",
         "range_top": "bed 8",
         "biozone": "zone a",
-        "section": "s1",
         "votes": 1
        },
        {
+        "species": "a",
+        "section": "s1",
         "range_base": "bed 4",
         "range_top": "bed 8",
         "biozone": "zone a",
-        "section": "s1",
         "votes": 1
        }
       ]
