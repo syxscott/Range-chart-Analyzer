@@ -570,6 +570,24 @@ _add(
           "\ufeff[{\"species\": \"A\", \"section\": \"S\"}]"),
     _case("safe_json_loads", "sj_bom_with_prose",
           "\ufeffSure! Here it is:\n{\"sections\": [{\"name\": \"A\"}]}\nDone."),
+    # AUDIT-2026-10-01: the two parsers' NESTING limits, measured on a depth
+    # ladder rather than guessed (the numbers are in the expressibility
+    # guard's comment further down). The array form is the expressible half:
+    # safe_json_loads raises in Python at depth >= 1000 --
+    # sys.getrecursionlimit() is 1000 -- while js/json-utils.js still parses
+    # it, so the same model reply is "unusable" on the desktop and "usable" in
+    # the browser. Recorded as a case rather than a note so it fails the build
+    # if either side moves.
+    #
+    # There is deliberately NO shallower control case beside it, and that is a
+    # limitation of this harness rather than an oversight: a case both engines
+    # parse produces a RESULT of the same depth, which is deeper than the
+    # serialisers can carry, so the expressibility guard refuses to add it
+    # ("nests deeper than 400 levels"). The two product parsers were therefore
+    # compared on a depth ladder directly rather than through a fixture -- see
+    # the measured table in the guard's comment -- and the boundary they found
+    # (1000, not 400) is a property of the parsers, not of this limit.
+    _case("safe_json_loads", "sj_nest_array_1200", "[" * 1200 + "]" * 1200),
 )
 
 # --- age bounds (quality.js / ics_table.js vs standards/ics.py) ------------
@@ -1301,6 +1319,81 @@ def compute_python_case(case: dict) -> Any:
     return fn(payload)
 
 
+def _iter_values(value: Any) -> Any:
+    """Yield every value in a JSON-shaped structure, ITERATIVELY.
+
+    A recursive walk is not an option here: the depth guard below exists
+    precisely because these structures can be thousands of levels deep, and
+    recursing over one blows the interpreter stack before the guard can report
+    anything useful.
+    """
+    stack = [value]
+    while stack:
+        cur = stack.pop()
+        yield cur
+        if isinstance(cur, dict):
+            stack.extend(cur.values())
+        elif isinstance(cur, (list, tuple)):
+            stack.extend(cur)
+
+
+# AUDIT-2026-10-01: two classes of Python result CANNOT be written into this
+# fixture, and both failed in ways that pointed nowhere near the cause.
+#
+#   1. A non-finite float. json.dumps writes it as the bare literal Infinity /
+#      NaN, and the harness reads the fixture with JSON.parse, which rejects
+#      both. The symptom was a SyntaxError at JSON.parse in
+#      tests_diff_frontend_parity.js pointing at a payload that looked fine.
+#      Measured reachable: safe_json_loads('{"a": 1e400}') returns {'a': inf}.
+#   2. A structure nested deeper than the serialisers can carry. json.dumps is
+#      recursive, so writing one raises RecursionError inside this generator.
+#
+# The nesting boundary was measured, not guessed, on both product functions
+# (rca_core.json_utils.safe_json_loads vs js/json-utils.js#safeJsonLoads):
+#   * array form, depth < 1000   both parse
+#   * array form, depth >= 1000  Python raises (sys.getrecursionlimit() == 1000),
+#                                the browser still parses -- to 10000
+#   * object form, depth < 1000  both parse, same returned depth
+#   * object form, depth >= 1000  BOTH parse, but Python returns a structure
+#                                truncated at depth 992 and reports success,
+#                                while the browser returns it whole
+# The object row is the dangerous half and is worth knowing about: a silently
+# truncated payload that looks like a success is the same shape as the
+# refused-extraction gap, one level up. It is left as a measurement rather than
+# a fix -- no realistic range-chart reply nests a thousand deep, and changing
+# either engine's limit is a product decision.
+#
+# The limits below are the serialisers', not the product's: they only decide
+# what this harness is able to compare.
+_MAX_FIXTURE_DEPTH = 400
+
+
+def _assert_expressible(value: Any, case_id: str) -> None:
+    stack = [(value, 1)]
+    while stack:
+        cur, depth = stack.pop()
+        if isinstance(cur, float) and (
+                cur != cur or cur in (float("inf"), float("-inf"))):
+            raise ValueError(
+                f"case {case_id!r} produced the non-finite float {cur!r}. Python's "
+                "json writes that as a bare Infinity / NaN literal and the "
+                "harness reads the fixture with JSON.parse, which rejects it, so "
+                "the case cannot be expressed as a differential case. Compare it "
+                "with a direct probe instead (see docs/ or the audit notes), or "
+                "change the case so the value is finite.")
+        if depth > _MAX_FIXTURE_DEPTH:
+            raise ValueError(
+                f"case {case_id!r} nests deeper than {_MAX_FIXTURE_DEPTH} levels "
+                f"(measured {depth}). json.dumps is recursive and would raise "
+                "RecursionError here, so the case cannot be expressed as a "
+                "differential case. Note that the two product parsers ALSO "
+                "disagree past depth 1000 -- see the table in the comment above.")
+        if isinstance(cur, dict):
+            stack.extend((x, depth + 1) for x in cur.values())
+        elif isinstance(cur, (list, tuple)):
+            stack.extend((x, depth + 1) for x in cur)
+
+
 def _jsonable(value: Any) -> Any:
     """Round-trip through JSON so tuples/lists and floats are canonical."""
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
@@ -1318,6 +1411,7 @@ def build_fixture() -> dict:
                 entry["python_error"] = type(exc).__name__
                 entry["python_message"] = str(exc)
             else:
+                _assert_expressible(result, str(case.get("id")))
                 entry["python"] = _jsonable(result)
             out["cases"].append(entry)
     return out

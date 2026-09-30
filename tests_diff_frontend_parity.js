@@ -182,6 +182,32 @@ function canon(value) {
   return value;
 }
 
+// AUDIT-2026-10-01: the diff caps at 12 LINES, but a pathological VALUE used to
+// arrive as one unbounded line -- sj_nest_array_1200 (a 1200-level nested
+// array, added to pin the two parsers' nesting limits) printed every bracket and
+// buried the run's other output. Truncate the rendered value, and say how long
+// it was, so the line stays readable without hiding that something big is
+// there. 240 is well above any value a real extraction emits.
+const _DIFF_VALUE_MAX = 240;
+function _show(value) {
+  let text;
+  try { text = JSON.stringify(value); } catch (e) { text = String(value); }
+  if (text === undefined) text = String(value);
+  return text.length > _DIFF_VALUE_MAX
+    ? `${text.slice(0, _DIFF_VALUE_MAX)}...<${text.length} chars>`
+    : text;
+}
+
+// Same cap for a MESSAGE, which is where sj_nest_array_1200's real payload used
+// to land: safe_json_loads quotes the whole string it failed on, so a 1200-level
+// array became a 2400-character exception message in the log.
+function _showText(text) {
+  const s = text === undefined || text === null ? String(text) : String(text);
+  return s.length > _DIFF_VALUE_MAX
+    ? `${s.slice(0, _DIFF_VALUE_MAX)}...<${s.length} chars>`
+    : s;
+}
+
 function diff(a, b, trail, out) {
   if (out.length > 12) return;
   if (a === b) return;
@@ -189,7 +215,7 @@ function diff(a, b, trail, out) {
       && Math.abs(a - b) < 1e-9) return;
   const ta = a === null ? 'null' : Array.isArray(a) ? 'array' : typeof a;
   const tb = b === null ? 'null' : Array.isArray(b) ? 'array' : typeof b;
-  if (ta !== tb) { out.push(`${trail}: py=${ta}(${JSON.stringify(a)}) js=${tb}(${JSON.stringify(b)})`); return; }
+  if (ta !== tb) { out.push(`${trail}: py=${ta}(${_show(a)}) js=${tb}(${_show(b)})`); return; }
   if (ta === 'array') {
     if (a.length !== b.length) {
       out.push(`${trail}: length py=${a.length} js=${b.length}`);
@@ -200,13 +226,13 @@ function diff(a, b, trail, out) {
   if (ta === 'object') {
     const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
     for (const k of [...keys].sort()) {
-      if (!(k in a)) { out.push(`${trail}.${k}: MISSING in python (js=${JSON.stringify(b[k])})`); continue; }
-      if (!(k in b)) { out.push(`${trail}.${k}: MISSING in js (py=${JSON.stringify(a[k])})`); continue; }
+      if (!(k in a)) { out.push(`${trail}.${k}: MISSING in python (js=${_show(b[k])})`); continue; }
+      if (!(k in b)) { out.push(`${trail}.${k}: MISSING in js (py=${_show(a[k])})`); continue; }
       diff(a[k], b[k], `${trail}.${k}`, out);
     }
     return;
   }
-  out.push(`${trail}: py=${JSON.stringify(a)} js=${JSON.stringify(b)}`);
+  out.push(`${trail}: py=${_show(a)} js=${_show(b)}`);
 }
 
 //  * ag_34 / ag_35 — non-ASCII decimal digits in an age label. Python's `\d`
@@ -298,6 +324,23 @@ const EXPECTED_DIVERGENCES = {
   // to keep matching: an integer payload still renders "3" on both sides.
   rc_float_integral: 'JSON.parse collapses 3.0 to the integer 3, so the browser cannot know a float was written; Python json.loads keeps it (py="3.0" js="3")',
   rc_float_exponent_big: 'Same JSON.parse wall on an integral value: 1e16 and 10000000000000000 are one JS number, but Python str() answers "1e+16" and "10000000000000000" respectively',
+  // AUDIT-2026-10-01: the parsers' NESTING limits, measured on a depth ladder
+  // directly rather than through a fixture (a case both engines parse returns a
+  // value of the same depth, which this fixture cannot carry -- see the
+  // expressibility guard in tests/gen_frontend_parity_fixtures.py):
+  //   depth <  1000   array: both parse   object: both parse, same depth
+  //   depth >= 1000   array: Python raises, browser parses to at least 10000
+  //                    object: both parse, but Python returns a structure
+  //                            truncated at depth 992 and reports success
+  // The array row is the expressible half, so it is the one recorded here.
+  // sys.getrecursionlimit() is 1000; the browser has no such limit. This is a
+  // runtime fact, not a mirror defect: raising Python's limit trades a clean
+  // ValueError for a possible C-stack overflow, and capping the browser is a
+  // product decision. No realistic range-chart reply nests a thousand deep.
+  // If either engine's limit ever moves, this entry goes stale and the case
+  // starts agreeing -- remove it then, as was done for
+  // rc_section_formations_string on 2026-09-30.
+  sj_nest_array_1200: 'Python json recursion limit (sys.getrecursionlimit() == 1000) refuses a 1200-level nested array; the browser parses it, so the same reply is unusable on the desktop and usable in the browser',
 };
 
 function main() {
@@ -321,7 +364,24 @@ function main() {
     }
     if (c.python_error) {
       if (gotError === null) {
-        failures.push(`${c.id} [${c.group}]: python raised ${c.python_error}(${c.python_message}), js returned ${JSON.stringify(got)}`);
+        // AUDIT-2026-10-01: EXPECTED_DIVERGENCES used to be consulted ONLY on the
+        // value-diff path below, so a legitimately documented
+        // raise-here / return-there divergence had nowhere to be recorded and
+        // would fail the build forever. sj_nest_array_1200 is the first real
+        // one: Python's json recursion limit refuses a 1200-level nested array
+        // and the browser parses it. The mechanism now covers both shapes of
+        // disagreement, and a STALE entry (the case starts agreeing again)
+        // still shows up as an ordinary pass, exactly as before.
+        const why = EXPECTED_DIVERGENCES[c.id];
+        const detail = `${c.id} [${c.group}]: python raised ${c.python_error}`
+          + `(${_showText(c.python_message)}), js returned ${_show(got)}`;
+        if (why) {
+          documented += 1;
+          console.log(`SKIP ${c.id} [${c.group}] — ${why}`);
+          if (VERBOSE) console.log('     ' + detail);
+        } else {
+          failures.push(detail);
+        }
         continue;
       }
       notes.push(`both raise (py:${c.python_error})`);
