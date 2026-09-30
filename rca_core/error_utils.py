@@ -19,7 +19,7 @@ import random
 import time
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
-from typing import Callable, TypeVar
+from typing import Any, Callable, TypeVar
 
 T = TypeVar("T")
 
@@ -75,11 +75,20 @@ class NormalizedError:
 
     @property
     def display_message(self) -> str:
-        """Get the best message for user display."""
+        """Get the best message for user display.
+
+        AUDIT-2026-10-01: the "is there a status" test was truthiness here and
+        ``!== null`` in js/error-utils.js, so a ``status`` of 0 was "no status"
+        on this side and a status on the browser: the desktop rendered
+        "Network error: ..." and dropped the caller's prefix, while the browser
+        rendered "HTTP 0: ...". 0 is not an HTTP status, but a caller that
+        uses it as a "no status" sentinel should be SPELLED that way (None), and
+        a caller that means it should see the same thing on both transports.
+        """
         if self.message_carries_body or not self.body:
             base = self.message
         else:
-            prefix = f"HTTP {self.status}" if self.status else "Network error"
+            prefix = f"HTTP {self.status}" if self.status is not None else "Network error"
             base = f"{prefix}: {self.body}"
         if self.error_code:
             base = f"[{self.error_code}] {base}"
@@ -116,7 +125,19 @@ def normalize_http_error(
 
 
 def _decode_body(body_bytes: bytes | None) -> str:
-    """Best-effort decode of error body bytes."""
+    """Best-effort decode of error body bytes.
+
+    AUDIT-2026-10-01: the ``latin-1`` entry in that tuple is DEAD, and the loop
+    reads as though a legacy latin-1 provider body decodes correctly when it
+    does not. ``errors="replace"`` makes the utf-8 decode unraisable, so the
+    first iteration always returns; measured, a body of invalid utf-8 and a body
+    containing a raw latin-1 byte both come out with U+FFFD in the same place.
+    The browser side agrees, because ``fetch().text()`` also replaces.
+
+    Left in place rather than deleted, and flagged here for the same reason
+    rca_core/bed_parser.py keeps its own deliberately-dead unit entry: a
+    reader should not have to re-measure it. The behaviour is unchanged.
+    """
     if not body_bytes:
         return ""
     for encoding in ("utf-8", "latin-1"):
@@ -148,14 +169,53 @@ def _extract_error_code(body_bytes: bytes | None, body: str) -> str | None:
         if isinstance(data, dict):
             for key in ("error_code", "code", "type", "error.type"):
                 if key in data:
-                    return str(data[key])
+                    code = _usable_error_code(data[key])
+                    if code is not None:
+                        return code
             error = data.get("error", {})
             if isinstance(error, dict):
                 for key in ("error_code", "code", "type"):
                     if key in error:
-                        return str(error[key])
+                        code = _usable_error_code(error[key])
+                        if code is not None:
+                            return code
     except Exception:
         pass
+    return None
+
+
+def _usable_error_code(value: Any) -> str | None:
+    """The machine code to show, or ``None`` when the value is not one.
+
+    AUDIT-2026-10-01: this used to be a bare ``str(value)`` on this side and a
+    bare ``String(value)`` in js/error-utils.js, and for a provider that returns
+    a NON-STRING code the two produced different text in the operator's badge:
+
+        body                     this side            browser
+        {"code": null}           "None"              "null"
+        {"code": true}           "True"              "true"
+        {"code": [1]}            "[1]"               "1"
+        {"code": {"deep": 1}}    "{'deep': 1}"       "[object Object]"
+
+    The array row is the one that loses information rather than just formatting:
+    ``String([1])`` is ``"1"``, indistinguishable from a real numeric code, so
+    the badge asserts a code the provider never sent. The object row put a
+    Python repr inside a user-visible string, which is the same defect
+    ``_stringify_scalar`` was written to stop elsewhere in this codebase.
+
+    So a code is accepted only when it is a string, or an integer (some
+    providers use numeric ids, and both engines already agree on those). A
+    float is excluded rather than coerced: ``str(7.0)`` is ``"7.0"`` where
+    ``String(7)`` is ``"7"``, and a float error code is not a thing. ``None`` is
+    returned for everything else, which also lets the caller keep looking
+    instead of stopping at the first present-but-unusable key.
+    """
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
     return None
 
 
@@ -178,11 +238,18 @@ def format_provider_error(
     normalized: NormalizedError,
     prefix: str | None = None,
 ) -> str:
-    """Format a normalized error for user display."""
+    """Format a normalized error for user display.
+
+    AUDIT-2026-10-01: ``if normalized.status`` was truthiness again, so a
+    ``status`` of 0 dropped BOTH the caller's prefix and the ``HTTP n`` prefix
+    here, where js/error-utils.js#formatError keyed the same two branches on a
+    real "is there a status" test. See NormalizedError.display_message.
+    """
     msg = normalized.display_message
-    if prefix and normalized.status:
+    has_status = normalized.status is not None
+    if prefix and has_status:
         return f"{prefix} ({normalized.status}): {msg}"
-    if normalized.status:
+    if has_status:
         return f"HTTP {normalized.status}: {msg}"
     return msg
 
