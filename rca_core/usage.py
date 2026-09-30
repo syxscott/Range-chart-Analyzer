@@ -436,65 +436,87 @@ class UsageStore:
                 "tokens": int(r["tok"] or 0),
             })
 
-        # Aggregate by UTC day in SQL (cheap, single scan). Then map each
-        # UTC day to a local day using the offset that was in effect at
-        # noon of that UTC day — this is correct except for rows within
-        # ±offset hours of midnight on the DST transition day, which is
-        # at most a 1-hour mis-attribution (acceptable for a per-day chart).
-        # Doing the offset shift in Python avoids the SQL placeholder
-        # binding problem caused by mixing `?` (WHERE) with `:name`
-        # (SELECT) — Python's sqlite3 cannot reliably bind both from a
-        # positional tuple (Bug-1 fix).
+        # Aggregate by LOCAL day, per row.
+        #
+        # AUDIT-2026-10-02 [item 10.1]: this used to group by UTC day in SQL
+        # and then file the whole UTC day under the local date holding the
+        # MAJORITY of that day's rows. A UTC day is not a local day, so for
+        # every row whose own local date differs from the day's majority, the
+        # bar landed on a date the call was not made on. Measured over one
+        # UTC day with a single request planted in each hour, the old rule
+        # misfiled 8 of 24 hours at UTC+8, 9 at UTC+9, 11 at UTC+13, 5 at
+        # UTC-5 and 8 at UTC-8 -- and 0 at UTC+0, which is the one zone CI
+        # runs in.
+        #
+        # The two earlier revisions of this block each moved the error rather
+        # than removing it. REVIEW-2026-07-31 fixed a negated ``tm_gmtoff``.
+        # AUDIT-2026-09-27 P2 fixed a key that carried the zone offset while
+        # the only consumer re-applied the zone
+        # (``time.strftime("%m-%d", time.localtime(d["day"]))`` in
+        # gui_fluent_pages.py:790), so the offset counted twice -- and its
+        # note claimed the author's own UTC+8 "landed on the right date
+        # anyway", which is true of the old formula's WEST end and false of
+        # its EAST end. None of the three tests covering this could see any
+        # of it, because each one recomputed the implementation's own
+        # formula to build its expected value
+        # (tests_bugfixes.py:100, tests/test_review_2026_07_31_core.py:111
+        # and :152, tests/test_audit_2026_09_27.py:603).
+        #
+        # The rule is now the plain one: a request belongs to the local
+        # calendar day it was made on. ``rca_local_gmtoff`` is a per-ROW
+        # lookup rather than one offset for the whole query, because the
+        # whole defect is that "one offset" cannot be right -- and it is
+        # memoised per UTC day, since tm_gmtoff is constant within a day, so
+        # the Python callback runs once per distinct day in the table and not
+        # once per row.
+        #
+        # Kept from the old code: the offset is read at NOON of the day, so
+        # a DST transition moves at most the transition day's own rows, and
+        # only for zones that change offset at local midnight. Same accepted
+        # caveat, now bounded to one day instead of every day.
+        #
+        # Also kept: the shift happens in SQL-adjacent Python rather than via
+        # a named SQLite parameter, because Python's sqlite3 cannot reliably
+        # bind ``?`` (WHERE) and ``:name`` (SELECT) from one positional tuple
+        # (Bug-1 fix).
         import time as _time
-        utc_rows = self.db.query(
-            f"""SELECT
-                CAST(timestamp / 86400 AS INTEGER) * 86400 AS utc_day,
+        offset_cache: dict[int, int] = {}
+
+        def _gmtoff(ts: float) -> int:
+            day = int(ts) // 86400
+            off = offset_cache.get(day)
+            if off is None:
+                off = _time.localtime(day * 86400 + 43200).tm_gmtoff
+                offset_cache[day] = off
+            return off
+
+        # Registration and the query that uses it are done under one hold of
+        # the RLock, so a concurrent summary() sharing this Database cannot
+        # slip its own registration in between. Both closures would compute
+        # the same value, but holding the lock across the pair costs nothing.
+        with self.db.connect() as conn:
+            conn.create_function("rca_local_gmtoff", 1, _gmtoff)
+            local_rows = self.db.query(
+                f"""SELECT
+                CAST((timestamp + rca_local_gmtoff(timestamp)) / 86400 AS INTEGER) * 86400 AS local_day,
                 COUNT(*) AS n,
                 COALESCE(SUM(input_tokens + output_tokens), 0) AS tok
             FROM usage {where}
-            GROUP BY utc_day
-            ORDER BY utc_day""",
-            params_t,
-        )
-        # Map each UTC day → local day. Two UTC days may collapse to the
-        # same local day (or one UTC day may split) only around DST, so we
-        # bucket in Python.
-        local_buckets: dict[int, dict[str, int]] = {}
-        for r in utc_rows:
-            utc_day = int(r["utc_day"] or 0)
-            count = int(r["n"] or 0)
-            tokens = int(r["tok"] or 0)
-            # localtime at noon of this UTC day picks the DST rule that
-            # affects the *majority* of that day's rows.
-            ts_noon = utc_day + 43200
-            # REVIEW-2026-07-31: tm_gmtoff is SECONDS EAST of UTC
-            # (+28800 for UTC+8) — local time = UTC + tm_gmtoff. The
-            # previous negation shifted every row's local day backward,
-            # so for UTC+8 all usage between 00:00-08:00 local landed on
-            # the PREVIOUS day.
-            local_offset = _time.localtime(ts_noon).tm_gmtoff
-            # AUDIT-2026-09-27 P2: the key used to be ``utc_day +
-            # local_offset``, i.e. a SHIFTED timestamp, while the only
-            # consumer re-applies the zone —
-            # ``time.strftime("%m-%d", time.localtime(d["day"]))`` in
-            # gui_fluent_pages.py — so the offset was counted twice. The
-            # author's own UTC+8 zone happens to land on the right date
-            # anyway, which is why this survived; executed for UTC-5 the
-            # daily bars were labelled one day EARLY, and a cost-per-day
-            # figure is something a user reconciles against an invoice.
-            #
-            # The key is now the epoch of LOCAL MIDNIGHT of the day that
-            # holds the MAJORITY of this UTC day's rows. A UTC day spans
-            # [D+off, D+off+24h) in local time, so the majority day is the
-            # local date of its midpoint — the same noon trick the DST rule
-            # above uses. Then localtime(key) is exactly 00:00 on that date.
-            majority_ts = utc_day + local_offset + 43200
-            local_day = (majority_ts // 86400) * 86400 - local_offset
-            bucket = local_buckets.setdefault(
-                local_day, {"day": local_day, "count": 0, "tokens": 0}
+            GROUP BY local_day
+            ORDER BY local_day""",
+                params_t,
             )
-            bucket["count"] += count
-            bucket["tokens"] += tokens
-        s.by_day = [local_buckets[k] for k in sorted(local_buckets.keys())]
+        # ``local_day`` is the UTC-midnight-aligned epoch of the local
+        # calendar date. The key the consumer re-localises has to be the
+        # epoch of LOCAL MIDNIGHT of that same date, i.e. minus the offset --
+        # which is also what makes ``(key + offset) % 86400 == 0`` hold.
+        s.by_day = [
+            {
+                "day": int(r["local_day"] or 0) - _gmtoff(int(r["local_day"] or 0) + 43200),
+                "count": int(r["n"] or 0),
+                "tokens": int(r["tok"] or 0),
+            }
+            for r in local_rows
+        ]
 
         return s

@@ -595,19 +595,51 @@ class TestP2UsageByDayLocalMidnight:
     """The key was ``utc_day + offset`` (a shifted timestamp) while the only
     consumer re-applies the zone with ``localtime()``, so the offset counted
     twice and every bar west of UTC was labelled a day early. The author's own
-    UTC+8 zone landed on the right date anyway, which is why it survived."""
+    UTC+8 zone landed on the right date anyway, which is why it survived.
 
-    def test_the_key_is_local_midnight_for_every_offset(self):
+    AUDIT-2026-10-02 [item 10.1]: the P2 fix only MOVED the error. The key
+    then became the epoch of the local day holding the MAJORITY of that UTC
+    day's rows, which is a different wrong answer rather than the right one --
+    at UTC+8 it misfiled 8 of the 24 hours of a day, and the error moved to
+    the east end where the P2 note had claimed it was fine. This test could
+    see none of it because it exercised the formula in pure arithmetic rather
+    than the store that produces the key, so it kept passing against code it
+    was supposed to be checking. It now goes through ``UsageStore``.
+    """
+
+    def test_the_key_is_local_midnight_for_every_offset(self, tmp_path,
+                                                       monkeypatch):
+        import time as _time
+        from rca_core.db import Database
+        from rca_core.usage import UsageRecord, UsageStore
         day = 1735689600          # 2025-01-01 00:00 UTC
         for off in (50400, 28800, 0, -18000, -32400):   # UTC+14 .. UTC-9
-            majority = day + off + 43200
-            key = (majority // 86400) * 86400 - off
-            # What the consumer sees: time.localtime(key) then strftime("%H:%M").
-            wall = time.gmtime(key + off)     # local wall clock of the instant
+            class _Fake:
+                tm_gmtoff = off
+
+                def __call__(self, ts):
+                    return self
+
+            monkeypatch.setattr(_time, "localtime", _Fake())
+            store = UsageStore(db=Database(path=str(tmp_path / f"u{off}.db")))
+            # 23:00 UTC is already the NEXT local day east of UTC and already
+            # the PREVIOUS local day west of it -- the hours the majority rule
+            # cannot represent.
+            ts = day + 23 * 3600
+            store.record(UsageRecord(
+                timestamp=ts, provider_id="p", provider_name="p", model="m",
+                input_tokens=1, output_tokens=1,
+            ))
+            s = store.summary()
+            assert len(s.by_day) == 1, (off, s.by_day)
+            key = s.by_day[0]["day"]
+            # What the consumer sees: time.localtime(key) then strftime.
+            wall = _time.gmtime(key + off)     # local wall clock of the instant
             assert time.strftime("%H:%M", wall) == "00:00", (off, wall)
-            # ...and on the date that holds the majority of that UTC day.
+            # ...on the date the request was ACTUALLY made, rather than on
+            # another date derived from the same formula under test.
             assert time.strftime("%Y-%m-%d", wall) == \
-                time.strftime("%Y-%m-%d", time.gmtime(majority)), off
+                time.strftime("%Y-%m-%d", _time.gmtime(ts + off)), off
 
 
 # ---------------------------------------------------------------------------

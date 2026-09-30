@@ -95,28 +95,28 @@ class TestUsageByDayTimezone:
             input_tokens=100, output_tokens=50,
         ))
         s = store.summary()
-        day_keys = [d["day"] for d in s.by_day]
-        # AUDIT-2026-09-27 P2: the expected key is now the epoch of LOCAL
-        # MIDNIGHT of the day holding the majority of this UTC day, which is
-        # what the consumer (`time.strftime("%m-%d", time.localtime(d["day"]))`
-        # in gui_fluent_pages.py) needs in order to print the right date.
+        # AUDIT-2026-10-02 [item 10.1]: this test used to rebuild the
+        # implementation's own formula to produce ``expected_day`` and then
+        # assert the key equalled it, so it could not fail on any change to
+        # the formula. Worse, the value it accepted resolved to 2026-07-31
+        # while the row it planted was made on 2026-08-01 local -- the exact
+        # outcome this docstring says must not happen.
         #
-        # It used to be `utc_midnight + offset`, i.e. a SHIFTED timestamp,
-        # while the consumer re-applies the zone — so the offset was counted
-        # TWICE. That is invisible east of UTC and wrong west of it, which is
-        # why REVIEW-2026-07-31's SIGN fix (east-positive, below) looked
-        # correct and this offset was never revisited. The sign itself is
-        # still right and is still asserted here.
+        # The expectation now comes from the ROW, not from a formula: the
+        # local wall clock at the request's own timestamp is ``utc_ts + off``,
+        # and the bucket must resolve to that date. ``gmtime`` rather than
+        # ``localtime``, because ``_time.localtime`` is stubbed in this test
+        # with an object carrying only ``tm_gmtoff``.
         off = _time.localtime(utc_ts + 43200).tm_gmtoff
-        majority = (utc_ts // 86400) * 86400 + off + 43200
-        expected_day = (majority // 86400) * 86400 - off
-        assert expected_day in day_keys, day_keys
+        bucket = s.by_day[0]
+        got = _time.strftime("%Y-%m-%d", _time.gmtime(bucket["day"] + off))
+        want = _time.strftime("%Y-%m-%d", _time.gmtime(utc_ts + off))
+        assert got == want == "2026-08-01", (got, want)
         # The invariant the consumer depends on, stated without touching
-        # ``_time.localtime`` (this test monkeypatches it with a stub that
-        # carries only ``tm_gmtoff``): adding the zone offset to the key must
-        # land exactly on a UTC midnight, which is what "00:00 local" means.
-        assert (expected_day + off) % 86400 == 0, (expected_day, off)
-        bucket = next(d for d in s.by_day if d["day"] == expected_day)
+        # ``_time.localtime``: adding the zone offset to the key must land
+        # exactly on a UTC midnight, which is what "00:00 local" means as an
+        # instant.
+        assert (bucket["day"] + off) % 86400 == 0, (bucket["day"], off)
         assert bucket["count"] == 1
 
     def test_by_day_west_negative_offset(self, tmp_path, monkeypatch):
@@ -142,24 +142,27 @@ class TestUsageByDayTimezone:
             input_tokens=100, output_tokens=50,
         ))
         s = store.summary()
-        day_keys = [d["day"] for d in s.by_day]
-        # AUDIT-2026-09-27 P2: see the east-offset test above - the key is the
-        # epoch of LOCAL MIDNIGHT, not a zone-shifted timestamp. West of UTC
-        # this is the case the old formula got wrong: with the double
-        # application, UTC 2026-07-31 22:00 was filed under 2026-07-30.
+        # AUDIT-2026-10-02 [item 10.1]: see the east-offset test above. The
+        # two revisions this block went through each moved the error rather
+        # than removing it -- REVIEW-2026-07-31 fixed a negated tm_gmtoff,
+        # AUDIT-2026-09-27 P2 fixed a key that carried the offset while the
+        # consumer re-applied the zone -- and this test could see neither,
+        # because it rebuilt the implementation's formula to get its
+        # expected value. The expectation comes from the row now.
         off = _time.localtime(utc_ts + 43200).tm_gmtoff
-        majority = (utc_ts // 86400) * 86400 + off + 43200
-        expected_day = (majority // 86400) * 86400 - off
-        assert expected_day in day_keys, day_keys
+        bucket = s.by_day[0]
+        assert (bucket["day"] + off) % 86400 == 0, (bucket["day"], off)
         # UTC 2026-07-31 22:00 in UTC-5 is 17:00 local on the SAME day, so the
         # bucket must resolve to 2026-07-31 - which, with the old double-offset
         # formula, came out as 2026-07-30. Pure arithmetic here because
-        # ``_time.localtime`` is stubbed in this test.
-        assert (expected_day + off) % 86400 == 0, (expected_day, off)
+        # ``_time.localtime`` is stubbed in this test; +off is the local wall
+        # clock of the instant, which is what the consumer's own
+        # ``time.localtime`` would print.
         local_date = _time.strftime(
-            "%Y-%m-%d",
-            _time.gmtime(expected_day + off))     # +off == local wall clock
-        assert local_date == "2026-07-31", local_date
+            "%Y-%m-%d", _time.gmtime(bucket["day"] + off))
+        want = _time.strftime("%Y-%m-%d", _time.gmtime(utc_ts + off))
+        assert local_date == want == "2026-07-31", (local_date, want)
+        assert bucket["count"] == 1
 
 
 class TestHistoryAtomicity:
