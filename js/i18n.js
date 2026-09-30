@@ -173,7 +173,7 @@ const RCA_I18N = {
     'results.title': '提取结果',
     'results.empty': '还没有结果。请在上方上传一张地层沿线图并点击「开始提取」。',
     // Step 0 (8.0→9.5): chimera_warnings surfaced
-    'results.chimera_warning': '检测到 {n} 条嵌合共识行（自然界未观察到），已被自动丢弃',
+    'results.chimera_warning': '检测到 {n} 条嵌合共识行（无任何单次运行观察到该组合），已保留并标记待复核',
     'results.confidence': '整体置信度',
     'results.exportAll': '导出全部 (JSON)',
     'results.copy': '复制',
@@ -306,7 +306,7 @@ const RCA_I18N = {
     'quality.null_fields': '部分预期字段为空',
     'quality.invalid_result': '提取结果无效',
     // F-4 (REVIEW-2026-07-25): P1-3 consistency dimension messages
-    'quality.chimera_dropped':    '嵌合共识行被丢弃（无任何单次运行观察到该 FAD/LAD/生物带组合）',
+    'quality.chimera_dropped':    '嵌合共识行已保留并标记（无任何单次运行观察到该 FAD/LAD/生物带组合），请复核选票',
     'quality.fad_lt_lad':        '部分物种的 FAD（首现）晚于 LAD（末现）',
     'quality.agreement_overflow': 'agreement_count 异常大于总运行次数',
     'quality.missing_biozone':    '部分物种缺失生物带归属',
@@ -522,7 +522,7 @@ RCA_I18N.en = {
   'results.title': 'Extraction results',
   'results.empty': 'No results yet. Upload a range chart above and click "Extract".',
   // Step 0 (8.0→9.5): chimera_warnings surfaced
-  'results.chimera_warning': 'Detected {n} chimeric consensus rows (not observed in any single run) — automatically dropped',
+  'results.chimera_warning': 'Detected {n} chimeric consensus rows (not observed in any single run) — kept and flagged for review',
   'results.confidence': 'Overall confidence',
   'results.exportAll': 'Export all (JSON)',
   'results.copy': 'Copy',
@@ -651,7 +651,7 @@ RCA_I18N.en = {
   'quality.null_fields': 'Some expected fields are null',
   'quality.invalid_result': 'Invalid extraction result',
   // F-4 (REVIEW-2026-07-25): P1-3 consistency dimension messages
-  'quality.chimera_dropped':    'Chimeric consensus row dropped (no single run observed this combination)',
+  'quality.chimera_dropped':    'Chimera row KEPT and flagged (field combination never observed in any single run) — review the ballots',
   'quality.fad_lt_lad':        'Some taxa have FAD (first appearance) later than LAD (last appearance)',
   'quality.agreement_overflow': 'agreement_count abnormally exceeds total number of runs',
   'quality.missing_biozone':   'Some taxa lack biozone assignment',
@@ -856,7 +856,7 @@ RCA_I18N.ja = {
   'results.title': '抽出結果',
   'results.empty': 'まだ結果がありません。上で画像をアップロードして「抽出開始」を押してください。',
   // Step 0 (8.0→9.5): chimera_warnings surfaced
-  'results.chimera_warning': '{n} 件のキメラ統合行を検出（単一ランでも観察されなかったため自動破棄）',
+  'results.chimera_warning': '{n} 件のキメラ統合行を検出（単一ランでも観察されなかった組み合わせ）。保持してフラグを付与しました',
   'results.confidence': '全体の信頼度',
   'results.exportAll': 'すべて書き出し (JSON)',
   'results.copy': 'コピー',
@@ -985,7 +985,7 @@ RCA_I18N.ja = {
   'quality.null_fields': '一部の期待されたフィールドが null です',
   'quality.invalid_result': '無効な抽出結果',
   // F-4 (REVIEW-2026-07-25): P1-3 consistency dimension messages
-  'quality.chimera_dropped':    'キメラ統合行が破棄されました（単一ランもこの組合を観察していません）',
+  'quality.chimera_dropped':    'キメラ行は保持してフラグ付け（いずれの単一ランでも観察されなかったフィールド組み合わせ）。投票を確認してください',
   'quality.fad_lt_lad':        '一部の分類群で FAD（初現）が LAD（終現）よりも後になっています',
   'quality.agreement_overflow': 'agreement_count が総ラン数を超えています',
   'quality.missing_biozone':    '一部の分類群にbiozone所属がありません',

@@ -290,7 +290,15 @@ TRANSLATIONS["zh"] = {
     "col.description": "描述",
     "col.characteristicFauna": "特征动物群",
     # Step 0 (8.0→9.5): chimera_warnings surfaced as user-visible warning
-    "results.chimera_warning": "检测到 {n} 条嵌合共识行（自然界未观察到），已被自动丢弃",
+    # AUDIT-2026-10-01 [item 9.15]: the old text said the rows were 已被自动丢弃
+    # ("automatically dropped"). They are NOT. AUDIT-2026-09-27 P1 in
+    # aggregate.py reversed that policy on purpose -- deleting taxa was itself
+    # the bug, because "raising `runs`, the documented way to make an
+    # extraction MORE reliable, was deleting taxa". A recombined row is now
+    # KEPT, flagged, and carries the ballots. Telling the operator it was
+    # dropped is the worst of both: they stop looking for a disagreement the
+    # tool still holds. All three languages said the same false thing.
+    "results.chimera_warning": "检测到 {n} 条嵌合共识行（无任何单次运行观察到该组合），已保留并标记待复核",
     "results.phylogeneticTree": "系统发育树",
     "wizard.steps": "步骤",
     "wizard.selectPreset": "选择预设",
@@ -457,7 +465,10 @@ TRANSLATIONS["zh"] = {
     "quality.null_fields": "部分预期字段为空",
     "quality.invalid_result": "提取结果无效",
     # P1-3 (REVIEW-2026-07-25): new keys for the consistency dimension.
-    "quality.chimera_dropped": "嵌合共识行被丢弃（无任何单次运行观察到该 FAD/LAD/生物带组合）",
+    # AUDIT-2026-10-01 [item 9.15]: said 被丢弃 ("dropped"). Nothing is
+    # dropped -- the row is kept, flagged, and carries the ballots. See the
+    # results.chimera_warning note for why that policy was reversed.
+    "quality.chimera_dropped": "嵌合共识行已保留并标记（无任何单次运行观察到该 FAD/LAD/生物带组合），请复核选票",
     "quality.fad_lt_lad": "部分物种的 FAD（首现）晚于 LAD（末现）",
     "quality.agreement_overflow": "agreement_count 异常大于总运行次数",
     "quality.missing_biozone": "部分物种缺失生物带归属",
@@ -757,7 +768,7 @@ TRANSLATIONS["en"] = {
     "col.description": "Description",
     "col.characteristicFauna": "Characteristic fauna",
     # Step 0 (8.0→9.5): chimera_warnings surfaced as user-visible warning
-    "results.chimera_warning": "Detected {n} chimeric consensus rows (not observed in any single run) — automatically dropped",
+    "results.chimera_warning": "Detected {n} chimeric consensus rows (not observed in any single run) — kept and flagged for review",
     "results.phylogeneticTree": "Phylogenetic Tree",
 
     # ----- Editable results -----
@@ -928,7 +939,7 @@ TRANSLATIONS["en"] = {
     # which made the GUI render the raw msg_key string for English/Japanese
     # users. Kept in sync with the zh block.
     "quality.agreement_overflow": "Agreement ratio exceeds 1.0 (clamped)",
-    "quality.chimera_dropped": "Chimera row dropped (field combination never observed in any single run)",
+    "quality.chimera_dropped": "Chimera row KEPT and flagged (field combination never observed in any single run) — review the ballots",
     "quality.empty_result": "Empty extraction result",
     "quality.fad_lt_lad": "FAD is younger than LAD (range order inverted)",
     "quality.missing_biozone": "Biozone label missing",
@@ -1238,7 +1249,9 @@ TRANSLATIONS["ja"] = {
     "col.description": "説明",
     "col.characteristicFauna": "特徴的動物群",
     # Step 0 (8.0→9.5): chimera_warnings surfaced as user-visible warning
-    "results.chimera_warning": "{n} 件のキメラ統合行を検出（単一ランでも観察されなかったため自動破棄）",
+    # AUDIT-2026-10-01 [item 9.15]: 除外 / 自動破棄 both claim a removal.
+    # Nothing is removed; the row is kept, flagged and carries the ballots.
+    "results.chimera_warning": "{n} 件のキメラ統合行を検出（単一ランでも観察されなかった組み合わせ）。保持してフラグを付与しました",
     "results.phylogeneticTree": "系統樹",
 
     # ----- Editable results -----
@@ -1409,7 +1422,7 @@ TRANSLATIONS["ja"] = {
     # which made the GUI render the raw msg_key string for English/Japanese
     # users. Kept in sync with the zh block.
     "quality.agreement_overflow": "一致率が1.0を超えています（クランプ済み）",
-    "quality.chimera_dropped": "キメラ行を除外（いずれの単一実行でも観察されなかったフィールド組み合わせ）",
+    "quality.chimera_dropped": "キメラ行は保持してフラグ付け（いずれの単一ランでも観察されなかったフィールド組み合わせ）。投票を確認してください",
     "quality.empty_result": "抽出結果が空です",
     "quality.fad_lt_lad": "FADがLADより新しい（範囲の順序が逆転）",
     "quality.missing_biozone": "生層準ラベルがありません",
