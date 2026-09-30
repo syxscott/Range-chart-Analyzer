@@ -220,12 +220,59 @@ def get_retry_delay(
     and its js/error-utils.js mirror, so it is left for the owner rather than
     changed here. Until then: the function honours Retry-After, and the LLM
     path does not use it.
+
+    AUDIT-2026-10-01: measured, and this note understated the gap in two ways.
+    Both matter to whoever picks the refactor up.
+
+      1. The BROWSER is not in the same position. js/minimax.js's direct-mode
+         transport surfaces 429/408 and rides ``err.headers`` through
+         retryWithBackoff into getRetryDelay (its comment at the throw site
+         says so), and a real ``Headers`` is case-insensitive. So the two
+         transports DISAGREE today: the same 429 is backed off per the server's
+         Retry-After in the browser and per the blind backoff on the desktop.
+         This is a live divergence, not a shared limitation.
+      2. Carrying the headers out is NECESSARY BUT NOT SUFFICIENT. Two further
+         divergences sit inside this function and would survive it. The header
+         lookup was case-sensitive over a plain dict (fixed here -- a no-op in
+         production while both call sites pass None, and pinned by
+         tests/test_error_utils_retry_header_parity.py), and the HTTP-date
+         branch still differs: ``parsedate_to_datetime`` accepts only the
+         RFC 9110 IMF-fixdate, while js/error-utils.js uses ``new Date()``,
+         which also accepts ISO-8601. That one is deliberately left alone --
+         accepting a non-spec format is a judgment call, not a mirror fix.
+
+    So the deferral is a THREE-part job, not one: capture the headers, keep the
+    lookup case-insensitive, and decide the date format.
     """
     delay: float | None = None
 
-    # 1. Check Retry-After-MS header (milliseconds)
+    # AUDIT-2026-10-01: header names are case-INSENSITIVE (RFC 9110 §5.1), and
+    # this function receives a plain dict, so the exact-spelling `.get()` pairs
+    # it used to do honoured two spellings out of the legal set. Measured
+    # against js/error-utils.js: the browser is handed a real `Headers`, whose
+    # `.get()` is case-insensitive, so it honoured Retry-After for
+    # "retry-after", "Retry-After", "RETRY-AFTER", "retry-After" and
+    # "rEtRy-AfTeR" alike, while this side silently fell through to the
+    # exponential backoff (1 s floor) for everything except the two spellings
+    # listed below -- including "RETRY-AFTER", which plenty of proxies and
+    # CDNs emit. One lookup over a lower-cased view of the keys is the whole
+    # fix, and it is a no-op in production today: both live call sites pass
+    # headers=None (llm.py:2001, extractor.py:2281), so nothing that ships
+    # reaches this branch. It matters for the refactor the docstring above
+    # defers -- carrying the headers out is not sufficient on its own.
+    #
+    # The values are looked up as-is, only the KEYS are folded, so a value
+    # that happens to look like a header name is unaffected.
+    folded = None
     if headers:
-        retry_after_ms = headers.get("retry-after-ms") or headers.get("Retry-After-Ms")
+        try:
+            folded = {str(k).lower(): v for k, v in headers.items()}
+        except AttributeError:  # a non-mapping was handed in
+            folded = None
+
+    # 1. Check Retry-After-MS header (milliseconds)
+    if folded:
+        retry_after_ms = folded.get("retry-after-ms")
         if retry_after_ms:
             try:
                 delay = float(retry_after_ms) / 1000.0
@@ -234,7 +281,7 @@ def get_retry_delay(
 
         # 2. Check Retry-After header (seconds or HTTP date)
         if delay is None:
-            retry_after = headers.get("retry-after") or headers.get("Retry-After")
+            retry_after = folded.get("retry-after")
             if retry_after:
                 try:
                     delay = float(retry_after)
@@ -243,6 +290,19 @@ def get_retry_delay(
                         dt = parsedate_to_datetime(retry_after)
                         delay = max(0.0, (dt - datetime.datetime.now(datetime.timezone.utc)).total_seconds())
                     except Exception:
+                        # AUDIT-2026-10-01: measured, and NOT fixed here.
+                        # parsedate_to_datetime accepts the RFC 9110 HTTP-date
+                        # (IMF-fixdate, "Wed, 21 Oct 2026 07:28:00 GMT") and
+                        # nothing else, while js/error-utils.js goes through
+                        # `new Date(string)`, which also accepts ISO-8601. So
+                        # for `Retry-After: 2099-10-21T07:28:00Z` this side
+                        # ignores the header and backs off ~1 s where the
+                        # browser waits the requested time. ISO-8601 is not
+                        # what RFC 9110 asks for, so accepting it is a
+                        # judgment call about gateways and CDNs rather than a
+                        # mirror bug, and it is left for the owner. Recorded
+                        # as a characterisation test in
+                        # tests/test_error_utils_retry_header_parity.py.
                         pass
 
     # 3. Fall back to exponential backoff with jitter

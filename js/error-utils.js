@@ -194,11 +194,32 @@ function getRetryDelay({
 }) {
     let delay = null;
 
-    // 1. Check Retry-After-MS header (milliseconds)
+    // AUDIT-2026-10-01: the plain-object fallback folded nothing, so a
+    // hand-built { 'RETRY-AFTER': '7' } was ignored here while a real Headers
+    // (which is what js/minimax.js hands over: `err.headers = r.headers` on a
+    // fetch Response) honoured it -- and while rca_core/error_utils.py, whose
+    // headers are always a plain dict, honoured only two exact spellings. The
+    // product shapes agreed by accident, on casing nobody controls. Fold the
+    // keys when there is no case-insensitive .get() to do it for us; the
+    // values are never touched.
+    let folded = null;
     if (headers) {
-        const retryAfterMs = headers.get && headers.get('retry-after-ms')
-            ? headers.get('retry-after-ms')
-            : headers['retry-after-ms'];
+        if (typeof headers.get === 'function') {
+            folded = {
+                'retry-after-ms': headers.get('retry-after-ms'),
+                'retry-after': headers.get('retry-after'),
+            };
+        } else if (typeof headers === 'object') {
+            folded = {};
+            for (const key of Object.keys(headers)) {
+                folded[String(key).toLowerCase()] = headers[key];
+            }
+        }
+    }
+
+    // 1. Check Retry-After-MS header (milliseconds)
+    if (folded) {
+        const retryAfterMs = folded['retry-after-ms'];
         if (retryAfterMs) {
             const parsed = parseFloat(retryAfterMs);
             if (!isNaN(parsed)) {
@@ -208,9 +229,7 @@ function getRetryDelay({
 
         // 2. Check Retry-After header (seconds or HTTP date)
         if (delay === null) {
-            const retryAfter = headers.get && headers.get('retry-after')
-                ? headers.get('retry-after')
-                : headers['retry-after'];
+            const retryAfter = folded['retry-after'];
             if (retryAfter) {
                 // Try parsing as float (seconds)
                 const parsed = parseFloat(retryAfter);

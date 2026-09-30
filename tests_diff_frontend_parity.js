@@ -324,23 +324,21 @@ const EXPECTED_DIVERGENCES = {
   // to keep matching: an integer payload still renders "3" on both sides.
   rc_float_integral: 'JSON.parse collapses 3.0 to the integer 3, so the browser cannot know a float was written; Python json.loads keeps it (py="3.0" js="3")',
   rc_float_exponent_big: 'Same JSON.parse wall on an integral value: 1e16 and 10000000000000000 are one JS number, but Python str() answers "1e+16" and "10000000000000000" respectively',
-  // AUDIT-2026-10-01: the parsers' NESTING limits, measured on a depth ladder
-  // directly rather than through a fixture (a case both engines parse returns a
-  // value of the same depth, which this fixture cannot carry -- see the
-  // expressibility guard in tests/gen_frontend_parity_fixtures.py):
-  //   depth <  1000   array: both parse   object: both parse, same depth
-  //   depth >= 1000   array: Python raises, browser parses to at least 10000
-  //                    object: both parse, but Python returns a structure
-  //                            truncated at depth 992 and reports success
-  // The array row is the expressible half, so it is the one recorded here.
-  // sys.getrecursionlimit() is 1000; the browser has no such limit. This is a
-  // runtime fact, not a mirror defect: raising Python's limit trades a clean
-  // ValueError for a possible C-stack overflow, and capping the browser is a
-  // product decision. No realistic range-chart reply nests a thousand deep.
-  // If either engine's limit ever moves, this entry goes stale and the case
-  // starts agreeing -- remove it then, as was done for
-  // rc_section_formations_string on 2026-09-30.
-  sj_nest_array_1200: 'Python json recursion limit (sys.getrecursionlimit() == 1000) refuses a 1200-level nested array; the browser parses it, so the same reply is unusable on the desktop and usable in the browser',
+  // AUDIT-2026-10-01: the parsers' nesting limits are recorded in the comment
+  // on the expressibility guard in tests/gen_frontend_parity_fixtures.py, NOT
+  // as an entry here. A case was tried and removed: the browser parses a
+  // 1200-level nested array at any depth, but WHERE CPython refuses it moves
+  // with the interpreter (3.10: raises at >= 1000 = sys.getrecursionlimit();
+  // 3.12.14, the CI interpreter: parses 1200), so the case's recorded Python
+  // answer was not the same on both of the versions this project tests. It
+  // passed on 3.10 and failed on 3.12. The same measurement also covers the
+  // object form, where 3.10 parses but returns a structure truncated at depth
+  // 992 while reporting success, and the browser returns it whole.
+  //
+  // The mechanism that entry would have needed is still worth having, so it is
+  // now reached from the python_error branch as well as the value-diff branch:
+  // a legitimate raise-here / return-there divergence used to have nowhere to
+  // be recorded and would have failed the build forever.
 };
 
 function main() {

@@ -570,24 +570,25 @@ _add(
           "\ufeff[{\"species\": \"A\", \"section\": \"S\"}]"),
     _case("safe_json_loads", "sj_bom_with_prose",
           "\ufeffSure! Here it is:\n{\"sections\": [{\"name\": \"A\"}]}\nDone."),
-    # AUDIT-2026-10-01: the two parsers' NESTING limits, measured on a depth
-    # ladder rather than guessed (the numbers are in the expressibility
-    # guard's comment further down). The array form is the expressible half:
-    # safe_json_loads raises in Python at depth >= 1000 --
-    # sys.getrecursionlimit() is 1000 -- while js/json-utils.js still parses
-    # it, so the same model reply is "unusable" on the desktop and "usable" in
-    # the browser. Recorded as a case rather than a note so it fails the build
-    # if either side moves.
-    #
-    # There is deliberately NO shallower control case beside it, and that is a
-    # limitation of this harness rather than an oversight: a case both engines
-    # parse produces a RESULT of the same depth, which is deeper than the
-    # serialisers can carry, so the expressibility guard refuses to add it
-    # ("nests deeper than 400 levels"). The two product parsers were therefore
-    # compared on a depth ladder directly rather than through a fixture -- see
-    # the measured table in the guard's comment -- and the boundary they found
-    # (1000, not 400) is a property of the parsers, not of this limit.
-    _case("safe_json_loads", "sj_nest_array_1200", "[" * 1200 + "]" * 1200),
+    # AUDIT-2026-10-01: the two parsers' NESTING limits were measured on a
+    # depth ladder (the numbers are in the expressibility guard's comment
+    # further down) and there is deliberately NO fixture case for them. The
+    # array form is the half that could have been expressed -- Python refuses
+    # it, so there is no value to serialise -- and adding it anyway turned out
+    # to be wrong for a reason worth recording: WHERE Python refuses is
+    # interpreter-dependent, so the case is not stable across the versions this
+    # project tests. Measured:
+    #   CPython 3.10 (sys.getrecursionlimit() == 1000): a 1200-level array
+    #     raises, so the case records python_error.
+    #   CPython 3.12.14 (the CI interpreter): the same 1200-level array PARSES,
+    #     so the case would record a 1200-deep value -- which the guard below
+    #     then refused, and tests/test_frontend_parity_fixtures_2026_09_20.py::
+    #     test_fixture_matches_python failed on 3.12 while passing on 3.10.
+    # A committed fixture has to be byte-identical whichever interpreter
+    # regenerates it, so a case whose Python answer moves with the version
+    # cannot live here. The finding is recorded where it stays true: as the
+    # measurement in the guard's comment, and as a guard on the guard
+    # (tests/test_parity_fixture_expressibility.py).
 )
 
 # --- age bounds (quality.js / ics_table.js vs standards/ics.py) ------------
@@ -1348,23 +1349,33 @@ def _iter_values(value: Any) -> Any:
 #   2. A structure nested deeper than the serialisers can carry. json.dumps is
 #      recursive, so writing one raises RecursionError inside this generator.
 #
-# The nesting boundary was measured, not guessed, on both product functions
-# (rca_core.json_utils.safe_json_loads vs js/json-utils.js#safeJsonLoads):
-#   * array form, depth < 1000   both parse
-#   * array form, depth >= 1000  Python raises (sys.getrecursionlimit() == 1000),
-#                                the browser still parses -- to 10000
-#   * object form, depth < 1000  both parse, same returned depth
-#   * object form, depth >= 1000  BOTH parse, but Python returns a structure
-#                                truncated at depth 992 and reports success,
-#                                while the browser returns it whole
+# The nesting boundary was measured on both product functions
+# (rca_core.json_utils.safe_json_loads vs js/json-utils.js#safeJsonLoads), and
+# it is NOT the same number everywhere -- which is why the measurement lives in
+# a comment and not in a case:
+#   * array form, depth <  1000   both engines parse
+#   * array form, depth >= 1000   CPython 3.10 refuses (sys.getrecursionlimit()
+#                                 == 1000); the browser parses to at least 10000
+#   * array form, depth == 1200   CPython 3.12.14 -- the CI interpreter --
+#                                 PARSES it. So "where Python refuses" moves
+#                                 with the interpreter, and a fixture case
+#                                 built on it cannot stay byte-identical across
+#                                 the versions this project tests. That is
+#                                 exactly how it was caught: the case passed on
+#                                 3.10 and failed on 3.12.
+#   * object form, depth >= 1000  both parse, but CPython 3.10 returns a
+#                                 structure truncated at depth 992 and reports
+#                                 SUCCESS, while the browser returns it whole
 # The object row is the dangerous half and is worth knowing about: a silently
 # truncated payload that looks like a success is the same shape as the
-# refused-extraction gap, one level up. It is left as a measurement rather than
-# a fix -- no realistic range-chart reply nests a thousand deep, and changing
-# either engine's limit is a product decision.
+# refused-extraction gap, one level up. Neither half is fixed here -- changing
+# either engine's limit is a product decision, and no realistic range-chart
+# reply nests a thousand deep.
 #
 # The limits below are the serialisers', not the product's: they only decide
-# what this harness is able to compare.
+# what this harness is able to compare. The guard itself is pinned by
+# tests/test_parity_fixture_expressibility.py, because a guard that has never
+# been seen to refuse anything is not a guard.
 _MAX_FIXTURE_DEPTH = 400
 
 
