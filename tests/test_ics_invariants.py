@@ -224,13 +224,28 @@ class TestNumericLookups:
 
 
 class TestJsMirror:
-    """js/ics_table.js must mirror the PRODUCTION table ics_current.json
-    exactly (dual-end parity).
+    """js/ics_table.js must mirror ics_current.json exactly (dual-end parity).
 
-    FE-FIX-2026-09-21: this pinned ics_2024.json (98 rows) while both ends
-    now ship ics_current.json (109 rows - the 11 added stages are the
-    authorized fix); mirroring the stale baseline would re-introduce drift
-    against the data the app actually uses."""
+    FE-FIX-2026-09-21: this used to pin ics_2024.json (98 rows) while the
+    fetched table had 109; pinning the stale baseline re-introduced drift
+    against the data the browser actually serves, so it was repointed at
+    ics_current.json.
+
+    AUDIT-2026-10-01 (item 33) -- the wording that replaced it said "both ends
+    now ship ics_current.json", and THAT WAS NOT TRUE.  This class only
+    compares js/ics_table.js against the JSON FILE; it never asserts which
+    file ``rca_core/standards/ics.py:53`` reads, and that path still loads
+    ics_2024.json.  So this test passed -- while its own comment asserted the
+    opposite of the truth -- and the desktop transport dated 11 stages (the
+    whole Silurian subseries: Rhuddanian / Telychian / Aeronian / Homerian /
+    Sheinwoodian / Gorstian / Ludfordian) as None.
+
+    The missing half now lives in tests/test_ics_transport_table_parity.py,
+    which checks the Python import path against the fetched table and pins
+    the divergence until the promote (``scripts/update_ics.py
+    --write-canonical``) happens.  Do not read a green TestJsMirror as
+    evidence that the two transports ship the same table.
+    """
 
     def test_js_table_matches_json(self):
         ics = json.loads(
