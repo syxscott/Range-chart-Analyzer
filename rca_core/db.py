@@ -247,7 +247,78 @@ class Database:
             # pre-existing databases that predate this schema. Idempotent
             # — silent no-op if columns already exist.
             self._add_provenance_columns(self._conn)
+            self._add_usage_columns(self._conn)
             self._conn.commit()
+
+    # Columns added to `usage` after it first shipped. A pre-existing database
+    # keeps whatever schema it had, because SCHEMA uses CREATE TABLE IF NOT
+    # EXISTS and never rewrites a table.
+    #
+    # AUDIT-2026-10-01 [item 9.8]: the row reader in rca_core.usage was made
+    # tolerant of a missing column in the previous commit, and that fix is
+    # correct but NOT sufficient -- UsageStore.summary() names these columns
+    # inside AGGREGATE SQL
+    #     COALESCE(SUM(cache_read_tokens), 0)
+    #     CASE WHEN status_code BETWEEN 200 AND 299 ...
+    # and SQLite resolves a column name when the statement is prepared, so a
+    # database without the column fails before any row is read. Measured: 10 of
+    # the 16 non-indexed columns break summary() with
+    # "sqlite3.OperationalError: no such column", while the same database is
+    # read fine by the tolerant reader. The usage dashboard was still dead, so
+    # this is the part that actually fixes it.
+    #
+    # (id, timestamp and provider_id are not listed: they are named by SCHEMA's
+    # own indexes, so a table without them cannot be opened at all -- no
+    # migration could help, and none is possible.)
+    #
+    # The earlier commit argued against a migration on the grounds that the
+    # reader could absorb the difference. That premise was wrong: it covered
+    # list()/get() and not the aggregation, which is the screen people look at.
+    _USAGE_ADDED_COLUMNS = (
+        ("endpoint", "TEXT"),
+        ("mode", "TEXT"),
+        ("cache_read_tokens", "INTEGER DEFAULT 0"),
+        ("cache_creation_tokens", "INTEGER DEFAULT 0"),
+        ("input_tokens_estimated", "INTEGER DEFAULT 0"),
+        ("output_tokens_estimated", "INTEGER DEFAULT 0"),
+        ("total_cost_usd", "REAL"),
+        ("latency_ms", "INTEGER"),
+        ("first_token_ms", "INTEGER"),
+        ("status_code", "INTEGER"),
+        ("error_message", "TEXT"),
+        ("request_id", "TEXT"),
+        ("model", "TEXT"),
+        ("provider_name", "TEXT"),
+        ("input_tokens", "INTEGER DEFAULT 0"),
+        ("output_tokens", "INTEGER DEFAULT 0"),
+    )
+
+    def _add_usage_columns(self, conn: sqlite3.Connection) -> None:
+        """Bring a pre-existing `usage` table up to the current column set.
+
+        Mirrors ``_add_provenance_columns`` exactly: SQLite has no IF NOT EXISTS
+        for ALTER TABLE ADD COLUMN in older versions, so the existing columns
+        are read from pragma_table_info first. Idempotent, and a silent no-op on
+        a current database.
+        """
+        try:
+            existing = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(usage)").fetchall()
+            }
+        except sqlite3.DatabaseError:
+            return
+        if not existing:
+            return          # no usage table yet; SCHEMA just created it
+        for col, decl in self._USAGE_ADDED_COLUMNS:
+            if col in existing:
+                continue
+            try:
+                conn.execute(f"ALTER TABLE usage ADD COLUMN {col} {decl}")
+            except sqlite3.DatabaseError:
+                # Defensive, same as the history path: pragma above should have
+                # caught it. Re-creating the database is the user's recourse.
+                pass
 
     def _add_provenance_columns(self, conn: sqlite3.Connection) -> None:
         """Add edit_provenance columns to existing history table.
