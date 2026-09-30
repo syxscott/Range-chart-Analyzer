@@ -628,7 +628,7 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
             issues.append({
                 "severity": v.get("severity", "warning"),
                 "msg_key": "quality.stage_order_reversed",
-                "params": {"section": v.get("section", ""), "detail": v.get("issue", "")},
+                "params": {"section": v.get("section", ""), "detail": v.get("detail", "")},
             })
 
     # Biozone section refs (columnar mode uses per-section thickness).
@@ -869,7 +869,17 @@ def _score_cross_era_accuracy(sections: list) -> list[dict[str, Any]]:
             if cmp_result > 0:
                 violations.append({
                     "section": sec_name,
-                    "issue": f"Stage order reversed: {stages[i]} above {stages[i + 1]}",
+                    # AUDIT-2026-10-01: this text is consumed as the {detail}
+                    # placeholder of quality.stage_order_reversed, whose
+                    # template is "Stage order reversed in section {section}:
+                    # {detail}" -- so it must NOT repeat the lead-in. It did:
+                    # the badge read "Stage order reversed in section S1:
+                    # Stage order reversed: Hirnantian above Sandbian", and in
+                    # zh / ja the untranslated English fragment sat inside an
+                    # otherwise-localised sentence. Keyed `detail` to match the
+                    # placeholder, and to js/quality.js, which already passed
+                    # the bare pair.
+                    "detail": f"{stages[i]} above {stages[i + 1]}",
                     # REVIEW-2026-09-20: "high" broke the module contract —
                     # this file's docstring and every other emitter only use
                     # "info" / "warning", and js/quality.js reports the same

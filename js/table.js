@@ -1933,11 +1933,25 @@ function rcaBedPairInverted(topVal, baseVal) {
 
 // The species range pair: quality.js tries the bed numbers first and only
 // falls back to Ma ages when either side reads like an age.
+//
+// AUDIT-2026-10-01: the bed branch also asks rcaSubbedInverted, so editing a
+// row to range_base="9a" / range_top="9" draws the same red frame the quality
+// badge now reports. Without it the editor accepted the row that
+// rca_core's exporter rejects with range_base_le_range_top, so the browser
+// was the only transport that could save an impossible range.
 function rcaRangePairInverted(topVal, baseVal) {
   const top = rcaParseBedN(topVal);
   const base = rcaParseBedN(baseVal);
   const agey = rcaLooksLikeAgeText(topVal) || rcaLooksLikeAgeText(baseVal);
-  if (top !== null && base !== null && !agey) return top < base;
+  if (top !== null && base !== null && !agey) {
+    // typeof-guarded for the same reason the rcaPyRound call in quality.js is:
+    // rcaSubbedInverted is defined in quality.js, and several suites load
+    // table.js on its own (tests_edit_history.js does). index.html loads
+    // quality.js first, so the real app always has it; standalone, the
+    // subscript check is skipped rather than throwing.
+    return top < base
+      || (typeof rcaSubbedInverted === 'function' && rcaSubbedInverted(topVal, baseVal));
+  }
   const topMa = rcaAgeTextToMa(topVal);
   const baseMa = rcaAgeTextToMa(baseVal);
   if (topMa === null || baseMa === null) return null;   // not comparable

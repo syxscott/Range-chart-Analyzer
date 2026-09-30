@@ -1080,6 +1080,88 @@ _add(
                         "response_kind": "extracted"}],
         "fossil_legend": [{"label": "A", "response_kind": "extracted"}],
         "confidence": 0.8}),
+    # AUDIT-2026-10-01: SUB-BED RANGES had no differential coverage at all.
+    # rca_core/quality.py::_subbed_inverted treats a subscript letter as
+    # ascending and an EMPTY subscript as sorting below every letter, so
+    # base="9a" / top="9" is an inverted range even though _parse_bed_n reads
+    # both as the integer 9. js/quality.js had no sub-bed branch anywhere, so
+    # the browser scored those rows 0.87/B with no warning while rca_core
+    # scored them 0.65/C -- and, unlike rca_core, the browser's exporter has
+    # no range_base_le_range_top validation either, so the impossible range
+    # reached the output file. The three "valid" cases are here on purpose:
+    # they are what a fix that simply flagged every subscripted pair would
+    # break, so they keep the rule one-directional.
+    _case("quality_coverage", "qc_subbed_inverted_bare_over_letter", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "9", "range_base": "9a",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_subbed_inverted_letters", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "9a", "range_base": "9b",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_subbed_inverted_uppercase", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "9", "range_base": "9A",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_subbed_inverted_high_number", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "23", "range_base": "23a",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_subbed_valid_letters_ascending", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "9b", "range_base": "9a",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_subbed_valid_letter_over_bare", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "23a", "range_base": "23",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_subbed_valid_different_beds", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "10", "range_base": "9a",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    # AUDIT-2026-10-01: the {detail} placeholder of quality.stage_order_reversed.
+    # The template is "Stage order reversed in section {section}: {detail}", and
+    # rca_core/quality.py passed _score_cross_era_accuracy's violation text --
+    # which already begins "Stage order reversed: " -- as {detail}, so the
+    # rendered badge said the phrase twice, and said it in ENGLISH inside the
+    # zh and ja sentences. No quality_coverage payload carried a multi-stage
+    # age_range before this one, so the branch had no differential coverage.
+    _case("quality_coverage", "qc_stage_order_detail_placeholder", {
+        "sections": [{"name": "S1", "age_range": "Hirnantian - Sandbian",
+                      "response_kind": "extracted"}],
+        "species_ranges": [{"species": "A", "section": "S1", "range_top": "9",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    # AUDIT-2026-10-01: a sum that is a WHOLE number. rca_core renders
+    # str(round(total, 1)), which always keeps one decimal ("3.0"); the browser
+    # rendered String(3) == "3". The existing qc_abundance_sum_violation cases
+    # are all tie-shaped decimals, so none of them could see a difference that
+    # only exists when the rounded value has no fractional part.
+    _case("quality_coverage", "qc_abundance_sum_whole", {
+        "sections": [{"name": "S1"}],
+        "abundances": [
+            {"taxon": "A", "site": "S1", "level": "L1", "abundance": 1,
+             "abundance_unit": "%", "response_kind": "extracted"},
+            {"taxon": "A", "site": "S1", "level": "L1", "abundance": 1,
+             "abundance_unit": "%", "response_kind": "extracted"},
+            {"taxon": "A", "site": "S1", "level": "L1", "abundance": 1,
+             "abundance_unit": "%", "response_kind": "extracted"},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
 )
 
 

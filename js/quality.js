@@ -171,6 +171,82 @@ function _parseBedN(value) {
   return m ? parseInt(m[0], 10) : null;
 }
 
+// ---------------------------------------------------------------------------
+// AUDIT-2026-10-01: subscript-aware bed labels. Mirror of
+// rca_core/bed_parser.py (parse_bed) and rca_core/quality.py's
+// _subbed_inverted, which the desktop has routed through the shared parser
+// since 2026-07-25.
+//
+// _parseBedN above reads "23a" and "23b" BOTH as 23, so a range whose
+// subscript runs backwards -- base="9a", top="9", or base="9b", top="9a" --
+// compared equal and was scored as a well-formed range. The browser had no
+// subscript parser at all, so those rows scored 0.87/B with no warning, the
+// table editor drew no red frame, and -- unlike rca_core, whose exporter
+// enforces range_base_le_range_top and makes to_xlsx raise -- the browser
+// exported the impossible range into the output file.
+//
+// A subscript letter ascends ("23a" is BELOW "23b" and BELOW a bare "23"), and
+// an EMPTY subscript sorts below every letter, which is what makes base="9a"
+// / top="9" inverted too. The unit-word and stray-residue rejections are
+// mirrored too: without them "253 Ma" would read as bed 253 with subscript
+// "ma" and a thickness would read as a bed, which is the exact split
+// rca_core/bed_parser.py was written to end.
+// ---------------------------------------------------------------------------
+const _BED_FULL_RE = /^Bed\s*(\d+)\s*([a-zA-Z]*)/i;
+const _BARE_BED_RE = /^(\d+)\s*([a-zA-Z]*)/;
+const _BED_UNIT_RE = /^(ma|myr|mya|m\.y\.|m\.y\.?|ka|kyr|ga|gyr|yr|cm|mm|km|ft|a)$/i;
+const _BED_SUB_RE = /^[a-ln-z]$/i;
+
+function _subIsBedLabel(sub, hadBedWord) {
+  if (!sub) return true;                       // bare number after an explicit "Bed"
+  if (sub.toLowerCase() === 'm') return false; // metres, not a subscript
+  if (sub.length > 1 && _BED_UNIT_RE.test(sub)) return false;
+  if (hadBedWord) return true;
+  return _BED_SUB_RE.test(sub);
+}
+
+function _bedStrayResidue(s, end) {
+  const rest = s.slice(end).trim();
+  return Boolean(rest) && rest.charAt(0) !== '(' && rest.charAt(0) !== '[';
+}
+
+/** Mirror of rca_core.bed_parser.parse_bed: {bed_num, bed_sub, raw} | null. */
+function rcaParseBed(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'boolean') return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  let m = _BED_FULL_RE.exec(s);
+  if (m) {
+    const sub = m[2];
+    if (!_subIsBedLabel(sub, true)) return null;
+    if (_bedStrayResidue(s, m[0].length)) return null;
+    return { bed_num: parseInt(m[1], 10), bed_sub: sub.toLowerCase(), raw: s };
+  }
+  m = _BARE_BED_RE.exec(s);
+  if (m) {
+    const sub = m[2];
+    if (!_subIsBedLabel(sub, false)) return null;
+    if (_bedStrayResidue(s, m[0].length)) return null;
+    return { bed_num: parseInt(m[1], 10), bed_sub: sub.toLowerCase(), raw: s };
+  }
+  return null;
+}
+
+/**
+ * Same bed NUMBER, and the SUBSCRIPT says the range runs backwards.
+ * Mirror of rca_core/quality.py::_subbed_inverted: false whenever the two
+ * sides are not the same bed, or when either label is not a bed at all, so
+ * this can only ever ADD a detection that the integer comparison missed.
+ */
+function rcaSubbedInverted(topRaw, baseRaw) {
+  const top = rcaParseBed(topRaw);
+  const base = rcaParseBed(baseRaw);
+  if (!top || !base) return false;
+  if (top.bed_num !== base.bed_num) return false;
+  return top.bed_sub < base.bed_sub;
+}
+
 function _clamp01(x) { return Math.min(1.0, Math.max(0.0, x)); }
 
 // ---------------------------------------------------------------------------
@@ -623,6 +699,17 @@ function scoreAccuracy(data) {
         // below use "quality.range_top_lt_base", while the consistency
         // check's bed inversion uses "quality.fad_lt_lad").
         issues.push({severity: 'warning', msg_key: 'quality.range_top_lt_base'});
+      } else if (rcaSubbedInverted(topRaw, baseRaw)) {
+        // AUDIT-2026-10-01: same bed NUMBER, and the SUBSCRIPT decides.
+        // _parseBedN read "9a" and "9" both as 9, so base="9a" / top="9"
+        // passed here while the exporter's range_base_le_range_top -- the
+        // check that makes to_xlsx RAISE -- rejected the row. Same disease
+        // the consistency branch below had, and WORSE here: accuracy is
+        // weighted 0.40 against consistency's 0.20, so the un-flagged
+        // inversions were costing twice as much of the grade. Mirrors
+        // rca_core/quality.py:477-489.
+        fadLadViolations += 1;
+        issues.push({severity: 'warning', msg_key: 'quality.range_top_lt_base'});
       }
     } else {
       const topR = _resolveAgeBound(topRaw, 'younger');
@@ -863,10 +950,16 @@ function scoreAccuracy(data) {
           // tie-shaped sums disagreed (2.25 -> 2.2 vs 2.3, 1.25 -> 1.2 vs 1.3,
           // 100.25 -> 100.2 vs 100.3, 0.15 -> 0.1 vs 0.2), and this is the
           // number the operator reads when the sum-to-100 check fires.
+          //
+          // AUDIT-2026-10-01: toFixed(1), not String(). A Python float keeps
+          // its decimal point, so `str(round(3.0, 1))` is "3.0" while
+          // String(3) is "3" -- the same violation was reported as "3.0%" on
+          // the desktop and "3%" in the browser, and only for a sum with no
+          // fractional part, which no tie-shaped case could see.
           params: {sample: v.sample,
-                   sum: String((typeof rcaPyRound === 'function')
+                   sum: ((typeof rcaPyRound === 'function')
                      ? rcaPyRound(v.sum, 1)
-                     : Math.round(v.sum * 10) / 10)}
+                     : Math.round(v.sum * 10) / 10).toFixed(1)}
         });
       }
       issues.push({
@@ -939,6 +1032,10 @@ function scoreConsistency(data) {
       const base = _parseBedN(baseRaw);
       if (top === null || base === null) continue;
       if (top < base) {
+        fadViolations += 1;
+      } else if (rcaSubbedInverted(topRaw, baseRaw)) {
+        // AUDIT-2026-10-01: mirror of rca_core/quality.py:773. Same bed
+        // number, backwards subscript -- see rcaSubbedInverted above.
         fadViolations += 1;
       }
     }

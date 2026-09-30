@@ -8245,6 +8245,953 @@
      }
     ]
    }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_subbed_inverted_bare_over_letter",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "range_base": "9a",
+      "response_kind": "extracted"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.65,
+    "grade": "C",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.range_top_lt_base"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.fad_lt_lad",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "1",
+       "cells": "1",
+       "not_drawn": "0",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "totals": {
+      "cells": 1,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0,
+      "explicit_responses": 1,
+      "row_count": 1,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 1,
+     "row_count": 1,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_subbed_inverted_letters",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "9a",
+      "range_base": "9b",
+      "response_kind": "extracted"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.65,
+    "grade": "C",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.range_top_lt_base"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.fad_lt_lad",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "1",
+       "cells": "1",
+       "not_drawn": "0",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "totals": {
+      "cells": 1,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0,
+      "explicit_responses": 1,
+      "row_count": 1,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 1,
+     "row_count": 1,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_subbed_inverted_uppercase",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "range_base": "9A",
+      "response_kind": "extracted"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.65,
+    "grade": "C",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.range_top_lt_base"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.fad_lt_lad",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "1",
+       "cells": "1",
+       "not_drawn": "0",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "totals": {
+      "cells": 1,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0,
+      "explicit_responses": 1,
+      "row_count": 1,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 1,
+     "row_count": 1,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_subbed_inverted_high_number",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "23",
+      "range_base": "23a",
+      "response_kind": "extracted"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.65,
+    "grade": "C",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.range_top_lt_base"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.fad_lt_lad",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "1",
+       "cells": "1",
+       "not_drawn": "0",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "totals": {
+      "cells": 1,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0,
+      "explicit_responses": 1,
+      "row_count": 1,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 1,
+     "row_count": 1,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_subbed_valid_letters_ascending",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "9b",
+      "range_base": "9a",
+      "response_kind": "extracted"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.87,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "1",
+       "cells": "1",
+       "not_drawn": "0",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "totals": {
+      "cells": 1,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0,
+      "explicit_responses": 1,
+      "row_count": 1,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 1,
+     "row_count": 1,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_subbed_valid_letter_over_bare",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "23a",
+      "range_base": "23",
+      "response_kind": "extracted"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.87,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "1",
+       "cells": "1",
+       "not_drawn": "0",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "totals": {
+      "cells": 1,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0,
+      "explicit_responses": 1,
+      "row_count": 1,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 1,
+     "row_count": 1,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_subbed_valid_different_beds",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "10",
+      "range_base": "9a",
+      "response_kind": "extracted"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.87,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "1",
+       "cells": "1",
+       "not_drawn": "0",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "totals": {
+      "cells": 1,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0,
+      "explicit_responses": 1,
+      "row_count": 1,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 1,
+     "row_count": 1,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_stage_order_detail_placeholder",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "Hirnantian - Sandbian",
+      "response_kind": "extracted"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "9",
+      "response_kind": "extracted"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.67,
+    "grade": "C",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.stage_order_reversed",
+      "params": {
+       "section": "S1",
+       "detail": "Hirnantian above Sandbian"
+      }
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "1",
+       "cells": "1",
+       "not_drawn": "0",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "totals": {
+      "cells": 1,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0,
+      "explicit_responses": 1,
+      "row_count": 1,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 1,
+     "row_count": 1,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_abundance_sum_whole",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "abundances": [
+     {
+      "taxon": "A",
+      "site": "S1",
+      "level": "L1",
+      "abundance": 1,
+      "abundance_unit": "%",
+      "response_kind": "extracted"
+     },
+     {
+      "taxon": "A",
+      "site": "S1",
+      "level": "L1",
+      "abundance": 1,
+      "abundance_unit": "%",
+      "response_kind": "extracted"
+     },
+     {
+      "taxon": "A",
+      "site": "S1",
+      "level": "L1",
+      "abundance": 1,
+      "abundance_unit": "%",
+      "response_kind": "extracted"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.98,
+    "grade": "A",
+    "issues": [
+     {
+      "severity": "warning",
+      "msg_key": "quality.abundance_sum_violation",
+      "params": {
+       "sample": "L1",
+       "sum": "3.0"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.abundance_sum_violation_count",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "1",
+       "cells": "1",
+       "not_drawn": "0",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "A",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "S1",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "totals": {
+      "cells": 1,
+      "extracted": 1,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 1,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0,
+      "explicit_responses": 3,
+      "row_count": 3,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 3,
+     "row_count": 3,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
   }
  ]
 }

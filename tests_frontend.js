@@ -1202,6 +1202,41 @@ function test_quality_fad_lad_ma_branch() {
   check('quality "Madison 3/6" bed pair not flagged', !bedOk.issues.some(i => i.msg_key === 'quality.fad_lt_lad'));
 }
 
+// ---- AUDIT-2026-10-01: sub-bed ranges (base="9a" / top="9") -----------------
+// _parseBedN reads "9a" and "9" both as 9, so the backwards-subscript case
+// compared equal. rca_core has flagged it since _subbed_inverted landed
+// (rca_core/quality.py:477); the browser had no subscript parser at all, so
+// the badge said 0.87/B and -- because js/export.js has no
+// range_base_le_range_top validation -- the row was exported as printed.
+// The scorer and the table editor's red frame are both checked, and the
+// ASCENDING pair is checked too so a fix cannot simply flag every subscript.
+function test_quality_subbed_range() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const mk = (top, base) => ctx.scoreRangeChart({
+    sections: [{ name: 'S1' }],
+    species_ranges: [{ species: 'A', section: 'S1', range_top: top, range_base: base }],
+    confidence: 0.8,
+  });
+  const flagged = (r) => r.issues.some(
+    (i) => i.msg_key === 'quality.range_top_lt_base' || i.msg_key === 'quality.fad_lt_lad');
+  check('subbed-bare-over-letter-flagged', flagged(mk('9', '9a')));
+  check('subbed-letters-ascending-not-flagged', !flagged(mk('9b', '9a')));
+  check('subbed-letter-over-bare-not-flagged', !flagged(mk('23a', '23')));
+  check('subbed-grade-penalised', mk('9', '9a').grade === 'C');
+  // The editor's own validator must agree with the badge.
+  if (typeof ctx.rcaRangePairInverted !== 'function') {
+    check('subbed-editor-validator-exposed', false);
+    return;
+  }
+  check('subbed-editor-validator-exposed', true);
+  check('editor-flags-bare-over-letter', ctx.rcaRangePairInverted('9', '9a') === true);
+  check('editor-allows-ascending', ctx.rcaRangePairInverted('9b', '9a') === false);
+  check('editor-allows-letter-over-bare', ctx.rcaRangePairInverted('23a', '23') === false);
+  check('editor-still-flags-different-beds', ctx.rcaRangePairInverted('7', '9') === true);
+}
+test_quality_subbed_range();
+
 function test_quality_cross_era_proportional() {
   const ctx = buildContext();
   loadAllScripts(ctx);
