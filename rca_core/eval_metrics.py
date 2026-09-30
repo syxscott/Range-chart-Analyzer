@@ -1633,12 +1633,58 @@ def _matched_pair_indices(
     return pairs
 
 
+# AUDIT-2026-10-01 [item 9.6]: a subscript's position INSIDE its bed, as a
+# fraction of one bed interval. Half-step offsets keep every letter strictly
+# inside (0, 1): no letter is 0.0, so a sub-bed never collides with the bare
+# bed, and none is 1.0, so it never collides with the NEXT bed. The previous
+# constant, 0.001, was 0.001 for EVERY letter, so all 26 sub-beds of a bed sat
+# on one point.
+_SUB_LETTERS = 26.0
+
+
+def _sub_offset(sub: str) -> float:
+    """Where a subscript sits inside its bed, in [0, 1).
+
+    ``a`` -> 0.5/26, ``z`` -> 25.5/26. Monotonic in the letter, and bounded so
+    that ``_bed_num`` stays strictly between ``bed_num`` and ``bed_num + 1``.
+    A multi-letter subscript (which parse_bed can return for a "Bed"-prefixed
+    label) falls back to its first letter, matching how _bin_distance treats
+    the token.
+    """
+    if not sub:
+        return 0.0
+    first = sub[0].lower()
+    if not ("a" <= first <= "z"):
+        return 0.0
+    return (ord(first) - ord("a") + 0.5) / _SUB_LETTERS
+
+
 def _bed_num(row: dict[str, Any], field: str) -> float | None:
-    """Comparable up-section position of one endpoint (bed index, else age)."""
+    """Comparable up-section position of one endpoint (bed index, else age).
+
+    AUDIT-2026-10-01 [item 9.6]: this used to add a flat 0.001 for ANY
+    subscript, which put 23a, 23c and 23z on the same point. That is the exact
+    failure ``rca_core.bed_parser`` exists to prevent -- its own docstring
+    records that "a predicted Bed 23c and ground truth Bed 23d would both score
+    as integer 23 -> false positive accuracy" -- reappearing in the reasoning
+    track, while ``_bin_distance`` in this same file handled subscripts
+    correctly. Measured consequences before the fix:
+
+        _span(23a -> 23z)                       = 0.0     (a real range, zero)
+        _span(23 -> 23a)                        = 0.0010000000000012221
+        _overlap_extent([23a..23z], [23a..23c]) = 0.0     (they share 23a..23c)
+        base_order, A@23c predicted / @23a true  = 1.0     (a wrong order,
+                                                          scored as agreement)
+
+    Spacing differs from ``_bin_distance``'s one-bin-per-difference on purpose:
+    that is a DISTANCE metric and wants unit steps, this is a POSITION and
+    wants even spacing inside a bed. Both agree on ordering and on distinctness,
+    which is what the two consumers rely on.
+    """
     bed = _parse_bed(row.get(field))
     if bed is not None:
         try:
-            return float(bed["bed_num"]) + (0.001 if _bed_sub(bed) else 0.0)
+            return float(bed["bed_num"]) + _sub_offset(_bed_sub(bed))
         except (TypeError, ValueError):  # pragma: no cover
             return None
     return _age_in_myr(row.get(field), require_unit=False)
