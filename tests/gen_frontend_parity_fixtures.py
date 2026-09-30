@@ -1017,6 +1017,22 @@ _add(
             {"sample_id": "DP2", "response_kind": "not_drawn"},
         ],
         "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    # AUDIT-2026-10-01 [item 26]: a scatter table whose points carry NO `label`
+    # (the table's own primary key) but DO carry `group` -- the taxon.  Before
+    # the ladder learned `group` this produced an empty grid (cells 0,
+    # coverage 0.0) for rows that all answered; both engines must agree on the
+    # 2 columns / 3 cells this now yields.
+    _case("quality_coverage", "qc_group_column", {
+        "sections": [{"name": "S1"}],
+        "points": [
+            {"group": "Bathylagus sp.", "x": 1, "y": 2, "label": "",
+             "response_kind": "extracted"},
+            {"group": "Bathylagus sp.", "x": 3, "y": 4, "label": "",
+             "response_kind": "uncertain"},
+            {"group": "E. antarctica", "x": 5, "y": 6, "label": "",
+             "response_kind": "extracted"},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
     _case("quality_coverage", "qc_empty", {}),
     # AUDIT-2026-09-30: NO quality_coverage payload carried abundance_unit "%"
     # before this one, so the sum-to-100 check (P1-8) -- a named scientific

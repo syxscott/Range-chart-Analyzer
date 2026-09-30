@@ -1332,7 +1332,12 @@ function rcaCoverageFor(data) {
   const rows = data[tableKey].filter(
     (r) => r && typeof r === 'object' && !Array.isArray(r));
   return rcaCoverageLedger(rows, {
-    columnKeys: [primaryColumn, 'taxon', 'species', 'sample_id', 'label', 'name'],
+    // AUDIT-2026-10-01 [item 26]: `group` was missing, and for a scatter plot
+    // it IS the taxon (extractor.js keeps it in the known point keys; see
+    // _COVERAGE_EXTRA_COLUMN_KEYS in rca_core/quality.py, which this literal
+    // mirrors — tests/test_coverage_column_identity.py pins the two together).
+    // Appended last so a row carrying its own primary key is unaffected.
+    columnKeys: [primaryColumn, 'taxon', 'species', 'sample_id', 'label', 'name', 'group'],
   });
 }
 

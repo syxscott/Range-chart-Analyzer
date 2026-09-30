@@ -7904,6 +7904,121 @@
   },
   {
    "group": "quality_coverage",
+   "id": "qc_group_column",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "points": [
+     {
+      "group": "Bathylagus sp.",
+      "x": 1,
+      "y": 2,
+      "label": "",
+      "response_kind": "extracted"
+     },
+     {
+      "group": "Bathylagus sp.",
+      "x": 3,
+      "y": 4,
+      "label": "",
+      "response_kind": "uncertain"
+     },
+     {
+      "group": "E. antarctica",
+      "x": 5,
+      "y": 6,
+      "label": "",
+      "response_kind": "extracted"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.85,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.coverage_ledger",
+      "params": {
+       "answered": "2",
+       "cells": "2",
+       "not_drawn": "0",
+       "gaps": "0"
+      }
+     }
+    ],
+    "coverage": {
+     "columns": [
+      {
+       "column": "Bathylagus sp.",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      },
+      {
+       "column": "E. antarctica",
+       "cells": 1,
+       "extracted": 1,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 1,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "strata": [
+      {
+       "stratum": "",
+       "cells": 2,
+       "extracted": 2,
+       "not_drawn": 0,
+       "uncertain": 0,
+       "silent_missing": 0,
+       "answered": 2,
+       "honest_coverage": 1.0,
+       "strict_coverage": 1.0
+      }
+     ],
+     "totals": {
+      "cells": 2,
+      "extracted": 2,
+      "not_drawn": 0,
+      "uncertain": 0,
+      "silent_missing": 0,
+      "answered": 2,
+      "honest_coverage": 1.0,
+      "strict_coverage": 1.0,
+      "explicit_responses": 3,
+      "row_count": 3,
+      "unattributed_rows": 0
+     },
+     "reason_code_counts": {},
+     "explicit_responses": 3,
+     "row_count": 3,
+     "unattributed_rows": 0,
+     "grid_used": true
+    }
+   }
+  },
+  {
+   "group": "quality_coverage",
    "id": "qc_empty",
    "payload": {},
    "extra": null,

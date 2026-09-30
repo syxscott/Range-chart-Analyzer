@@ -1320,8 +1320,20 @@ _COVERAGE_TABLES: tuple[tuple[str, str], ...] = (
 #: :func:`coverage_column_keys` is the ONLY producer of this ladder — the
 #: evidence report used to keep its own table list and its own ledger call,
 #: which is how the two audits drifted apart (FIX-2026-09-22, audit item 6).
+#:
+#: AUDIT-2026-10-01 [item 26]: ``group`` was missing, and for a scatter plot it
+#: IS the taxon — ``extractor.py`` lists it in ``_KNOWN_SCATTER_POINT_KEYS``
+#: (:4066) and the normaliser writes it (:4162); ``aggregate.py`` names it in
+#: ``COLUMNAR_SECTION_SCHEMA.primary_id_keys``.  A real payload whose points
+#: carried an empty ``label`` (the table's own primary key) therefore produced
+#: an empty grid — ``cells: 0``, ``honest_coverage: 0.0``,
+#: ``unattributed_rows: 44`` — in the same report block whose rollup said
+#: ``contracted_rows: 44`` and listed 44 decisions, all with ``row: ""``.
+#: Appended LAST so a row that does carry its own primary key is unaffected.
+#: js/quality.js mirrors this tuple as a literal; the two are pinned to the
+#: same key set by tests/test_coverage_column_identity.py.
 _COVERAGE_EXTRA_COLUMN_KEYS: tuple[str, ...] = (
-    "taxon", "species", "sample_id", "label", "name",
+    "taxon", "species", "sample_id", "label", "name", "group",
 )
 
 
