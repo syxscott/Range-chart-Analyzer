@@ -233,27 +233,64 @@ class UsageSummary:
     end_ts: float = 0.0
 
 
+def _field(row, key, default=None):
+    """Read one column, tolerating a column an older build never wrote.
+
+    AUDIT-2026-10-01 [item 9.7]: ``usage`` is created with CREATE TABLE IF NOT
+    EXISTS and is never migrated -- db.py has _add_provenance_columns for
+    ``history`` and nothing equivalent for ``usage`` -- so a database written
+    by an older build keeps whatever schema it had, and ``row["status_code"]``
+    raises IndexError instead of returning anything. Measured: dropping any
+    one of the 19 columns crashes the reader, and Database() does NOT add the
+    missing one back.
+
+    That is reachable, not theoretical: the note on UsageSummary.rated_requests
+    says outright that "rows written before status tracking existed ... carry
+    status_code NULL", i.e. the column did not always exist. The
+    cache_read/cache_creation token columns, the two *_estimated flags,
+    total_cost_usd, first_token_ms and request_id read as later additions for
+    the same reason.
+
+    rca_core.history._row_to_record already copes, by guarding with
+    ``"image_sha256" in row.keys()`` and returning "" / {} -- and history is
+    the table that DOES have a migration. This is the same tolerance applied
+    to the table that does not.
+
+    The default is returned only when the column is absent or NULL, and the
+    caller's existing ``or`` fallbacks are left in place, so behaviour for a
+    database that has every column is byte-for-byte unchanged.
+    """
+    try:
+        keys = row.keys()
+    except AttributeError:  # a plain tuple/dict row
+        keys = row
+    if key in keys:
+        value = row[key]
+        return default if value is None else value
+    return default
+
+
 def _row_to_record(row) -> UsageRecord:
     return UsageRecord(
         id=row["id"],
         timestamp=row["timestamp"],
-        provider_id=row["provider_id"] or "",
-        provider_name=row["provider_name"] or "",
-        model=row["model"] or "",
-        endpoint=row["endpoint"] or "",
-        mode=row["mode"] or "range_chart",
-        input_tokens=row["input_tokens"] or 0,
-        output_tokens=row["output_tokens"] or 0,
-        cache_read_tokens=row["cache_read_tokens"] or 0,
-        cache_creation_tokens=row["cache_creation_tokens"] or 0,
-        input_tokens_estimated=bool(row["input_tokens_estimated"]),
-        output_tokens_estimated=bool(row["output_tokens_estimated"]),
-        total_cost_usd=row["total_cost_usd"],
-        latency_ms=row["latency_ms"] or 0,
-        first_token_ms=row["first_token_ms"],
-        status_code=row["status_code"],
-        error_message=row["error_message"] or "",
-        request_id=row["request_id"] or "",
+        provider_id=_field(row, "provider_id") or "",
+        provider_name=_field(row, "provider_name") or "",
+        model=_field(row, "model") or "",
+        endpoint=_field(row, "endpoint") or "",
+        mode=_field(row, "mode") or "range_chart",
+        input_tokens=_field(row, "input_tokens") or 0,
+        output_tokens=_field(row, "output_tokens") or 0,
+        cache_read_tokens=_field(row, "cache_read_tokens") or 0,
+        cache_creation_tokens=_field(row, "cache_creation_tokens") or 0,
+        input_tokens_estimated=bool(_field(row, "input_tokens_estimated")),
+        output_tokens_estimated=bool(_field(row, "output_tokens_estimated")),
+        total_cost_usd=_field(row, "total_cost_usd"),
+        latency_ms=_field(row, "latency_ms") or 0,
+        first_token_ms=_field(row, "first_token_ms"),
+        status_code=_field(row, "status_code"),
+        error_message=_field(row, "error_message") or "",
+        request_id=_field(row, "request_id") or "",
     )
 
 
