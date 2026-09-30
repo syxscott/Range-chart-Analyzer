@@ -73,6 +73,12 @@ CASES = [
 JS_DRIVER = r"""
 const vm = require('vm');
 const fs = require('fs');
+// The path comes in as an ARGUMENT. It used to be a hardcoded
+// 'D:/GIthub/Range-chart Analyzer/js/export.js', which works on the author's
+// machine and is ENOENT on CI -- the whole reason the parity harness resolves
+// everything from its own ROOT is that a hand-rolled context should not carry
+// the author's environment either.
+const EXPORT_JS = process.argv[3];
 const ctx = vm.createContext({
   console, Blob: class Blob {},
   URL: { createObjectURL: () => 'blob:x', revokeObjectURL: () => {} },
@@ -81,8 +87,7 @@ const ctx = vm.createContext({
                body: { appendChild() {}, removeChild() {} } },
 });
 ctx.window = ctx; ctx.globalThis = ctx;
-vm.runInContext(fs.readFileSync('D:/GIthub/Range-chart Analyzer/js/export.js', 'utf8'),
-                ctx, { filename: 'js/export.js' });
+vm.runInContext(fs.readFileSync(EXPORT_JS, 'utf8'), ctx, { filename: 'js/export.js' });
 for (const fn of ['rcaToCsv', 'rcaToTsv', 'rcaDownload']) {
   if (typeof ctx[fn] !== 'function') { console.error('ENV BROKEN: ' + fn); process.exit(3); }
 }
@@ -121,7 +126,7 @@ def _js():
             "headers": ["a", "b"], "rows": [["1", "2"]]}
     sp = _TMP / "export_render_spec.json"
     sp.write_text(json.dumps(spec, ensure_ascii=True), encoding="utf-8")
-    r = subprocess.run(["node", str(driver), str(sp)],
+    r = subprocess.run(["node", str(driver), str(sp), str(REPO / "js" / "export.js")],
                        capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0, f"js/export.js did not run: {r.stderr[:400]}"
     return json.loads(r.stdout)
