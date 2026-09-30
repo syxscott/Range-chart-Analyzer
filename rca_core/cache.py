@@ -75,6 +75,46 @@ def _ensure_dir(path: str) -> None:
         os.makedirs(parent, mode=0o700, exist_ok=True)
 
 
+def stable_extra_headers(prov_obj) -> list:
+    """Sorted (name, value) pairs of a provider's extra headers.
+
+    Sorted so different header VALUES produce different keys. The extraction
+    keys in server.py used to hash only the header NAMES, so flipping the
+    Authorization value still hit the cache and served another identity's
+    response.
+
+    Lives here rather than inside the request handler that first needed it,
+    because extractor.py builds a cache key too and must not re-derive this
+    (AUDIT-2026-10-01 [item 9.9]): the chart-classify key omitted these two
+    fields entirely, so two providers differing only in credentials or vendor
+    routing shared one cached classification -- and mode="auto" derives the
+    EXTRACTION mode from that classification, so the stale verdict silently
+    picked the wrong prompt / normalizer / merge schema.
+    """
+    if not prov_obj:
+        return []
+    return sorted(
+        (k, str(v)) for k, v in (getattr(prov_obj, "extra_headers", None)
+                                 or {}).items()
+    )
+
+
+def stable_extra_body(prov_obj) -> list:
+    """Sorted (name, value) pairs of a provider's extra_body.
+
+    P1-4 (REVIEW-2026-07-25): extra_body is a provider field that changes the
+    LLM request shape (e.g. Anthropic prompt-caching toggles, custom sampling
+    parameters). Two requests with different extra_body MUST NOT share a cache
+    entry.
+    """
+    if not prov_obj:
+        return []
+    return sorted(
+        (k, str(v)) for k, v in (getattr(prov_obj, "extra_body", None)
+                                 or {}).items()
+    )
+
+
 def _rowid_for(conn: sqlite3.Connection, key: str) -> int | None:
     cur = conn.execute("SELECT id FROM extract_cache WHERE k = ?", (key,))
     row = cur.fetchone()

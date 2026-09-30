@@ -2584,25 +2584,16 @@ class Handler(BaseHTTPRequestHandler):
         # cached result, and hashed only header names so flipping the
         # Authorization value still hit. ``run_idx`` is added for
         # multi-run slots below so each slot has a distinct key.
-        def _stable_extra_headers(prov_obj):
-            if not prov_obj:
-                return []
-            # Sort by key, return sorted (key, value) tuples so different
-            # header VALUES produce different keys.
-            return sorted(
-                (k, str(v)) for k, v in (prov_obj.extra_headers or {}).items()
-            )
-
-        def _stable_extra_body(prov_obj):
-            """P1-4 (REVIEW-2026-07-25): extra_body is a provider field
-            that changes the LLM request shape (e.g. Anthropic prompt
-            caching toggles, custom sampling parameters). Two requests
-            with different extra_body MUST NOT share a cache entry."""
-            if not prov_obj:
-                return []
-            return sorted(
-                (k, str(v)) for k, v in (prov_obj.extra_body or {}).items()
-            )
+        #
+        # AUDIT-2026-10-01 [item 9.9]: the two helpers were nested defs here,
+        # which is why extractor.py could not include the same fields in the
+        # chart-classify key and did not -- a class of collision the project
+        # had already named in _stable_extra_body's own docstring ("two
+        # requests with different extra_body MUST NOT share a cache entry").
+        # They now live in rca_core.cache next to make_key, which is where the
+        # next key builder will look.
+        from rca_core.cache import stable_extra_body as _stable_extra_body
+        from rca_core.cache import stable_extra_headers as _stable_extra_headers
 
         if runs == 1:
             # FIX (cache): check the cache first so identical reruns are

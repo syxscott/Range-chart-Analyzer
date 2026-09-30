@@ -4604,13 +4604,30 @@ def classify_chart_image(
     # any cache trouble just falls through to the network call.
     ckey = None
     try:
-        from .cache import get_cache
+        from .cache import get_cache, stable_extra_body, stable_extra_headers
         from .prompt import prompt_version_for_mode as _pvm
         _cache = get_cache()
         ckey = _cache.make_key(
             endpoint=p.endpoint if p else "",
             model=p.model if p else "",
             api_format=p.api_format.value if p else "",
+            # AUDIT-2026-10-01 [item 9.9]: the two sibling extraction keys in
+            # server.py carry these and this one did not, so two providers that
+            # differ ONLY in their Authorization value or their vendor
+            # extra_body shared one cached classification. Its own comment
+            # already noted "the sibling extraction keys already include both
+            # fields" -- without seeing that the omission was the bug rather
+            # than a deliberate narrowing.
+            #
+            # It matters more here than it looks: mode="auto" DERIVES the
+            # extraction mode from this verdict (see REVIEW-2026-09-10 in the
+            # comment below), so a verdict served from another identity's cache
+            # silently selects the wrong prompt / normalizer / merge schema for
+            # the same image. _stable_extra_body's own docstring already states
+            # the rule this was breaking: "two requests with different
+            # extra_body MUST NOT share a cache entry".
+            extra_headers=stable_extra_headers(p),
+            extra_body=stable_extra_body(p),
             prompt_version=_pvm("chart_classify"),
             mode="chart_classify",
             image_b64=image_b64,
