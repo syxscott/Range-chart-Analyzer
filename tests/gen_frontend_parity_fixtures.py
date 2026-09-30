@@ -50,6 +50,7 @@ from rca_core.json_utils import safe_json_loads  # noqa: E402
 from rca_core.standards.ics import ics_resolve_age_bound  # noqa: E402
 # BORROW-2026-09-20 (js-data-layer mirror round): the coverage-contract trio.
 import rca_core.reason_codes as RC  # noqa: E402
+from rca_core.editable import apply_edits, capture_edits  # noqa: E402
 from rca_core.aggregate import SCHEMA_BY_MODE, merge_results  # noqa: E402
 from rca_core.quality import score_range_chart  # noqa: E402
 
@@ -59,7 +60,7 @@ GROUPS = (
     "range_chart", "columnar_section", "abundance_diagram",
     "zonation_chart", "phylogenetic_tree", "chart_classification",
     "to_newick", "safe_json_loads", "age_bound",
-    "reason_codes", "merge", "quality_coverage",
+    "reason_codes", "merge", "quality_coverage", "editable",
 )
 
 
@@ -67,11 +68,128 @@ def _case(group: str, cid: str, payload: Any, extra: Any = None) -> dict:
     return {"group": group, "id": cid, "payload": payload, "extra": extra}
 
 
+# --- the table editor's edit payload: rca_core/editable.py vs js/table.js ----
+# AUDIT-2026-10-01. The editor is how a researcher corrects a model mistake, and
+# the payload it produces is what "Save edits" / "Apply" sends, so the two
+# engines have to agree on the WHOLE thing: not only the diff, but the round
+# trip, because a payload that looks right and replays to the wrong table is
+# worse than one that is visibly wrong.
+#
+# Reading the two implementations side by side suggests a divergence that
+# measurement does not support: capture_edits aligns rows by IDENTITY first
+# (rca_core/editable.py:_align_rows, "so an insertion or a re-sort cannot slide
+# one taxon's edit onto its neighbour") while rcaCaptureListEdits pairs purely by
+# position. Running the branches settles it -- 25 cases including mid-table
+# insert, head insert, re-sort with an edit, scalar-list insert/change/delete,
+# dict<->scalar row changes, both deletion positions, cleared cells, added
+# fields, numeric-vs-string, unicode and _extras all agree, diff AND replay.
+# Recorded here because "the two implementations look different" is exactly the
+# kind of claim that should not be repeated, and because the group was missing:
+# the editor had no cross-engine guard at all.
+def _ed_replay(before: Any, edits: Any) -> Any:
+    """apply_edits(before, edits) restricted to the keys the edits mention."""
+    if not isinstance(edits, dict) or not edits:
+        return None
+    try:
+        after = apply_edits(copy.deepcopy(before), copy.deepcopy(edits))
+    except Exception as exc:  # noqa: BLE001 - a raise is a finding
+        return "__raised__ %s" % type(exc).__name__
+    # A key the replay did not create is None, which is what the JS side answers
+    # for an absent key too; comparing raw would report one spurious difference.
+    return {k: (after.get(k) if isinstance(after, dict) else None) for k in edits}
+
+
+def _editable_python(payload: dict) -> Any:
+    args = payload.get("args") or []
+    if payload.get("op") == "capture_all":
+        edits = capture_edits(copy.deepcopy(args[0]), copy.deepcopy(args[1]))
+        return {"edits": edits, "replay": _ed_replay(args[0], edits)}
+    raise KeyError(payload.get("op"))
+
+
+def _ed_row(name: str, **kw: Any) -> dict:
+    d = {"species": name, "section": "S1"}
+    d.update(kw)
+    return d
+
+
+def _ed_res(*rows: Any, **kw: Any) -> dict:
+    d = {"sections": [{"name": "S1"}], "species_ranges": list(rows),
+         "biozones": [], "other_fossils": []}
+    d.update(kw)
+    return d
+
+
+_ED_R3 = [_ed_row("A", range_top="9"), _ed_row("B", range_top="8"),
+          _ed_row("C", range_top="7")]
+_ED_PAIRS = [
+    # cell-level edits
+    ("cell_change", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("A", range_top="1"), _ED_R3[1], _ED_R3[2])),
+    ("cell_clear", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("A"), _ED_R3[1], _ED_R3[2])),
+    ("cell_add_field", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("A", range_top="9", range_base="2"), _ED_R3[1], _ED_R3[2])),
+    ("cell_numeric_vs_string", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("A", range_top=9), _ED_R3[1], _ED_R3[2])),
+    ("cell_unicode", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("A", range_top="中华虫"), _ED_R3[1], _ED_R3[2])),
+    ("cell_extras_ignored", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("A", range_top="9", _extras={"x": 1}), _ED_R3[1], _ED_R3[2])),
+    # insertions: the branches the identity alignment exists for
+    ("append_trailing", _ed_res(*_ED_R3),
+     _ed_res(_ED_R3[0], _ED_R3[1], _ED_R3[2], _ed_row("D", range_top="6"))),
+    ("insert_middle", _ed_res(*_ED_R3),
+     _ed_res(_ED_R3[0], _ed_row("D", range_top="6"), _ED_R3[1], _ED_R3[2])),
+    ("insert_head", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("D", range_top="6"), _ED_R3[0], _ED_R3[1], _ED_R3[2])),
+    # deletions: both positions, and the shrink -> _replaced path
+    ("delete_tail", _ed_res(*_ED_R3), _ed_res(_ED_R3[0], _ED_R3[1])),
+    ("delete_middle", _ed_res(*_ED_R3), _ed_res(_ED_R3[0], _ED_R3[2])),
+    # re-sort: same rows, different order, and with an edit riding on it
+    ("resort_only", _ed_res(*_ED_R3), _ed_res(_ED_R3[2], _ED_R3[1], _ED_R3[0])),
+    ("resort_with_edit", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("C", range_top="99"), _ED_R3[1], _ED_R3[0])),
+    # scalar lists (other_fossils)
+    ("scalar_append", _ed_res(*_ED_R3, other_fossils=["F1"]),
+     _ed_res(*_ED_R3, other_fossils=["F1", "F2"])),
+    ("scalar_change", _ed_res(*_ED_R3, other_fossils=["F1", "F2"]),
+     _ed_res(*_ED_R3, other_fossils=["F1", "F9"])),
+    ("scalar_delete", _ed_res(*_ED_R3, other_fossils=["F1", "F2"]),
+     _ed_res(*_ED_R3, other_fossils=["F1"])),
+    # row-type changes
+    ("dict_to_scalar", _ed_res(*_ED_R3, other_fossils=[{"name": "A"}]),
+     _ed_res(*_ED_R3, other_fossils=["A"])),
+    ("scalar_to_dict", _ed_res(*_ED_R3, other_fossils=["A"]),
+     _ed_res(*_ED_R3, other_fossils=[{"name": "A"}])),
+    # no change and degenerate inputs
+    ("identical", _ed_res(*_ED_R3), _ed_res(*_ED_R3)),
+    ("empty_rows", _ed_res(), _ed_res()),
+    ("before_not_dict", "nope", _ed_res()),
+    ("after_not_dict", _ed_res(), 5),
+    # rows with no usable identity: the positional fallback
+    ("no_identity_rows", _ed_res({"range_top": "1"}, {"range_top": "2"}),
+     _ed_res({"range_top": "9"}, {"range_top": "2"})),
+    # other list keys
+    ("sections_edit", _ed_res(*_ED_R3),
+     _ed_res(*_ED_R3, sections=[{"name": "S1", "age_range": "Permian"}])),
+    ("cross_beds_new", _ed_res(*_ED_R3),
+     _ed_res(*_ED_R3, cross_beds=[{"from": "S1", "to": "S2"}])),
+]
+# (the _add(*[...]) call for these lives just below, after _add is defined)
+
+
 CASES: list[dict] = []
 
 
 def _add(*cases: dict) -> None:
     CASES.extend(cases)
+
+
+_add(*[
+    _case("editable", f"ed_{cid}", {"op": "capture_all", "args": [before, after]})
+    for cid, before, after in _ED_PAIRS
+])
 
 
 # --- range_chart -----------------------------------------------------------
@@ -1311,6 +1429,8 @@ def compute_python_case(case: dict) -> Any:
         return _merge_python(copy.deepcopy(payload))
     if group == "quality_coverage":
         return score_range_chart(copy.deepcopy(payload))
+    if group == "editable":
+        return _editable_python(payload)
     payload = copy.deepcopy(payload)  # the normalizers mutate in place
     fn = _PY_RUNNERS[group]
     if group == "to_newick":

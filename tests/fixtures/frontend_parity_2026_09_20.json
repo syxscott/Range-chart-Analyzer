@@ -2,6 +2,1957 @@
  "generated_by": "tests/gen_frontend_parity_fixtures.py",
  "cases": [
   {
+   "group": "editable",
+   "id": "ed_cell_change",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "1"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "species_ranges": {
+      "0": {
+       "range_top": "1"
+      }
+     }
+    },
+    "replay": {
+     "species_ranges": [
+      {
+       "species": "A",
+       "section": "S1",
+       "range_top": "1"
+      },
+      {
+       "species": "B",
+       "section": "S1",
+       "range_top": "8"
+      },
+      {
+       "species": "C",
+       "section": "S1",
+       "range_top": "7"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_cell_clear",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "species_ranges": {
+      "0": {
+       "_deleted_keys": [
+        "range_top"
+       ]
+      }
+     }
+    },
+    "replay": {
+     "species_ranges": [
+      {
+       "species": "A",
+       "section": "S1"
+      },
+      {
+       "species": "B",
+       "section": "S1",
+       "range_top": "8"
+      },
+      {
+       "species": "C",
+       "section": "S1",
+       "range_top": "7"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_cell_add_field",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9",
+        "range_base": "2"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "species_ranges": {
+      "0": {
+       "range_base": "2"
+      }
+     }
+    },
+    "replay": {
+     "species_ranges": [
+      {
+       "species": "A",
+       "section": "S1",
+       "range_top": "9",
+       "range_base": "2"
+      },
+      {
+       "species": "B",
+       "section": "S1",
+       "range_top": "8"
+      },
+      {
+       "species": "C",
+       "section": "S1",
+       "range_top": "7"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_cell_numeric_vs_string",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": 9
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "species_ranges": {
+      "0": {
+       "range_top": 9
+      }
+     }
+    },
+    "replay": {
+     "species_ranges": [
+      {
+       "species": "A",
+       "section": "S1",
+       "range_top": 9
+      },
+      {
+       "species": "B",
+       "section": "S1",
+       "range_top": "8"
+      },
+      {
+       "species": "C",
+       "section": "S1",
+       "range_top": "7"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_cell_unicode",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "中华虫"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "species_ranges": {
+      "0": {
+       "range_top": "中华虫"
+      }
+     }
+    },
+    "replay": {
+     "species_ranges": [
+      {
+       "species": "A",
+       "section": "S1",
+       "range_top": "中华虫"
+      },
+      {
+       "species": "B",
+       "section": "S1",
+       "range_top": "8"
+      },
+      {
+       "species": "C",
+       "section": "S1",
+       "range_top": "7"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_cell_extras_ignored",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9",
+        "_extras": {
+         "x": 1
+        }
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {},
+    "replay": null
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_append_trailing",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       },
+       {
+        "species": "D",
+        "section": "S1",
+        "range_top": "6"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "species_ranges": {
+      "new_3": {
+       "species": "D",
+       "section": "S1",
+       "range_top": "6"
+      }
+     }
+    },
+    "replay": {
+     "species_ranges": [
+      {
+       "species": "A",
+       "section": "S1",
+       "range_top": "9"
+      },
+      {
+       "species": "B",
+       "section": "S1",
+       "range_top": "8"
+      },
+      {
+       "species": "C",
+       "section": "S1",
+       "range_top": "7"
+      },
+      {
+       "species": "D",
+       "section": "S1",
+       "range_top": "6"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_insert_middle",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "D",
+        "section": "S1",
+        "range_top": "6"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "species_ranges": {
+      "new_1": {
+       "species": "D",
+       "section": "S1",
+       "range_top": "6"
+      }
+     }
+    },
+    "replay": {
+     "species_ranges": [
+      {
+       "species": "A",
+       "section": "S1",
+       "range_top": "9"
+      },
+      {
+       "species": "D",
+       "section": "S1",
+       "range_top": "6"
+      },
+      {
+       "species": "B",
+       "section": "S1",
+       "range_top": "8"
+      },
+      {
+       "species": "C",
+       "section": "S1",
+       "range_top": "7"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_insert_head",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "D",
+        "section": "S1",
+        "range_top": "6"
+       },
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "species_ranges": {
+      "new_0": {
+       "species": "D",
+       "section": "S1",
+       "range_top": "6"
+      }
+     }
+    },
+    "replay": {
+     "species_ranges": [
+      {
+       "species": "D",
+       "section": "S1",
+       "range_top": "6"
+      },
+      {
+       "species": "A",
+       "section": "S1",
+       "range_top": "9"
+      },
+      {
+       "species": "B",
+       "section": "S1",
+       "range_top": "8"
+      },
+      {
+       "species": "C",
+       "section": "S1",
+       "range_top": "7"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_delete_tail",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "species_ranges": {
+      "_replaced": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       }
+      ]
+     }
+    },
+    "replay": {
+     "species_ranges": [
+      {
+       "species": "A",
+       "section": "S1",
+       "range_top": "9"
+      },
+      {
+       "species": "B",
+       "section": "S1",
+       "range_top": "8"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_delete_middle",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "species_ranges": {
+      "_replaced": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ]
+     }
+    },
+    "replay": {
+     "species_ranges": [
+      {
+       "species": "A",
+       "section": "S1",
+       "range_top": "9"
+      },
+      {
+       "species": "C",
+       "section": "S1",
+       "range_top": "7"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_resort_only",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {},
+    "replay": null
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_resort_with_edit",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "99"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "species_ranges": {
+      "2": {
+       "range_top": "99"
+      }
+     }
+    },
+    "replay": {
+     "species_ranges": [
+      {
+       "species": "A",
+       "section": "S1",
+       "range_top": "9"
+      },
+      {
+       "species": "B",
+       "section": "S1",
+       "range_top": "8"
+      },
+      {
+       "species": "C",
+       "section": "S1",
+       "range_top": "99"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_scalar_append",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [
+       "F1"
+      ]
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [
+       "F1",
+       "F2"
+      ]
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "other_fossils": {
+      "_replaced": [
+       "F1",
+       "F2"
+      ]
+     }
+    },
+    "replay": {
+     "other_fossils": [
+      "F1",
+      "F2"
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_scalar_change",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [
+       "F1",
+       "F2"
+      ]
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [
+       "F1",
+       "F9"
+      ]
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "other_fossils": {
+      "_replaced": [
+       "F1",
+       "F9"
+      ]
+     }
+    },
+    "replay": {
+     "other_fossils": [
+      "F1",
+      "F9"
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_scalar_delete",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [
+       "F1",
+       "F2"
+      ]
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [
+       "F1"
+      ]
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "other_fossils": {
+      "_replaced": [
+       "F1"
+      ]
+     }
+    },
+    "replay": {
+     "other_fossils": [
+      "F1"
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_dict_to_scalar",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [
+       {
+        "name": "A"
+       }
+      ]
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [
+       "A"
+      ]
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "other_fossils": {
+      "_replaced": [
+       "A"
+      ]
+     }
+    },
+    "replay": {
+     "other_fossils": [
+      "A"
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_scalar_to_dict",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [
+       "A"
+      ]
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [
+       {
+        "name": "A"
+       }
+      ]
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "other_fossils": {
+      "_replaced": [
+       {
+        "name": "A"
+       }
+      ]
+     }
+    },
+    "replay": {
+     "other_fossils": [
+      {
+       "name": "A"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_identical",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {},
+    "replay": null
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_empty_rows",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {},
+    "replay": null
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_before_not_dict",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     "nope",
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {},
+    "replay": null
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_after_not_dict",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [],
+      "biozones": [],
+      "other_fossils": []
+     },
+     5
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {},
+    "replay": null
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_no_identity_rows",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "range_top": "1"
+       },
+       {
+        "range_top": "2"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "range_top": "9"
+       },
+       {
+        "range_top": "2"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "species_ranges": {
+      "0": {
+       "range_top": "9"
+      }
+     }
+    },
+    "replay": {
+     "species_ranges": [
+      {
+       "range_top": "9"
+      },
+      {
+       "range_top": "2"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_sections_edit",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1",
+        "age_range": "Permian"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "sections": {
+      "0": {
+       "age_range": "Permian"
+      }
+     }
+    },
+    "replay": {
+     "sections": [
+      {
+       "name": "S1",
+       "age_range": "Permian"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "group": "editable",
+   "id": "ed_cross_beds_new",
+   "payload": {
+    "op": "capture_all",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": []
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "9"
+       },
+       {
+        "species": "B",
+        "section": "S1",
+        "range_top": "8"
+       },
+       {
+        "species": "C",
+        "section": "S1",
+        "range_top": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "cross_beds": [
+       {
+        "from": "S1",
+        "to": "S2"
+       }
+      ]
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "edits": {
+     "cross_beds": {
+      "new_0": {
+       "from": "S1",
+       "to": "S2"
+      }
+     }
+    },
+    "replay": {
+     "cross_beds": null
+    }
+   }
+  },
+  {
    "group": "range_chart",
    "id": "rc_empty",
    "payload": {},

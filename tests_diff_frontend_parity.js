@@ -109,6 +109,14 @@ function buildContext() {
       mergeResults: typeof rcaMergeResults !== 'undefined' ? rcaMergeResults : null,
       keymaps: typeof RCA_KEYMAP_BY_MODE !== 'undefined' ? RCA_KEYMAP_BY_MODE : null,
       scoreRangeChart: typeof scoreRangeChart !== 'undefined' ? scoreRangeChart : null,
+      // AUDIT-2026-10-01: the table editor's edit payload, for the editable
+      // group. These are function DECLARATIONS in js/table.js, so they land on
+      // the context on their own -- but buildContext() RETURNS ctx.__exp, not
+      // ctx, so anything a runner needs has to be named here. (No backticks in
+      // this comment: it lives inside a template literal.)
+      rcaCaptureEdits: typeof rcaCaptureEdits !== 'undefined' ? rcaCaptureEdits : null,
+      rcaApplyEdits: typeof rcaApplyEdits !== 'undefined' ? rcaApplyEdits : null,
+      RCA_EDIT_LIST_KEYS: typeof RCA_EDIT_LIST_KEYS !== 'undefined' ? RCA_EDIT_LIST_KEYS : null,
     };
   `, ctx);
   return ctx.__exp;
@@ -168,6 +176,38 @@ const RUNNERS = {
     c.payload.total_runs === null ? undefined : c.payload.total_runs,
     f.keymaps[c.payload.mode || 'range_chart']),
   quality_coverage: (f, c) => f.scoreRangeChart(c.payload),
+  // AUDIT-2026-10-01: rca_core/editable.py vs js/table.js — the payload the
+  // table editor produces and replays. The REPLAY is compared too, not just the
+  // diff: a payload that looks right and replays onto the wrong table is worse
+  // than one that is visibly wrong, and the editor is how a researcher corrects
+  // a model mistake, so this is the path where a silent divergence would change
+  // the numbers they publish.
+  //
+  // An absent key is normalised to null, because JS answers undefined and
+  // Python's dict.get answers None and both mean "not there"; comparing them
+  // raw reported one spurious difference on a missing-key case.
+  editable: (f, c) => {
+    const p = c.payload;
+    if (p.op === 'list_keys') return f.RCA_EDIT_LIST_KEYS;
+    if (p.op !== 'capture_all') throw new Error('no editable op ' + p.op);
+    const edits = f.rcaCaptureEdits(p.args[0], p.args[1]);
+    let replay = null;
+    if (edits && typeof edits === 'object' && Object.keys(edits).length) {
+      try {
+        const after = f.rcaApplyEdits(JSON.parse(JSON.stringify(p.args[0])),
+                                      JSON.parse(JSON.stringify(edits)));
+        const out = {};
+        for (const k of Object.keys(edits)) {
+          out[k] = (after && Object.prototype.hasOwnProperty.call(after, k))
+            ? after[k] : null;
+        }
+        replay = out;
+      } catch (err) {
+        replay = '__raised__ ' + String(err && err.message || err);
+      }
+    }
+    return { edits: edits, replay: replay };
+  },
 };
 
 // Numbers: Python 1.0 vs JS 1 (and float noise) are the same value.
