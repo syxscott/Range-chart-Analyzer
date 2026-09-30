@@ -51,6 +51,7 @@ from rca_core.standards.ics import ics_resolve_age_bound  # noqa: E402
 # BORROW-2026-09-20 (js-data-layer mirror round): the coverage-contract trio.
 import rca_core.reason_codes as RC  # noqa: E402
 from rca_core.editable import apply_edits, capture_edits  # noqa: E402
+from rca_core.extractor import axis_domains_from, pos_to_axis_value  # noqa: E402
 from rca_core.aggregate import SCHEMA_BY_MODE, merge_results  # noqa: E402
 from rca_core.quality import score_range_chart  # noqa: E402
 
@@ -60,7 +61,7 @@ GROUPS = (
     "range_chart", "columnar_section", "abundance_diagram",
     "zonation_chart", "phylogenetic_tree", "chart_classification",
     "to_newick", "safe_json_loads", "age_bound",
-    "reason_codes", "merge", "quality_coverage", "editable",
+    "reason_codes", "merge", "quality_coverage", "editable", "axis",
 )
 
 
@@ -105,6 +106,69 @@ def _editable_python(payload: dict) -> Any:
         edits = capture_edits(copy.deepcopy(args[0]), copy.deepcopy(args[1]))
         return {"edits": edits, "replay": _ed_replay(args[0], edits)}
     raise KeyError(payload.get("op"))
+
+
+# --- axis calibration: rca_core/extractor.py vs js/minimax.js ---------------
+# AUDIT-2026-10-01. The normalisation pass only hoists the block verbatim (12
+# adversarial shapes matched), so the FIT is not in that path -- these functions
+# are, and they are what turn the model's 0-999 position into the number a
+# figure is drawn from. "axis_calibration" had appeared ZERO times in this
+# fixture, while the prompt asks for the block in five modes and js/minimax.js's
+# own comment mentions it having "diverged between transports". Measured over the
+# shapes below: 180 comparisons, 0 divergences. Recorded as a group so it cannot
+# start drifting silently.
+_AXIS_CALS = {
+    "normal": {"vertical": {"at_0": 1, "at_999": 24, "unit": "bed"}},
+    "reversed": {"vertical": {"at_0": 24, "at_999": 1, "unit": "bed"}},
+    "fractional": {"vertical": {"at_0": 0.5, "at_999": 99.5, "unit": "bed"}},
+    "negative": {"vertical": {"at_0": -4.0, "at_999": 4.0, "unit": "PC1"}},
+    "zero_span": {"vertical": {"at_0": 7, "at_999": 7, "unit": "bed"}},
+    "float_ends": {"vertical": {"at_0": 0.0, "at_999": 30.0, "unit": "m"}},
+    "two_axes": {"x": {"at_0": -4.0, "at_999": 4.0, "unit": "PC1"},
+                 "y": {"at_0": -3.0, "at_999": 3.0, "unit": "PC2"}},
+    "unknown_axis": {"depth": {"at_0": 0, "at_999": 100, "unit": "cm"}},
+    "no_unit": {"vertical": {"at_0": 1, "at_999": 24}},
+    "anchors_shape": {"vertical": {
+        "anchors": [{"position": 0, "value": 1},
+                    {"position": 999, "value": 24}], "unit": "bed"}},
+    "not_a_dict": "nonsense",
+    "empty": {},
+}
+# Positions chosen to include both ends, the interior, out-of-range values, a
+# fractional one, a non-numeric one, and a missing one.
+_AXIS_POSITIONS = [0, 1, 200, 333, 500, 666, 800, 998, 999, -1, 1000, 12.5, None, "500"]
+# The calibrations whose every position is compared; the other shapes are
+# compared through axis_domains_from alone, which is where a shape that cannot
+# form a domain is caught.
+_AXIS_FULL_SHAPES = ("normal", "reversed", "zero_span", "two_axes")
+
+
+def _axis_payload(cal: Any) -> dict:
+    return {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            {"species": "A", "section": "S1", "range_top": "Bed 9",
+             "range_base": "Bed 7", "top_pos_0_999": 800,
+             "base_pos_0_999": 200},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8,
+        "axis_calibration": cal,
+    }
+
+
+def _axis_python(payload: dict) -> Any:
+    op = payload.get("op")
+    args = payload.get("args") or []
+    if op == "axis_domains_from":
+        return axis_domains_from(copy.deepcopy(args[0]))
+    if op == "pos_to_axis_value":
+        axes = axis_domains_from(copy.deepcopy(args[1]))
+        return {"axes": axes,
+                "v": pos_to_axis_value(args[0], axes.get(args[3]))}
+    raise KeyError(op)
+
+
+# (the axis cases are added below, after _add is defined)
 
 
 def _ed_row(name: str, **kw: Any) -> dict:
@@ -189,6 +253,18 @@ def _add(*cases: dict) -> None:
 _add(*[
     _case("editable", f"ed_{cid}", {"op": "capture_all", "args": [before, after]})
     for cid, before, after in _ED_PAIRS
+])
+_add(*[
+    _case("axis", f"axdom_{name}", {"op": "axis_domains_from",
+                                     "args": [_axis_payload(cal)]})
+    for name, cal in _AXIS_CALS.items()
+])
+_add(*[
+    _case("axis", f"axpos_{name}_{pos}",
+          {"op": "pos_to_axis_value",
+           "args": [pos, _axis_payload(_AXIS_CALS[name]), None, "vertical"]})
+    for name in _AXIS_FULL_SHAPES
+    for pos in _AXIS_POSITIONS
 ])
 
 
@@ -1431,6 +1507,8 @@ def compute_python_case(case: dict) -> Any:
         return score_range_chart(copy.deepcopy(payload))
     if group == "editable":
         return _editable_python(payload)
+    if group == "axis":
+        return _axis_python(payload)
     payload = copy.deepcopy(payload)  # the normalizers mutate in place
     fn = _PY_RUNNERS[group]
     if group == "to_newick":

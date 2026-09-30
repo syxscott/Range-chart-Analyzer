@@ -1953,6 +1953,3461 @@
    }
   },
   {
+   "group": "axis",
+   "id": "axdom_normal",
+   "payload": {
+    "op": "axis_domains_from",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "vertical": {
+     "at_0": 1.0,
+     "at_999": 24.0,
+     "unit": "bed"
+    }
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axdom_reversed",
+   "payload": {
+    "op": "axis_domains_from",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "vertical": {
+     "at_0": 24.0,
+     "at_999": 1.0,
+     "unit": "bed"
+    }
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axdom_fractional",
+   "payload": {
+    "op": "axis_domains_from",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 0.5,
+        "at_999": 99.5,
+        "unit": "bed"
+       }
+      }
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "vertical": {
+     "at_0": 0.5,
+     "at_999": 99.5,
+     "unit": "bed"
+    }
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axdom_negative",
+   "payload": {
+    "op": "axis_domains_from",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       }
+      }
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "vertical": {
+     "at_0": -4.0,
+     "at_999": 4.0,
+     "unit": "PC1"
+    }
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axdom_zero_span",
+   "payload": {
+    "op": "axis_domains_from",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "vertical": {
+     "at_0": 7.0,
+     "at_999": 7.0,
+     "unit": "bed"
+    }
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axdom_float_ends",
+   "payload": {
+    "op": "axis_domains_from",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 0.0,
+        "at_999": 30.0,
+        "unit": "m"
+       }
+      }
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "vertical": {
+     "at_0": 0.0,
+     "at_999": 30.0,
+     "unit": "m"
+    }
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axdom_two_axes",
+   "payload": {
+    "op": "axis_domains_from",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "x": {
+     "at_0": -4.0,
+     "at_999": 4.0,
+     "unit": "PC1"
+    },
+    "y": {
+     "at_0": -3.0,
+     "at_999": 3.0,
+     "unit": "PC2"
+    }
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axdom_unknown_axis",
+   "payload": {
+    "op": "axis_domains_from",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "depth": {
+        "at_0": 0,
+        "at_999": 100,
+        "unit": "cm"
+       }
+      }
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "depth": {
+     "at_0": 0.0,
+     "at_999": 100.0,
+     "unit": "cm"
+    }
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axdom_no_unit",
+   "payload": {
+    "op": "axis_domains_from",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24
+       }
+      }
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "vertical": {
+     "at_0": 1.0,
+     "at_999": 24.0,
+     "unit": ""
+    }
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axdom_anchors_shape",
+   "payload": {
+    "op": "axis_domains_from",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "anchors": [
+         {
+          "position": 0,
+          "value": 1
+         },
+         {
+          "position": 999,
+          "value": 24
+         }
+        ],
+        "unit": "bed"
+       }
+      }
+     }
+    ]
+   },
+   "extra": null,
+   "python": {}
+  },
+  {
+   "group": "axis",
+   "id": "axdom_not_a_dict",
+   "payload": {
+    "op": "axis_domains_from",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": "nonsense"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {}
+  },
+  {
+   "group": "axis",
+   "id": "axdom_empty",
+   "payload": {
+    "op": "axis_domains_from",
+    "args": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {}
+     }
+    ]
+   },
+   "extra": null,
+   "python": {}
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_0",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     0,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": 1.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_1",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     1,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": 1.023023023023023
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_200",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     200,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": 5.604604604604605
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_333",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     333,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": 8.666666666666666
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_500",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     500,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": 12.511511511511513
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_666",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     666,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": 16.333333333333332
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_800",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     800,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": 19.41841841841842
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_998",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     998,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": 23.976976976976978
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_999",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     999,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": 24.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_-1",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     -1,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": 0.9769769769769769
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_1000",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     1000,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": 24.023023023023026
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_12.5",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     12.5,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": 1.2877877877877877
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_None",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     null,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_normal_500",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     "500",
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 1,
+        "at_999": 24,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 1.0,
+      "at_999": 24.0,
+      "unit": "bed"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_0",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     0,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": 24.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_1",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     1,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": 23.976976976976978
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_200",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     200,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": 19.395395395395397
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_333",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     333,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": 16.333333333333336
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_500",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     500,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": 12.488488488488487
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_666",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     666,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": 8.666666666666668
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_800",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     800,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": 5.581581581581581
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_998",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     998,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": 1.023023023023022
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_999",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     999,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": 1.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_-1",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     -1,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": 24.023023023023022
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_1000",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     1000,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": 0.9769769769769745
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_12.5",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     12.5,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": 23.71221221221221
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_None",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     null,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_reversed_500",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     "500",
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 24,
+        "at_999": 1,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 24.0,
+      "at_999": 1.0,
+      "unit": "bed"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_0",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     0,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": 7.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_1",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     1,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": 7.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_200",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     200,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": 7.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_333",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     333,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": 7.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_500",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     500,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": 7.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_666",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     666,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": 7.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_800",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     800,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": 7.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_998",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     998,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": 7.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_999",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     999,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": 7.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_-1",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     -1,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": 7.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_1000",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     1000,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": 7.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_12.5",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     12.5,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": 7.0
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_None",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     null,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_zero_span_500",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     "500",
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "vertical": {
+        "at_0": 7,
+        "at_999": 7,
+        "unit": "bed"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "vertical": {
+      "at_0": 7.0,
+      "at_999": 7.0,
+      "unit": "bed"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_0",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     0,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_1",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     1,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_200",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     200,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_333",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     333,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_500",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     500,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_666",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     666,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_800",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     800,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_998",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     998,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_999",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     999,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_-1",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     -1,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_1000",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     1000,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_12.5",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     12.5,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_None",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     null,
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
+   "group": "axis",
+   "id": "axpos_two_axes_500",
+   "payload": {
+    "op": "pos_to_axis_value",
+    "args": [
+     "500",
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "A",
+        "section": "S1",
+        "range_top": "Bed 9",
+        "range_base": "Bed 7",
+        "top_pos_0_999": 800,
+        "base_pos_0_999": 200
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8,
+      "axis_calibration": {
+       "x": {
+        "at_0": -4.0,
+        "at_999": 4.0,
+        "unit": "PC1"
+       },
+       "y": {
+        "at_0": -3.0,
+        "at_999": 3.0,
+        "unit": "PC2"
+       }
+      }
+     },
+     null,
+     "vertical"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "axes": {
+     "x": {
+      "at_0": -4.0,
+      "at_999": 4.0,
+      "unit": "PC1"
+     },
+     "y": {
+      "at_0": -3.0,
+      "at_999": 3.0,
+      "unit": "PC2"
+     }
+    },
+    "v": null
+   }
+  },
+  {
    "group": "range_chart",
    "id": "rc_empty",
    "payload": {},

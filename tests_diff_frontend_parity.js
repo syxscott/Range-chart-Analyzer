@@ -116,6 +116,9 @@ function buildContext() {
       // this comment: it lives inside a template literal.)
       rcaCaptureEdits: typeof rcaCaptureEdits !== 'undefined' ? rcaCaptureEdits : null,
       rcaApplyEdits: typeof rcaApplyEdits !== 'undefined' ? rcaApplyEdits : null,
+      // AUDIT-2026-10-01: the axis-calibration mirrors in js/minimax.js.
+      rcaAxisDomainsFrom: typeof rcaAxisDomainsFrom !== 'undefined' ? rcaAxisDomainsFrom : null,
+      rcaPosToAxisValue: typeof rcaPosToAxisValue !== 'undefined' ? rcaPosToAxisValue : null,
       RCA_EDIT_LIST_KEYS: typeof RCA_EDIT_LIST_KEYS !== 'undefined' ? RCA_EDIT_LIST_KEYS : null,
     };
   `, ctx);
@@ -176,6 +179,24 @@ const RUNNERS = {
     c.payload.total_runs === null ? undefined : c.payload.total_runs,
     f.keymaps[c.payload.mode || 'range_chart']),
   quality_coverage: (f, c) => f.scoreRangeChart(c.payload),
+  // AUDIT-2026-10-01: the axis-calibration chain. The normalisation pass only
+  // HOISTS `axis_calibration` verbatim, so the fit is not in that path -- these
+  // four functions are, and they are what turn the model's 0-999 position into
+  // the number a figure is drawn from. "axis_calibration" appeared ZERO times
+  // in this fixture before, while the prompt asks for the block in five modes
+  // and js/minimax.js's own comment mentions it having "diverged between
+  // transports". Each side derives the DOMAIN ITSELF, because that is where a
+  // divergence would actually live.
+  axis: (f, c) => {
+    const p = c.payload;
+    const a = p.args || [];
+    if (p.op === 'axis_domains_from') return f.rcaAxisDomainsFrom(a[0]);
+    if (p.op === 'pos_to_axis_value') {
+      const axes = f.rcaAxisDomainsFrom(a[1]);
+      return { axes: axes, v: f.rcaPosToAxisValue(a[0], axes[a[3]] || null) };
+    }
+    throw new Error('no axis op ' + p.op);
+  },
   // AUDIT-2026-10-01: rca_core/editable.py vs js/table.js — the payload the
   // table editor produces and replays. The REPLAY is compared too, not just the
   // diff: a payload that looks right and replays onto the wrong table is worse
