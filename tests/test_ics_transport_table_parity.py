@@ -196,3 +196,66 @@ def test_the_shipped_archive_carries_no_age_for_an_undatable_stage(
         "%s: fad_ma/lad_ma = %r/%r, expected numeric ages=%s"
         % (label, row.get("fad_ma"), row.get("lad_ma"), expect_numbers))
 
+
+#: Ages sitting on a Silurian substage base.  The reverse direction (age ->
+#: stage name) diverges too, and not by returning nothing: Python cannot name a
+#: stage the canonical table lacks, so it falls back to the SERIES
+#: ("Ludlow"), while the browser names the stage ("Gorstian").  In a
+#: zonation / correlation workflow the output VALUE is that label, so the two
+#: transports emit different ranks for the same number.
+#: Famennian is the control: it is in both tables, so both must agree.
+_AGE_TO_STAGE = [
+    (443.1, "Llandovery", "Hirnantian"),   # Silurian base / Hirnantian top
+    (438.6, "Llandovery", "Aeronian"),
+    (432.9, "Wenlock", "Llandovery"),
+    (430.6, "Wenlock", "Homerian"),
+    (426.7, "Ludlow", "Gorstian"),
+    (372.15, "Famennian", "Famennian"),   # control
+]
+
+
+def test_age_to_stage_name_agrees_across_transports():
+    """The reverse lookup is a second, independent symptom of the same gap.
+
+    Read the JS table out of js/ics_table.js (globalThis.RCA_ICS_TABLE) rather
+    than trusting a name here -- an earlier probe guessed the export wrong and
+    reported 8/8 divergence including the control, which is how a broken probe
+    announces itself.
+    """
+    import subprocess
+
+    js = (
+        "var fs=require('fs'),vm=require('vm');"
+        "var src=fs.readFileSync('js/ics_table.js','utf8');"
+        "var ctx=vm.createContext({console:console});"
+        "vm.runInContext(src,ctx);"
+        "var t=ctx.RCA_ICS_TABLE;"
+        "if(!t)throw new Error('js/ics_table.js exports no RCA_ICS_TABLE');"
+        "var ages=[%s];"
+        "var out=[];for(var i=0;i<ages.length;i++){var m=ages[i],best=null;"
+        "  for(var k in t){var r=t[k];"
+        "    if(r.top_ma<=m&&m<=r.base_ma){best=k;break;}}"
+        "  out.push(best);}"
+        "process.stdout.write(JSON.stringify(out));"
+        % ",".join(repr(float(ma)) for ma, _p, _j in _AGE_TO_STAGE)
+    )
+    proc = subprocess.run(["node", "-e", js], cwd=str(REPO),
+                          capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
+    assert proc.returncode == 0, "could not evaluate js/ics_table.js: %s" % (
+        (proc.stderr or proc.stdout)[:400],)
+    js_stages = json.loads(proc.stdout)
+    assert len(js_stages) == len(_AGE_TO_STAGE)
+
+    for (ma, py_expected, js_expected), js_got in zip(_AGE_TO_STAGE, js_stages):
+        # The control must agree on BOTH sides whatever the gap is.
+        py_got = ics.ics_stage_from_age(ma)
+        assert js_got == js_expected, (
+            "js/ics_table.js stopped resolving %.2f Ma to %r (got %r) -- the "
+            "mirror moved, re-read the table before trusting this file"
+            % (ma, js_expected, js_got))
+        assert py_got == py_expected, (
+            "python resolved %.2f Ma to %r, expected %r.  If the promote has "
+            "landed this becomes a REAL fix requirement: the two transports "
+            "must name the same stage." % (ma, py_got, py_expected))
+
