@@ -446,8 +446,10 @@ def make_pinning_opener():
     pinned.
 
     NOTE (REVIEW-2026-09-20, corrected FIX-2026-09-22 item 3):
-    ``install_opener`` at the bottom of this module is a PROCESS-WIDE side
-    effect, not scoped to rca_core: every ``urllib.request.urlopen`` in the
+    ``make_pinning_opener``'s result is passed to
+    ``urllib.request.install_opener`` by the CALLERS -- ``llm.py`` and
+    ``server.py`` -- and that is a PROCESS-WIDE side effect, not scoped to
+    rca_core: every ``urllib.request.urlopen`` in the
     interpreter — including any GBIF / mindat lookup that still uses the
     global opener — goes through this handler, so those calls are pinned and
     no-redirect too. It used to claim pinning "protects" those public-host
@@ -562,6 +564,32 @@ def make_pinning_opener():
 
     class _PinnedHTTPHandler(urllib.request.HTTPHandler):
         def http_open(self, req):
+            # AUDIT-2026-10-01 [item 28]. The https twin above skips the pin
+            # for a proxied request, because the proxy resolves the name and
+            # there is therefore no DNS here to pin.  It detects that with
+            # ``req._tunnel_host`` -- but ``Request.set_proxy`` only sets that
+            # flag for https.  For plain http it leaves it alone and instead
+            # copies the full URL into ``req.selector``:
+            #
+            #   https://target/v1  -> host='proxy:7890' _tunnel_host='target'
+            #   http://target:11434/v1
+            #                       -> host='proxy:7890' _tunnel_host=None
+            #
+            # So ``req.host`` was ALREADY the proxy address when _pin ran: it
+            # resolved and pinned the PROXY, then
+            # ``add_unredirected_header("Host", <proxy name>)`` replaced the
+            # real one.  The request-line still named the target (so the proxy
+            # connected to the right place) but the origin vhosted the wrong
+            # name -- the same failure shape as the HTTP 418 of AUDIT-2026-09-27
+            # item 5.2, on the cleartext path.
+            #
+            # Match on the selector STARTING with a scheme, never merely
+            # CONTAINING one: a direct request's selector is a path, and a
+            # query string such as ``?next=http://x`` would otherwise smuggle
+            # "://" in and switch the pin off for an attacker-chosen host.
+            if (req.selector or "").startswith(("http://", "https://")):
+                # Proxied: connect to the proxy and let it resolve the target.
+                return super().http_open(req)
             # REVIEW-2026-09-20 (item 17): plain HTTP is pinned with the exact
             # same code path as HTTPS (see _PinnedHTTPConnection).
             _pin(req, "http")
@@ -601,6 +629,12 @@ def make_pinning_opener():
 
 __all__ = [
     "validate_endpoint",
+    # AUDIT-2026-10-01 [item 28]: omitted here while five product modules
+    # (llm.py x3, gui_fluent.py, gui.py) imported it by name -- harmless for
+    # `from .ssrf import x`, but `__all__` is this module's own statement of
+    # what it offers, and the loopback policy is the one an operator is most
+    # likely to reach for by name.
+    "validate_endpoint_local_ok",
     "validate_endpoint_or_raise",
     "is_private_host",
     "pinned_endpoint_ip",
