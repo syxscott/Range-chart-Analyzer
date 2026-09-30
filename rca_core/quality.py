@@ -709,6 +709,34 @@ def _score_consistency(data: dict[str, Any]) -> tuple[float, list[dict[str, str]
             base_n = _parse_bed_n(base)
             if top_n is not None and base_n is not None and top_n < base_n:
                 fad_violations += 1
+                continue
+            # AUDIT-2026-10-01 [item 9.10]: _parse_bed_n takes the first integer
+            # in the string, so "23a" and "23b" are both bed 23 and the
+            # comparison above says they are fine. They are not: a subscript
+            # letters UPWARD, so base="23b" / top="23a" is an inverted range,
+            # and so is base="23a" / top="23".
+            #
+            # This is the same defect rca_core/bed_parser.py was created to
+            # end -- its docstring records that "a predicted Bed 23c and ground
+            # truth Bed 23d would both score as integer 23 -> false positive
+            # accuracy" -- and the same one _bed_num in eval_metrics.py had
+            # until two commits ago. The M-1 fix unified eval_metrics and
+            # exporter; quality.py kept a third, weaker parser.
+            #
+            # It mattered because the two checks are not symmetric. Measured
+            # against the exporter's range_base_le_range_top on 28 shapes, this
+            # was the ONLY direction that disagreed, and it is the expensive
+            # one: the exporter RAISES on those rows, so the user got a
+            # validation error while the quality report -- the thing that is
+            # supposed to explain it -- said everything was fine and the grade
+            # was not penalised.
+            from .bed_parser import parse_bed as _parse_bed_sub
+            top_b = _parse_bed_sub(top)
+            base_b = _parse_bed_sub(base)
+            if (top_b and base_b
+                    and top_b["bed_num"] == base_b["bed_num"]
+                    and top_b["bed_sub"] < base_b["bed_sub"]):
+                fad_violations += 1
         if fad_violations:
             score -= min(0.3, 0.1 * fad_violations)
             issues.append({
