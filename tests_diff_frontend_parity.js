@@ -278,6 +278,26 @@ const EXPECTED_DIVERGENCES = {
   // rcaOptionalConfidence (null) already did. If a NaN divergence ever comes
   // back it will now FAIL the build instead of being absorbed here, which is
   // the whole point of the table being checked rather than trusted.
+  //
+  // AUDIT-2026-10-01: rc_float_integral and rc_float_exponent_big were found by
+  // an adversarial pass over the range-chart group, and they are the same class
+  // as the three above: a property of the RUNTIME, not a defect in the mirror.
+  // Python's json.loads keeps the int/float distinction ('3.0' -> 3.0, a float),
+  // so rca_core/extractor.py::_stringify_scalar writes "3.0". JSON.parse has one
+  // number type: JSON.parse('3.0') is the number 3 and Number.isInteger(3) is
+  // true, so the browser cannot know the model wrote a float, and String(3) is
+  // "3". rc_float_exponent_big is the same wall seen from the other side, and it
+  // is what corrected the first classification: the discriminator is not "does
+  // this value need exponent form" but "is this value INTEGRAL". The browser
+  // holds 10000000000000000 whether the model wrote 1e16 or the digits, while
+  // Python answers '1e+16' and '10000000000000000' respectively.
+  // The NON-integral half of the family is deliberately NOT listed, because it
+  // is fixable and was fixed: rcaStringifyScalar routes a non-integral float
+  // through js/table.js#rcaPyFloatStr, so str(1e-7) == "1e-07" on both engines
+  // (rc_float_exponent_small / _negative). rc_float_int is the control that has
+  // to keep matching: an integer payload still renders "3" on both sides.
+  rc_float_integral: 'JSON.parse collapses 3.0 to the integer 3, so the browser cannot know a float was written; Python json.loads keeps it (py="3.0" js="3")',
+  rc_float_exponent_big: 'Same JSON.parse wall on an integral value: 1e16 and 10000000000000000 are one JS number, but Python str() answers "1e+16" and "10000000000000000" respectively',
 };
 
 function main() {

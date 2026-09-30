@@ -685,9 +685,19 @@ function rcaSplitDataUrl(dataUrl) {
 //      "{'a': 1}" server-side where JS yields "". JS is lossless-or-empty,
 //      never a fabricated Python repr; no test pins the Python repr.
 //   2. Float repr: Python str(1.0) == "1.0" and str(1e-7) == "1e-07", JS
-//      String(1.0) == "1" and String(1e-7) == "1e-7". Only reachable when the
-//      model emits a raw number in a string field; the aggregate layer
-//      re-normalizes both spellings through rcaPyFloat before comparing.
+//      String(1.0) == "1" and String(1e-7) == "1e-7". Reachable only when the
+//      model emits a raw number in a string field.
+//      AUDIT-2026-10-01: this note used to say the divergence was contained
+//      because "the aggregate layer re-normalizes both spellings through
+//      rcaPyFloat before comparing". That was the wrong reason -- the
+//      aggregate layer only covers MERGING, and the EXPORTED CELL kept
+//      whichever spelling the run emitted. Measured instead, the split is:
+//        - a NON-INTEGRAL float keeps the information, so rcaStringifyScalar
+//          now spells it with Python's exponent grammar (see below). Fixed.
+//        - an INTEGRAL float does not: JSON.parse('3.0') is the number 3 and
+//          Number.isInteger(3) is true, so the browser cannot know a float was
+//          written. Pinned as rc_float_integral in the differential harness's
+//          EXPECTED_DIVERGENCES, with THAT reason.
 //   3. Booleans: Python str(True) == "True", _stringify_scalar == "true";
 //      both engines use the lowercase "true"/"false" form here (rule 1 means
 //      the two range-chart str() fields are again the exception).
@@ -707,6 +717,25 @@ function rcaStringifyScalar(value) {
     if (Number.isNaN(value)) return 'nan';
     if (value === Infinity) return 'inf';
     if (value === -Infinity) return '-inf';
+    // AUDIT-2026-10-01: a NON-INTEGRAL float is spelled with Python's
+    // exponent grammar. str(1e16) is '1e+16' where String(1e16) is
+    // '10000000000000000', and str(1e-7) is '1e-07' where String is '1e-7',
+    // so the same model payload reached the CSV/XLSX cell as two different
+    // strings. js/table.js#rcaPyFloatStr already implements that grammar for
+    // the export path (checked against Python str() on 16 values, including
+    // 1e+16 / 1e-05 / 9.99e-05 / 5e-324 / -0.0), so this delegates rather than
+    // growing a third spelling of the same number in this product.
+    //
+    // An INTEGRAL value deliberately stays on String(). JSON.parse collapses
+    // the model's 3.0 to the number 3, and Number.isInteger(3) is true, so the
+    // browser cannot know a float was written; rcaPyFloatStr(3) would answer
+    // '3.0' for an ordinary integer payload. That residue is recorded in
+    // tests_diff_frontend_parity.js's EXPECTED_DIVERGENCES as
+    // rc_float_integral, next to rc_dict_shaped_sections and ag_34 / ag_35 --
+    // the same class of runtime fact rather than a mirror defect.
+    if (!Number.isInteger(value) && typeof rcaPyFloatStr === 'function') {
+      return rcaPyFloatStr(value);
+    }
   }
   return String(value);
 }

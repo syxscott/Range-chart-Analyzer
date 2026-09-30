@@ -283,6 +283,29 @@ function _looksLikeAge(v) {
 
 function _regExpEscape(s) { return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'); }
 
+// AUDIT-2026-10-01: Python's \b on a str pattern is UNICODE-aware -- its \w is
+// str.isalnum() plus "_", so an Arabic-Indic digit is a word character and
+// "Hirnantian٣" has NO word boundary after "Hirnantian". JavaScript's \w is
+// ASCII-only ([A-Za-z0-9_]), so the same \b matched there and the browser
+// resolved Hirnantian to 445.2 Ma where rca_core returned (None, None) -- the
+// mirror was more permissive than the module it mirrors, on the very input
+// class ag_34 / ag_35 already document for \d. Measured, both directions:
+//   "Hirnantian٣"  py=None            js=Hirnantian 445.2
+//   "26٠ Ma"       py=Capitanian 260  js=None          (the documented \d case)
+// so the family is "the two engines disagree on Unicode awareness of a regex
+// character class", and \b is the second site. The lookarounds below are \b
+// over the same classes Python uses: letters, numbers, underscore. Every
+// character _regExpEscape escapes is a valid identity escape under /u, so
+// adding the flag is safe for these labels.
+const _NOT_WORD_BEFORE = '(?<![\\p{L}\\p{N}_])';
+const _NOT_WORD_AFTER = '(?![\\p{L}\\p{N}_])';
+
+function _wordBoundaryRe(needle, flags) {
+  const f = flags || '';
+  return new RegExp(_NOT_WORD_BEFORE + _regExpEscape(needle) + _NOT_WORD_AFTER,
+                    f.indexOf('u') === -1 ? f + 'u' : f);
+}
+
 // REVIEW-2026-09-20: the bundled table carries the Cambrian intervals that
 // have no ratified name yet as "Stage 2" … "Stage 10", and TWO of them share
 // their span with the ratified name adopted since:
@@ -345,7 +368,7 @@ function _icsParseAgeRange(stages, text) {
   if (!s) return [];
   const matches = [];
   for (const stageName of Object.keys(stages)) {
-    const re = new RegExp('\\b' + _regExpEscape(stageName) + '\\b', 'gi');
+    const re = _wordBoundaryRe(stageName, 'gi');
     let m;
     while ((m = re.exec(s)) !== null) {
       matches.push({ idx: m.index, name: stageName });
@@ -375,6 +398,27 @@ const _PREFER_OLDER = ['older', 'oldest', 'old', 'base', 'bottom'];
 const _PREFER_YOUNGER = ['younger', 'youngest', 'young', 'top', 'upper'];
 
 function _resolvePrefer(prefer) {
+  // AUDIT-2026-10-01: refuse a non-scalar BEFORE stringifying it. Python
+  // stringifies with str() and JS with String(), and the two disagree exactly
+  // where it matters: str(['younger']) is "['younger']" (unknown, so Python
+  // raises) while String(['younger']) is "younger" (a known spelling, so the
+  // browser silently resolved the YOUNGER end). Same for [] -> "[]" vs "",
+  // which defaulted to older. That is the quiet FAD/LAD inversion this
+  // function was rewritten to prevent, and the module's own comment claims an
+  // unknown value raises "instead of quietly inverting" -- it did not.
+  // Reachability measured 2026-10-01: every production caller passes a string
+  // literal (pbdb / darwin_core / exporter / quality on the Python side,
+  // 'older' / 'younger' in this file), so this is a latent hole rather than a
+  // live defect; the guard exists so the first caller that forwards a
+  // payload value cannot inherit it.
+  if (prefer !== null && prefer !== undefined
+      && typeof prefer !== 'string' && typeof prefer !== 'boolean'
+      && typeof prefer !== 'number') {
+    throw new Error('prefer must be an \'older\'/\'younger\' spelling (got '
+      + JSON.stringify(prefer) + '); known values: '
+      + _PREFER_OLDER.concat(_PREFER_YOUNGER).filter(
+        (v, i, arr) => arr.indexOf(v) === i).sort().join(', '));
+  }
   const key = String(prefer === null || prefer === undefined ? '' : prefer)
     .trim().toLowerCase();
   if (!key || _PREFER_OLDER.indexOf(key) !== -1) return true;
@@ -474,7 +518,7 @@ function _resolveAgeBound(text, prefer) {
   const series = globalThis.RCA_ICS_SERIES || {};
   const norm = s.toLowerCase();
   for (const label of Object.keys(series)) {
-    if (!new RegExp('\\b' + _regExpEscape(label) + '\\b').test(norm)) continue;
+    if (!_wordBoundaryRe(label).test(norm)) continue;
     const bounds = _seriesBoundsFor(stages, series[label]);
     if (bounds[0] !== null && bounds[0] !== undefined) {
       return {
@@ -499,7 +543,7 @@ function _resolveAgeBound(text, prefer) {
   const periods = globalThis.RCA_ICS_PERIODS || {};
   const periodNames = globalThis.RCA_ICS_PERIOD_NAMES || {};
   for (const label of Object.keys(periods)) {
-    if (!new RegExp('\\b' + _regExpEscape(label) + '\\b').test(norm)) continue;
+    if (!_wordBoundaryRe(label).test(norm)) continue;
     const b = periods[label];
     if (b && b[0] !== null && b[0] !== undefined) {
       return { name: periodNames[label] || label, ma: wantOlder ? b[0] : b[1] };
@@ -1148,7 +1192,7 @@ function scoreConsistency(data) {
           if (low.indexOf(key) !== -1 && stages2[biozoneStageMap[key]]) return biozoneStageMap[key];
         }
         for (const k of Object.keys(stages2)) {
-          if (new RegExp('\\b' + _regExpEscape(k) + '\\b', 'i').test(low)) return k;
+          if (_wordBoundaryRe(k, 'i').test(low)) return k;
         }
         return null;
       };

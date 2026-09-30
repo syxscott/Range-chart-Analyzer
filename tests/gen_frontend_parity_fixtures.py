@@ -618,6 +618,42 @@ _AGE_INPUTS = [
     # change on BOTH engines, not a bug fix.
     ("26٠ Ma", "older"),
     ("２６０ Ma", "older"),
+    # AUDIT-2026-10-01: the \b half of the same Unicode-awareness family, and
+    # it fails in the OPPOSITE direction, so the two \d cases above could never
+    # have found it. Python's \b on a str pattern is Unicode-aware (\w is
+    # str.isalnum() plus "_"), so "Hirnantian" + an Arabic-Indic digit has no
+    # word boundary and rca_core returns (None, None); ECMAScript's \w is
+    # ASCII-only, so js/quality.js saw a boundary, matched, and assigned
+    # Hirnantian 445.2 Ma. The browser was therefore assigning a FAD/LAD age
+    # the desktop refused to assign, from a label the model can emit.
+    # js/quality.js now builds these patterns through _wordBoundaryRe, whose
+    # lookarounds cover the same classes Python's \b uses.
+    # The two ASCII-digit controls are here because a fix that simply refused
+    # any label containing a digit would satisfy the cases above.
+    ("Hirnantian٣", "older"),
+    ("Hirnantian٣", "younger"),
+    ("Wuchiapingian٣", "older"),
+    ("Induan۳", "older"),
+    ("Hirnantian 3", "older"),
+    ("Hirnantian3", "older"),
+    ("Hirnantian", "older"),
+    # AUDIT-2026-10-01: `prefer` as a single-element ARRAY. Python stringifies
+    # with str() and JS with String(), and they disagree where it hurts:
+    # str(["younger"]) is "['younger']" (unknown -> ValueError) while
+    # String(["younger"]) is "younger" (known -> the browser silently resolved
+    # the YOUNGER end), and [] / [""] defaulted to older instead of raising.
+    # That is the quiet FAD/LAD inversion ics.py's own comment says an unknown
+    # value must not cause. Every production caller passes a literal today
+    # (pbdb / darwin_core / exporter / quality, and 'older' / 'younger' in
+    # js/quality.js), so this is a latent hole; these cases keep it from
+    # reopening. The Python side raises for all of them, so they are recorded
+    # as python_error and the harness requires the mirror to raise too.
+    ("Wuchiapingian", ["younger"]),
+    ("Wuchiapingian", ["older"]),
+    ("Wuchiapingian", []),
+    ("Wuchiapingian", [""]),
+    ("Wuchiapingian", ["older", "younger"]),
+    ("Wuchiapingian", "younger"),
 ]
 for _i, (_text, _prefer) in enumerate(_AGE_INPUTS):
     _add(_case("age_bound", "ag_%02d" % (_i + 1), _text, _prefer))
@@ -1162,6 +1198,38 @@ _add(
              "abundance_unit": "%", "response_kind": "extracted"},
         ],
         "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    # AUDIT-2026-10-01: float repr in a string field, in three parts. The
+    # mirror's note (js/minimax.js) recorded this as a known divergence and
+    # gave the wrong reason -- "the aggregate layer re-normalizes both
+    # spellings", which only covers MERGING, not the exported cell. Measuring
+    # the PARSER instead of the mirror split it by a line I had guessed wrong:
+    # the discriminator is not "does this value need exponent form", it is
+    # "is this value INTEGRAL".
+    #   * NON-INTEGRAL floats keep the information, so the browser can spell
+    #     them the Python way: str(1e-7) is '1e-07' where String(1e-7) is
+    #     '1e-7'. Fixable, and the export path already has the grammar
+    #     (js/table.js#rcaPyFloatStr, verified against Python str() on 16
+    #     values including 1e+16 / 1e-05 / 9.99e-05 / 5e-324 / -0.0). Fixed.
+    #   * INTEGRAL values do NOT, and 1e16 is the case that proves it. The
+    #     browser sees the number 10000000000000000 either way, but Python
+    #     answers '1e+16' for a model that wrote 1e16 and
+    #     '10000000000000000' for one that wrote the digits -- so the gap is
+    #     in the PARSER, not in the number. rc_float_exponent_big and
+    #     rc_float_integral are both pinned in the harness's
+    #     EXPECTED_DIVERGENCES with that reason, next to rc_dict_shaped_sections
+    #     and ag_34 / ag_35, which are the same class of runtime fact.
+    # rc_float_int is the control: an integer payload must keep the integer
+    # spelling on both sides, or the fix has broken the common case.
+    _case("range_chart", "rc_float_exponent_big", {
+        "species_ranges": [{"species": "A", "range_top": 1e16}]}),
+    _case("range_chart", "rc_float_exponent_small", {
+        "species_ranges": [{"species": "A", "range_top": 1e-7}]}),
+    _case("range_chart", "rc_float_exponent_negative", {
+        "species_ranges": [{"species": "A", "range_top": -2.5e-5}]}),
+    _case("range_chart", "rc_float_integral", {
+        "species_ranges": [{"species": "A", "range_top": 3.0}]}),
+    _case("range_chart", "rc_float_int", {
+        "species_ranges": [{"species": "A", "range_top": 3}]}),
 )
 
 

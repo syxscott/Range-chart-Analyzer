@@ -3844,6 +3844,120 @@
    }
   },
   {
+   "group": "age_bound",
+   "id": "ag_36",
+   "payload": "Hirnantian٣",
+   "extra": "older",
+   "python": null
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_37",
+   "payload": "Hirnantian٣",
+   "extra": "younger",
+   "python": null
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_38",
+   "payload": "Wuchiapingian٣",
+   "extra": "older",
+   "python": null
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_39",
+   "payload": "Induan۳",
+   "extra": "older",
+   "python": null
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_40",
+   "payload": "Hirnantian 3",
+   "extra": "older",
+   "python": {
+    "name": "Hirnantian",
+    "ma": 445.2
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_41",
+   "payload": "Hirnantian3",
+   "extra": "older",
+   "python": null
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_42",
+   "payload": "Hirnantian",
+   "extra": "older",
+   "python": {
+    "name": "Hirnantian",
+    "ma": 445.2
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_43",
+   "payload": "Wuchiapingian",
+   "extra": [
+    "younger"
+   ],
+   "python_error": "ValueError",
+   "python_message": "prefer must be an 'older'/'younger' spelling (got ['younger']); known values: base, bottom, old, older, oldest, top, upper, young, younger, youngest"
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_44",
+   "payload": "Wuchiapingian",
+   "extra": [
+    "older"
+   ],
+   "python_error": "ValueError",
+   "python_message": "prefer must be an 'older'/'younger' spelling (got ['older']); known values: base, bottom, old, older, oldest, top, upper, young, younger, youngest"
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_45",
+   "payload": "Wuchiapingian",
+   "extra": [],
+   "python_error": "ValueError",
+   "python_message": "prefer must be an 'older'/'younger' spelling (got []); known values: base, bottom, old, older, oldest, top, upper, young, younger, youngest"
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_46",
+   "payload": "Wuchiapingian",
+   "extra": [
+    ""
+   ],
+   "python_error": "ValueError",
+   "python_message": "prefer must be an 'older'/'younger' spelling (got ['']); known values: base, bottom, old, older, oldest, top, upper, young, younger, youngest"
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_47",
+   "payload": "Wuchiapingian",
+   "extra": [
+    "older",
+    "younger"
+   ],
+   "python_error": "ValueError",
+   "python_message": "prefer must be an 'older'/'younger' spelling (got ['older', 'younger']); known values: base, bottom, old, older, oldest, top, upper, young, younger, youngest"
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_48",
+   "payload": "Wuchiapingian",
+   "extra": "younger",
+   "python": {
+    "name": "Wuchiapingian",
+    "ma": 254.14
+   }
+  },
+  {
    "group": "reason_codes",
    "id": "rzn_valid_strip",
    "payload": {
@@ -9191,6 +9305,201 @@
      "unattributed_rows": 0,
      "grid_used": true
     }
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_float_exponent_big",
+   "payload": {
+    "species_ranges": [
+     {
+      "species": "A",
+      "range_top": 1e+16
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "",
+      "range_top": "1e+16",
+      "range_base": "",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_float_exponent_small",
+   "payload": {
+    "species_ranges": [
+     {
+      "species": "A",
+      "range_top": 1e-07
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "",
+      "range_top": "1e-07",
+      "range_base": "",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_float_exponent_negative",
+   "payload": {
+    "species_ranges": [
+     {
+      "species": "A",
+      "range_top": -2.5e-05
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "",
+      "range_top": "-2.5e-05",
+      "range_base": "",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_float_integral",
+   "payload": {
+    "species_ranges": [
+     {
+      "species": "A",
+      "range_top": 3.0
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "",
+      "range_top": "3.0",
+      "range_base": "",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_float_int",
+   "payload": {
+    "species_ranges": [
+     {
+      "species": "A",
+      "range_top": 3
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "",
+      "range_top": "3",
+      "range_base": "",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
    }
   }
  ]
