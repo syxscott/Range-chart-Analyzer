@@ -145,6 +145,8 @@ function buildContext() {
       rcaMergeContractField: typeof rcaMergeContractField !== 'undefined' ? rcaMergeContractField : null,
       rcaIsChimericRow: typeof rcaIsChimericRow !== 'undefined' ? rcaIsChimericRow : null,
       rcaRecombinationBallots: typeof rcaRecombinationBallots !== 'undefined' ? rcaRecombinationBallots : null,
+      // Third wave: the float() mirror the schema sort keys are built on.
+      rcaPyFloat: typeof rcaPyFloat !== 'undefined' ? rcaPyFloat : null,
     };
   `, ctx);
   return ctx.__exp;
@@ -262,6 +264,17 @@ const RUNNERS = {
       }
       case 'chimeric': return f.rcaIsChimericRow(a[0], a[1], a[2]) === true;
       case 'ballots': return f.rcaRecombinationBallots(a[0], a[1]);
+      // Python float() on the same token vocabulary the generator uses; see
+      // the third-wave header there for why NaN/inf/raise are mapped rather
+      // than recorded raw.
+      case 'py_float': {
+        const r = f.rcaPyFloat(a[0]);
+        if (r === null || r === undefined) return 'raise';
+        if (typeof r === 'number' && Number.isNaN(r)) return 'nan';
+        if (r === Infinity) return 'inf';
+        if (r === -Infinity) return '-inf';
+        return r;
+      }
       default: throw new Error('no aggregate op ' + p.op);
     }
   },

@@ -610,7 +610,21 @@ function rcaOrChainStr(row, k) {
 //   * Python accepts "inf"/"infinity"/"nan" (case-insensitive) and the
 //     underscore digit separator ("1_000" -> 1000.0), which Number() rejects.
 // Returns null where Python would raise TypeError/ValueError.
-const _PY_FLOAT_RE = /^[+-]?(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d+)?$/;
+// AUDIT-2026-10-02: this pattern was `\d[\d_]*`, which accepts an underscore
+// ANYWHERE after the first digit -- including at the end and doubled -- and
+// had no underscore support in the exponent at all. Python allows `_` only
+// BETWEEN two digits, so the mirror was wrong in both directions, measured by
+// the `aggregate` parity group:
+//   "1_"     -> js 1       / py raises
+//   "1__0"   -> js 10      / py raises
+//   "1_.5"   -> js 1.5     / py raises
+//   "1._5"   -> js 1.5     / py raises
+//   "1e1_0"  -> js raises  / py 1e10      <-- the opposite direction
+//   "1_0e2_0"-> js raises  / py 1e21      <-- and again
+// `\d(?:_?\d)*` is the faithful form: one digit, then any number of
+// ("_" digit) pairs. The exponent gets the same treatment, and the fraction
+// keeps a bare trailing "." because float("5.") is 5.0.
+const _PY_FLOAT_RE = /^[+-]?(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?$/;
 function rcaPyFloat(v) {
   if (typeof v === 'number') return Number.isNaN(v) ? NaN : v;
   if (typeof v === 'boolean') return v ? 1 : 0;   // float(True) == 1.0

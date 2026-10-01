@@ -1674,6 +1674,45 @@ for _g in _AGG_BALLOT_ROWS:
 _add(*_agg2)
 
 
+# --- aggregate, third wave: the float() mirror the sort keys are built on ----
+# AUDIT-2026-10-02. js/aggregate.js#rcaPyFloat is a mirror of Python's float()
+# and its own comment enumerates the divergences it has to absorb: Number("")
+# is 0 where float("") raises, Number("0x10") is 16 where float("0x10")
+# raises, and Python accepts "inf"/"infinity"/"nan" case-insensitively plus the
+# underscore digit separator, all of which Number() rejects. It returns null
+# where Python would raise -- a claim, not a measurement, and nothing tested
+# it. The result feeds rcaSortTuple, so a wrong answer here changes the ROW
+# ORDER of a merged export rather than a value.
+#
+# NaN and +-inf are not JSON-expressible, so both runners map the answer onto
+# one shared token vocabulary BEFORE the fixture sees it: a finite float stays
+# a number, and everything else becomes "nan" / "inf" / "-inf" / "raise". A
+# one-sided mapping would have been the whole divergence.
+_AGG_PYFLOAT = [
+    0, 1, -1, 0.0, 3.0, 1e16, 1e-7, -0.0, 1e300,
+    True, False, None, "", "  ", "\t\n",
+    "0", "1", "-1", "3.0", ".5", "-.5", "5.", "+5", "1e5", "1E5",
+    "1_000", "1_0.5", "_1", "1_",
+    "0x10", "0b11", "0o17", "1e", "e5", "--5", "5-", "1.2.3",
+    "inf", "INF", "+inf", "-inf", "Inf", "infinity", "-INFINITY",
+    "nan", "NaN", "NAN", "-nan", "+nan",
+    "  3.5  ", " 1_000 ", "0.0", "-0", "00", "007",
+    # AUDIT-2026-10-02: the underscore rules. Python allows `_` ONLY between
+    # two digits; the mirror's `\d[\d_]*` allowed a trailing one and a
+    # doubled one, so "1_" and "1__0" were accepted as 1 and 10 where
+    # float() raises. Found by agfloat_28 (index 28 == "1_").
+    "1_", "0_", "1_0", "1__0", "1_0_0", "_1", "_1_0", "1_.5", "1._5",
+    "1_.", "._5", "._", "1_0.", "1_0_.5", "1e1_0", "1e_0", "1e1_",
+    "1e5_", "+1_", "-1_", "1_0e2_0", "1__0.5", "0__0",
+    [1], [1, 2], {}, {"a": 1}, "9" * 400, "1e400", "-1e400",
+]
+
+_agg3 = [
+    _agg("agfloat_%d" % i, "py_float", [v]) for i, v in enumerate(_AGG_PYFLOAT)
+]
+_add(*_agg3)
+
+
 # --- quality scoring + coverage ledger (js/quality.js) ------------------------
 # Exercises score_range_chart end-to-end so BOTH the additive ``coverage``
 # block and the ``quality.coverage_ledger`` info issue are replayed, plus the
@@ -1986,7 +2025,28 @@ _AGG_PY_OPS = {
     # Writing args[2] here is the same arity mistake the JS runner would
     # have made in mirror image; both read [1] and the payload carries two.
     "ballots": lambda a: AGG._recombination_ballots(a[0], tuple(a[1])),
+    "py_float": lambda a: _agg_py_float(a[0]),
 }
+
+
+def _agg_py_float(v) -> Any:
+    """Python ``float(v)`` on a shared token vocabulary with rcaPyFloat.
+
+    NaN / +-inf cannot go into JSON, and the harness's expressibility guard
+    would (correctly) reject the whole fixture. Both sides therefore map to
+    the same four tokens before the value is recorded.
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "raise"
+    if f != f:                       # NaN is the only self-unequal float
+        return "nan"
+    if f == float("inf"):
+        return "inf"
+    if f == float("-inf"):
+        return "-inf"
+    return f
 
 
 def _agg_mutate(fn, a):

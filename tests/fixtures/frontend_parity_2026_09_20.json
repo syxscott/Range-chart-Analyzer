@@ -28647,6 +28647,1033 @@
    "python": []
   },
   {
+   "group": "aggregate",
+   "id": "agfloat_0",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     0
+    ]
+   },
+   "extra": null,
+   "python": 0.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_1",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     1
+    ]
+   },
+   "extra": null,
+   "python": 1.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_2",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     -1
+    ]
+   },
+   "extra": null,
+   "python": -1.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_3",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     0.0
+    ]
+   },
+   "extra": null,
+   "python": 0.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_4",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     3.0
+    ]
+   },
+   "extra": null,
+   "python": 3.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_5",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     1e+16
+    ]
+   },
+   "extra": null,
+   "python": 1e+16
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_6",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     1e-07
+    ]
+   },
+   "extra": null,
+   "python": 1e-07
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_7",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     -0.0
+    ]
+   },
+   "extra": null,
+   "python": -0.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_8",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     1e+300
+    ]
+   },
+   "extra": null,
+   "python": 1e+300
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_9",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     true
+    ]
+   },
+   "extra": null,
+   "python": 1.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_10",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     false
+    ]
+   },
+   "extra": null,
+   "python": 0.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_11",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     null
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_12",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     ""
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_13",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "  "
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_14",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "\t\n"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_15",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "0"
+    ]
+   },
+   "extra": null,
+   "python": 0.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_16",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1"
+    ]
+   },
+   "extra": null,
+   "python": 1.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_17",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "-1"
+    ]
+   },
+   "extra": null,
+   "python": -1.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_18",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "3.0"
+    ]
+   },
+   "extra": null,
+   "python": 3.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_19",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     ".5"
+    ]
+   },
+   "extra": null,
+   "python": 0.5
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_20",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "-.5"
+    ]
+   },
+   "extra": null,
+   "python": -0.5
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_21",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "5."
+    ]
+   },
+   "extra": null,
+   "python": 5.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_22",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "+5"
+    ]
+   },
+   "extra": null,
+   "python": 5.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_23",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1e5"
+    ]
+   },
+   "extra": null,
+   "python": 100000.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_24",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1E5"
+    ]
+   },
+   "extra": null,
+   "python": 100000.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_25",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1_000"
+    ]
+   },
+   "extra": null,
+   "python": 1000.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_26",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1_0.5"
+    ]
+   },
+   "extra": null,
+   "python": 10.5
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_27",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "_1"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_28",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1_"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_29",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "0x10"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_30",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "0b11"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_31",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "0o17"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_32",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1e"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_33",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "e5"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_34",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "--5"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_35",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "5-"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_36",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1.2.3"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_37",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "inf"
+    ]
+   },
+   "extra": null,
+   "python": "inf"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_38",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "INF"
+    ]
+   },
+   "extra": null,
+   "python": "inf"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_39",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "+inf"
+    ]
+   },
+   "extra": null,
+   "python": "inf"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_40",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "-inf"
+    ]
+   },
+   "extra": null,
+   "python": "-inf"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_41",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "Inf"
+    ]
+   },
+   "extra": null,
+   "python": "inf"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_42",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "infinity"
+    ]
+   },
+   "extra": null,
+   "python": "inf"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_43",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "-INFINITY"
+    ]
+   },
+   "extra": null,
+   "python": "-inf"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_44",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "nan"
+    ]
+   },
+   "extra": null,
+   "python": "nan"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_45",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "NaN"
+    ]
+   },
+   "extra": null,
+   "python": "nan"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_46",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "NAN"
+    ]
+   },
+   "extra": null,
+   "python": "nan"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_47",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "-nan"
+    ]
+   },
+   "extra": null,
+   "python": "nan"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_48",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "+nan"
+    ]
+   },
+   "extra": null,
+   "python": "nan"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_49",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "  3.5  "
+    ]
+   },
+   "extra": null,
+   "python": 3.5
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_50",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     " 1_000 "
+    ]
+   },
+   "extra": null,
+   "python": 1000.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_51",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "0.0"
+    ]
+   },
+   "extra": null,
+   "python": 0.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_52",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "-0"
+    ]
+   },
+   "extra": null,
+   "python": -0.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_53",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "00"
+    ]
+   },
+   "extra": null,
+   "python": 0.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_54",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "007"
+    ]
+   },
+   "extra": null,
+   "python": 7.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_55",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1_"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_56",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "0_"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_57",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1_0"
+    ]
+   },
+   "extra": null,
+   "python": 10.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_58",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1__0"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_59",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1_0_0"
+    ]
+   },
+   "extra": null,
+   "python": 100.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_60",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "_1"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_61",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "_1_0"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_62",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1_.5"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_63",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1._5"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_64",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1_."
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_65",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "._5"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_66",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "._"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_67",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1_0."
+    ]
+   },
+   "extra": null,
+   "python": 10.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_68",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1_0_.5"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_69",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1e1_0"
+    ]
+   },
+   "extra": null,
+   "python": 10000000000.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_70",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1e_0"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_71",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1e1_"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_72",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1e5_"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_73",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "+1_"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_74",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "-1_"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_75",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1_0e2_0"
+    ]
+   },
+   "extra": null,
+   "python": 1e+21
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_76",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1__0.5"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_77",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "0__0"
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_78",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_79",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     [
+      1,
+      2
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_80",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     {}
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_81",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     {
+      "a": 1
+     }
+    ]
+   },
+   "extra": null,
+   "python": "raise"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_82",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+    ]
+   },
+   "extra": null,
+   "python": "inf"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_83",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "1e400"
+    ]
+   },
+   "extra": null,
+   "python": "inf"
+  },
+  {
+   "group": "aggregate",
+   "id": "agfloat_84",
+   "payload": {
+    "op": "py_float",
+    "args": [
+     "-1e400"
+    ]
+   },
+   "extra": null,
+   "python": "-inf"
+  },
+  {
    "group": "quality_coverage",
    "id": "qc_notdrawn",
    "payload": {
