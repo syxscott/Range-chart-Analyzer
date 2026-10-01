@@ -35,6 +35,10 @@ import re
 # it breaks mypy and would NameError under typing.get_type_hints().
 from typing import Any, Iterable, Optional
 
+# AUDIT-2026-10-02: the explicit-age pattern text is shared with
+# standards/ics.py and standards/pbdb.py; see rca_core/age_patterns.py.
+from .age_patterns import AGE_VALUE_WITH_UNIT_PATTERN
+
 try:
     from .standards.ics import (
         ics_age_compare,
@@ -246,9 +250,17 @@ def _parse_bed_n(value: Any) -> int | None:
 # the first number in the text as the age — so a perfectly valid bed pair
 # like range_base="Madison 3" / range_top="Madison 6" was misread as an
 # inverted age range (3 Ma < 6 Ma) and flagged as an FAD<LAD violation.
+# AUDIT-2026-10-02: the text now comes from rca_core.age_patterns. This was a
+# byte-for-byte copy of the pair in standards/ics.py and standards/pbdb.py, and
+# fixing the CJK-prefix guard in ics.py alone left THIS copy live -- so after
+# that fix the desktop's quality score read "深度260 Ma - 250 Ma" as 250 Ma
+# while ics.py read the same label as 260 Ma. `\w` and `\d` are Unicode-aware
+# on Python str patterns and ASCII-only in the browser's mirror, so a CJK
+# glyph is a word character here and the guard silently dropped the OLDER
+# endpoint. The shared module's docstring records the direction and why
+# `re.ASCII` would have been the wrong repair.
 _AGE_UNIT_PATTERN = re.compile(
-    r"(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
-    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b",
+    AGE_VALUE_WITH_UNIT_PATTERN,
     re.IGNORECASE,
 )
 

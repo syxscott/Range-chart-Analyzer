@@ -9,6 +9,12 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+# AUDIT-2026-10-02: shared explicit-age pattern text; see rca_core/age_patterns.py.
+from ..age_patterns import (
+    AGE_RANGE_WITH_UNIT_PATTERN,
+    AGE_VALUE_WITH_UNIT_PATTERN,
+)
+
 # C-4 (REVIEW-2026-07-25): wire the ICS 2024 table into the PBDB export path
 # so stage-name -> numeric Ma conversion happens here (previously ICS was
 # only imported by quality.py, so PBDB emitted empty max_ma/min_ma for text
@@ -813,16 +819,18 @@ def _parse_coords(text):
     return _parse_coordinates(text)
 
 
+# AUDIT-2026-10-02: the text now comes from rca_core.age_patterns, shared with
+# standards/ics.py and quality.py. These were byte-for-byte copies carrying the
+# same Unicode-aware `(?<![\w.])` guard, so the CJK-prefix defect fixed in
+# ics.py was still live in the PBDB writer -- the module whose output goes to
+# the Paleobiology Database. The shared module's docstring records the
+# direction and why `re.ASCII` would have been the wrong repair.
 _AGE_RANGE_WITH_UNIT = re.compile(
-    r"(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
-    r"(?:[-–—]|\bto\b)\s*"
-    r"([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
-    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b",
+    AGE_RANGE_WITH_UNIT_PATTERN,
     re.IGNORECASE,
 )
 _AGE_VALUE_WITH_UNIT = re.compile(
-    r"(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
-    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b",
+    AGE_VALUE_WITH_UNIT_PATTERN,
     re.IGNORECASE,
 )
 
