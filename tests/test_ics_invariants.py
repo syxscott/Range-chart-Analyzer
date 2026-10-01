@@ -216,6 +216,89 @@ class TestNumericLookups:
         from rca_core.standards.ics import ics_stage_from_age
         assert ics_stage_from_age(ma) == expected
 
+    def test_every_stage_answered_actually_contains_the_age(self):
+        """Dense-grid form of the list above. Eleven hand-picked ages cannot
+        see a regression BETWEEN two of them, and the ends are where a lookup
+        breaks.
+
+        The property: the stage returned for an age contains that age. Note
+        WHICH defect it defends against, because it is narrower than it looks.
+        ``ics_stage_from_age`` is a three-tier exact match (strict interior,
+        then a stage's base, then its top), not a nearest-neighbour search, so
+        on a gapless table the property is guaranteed by the ALGORITHM and
+        this test is really a check on the bundled table. Measured by
+        perturbing the table three ways:
+
+            a GAP (Changhsingian base 254.14 -> 252.5)   0 caught
+            an OVERLAP (Induan base -> 999.0)            0 caught
+            base/top INVERTED on one stage                1 caught
+
+        A gap is not caught because the function answers None for an uncovered
+        age and None is not an offender -- which is the honest answer anyway.
+        An overlap is not caught because the three tiers still pick one
+        deterministically and whichever is picked contains the age. So this
+        guards inverted bounds, nothing more; a promoted table with a gap or
+        an overlap needs its own check (update_ics.py's promotion gate is the
+        place for it) and is NOT what this asserts.
+
+        Two details a naive version of this test gets wrong, both of which
+        produced a phantom failure before being fixed:
+
+        * CONTAINMENT IS top_ma <= age <= base_ma. base_ma is the OLDER bound,
+          so `base_ma <= age <= top_ma` marks every point as an offender.
+        * The step must be integer arithmetic. `ma += 0.05` over ten thousand
+          iterations drifts just past the table's oldest boundary (538.8, the
+          Fortunian base) and reports that one point as a violation.
+          `round(i * 0.05, 2)` cannot.
+        """
+        from rca_core.standards.ics import ICS_2024, ics_stage_from_age
+
+        spans = {k: (v["top_ma"], v["base_ma"]) for k, v in ICS_2024.items()
+                 if v.get("base_ma") is not None and v.get("top_ma") is not None}
+        assert len(spans) >= 90, ("the bundled ICS table shrank to %d stages; "
+                                 "this guard would pass vacuously" % len(spans))
+        oldest = max(base for _top, base in spans.values())
+
+        offenders = []
+        for i in range(0, int(oldest / 0.05) + 1):
+            ma = round(i * 0.05, 2)
+            name = ics_stage_from_age(ma)
+            if name is None:
+                continue
+            span = spans.get(name)
+            if span is None:
+                offenders.append((ma, name, "not a stage in the table"))
+                continue
+            top, base = span
+            if not (top <= ma <= base):
+                offenders.append((ma, name, "stage spans %s-%s Ma" % (base, top)))
+        assert not offenders, (
+            "ics_stage_from_age returned a stage that does not contain the "
+            "age for %d grid points, first 10: %r" % (len(offenders), offenders[:10])
+        )
+
+    def test_ages_outside_the_table_answer_none(self):
+        """Outside the table there is no correct answer, and the function says
+        so.
+
+        I first wrote this expecting a clamp to the oldest stage and asserted
+        one; it returns None instead. None is the RIGHT answer -- a figure
+        older than the named timescale has no stage here, and answering with
+        the Fortunian would be exactly the "plausible-looking wrong stage" the
+        grid test above exists to catch. The distinction matters: the table
+        gap that makes 439.5 resolve to a neighbour is a data-version problem
+        INSIDE the table, and this pins that the function does not paper over
+        the edges."""
+        from rca_core.standards.ics import ICS_2024, ics_stage_from_age
+        oldest_stage = max(
+            ICS_2024, key=lambda k: ICS_2024[k].get("base_ma") or 0.0)
+        base = ICS_2024[oldest_stage]["base_ma"]
+        assert ics_stage_from_age(base + 100.0) is None
+        assert ics_stage_from_age(base + 1e6) is None
+        assert ics_stage_from_age(-1.0) is None
+        # ...and the boundary itself IS answered, inclusively.
+        assert ics_stage_from_age(base) == oldest_stage
+
     def test_age_compare_direction(self):
         from rca_core.standards.ics import ics_age_compare
         # Norian (~205.7-227.3) is OLDER than Rhaetian (201.4-205.7).
