@@ -14,6 +14,39 @@ lock again. They are kept (as empty sets) rather than deleted so a future
 "temporary" divergence has to be written down here, in the open, and makes
 ``test_pending_js_mirror_entries_are_still_pending`` fail if the entry is a
 keyword that exists on neither side.
+
+WHAT THIS FILE DOES NOT COVER, and why not -- recorded so nobody rebuilds it
+(AUDIT-2026-10-02). This locks the TABLES, the stem list, the branch order and
+the phrase regex. It does NOT compare the matching FUNCTION's behaviour
+side by side: ``chart_mode.py:_match_kw`` against
+``app.js:rcaChartModeMatchKw``, both two-branch (stem -> leading boundary,
+otherwise -> whole word, CJK -> plain substring).
+
+Closing that would mean adding the caption classifier to the differential
+harness (tests_diff_frontend_parity.js), and the harness cannot load
+js/app.js. Measured, not assumed: with the harness's own script list plus
+js/app.js, the load fails twice in a row, each failure exposing a new
+assumption about the environment rather than a new bug --
+
+    1. with the harness's document stub:  "rcaSetLang is not defined"
+       (js/app.js needs js/i18n.js, which the harness does not load)
+    2. with js/i18n.js added and getElementById returning a permissive
+       Proxy:  "Cannot set properties of null (setting 'value')", then
+       after widening that too, "Cannot read properties of undefined
+       (reading 'trim')" -- i.e. app.js reaches for real config/DOM state at
+       module scope, and a fake DOM invented to load it could make the
+       classifier behave differently from the product.
+
+Both functions are pure string functions, so a fake DOM would be built purely
+to host them -- the wrong trade, and exactly the "hand-rolled harness inherits
+the shape but not the discipline" trap. The behaviour that the cross-engine
+agreement actually rests on is pinned one-sidedly instead: the ``re.ASCII``
+boundary semantics that make Python's ``\\b`` mean what JavaScript's means are
+tested in tests/test_audit_2026_09_27.py against the exact captions from
+_match_kw's own docstring ("pollen丰度图", "biplot图", "scatter plot图",
+"pollenГрафик"), together with the reverse control that ``re.ASCII`` must not
+weaken the longer-word guard. That fix was driven by a measurement over 22
+real captions, 3 of which diverged.
 """
 
 import os
