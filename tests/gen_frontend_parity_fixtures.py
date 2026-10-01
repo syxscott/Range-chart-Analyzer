@@ -1034,6 +1034,25 @@ def _abrun(row: dict) -> dict:
     return {"abundances": [row], "sites": [], "zones": [], "confidence": 0.9}
 
 
+def _csec(ids, group: str = "g1") -> dict:
+    """One columnar_section run carrying ``ids`` as the primary rows.
+
+    AUDIT-2026-10-02: built so that the merged row ORDER is the only thing the
+    case can distinguish. Two identical runs are used at the call site because
+    a single run is a passthrough and never reaches the sort.
+    """
+    return {
+        "sections": [
+            {"id": i, "group": group, "lithology_blocks": [],
+             "age_units": [], "response_kind": "extracted",
+             "reason_codes": []}
+            for i in ids
+        ],
+        "fossil_legend": [], "lithology_legend": [], "cross_beds": [],
+        "confidence": 0.9,
+    }
+
+
 _add(
     # AUDIT-2026-10-02: two runs spelling the SAME authorship differently.
     # The leaf-level `aggregate` group found the mechanism (the "and" case in
@@ -1223,6 +1242,65 @@ _add(
     # Each case uses the divergent-vote shape (one run extracted, one
     # not_drawn) because that is the path through the mode-specific row
     # grouping, not the single-run passthrough.
+    # AUDIT-2026-10-02: the sort machinery, which until now was only reachable
+    # by accident. Python's `_sort_tuple` is a nested closure inside the row
+    # builder, so it has no module-level entry point and the `aggregate` group
+    # cannot call it -- the only way in is merge_results. columnar_section is
+    # the schema whose sort_keys lands on a field that LOOKS numeric
+    # (sort_keys = [("id","asc")]), which is exactly where `_sort_tuple`'s
+    # "rank 0 keeps every number before every string" rule earns its keep:
+    # "2" must sort before "10" on both engines, and "1_0" (a number to
+    # Python) must land among the numbers while "1_" (a string to both, since
+    # 888b40e) lands after them.
+    #
+    # Two identical runs, so the grouping produces every row and the sort is
+    # the ONLY thing that can differ -- a single run is a passthrough.
+    _mg("mrg_sortcol_numeric", [
+        _csec(["1", "2", "10"]), _csec(["1", "2", "10"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_underscore_number", [
+        _csec(["1_0", "2", "10"]), _csec(["1_0", "2", "10"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_underscore_string", [
+        _csec(["1_", "2", "10"]), _csec(["1_", "2", "10"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_mixed_rank", [
+        _csec(["1", "A", "2"]), _csec(["1", "A", "2"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_case", [
+        _csec(["a", "B", "c"]), _csec(["a", "B", "c"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_whitespace", [
+        _csec([" 2 ", "10", "1"]), _csec([" 2 ", "10", "1"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_empty_id", [
+        _csec(["", "1", "2"]), _csec(["", "1", "2"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_unicode", [
+        _csec(["甲", "a", "1"]), _csec(["甲", "a", "1"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_nan", [
+        _csec(["NaN", "1", "2"]), _csec(["NaN", "1", "2"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_inf", [
+        _csec(["inf", "1", "-inf"]), _csec(["inf", "1", "-inf"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_float_spellings", [
+        _csec(["1.0", "1", "1.00"]), _csec(["1.0", "1", "1.00"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_bed_prefix", [
+        _csec(["bed 9", "bed 9 (rp13)", "bed 10"]),
+        _csec(["bed 9", "bed 9 (rp13)", "bed 10"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_boolish", [
+        _csec(["true", "True", "1"]), _csec(["true", "True", "1"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_negative", [
+        _csec(["-1", "2", "-10"]), _csec(["-1", "2", "-10"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_exponent", [
+        _csec(["1e3", "1000", "999"]), _csec(["1e3", "1000", "999"]),
+    ], mode="columnar_section"),
     _mg("mrg_columnar_contract", [
         {"sections": [{"id": "s1", "group": "g1",
                        "lithology_blocks": [{"name": "sand", "top_depth_m": "10"}],
@@ -1330,6 +1408,24 @@ _add(
 # detector in particular survives every key-count in the corpus, which is the
 # shape AUDIT-2026-10-01 [item 9.13] made configurable after it had been
 # hardcoded to the four range-chart field names.
+#
+# THE SORT, and the one structural gap in the group. Python's `_sort_tuple` is
+# a NESTED CLOSURE inside the row builder, so it has no module-level entry
+# point and the aggregate group cannot call it -- merge_results is the only
+# way in. The mrg_sortcol_* cases below close that gap from the outside, on
+# columnar_section, whose sort_keys lands on `id` (a field that looks numeric,
+# which is where the "rank 0 puts every number before every string" rule earns
+# its keep). 15 adversarial orderings, 0 divergences, and 9 of the 15 come out
+# in an order a naive lexical sort would NOT produce, so the rule is doing
+# work rather than agreeing trivially:
+#     numeric              ['1','2','10']      (lexical would be 1,10,2)
+#     underscore_number    ['2','1_0','10']    1_0 is 10.0 to both engines
+#     underscore_string    ['2','10','1_']     1_ is a string to both
+#     negative             ['-10','-1','2']
+#     nan                  ['NaN','1','2']     NaN's own quirk, agreed
+#     whitespace           ['1',' 2 ','10']    both engines trim
+# The underscore_string case is the one that 888b40e's rcaPyFloat fix governs,
+# reached end to end for the first time.
 
 # Harvested from the committed real extraction payloads
 # (tests/fixtures/real_payloads/*.json, 8 files) -- the taxon-shaped strings
@@ -1713,6 +1809,90 @@ _agg3 = [
 _add(*_agg3)
 
 
+# --- aggregate, fourth wave: schema auto-detection ---------------------------
+# AUDIT-2026-10-02. `_auto_detect_schema` and `rcaAutoDetectKeymap` are a
+# 45-line decision tree (three detectors, a majority threshold, a tie-break
+# order, and a 1-run/2-run special case) with ZERO cross-engine coverage --
+# nothing in the `merge` group can reach it, because that group always passes
+# an explicit schema.
+#
+# It is worth knowing whether the two trees agree, SEPARATELY from the fact
+# that only the browser calls it: js/app.js:1287 does
+#     const detectedKm = rcaAutoDetectKeymap(okDatas);
+# under a comment that says "Auto-detect the keymap from data shape so the
+# merge uses the correct schema EVEN WHEN THE USER'S MODE SELECTION WAS
+# WRONG", while all three desktop call sites (gui_fluent.py:686, gui.py:1977,
+# server.py:3109) do
+#     schema = SCHEMA_BY_MODE.get(mode, RANGE_CHART_SCHEMA)
+#     merge_results(..., schema=schema)
+# and never auto-detect. That asymmetry is a product decision, not a
+# defect, and it is reported rather than changed -- but the trees themselves
+# are pinned here so the decision is made on measured ground.
+#
+# The two return types cannot be compared directly (a MergeSchema dataclass
+# vs a keymap object), so both runners project to the one field that decides
+# the merged document's shape: `primary_list_key` / `primary`.
+def _rc(section_id=None, nodes=None, abundances=None, species=None):
+    out = {"confidence": 0.8}
+    if abundances is not None:
+        out["abundances"] = abundances
+    if section_id is not None:
+        out["sections"] = [{"id": section_id, "group": "g"}]
+    if nodes is not None:
+        out["nodes"] = nodes
+    if species is not None:
+        out["species_ranges"] = [{"species": species, "section": "S1"}]
+    return out
+
+
+_PHY = [{"id": "n1", "parent": None, "name": "root"}]
+_PHY_NO_PARENT = [{"id": "n1", "name": "root"}]
+
+_AGG_DETECT = [
+    [],
+    [None], [{}],
+    # one of each shape, alone
+    [_rc(species="A")],
+    [_rc(abundances=[{"taxon": "A", "site": "S", "level": "1", "abundance": "5"}])],
+    [_rc(section_id="Ki-1")],
+    [_rc(nodes=_PHY)],
+    # the same shapes repeated, to cross the majority threshold
+    [_rc(species="A"), _rc(species="B")],
+    [_rc(section_id="a"), _rc(section_id="b"), _rc(section_id="c")],
+    [_rc(abundances=[{"a": 1}]), _rc(abundances=[{"a": 2}])],
+    [_rc(nodes=_PHY), _rc(nodes=_PHY)],
+    # mixtures: threshold vs plurality, and the columnar/abundance tie-break
+    [_rc(section_id="a"), _rc(species="B")],
+    [_rc(section_id="a"), _rc(section_id="b"), _rc(species="C")],
+    [_rc(abundances=[{"a": 1}]), _rc(abundances=[{"a": 2}]), _rc(species="C")],
+    [_rc(section_id="a"), _rc(abundances=[{"x": 1}])],
+    [_rc(section_id="a"), _rc(abundances=[{"x": 1}]), _rc(species="C")],
+    [_rc(section_id="a"), _rc(section_id="b"), _rc(abundances=[{"x": 1}])],
+    [_rc(nodes=_PHY), _rc(section_id="a")],
+    [_rc(nodes=_PHY), _rc(section_id="a"), _rc(abundances=[{"x": 1}])],
+    [_rc(nodes=_PHY), _rc(nodes=_PHY), _rc(section_id="a")],
+    # a phylo payload missing `parent` -- the M2 fix requires BOTH
+    [_rc(nodes=_PHY_NO_PARENT)],
+    [_rc(nodes=_PHY_NO_PARENT), _rc(nodes=_PHY_NO_PARENT)],
+    [_rc(nodes=_PHY_NO_PARENT), _rc(section_id="a"), _rc(section_id="b")],
+    # empty-list variants: the detectors deliberately ignore them
+    [_rc(abundances=[])],
+    [_rc(abundances=[], section_id="a")],
+    [_rc(nodes=[])],
+    [_rc(nodes=[], section_id="a")],
+    # sections present but not section-shaped
+    [_rc(abundances=[], species="A")],
+    [{"sections": []}, {"sections": []}],
+    [{"sections": [{"name": "no id here"}]}],
+    [{"nodes": [{"name": "no id"}]}],
+]
+
+_add(*[
+    _agg("agdet_%d" % i, "auto_detect", [copy.deepcopy(rs)])
+    for i, rs in enumerate(_AGG_DETECT)
+])
+
+
 # --- quality scoring + coverage ledger (js/quality.js) ------------------------
 # Exercises score_range_chart end-to-end so BOTH the additive ``coverage``
 # block and the ``quality.coverage_ledger`` info issue are replayed, plus the
@@ -2026,6 +2206,11 @@ _AGG_PY_OPS = {
     # have made in mirror image; both read [1] and the payload carries two.
     "ballots": lambda a: AGG._recombination_ballots(a[0], tuple(a[1])),
     "py_float": lambda a: _agg_py_float(a[0]),
+    # Only the primary key is projected, because that is the field that
+    # decides the shape of the merged document; the rest of a MergeSchema
+    # and a keymap object are not field-for-field comparable.
+    "auto_detect": lambda a: AGG._auto_detect_schema(
+        copy.deepcopy(a[0])).primary_list_key,
 }
 
 

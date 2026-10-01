@@ -448,15 +448,40 @@ function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-// Detect the appropriate keymap from the shape of the first result object.
-// Mirrors Python _auto_detect_schema so both ends agree on the schema.
+// Detect the appropriate keymap from the shape of the result objects.
+//
+// AUDIT-2026-10-02: this function had been left in its ORIGINAL form while
+// rca_core/aggregate.py::_auto_detect_schema was rewritten by REVIEW-2026-09-20.
+// The Python docstring names the old algorithm's defect exactly:
+//
+//   "The fallback compared detectors pairwise (phy > col and phy > ab, then
+//    col > ab), which is NOT a total order: [phylo, columnar] returned phylo,
+//    but adding one more run of any other shape ([phylo, columnar, abundance])
+//    made all three counts equal, the strict > comparisons all failed, and the
+//    answer became RANGE_CHART -- the phylo preference vanished as more data
+//    arrived."
+//
+// Measured by the `aggregate` parity group, 2 cases:
+//   [phylo, columnar, abundance]  py nodes          js species_ranges
+//   [columnar, abundance, range]  py sections       js species_ranges
+// and the same docstring says misdetecting phylo as range-chart "destroys the
+// primary row key" -- so the browser was merging a three-run tree as a range
+// chart. It could fire there and ONLY there: js/app.js:1287 is the sole caller
+// of this function on either engine (the three desktop call sites pass an
+// explicit schema), so the desktop was immune to a bug only the browser had.
+//
+// The rule is now Python's, one rule used twice: a STRICT majority
+// (`count * 2 > n`) decides, and when no shape holds one -- or several do,
+// since the detectors are independent -- the highest count wins, with the
+// declared preference order phylo > columnar > abundance breaking every tie.
+// Being a total order is what makes the choice monotonic: it can no longer
+// depend on the argument order of `results` or on how many runs arrived.
 function rcaAutoDetectKeymap(results) {
   if (!results || !Array.isArray(results) || results.length === 0) {
     return RCA_DEFAULT_KEYMAP;
   }
-  let abCount = 0;
-  let colCount = 0;
-  let phyCount = 0;
+  const n = results.length;
+  let phyCount = 0, colCount = 0, abCount = 0;
   for (const r of results) {
     if (!r || typeof r !== 'object') continue;
     if (Array.isArray(r.abundances) && r.abundances.length > 0) abCount++;
@@ -478,23 +503,19 @@ function rcaAutoDetectKeymap(results) {
       phyCount++;
     }
   }
-  const n = results.length;
-  const half = Math.floor((n + 1) / 2);
-  // Phylo is the most specific shape — it wins over columnar/abundance when
-  // multiple detectors meet the threshold simultaneously.
-  if (phyCount >= half) return RCA_PHYLO_KEYMAP;
-  if (colCount >= half && abCount >= half) {
-    // Both detectors meet threshold — prefer the more specific one.
-    return colCount >= abCount ? RCA_COLUMNAR_KEYMAP : RCA_ABUNDANCE_KEYMAP;
-  }
-  if (colCount >= half) return RCA_COLUMNAR_KEYMAP;
-  if (abCount >= half) return RCA_ABUNDANCE_KEYMAP;
-  // Phylo beats the others when neither of them meets majority but phylo
-  // still has at least one detection (handles the 1-run / 2-run edge case).
-  if (phyCount > colCount && phyCount > abCount) return RCA_PHYLO_KEYMAP;
-  if (colCount > abCount) return RCA_COLUMNAR_KEYMAP;
-  if (abCount > colCount) return RCA_ABUNDANCE_KEYMAP;
-  return RCA_DEFAULT_KEYMAP;  // tie → default to range-chart
+  // Preference order, filtered to the shapes that were actually seen. This
+  // array IS the total order, so `pool` below needs no comparator.
+  const ranked = [];
+  if (phyCount > 0) ranked.push([RCA_PHYLO_KEYMAP, phyCount]);
+  if (colCount > 0) ranked.push([RCA_COLUMNAR_KEYMAP, colCount]);
+  if (abCount > 0) ranked.push([RCA_ABUNDANCE_KEYMAP, abCount]);
+  if (ranked.length === 0) return RCA_DEFAULT_KEYMAP;
+  const majority = ranked.filter((e) => e[1] * 2 > n);
+  const pool = majority.length ? majority : ranked;
+  let best = 0;
+  for (const e of pool) if (e[1] > best) best = e[1];
+  for (const e of pool) if (e[1] === best) return e[0];
+  return RCA_DEFAULT_KEYMAP;  // unreachable, kept as a defensive default
 }
 
 function emptyFor(km, n) {

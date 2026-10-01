@@ -12772,6 +12772,1750 @@
   },
   {
    "group": "merge",
+   "id": "mrg_sortcol_numeric",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "10",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "10",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "2",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "10",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_underscore_number",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "1_0",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "10",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "1_0",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "10",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "2",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1_0",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "10",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_underscore_string",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "1_",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "10",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "1_",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "10",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "2",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "10",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1_",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_mixed_rank",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "A",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "A",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "2",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "A",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_case",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "a",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "B",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "c",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "a",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "B",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "c",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "a",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "B",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "c",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_whitespace",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": " 2 ",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "10",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": " 2 ",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "10",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": " 2 ",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "10",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_empty_id",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "2",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "id": "",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_unicode",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "甲",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "a",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "甲",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "a",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "a",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "甲",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_nan",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "NaN",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "NaN",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "NaN",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "2",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_inf",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "inf",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "-inf",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "inf",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "-inf",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "-inf",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "inf",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_float_spellings",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "1.0",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1.00",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "1.0",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1.00",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1.0",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1.00",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_bed_prefix",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "bed 9",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "bed 9 (rp13)",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "bed 10",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "bed 9",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "bed 9 (rp13)",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "bed 10",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "bed 10",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "bed 9",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "bed 9 (rp13)",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_boolish",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "true",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "True",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "true",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "True",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "true",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_negative",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "-1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "-10",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "-1",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "2",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "-10",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "-10",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "-1",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "2",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_sortcol_exponent",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "id": "1e3",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1000",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "999",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     },
+     {
+      "sections": [
+       {
+        "id": "1e3",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "1000",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       },
+       {
+        "id": "999",
+        "group": "g1",
+        "lithology_blocks": [],
+        "age_units": [],
+        "response_kind": "extracted",
+        "reason_codes": []
+       }
+      ],
+      "fossil_legend": [],
+      "lithology_legend": [],
+      "cross_beds": [],
+      "confidence": 0.9
+     }
+    ],
+    "total_runs": 2,
+    "mode": "columnar_section"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "sections": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "999",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1e3",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     },
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "id": "1000",
+      "group": "g1",
+      "lithology_blocks": [],
+      "age_units": [],
+      "response_kind": "extracted",
+      "coordinates_text": "",
+      "thickness_m": ""
+     }
+    ],
+    "fossil_legend": [],
+    "lithology_legend": [],
+    "cross_beds": [],
+    "confidence": 0.9
+   }
+  },
+  {
+   "group": "merge",
    "id": "mrg_columnar_contract",
    "payload": {
     "results": [
@@ -29672,6 +31416,856 @@
    },
    "extra": null,
    "python": "-inf"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_0",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     []
+    ]
+   },
+   "extra": null,
+   "python": "species_ranges"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_1",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "species_ranges"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_2",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {}
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "species_ranges"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_3",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "species_ranges": [
+        {
+         "species": "A",
+         "section": "S1"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "species_ranges"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_4",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "abundances": [
+        {
+         "taxon": "A",
+         "site": "S",
+         "level": "1",
+         "abundance": "5"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "abundances"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_5",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "Ki-1",
+         "group": "g"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "sections"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_6",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "nodes": [
+        {
+         "id": "n1",
+         "parent": null,
+         "name": "root"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "nodes"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_7",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "species_ranges": [
+        {
+         "species": "A",
+         "section": "S1"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "species_ranges": [
+        {
+         "species": "B",
+         "section": "S1"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "species_ranges"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_8",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "a",
+         "group": "g"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "b",
+         "group": "g"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "c",
+         "group": "g"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "sections"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_9",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "abundances": [
+        {
+         "a": 1
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "abundances": [
+        {
+         "a": 2
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "abundances"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_10",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "nodes": [
+        {
+         "id": "n1",
+         "parent": null,
+         "name": "root"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "nodes": [
+        {
+         "id": "n1",
+         "parent": null,
+         "name": "root"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "nodes"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_11",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "a",
+         "group": "g"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "species_ranges": [
+        {
+         "species": "B",
+         "section": "S1"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "sections"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_12",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "a",
+         "group": "g"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "b",
+         "group": "g"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "species_ranges": [
+        {
+         "species": "C",
+         "section": "S1"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "sections"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_13",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "abundances": [
+        {
+         "a": 1
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "abundances": [
+        {
+         "a": 2
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "species_ranges": [
+        {
+         "species": "C",
+         "section": "S1"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "abundances"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_14",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "a",
+         "group": "g"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "abundances": [
+        {
+         "x": 1
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "sections"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_15",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "a",
+         "group": "g"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "abundances": [
+        {
+         "x": 1
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "species_ranges": [
+        {
+         "species": "C",
+         "section": "S1"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "sections"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_16",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "a",
+         "group": "g"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "b",
+         "group": "g"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "abundances": [
+        {
+         "x": 1
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "sections"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_17",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "nodes": [
+        {
+         "id": "n1",
+         "parent": null,
+         "name": "root"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "a",
+         "group": "g"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "nodes"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_18",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "nodes": [
+        {
+         "id": "n1",
+         "parent": null,
+         "name": "root"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "a",
+         "group": "g"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "abundances": [
+        {
+         "x": 1
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "nodes"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_19",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "nodes": [
+        {
+         "id": "n1",
+         "parent": null,
+         "name": "root"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "nodes": [
+        {
+         "id": "n1",
+         "parent": null,
+         "name": "root"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "a",
+         "group": "g"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "nodes"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_20",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "nodes": [
+        {
+         "id": "n1",
+         "name": "root"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "species_ranges"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_21",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "nodes": [
+        {
+         "id": "n1",
+         "name": "root"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "nodes": [
+        {
+         "id": "n1",
+         "name": "root"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "species_ranges"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_22",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "nodes": [
+        {
+         "id": "n1",
+         "name": "root"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "a",
+         "group": "g"
+        }
+       ]
+      },
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "b",
+         "group": "g"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "sections"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_23",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "abundances": []
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "species_ranges"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_24",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "abundances": [],
+       "sections": [
+        {
+         "id": "a",
+         "group": "g"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "sections"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_25",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "nodes": []
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "species_ranges"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_26",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "sections": [
+        {
+         "id": "a",
+         "group": "g"
+        }
+       ],
+       "nodes": []
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "sections"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_27",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "confidence": 0.8,
+       "abundances": [],
+       "species_ranges": [
+        {
+         "species": "A",
+         "section": "S1"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "species_ranges"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_28",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "sections": []
+      },
+      {
+       "sections": []
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "species_ranges"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_29",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "sections": [
+        {
+         "name": "no id here"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "species_ranges"
+  },
+  {
+   "group": "aggregate",
+   "id": "agdet_30",
+   "payload": {
+    "op": "auto_detect",
+    "args": [
+     [
+      {
+       "nodes": [
+        {
+         "name": "no id"
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "species_ranges"
   },
   {
    "group": "quality_coverage",

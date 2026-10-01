@@ -147,6 +147,12 @@ function buildContext() {
       rcaRecombinationBallots: typeof rcaRecombinationBallots !== 'undefined' ? rcaRecombinationBallots : null,
       // Third wave: the float() mirror the schema sort keys are built on.
       rcaPyFloat: typeof rcaPyFloat !== 'undefined' ? rcaPyFloat : null,
+      // Fourth wave: schema auto-detection, projected to the primary key on
+      // both sides (a MergeSchema and a keymap object are not field-for-field
+      // comparable, and that field is what decides the merged document's
+      // shape). No backticks in this comment: it lives inside a template
+      // literal.
+      rcaAutoDetectKeymap: typeof rcaAutoDetectKeymap !== 'undefined' ? rcaAutoDetectKeymap : null,
     };
   `, ctx);
   return ctx.__exp;
@@ -274,6 +280,10 @@ const RUNNERS = {
         if (r === Infinity) return 'inf';
         if (r === -Infinity) return '-inf';
         return r;
+      }
+      case 'auto_detect': {
+        const km = f.rcaAutoDetectKeymap(a[0]);
+        return km ? km.primary : null;
       }
       default: throw new Error('no aggregate op ' + p.op);
     }
