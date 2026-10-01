@@ -33744,6 +33744,340 @@
   },
   {
    "group": "quality_coverage",
+   "id": "qc_cross_era_cjk_adjacent",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1",
+      "lithology_blocks": [
+       {
+        "age": "图Permian"
+       },
+       {
+        "age": "Jurassic"
+       }
+      ]
+     },
+     {
+      "name": "S2",
+      "lithology_blocks": [
+       {
+        "age": "Permian图"
+       },
+       {
+        "age": "Jurassic"
+       }
+      ]
+     },
+     {
+      "name": "S3",
+      "lithology_blocks": [
+       {
+        "age": "αcretaceous"
+       },
+       {
+        "age": "Permian"
+       }
+      ]
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.85,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     }
+    ]
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_cross_era_two_sections",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1",
+      "lithology_blocks": [
+       {
+        "age": "Permian"
+       },
+       {
+        "age": "Jurassic"
+       }
+      ]
+     },
+     {
+      "name": "S2",
+      "lithology_blocks": [
+       {
+        "age": "Permian"
+       },
+       {
+        "age": "Jurassic"
+       }
+      ]
+     },
+     {
+      "name": "S3",
+      "lithology_blocks": [
+       {
+        "age": "Eocene"
+       },
+       {
+        "age": "Cretaceous"
+       }
+      ]
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.45,
+    "grade": "D",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.ages_inconsistent",
+      "params": {
+       "count": "3"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_cross_era_boundaries",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1",
+      "lithology_blocks": [
+       {
+        "age": "Permian"
+       }
+      ]
+     },
+     {
+      "name": "S2",
+      "lithology_blocks": [
+       {
+        "age": "Permian (upper)"
+       },
+       {
+        "age": "Jurassic"
+       }
+      ]
+     },
+     {
+      "name": "S3",
+      "lithology_blocks": [
+       {
+        "age": "xPermianx"
+       },
+       {
+        "age": "Jurassic"
+       }
+      ]
+     },
+     {
+      "name": "S4",
+      "lithology_blocks": [
+       {
+        "age": "Late Permian"
+       },
+       {
+        "age": "Early Jurassic"
+       }
+      ]
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.45,
+    "grade": "D",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.ages_inconsistent",
+      "params": {
+       "count": "2"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_cross_era_s1_plain",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1",
+      "lithology_blocks": [
+       {
+        "age": "Permian"
+       }
+      ]
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.85,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     }
+    ]
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_cross_era_s2_paren",
+   "payload": {
+    "sections": [
+     {
+      "name": "S2",
+      "lithology_blocks": [
+       {
+        "age": "Permian (upper)"
+       },
+       {
+        "age": "Jurassic"
+       }
+      ]
+     }
+    ],
+    "biozones": [],
+    "other_fossills": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.7,
+    "grade": "C",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.ages_inconsistent",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "info",
+      "msg_key": "quality.null_fields"
+     }
+    ]
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_cross_era_s3_glued",
+   "payload": {
+    "sections": [
+     {
+      "name": "S3",
+      "lithology_blocks": [
+       {
+        "age": "xPermianx"
+       },
+       {
+        "age": "Jurassic"
+       }
+      ]
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.85,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     }
+    ]
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_cross_era_s4_late_early",
+   "payload": {
+    "sections": [
+     {
+      "name": "S4",
+      "lithology_blocks": [
+       {
+        "age": "Late Permian"
+       },
+       {
+        "age": "Early Jurassic"
+       }
+      ]
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   },
+   "extra": null,
+   "python": {
+    "score": 0.65,
+    "grade": "C",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_top_level"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.ages_inconsistent",
+      "params": {
+       "count": "1"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "group": "quality_coverage",
    "id": "qc_group_column",
    "payload": {
     "sections": [

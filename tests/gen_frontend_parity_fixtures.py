@@ -2072,6 +2072,74 @@ _add(
     # the ladder learned `group` this produced an empty grid (cells 0,
     # coverage 0.0) for rows that all answered; both engines must agree on the
     # 2 columns / 3 cells this now yields.
+    # AUDIT-2026-10-02: the cross-era detector's three regexes. js/quality.js
+    # built them with a BARE \b while the rest of the same file uses the
+    # Unicode-aware _wordBoundaryRe (lines 413 / 563 / 588 / 1237), and the
+    # Python side is a Unicode-aware \b -- so the browser counted an era a
+    # CJK letter was sitting against and the desktop did not.
+    #
+    # The SECOND era in each block is load-bearing, and the first draft of
+    # this case got it wrong: "图Permian" + "Permian图" both miss on the
+    # desktop, so its era set is EMPTY and the section is dropped, while the
+    # browser's is {Paleozoic} -- and a single era never triggers the warning
+    # on either side. The case passed against unfixed code because it was
+    # structurally incapable of failing, which is the same trap as planting a
+    # by_day case whose two species differ in _norm(species). Each block
+    # pairs a CJK-adjacent era with a plain second era, so the desktop ends
+    # up with one era (no warning) and the browser with two (a warning).
+    _case("quality_coverage", "qc_cross_era_cjk_adjacent", {
+        "sections": [
+            {"name": "S1", "lithology_blocks": [
+                {"age": "图Permian"}, {"age": "Jurassic"}]},
+            {"name": "S2", "lithology_blocks": [
+                {"age": "Permian图"}, {"age": "Jurassic"}]},
+            {"name": "S3", "lithology_blocks": [
+                {"age": "αcretaceous"}, {"age": "Permian"}]},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    # Two offending sections in one payload, which is the shape that caught
+    # the emit-per-item bug: the browser used to raise one warning per
+    # offending section and the FIRST one said "1" when the truth was 2.
+    _case("quality_coverage", "qc_cross_era_two_sections", {
+        "sections": [
+            {"name": "S1", "lithology_blocks": [
+                {"age": "Permian"}, {"age": "Jurassic"}]},
+            {"name": "S2", "lithology_blocks": [
+                {"age": "Permian"}, {"age": "Jurassic"}]},
+            {"name": "S3", "lithology_blocks": [
+                {"age": "Eocene"}, {"age": "Cretaceous"}]},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_cross_era_boundaries", {
+        "sections": [
+            {"name": "S1", "lithology_blocks": [{"age": "Permian"}]},
+            {"name": "S2", "lithology_blocks": [
+                {"age": "Permian (upper)"}, {"age": "Jurassic"}]},
+            {"name": "S3", "lithology_blocks": [
+                {"age": "xPermianx"}, {"age": "Jurassic"}]},
+            {"name": "S4", "lithology_blocks": [
+                {"age": "Late Permian"}, {"age": "Early Jurassic"}]},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    # ...and the same four sections ONE PER CASE, because the combined payload
+    # diverged in a way the two-line diff could not attribute: py had 2 issues
+    # with count="2", js had 3 with count="1". Splitting is cheaper and more
+    # honest than reimplementing the harness's vm to print both sides.
+    _case("quality_coverage", "qc_cross_era_s1_plain", {
+        "sections": [{"name": "S1", "lithology_blocks": [{"age": "Permian"}]}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_cross_era_s2_paren", {
+        "sections": [{"name": "S2", "lithology_blocks": [
+            {"age": "Permian (upper)"}, {"age": "Jurassic"}]}],
+        "biozones": [], "other_fossills": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_cross_era_s3_glued", {
+        "sections": [{"name": "S3", "lithology_blocks": [
+            {"age": "xPermianx"}, {"age": "Jurassic"}]}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_cross_era_s4_late_early", {
+        "sections": [{"name": "S4", "lithology_blocks": [
+            {"age": "Late Permian"}, {"age": "Early Jurassic"}]}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
     _case("quality_coverage", "qc_group_column", {
         "sections": [{"name": "S1"}],
         "points": [

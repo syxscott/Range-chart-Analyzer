@@ -888,9 +888,22 @@ function scoreAccuracy(data) {
   // Any section containing blocks from more than one era (Paleozoic /
   // Mesozoic / Cenozoic) gets a warning (NOT a hard error — boundary
   // sections such as P/T or K/Pg legitimately span eras).
-  const paleozoicRe2 = /\b(cambrian|ordovician|silurian|devonian|carboniferous|pennsylvanian|mississippian|permian)\b/i;
-  const mesozoicRe2 = /\b(triassic|jurassic|cretaceous)\b/i;
-  const cenozoicRe2 = /\b(paleocene|paleogene|neogene|quaternary|pleistocene|holocene|eocene|oligocene|miocene|pliocene)\b/i;
+  // AUDIT-2026-10-02: these three were the only boundary tests in this file
+  // still written with a BARE \b, while lines 413 / 563 / 588 / 1237 use the
+  // Unicode-aware _wordBoundaryRe. rca_core/quality.py's _PALEOZOIC_RE /
+  // _MESOZOIC_RE / _CENOZOIC_RE use a Unicode-aware \b, so a CJK / Greek /
+  // Cyrillic letter sitting against an era name counted the era in the
+  // browser and not on the desktop -- which is what flips a section's era
+  // count, and with it this warning. Measured on the quality_coverage parity
+  // group. Same repair as the explicit-age and zone-marker guards: the
+  // correct notion of "adjacent identifier character" is ASCII, because a
+  // CJK glyph does not continue an ASCII identifier.
+  // Built directly rather than through _wordBoundaryRe: that helper escapes
+  // its needle, and this is a regex BODY (an alternation), not a literal.
+  const _eraRe = (body) => new RegExp(_NOT_WORD_BEFORE + body + _NOT_WORD_AFTER, 'iu');
+  const paleozoicRe2 = _eraRe('(cambrian|ordovician|silurian|devonian|carboniferous|pennsylvanian|mississippian|permian)');
+  const mesozoicRe2 = _eraRe('(triassic|jurassic|cretaceous)');
+  const cenozoicRe2 = _eraRe('(paleocene|paleogene|neogene|quaternary|pleistocene|holocene|eocene|oligocene|miocene|pliocene)');
   const sects2 = data && Array.isArray(data.sections) ? data.sections : [];
   const erasBySection = {};
   for (const sec of sects2) {
@@ -914,8 +927,26 @@ function scoreAccuracy(data) {
   for (const k of Object.keys(erasBySection)) {
     if (erasBySection[k].size > 1) {
       crossEraCount2 += 1;
-      issues.push({severity: 'warning', msg_key: 'quality.ages_inconsistent', params: {count: String(crossEraCount2)}});
     }
+  }
+  // AUDIT-2026-10-02: the issues.push used to be INSIDE the loop above, so
+  // the warning fired once per offending section and each one carried the
+  // running count rather than the total: a figure with two cross-era
+  // sections produced TWO warnings reading "1" and "2". rca_core/quality.py
+  // counts first and emits one, and the message is
+  // "{count} section(s) span eras" -- i.e. the count is the TOTAL, so the
+  // aggregated form is the intent and the browser was under-reporting its
+  // own first message.
+  //
+  // This is the same defect docs/FRONTEND-FIX-2026-07-27.md fixed when
+  // params.count was hard-coded to '1': that change made the number vary
+  // (1, 2, 3 ...) instead of always 1, which looked like a fix and left the
+  // emit-per-item shape in place. The penalty block immediately below was
+  // already aggregated correctly, which is why the SCORE always agreed and
+  // only the notice diverged -- so no test caught it until a payload with two
+  // offending sections appeared.
+  if (crossEraCount2 > 0) {
+    issues.push({severity: 'warning', msg_key: 'quality.ages_inconsistent', params: {count: String(crossEraCount2)}});
   }
   if (crossEraCount2 > 0) {
     checks += 1;
