@@ -983,8 +983,7 @@ for _i, (_text, _prefer) in enumerate(_AGE_INPUTS):
     _add(_case("age_bound", "ag_%02d" % (_i + 1), _text, _prefer))
 
 
-# --- coverage contract: reason codes / response kinds / ledger ---------------
-# BORROW-2026-09-20 (js-data-layer mirror round). Every case dispatches ONE
+# --- coverage contract: reason codes / response kinds / ledger ---------------# BORROW-2026-09-20 (js-data-layer mirror round). Every case dispatches ONE
 # public function of rca_core/reason_codes.py by name; js/reason-codes.js
 # exposes the same functions under the same snake_case keys on its
 # ``RCAReasonCodes`` namespace, so the replay side is one lookup table.
@@ -2008,6 +2007,29 @@ _add(*[
 # table-selection rules of coverage_for (largest contracted table, strict >
 # so first-in-_COVERAGE_TABLES wins ties, per-mode column keys).
 
+# AUDIT-2026-10-02, SWEPT AND CLEAN -- the emit-SHAPE family, recorded so
+# nobody re-derives it. `quality.ages_inconsistent` used to be pushed INSIDE
+# the loop over offending sections (one warning per section, each carrying the
+# running count, so the first said "1" when there were two) while
+# rca_core/quality.py counted first and emitted one; the message is
+# "{count} section(s) span eras" / "{count} 个剖面", so the aggregated form is
+# the intent. Fixed on the JS side this round.
+#
+# With that fixed, both modules' every msg_key site was enumerated and compared
+# by loop nesting along the node's ANCESTOR chain: 25 sites each, identical key
+# sets (no py-only, no js-only), and no key where one side aggregates and the
+# other emits per item. Spot-checked that the aggregator really was in the list
+# before believing it -- quality.ages_inconsistent / empty_result /
+# invalid_result / abundance_sum_violation_count / coverage_ledger all read
+# depth 0 on both sides, and quality.missing_top_level reads (389, depth 1) +
+# (404, depth 0) on Python against (687, depth 1) + (705, depth 0) in JS.
+#
+# Worth recording WHY that spot-check was necessary: the first version of the
+# sweep only extracted msg_keys from nodes that were themselves loop headers,
+# so every Python aggregation site was missing from its list -- which is
+# exactly the set the comparison exists to test. It reported "no mismatches",
+# which was an artifact of the extractor rather than a property of the code. A
+# sweep that cannot see the thing it is looking for returns "clean" forever.
 _add(
     _case("quality_coverage", "qc_notdrawn", {
         "sections": [{"name": "S1"}],
