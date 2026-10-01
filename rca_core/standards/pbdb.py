@@ -775,6 +775,34 @@ def _resolve_pbdb_bounds(row):
     # FAD/base is the OLDER (larger Ma) end, LAD/top the YOUNGER end.
     e_stage, e_ma = ics_resolve_age_bound(base, prefer="older") if ics_resolve_age_bound else (None, None)
     l_stage, l_ma = ics_resolve_age_bound(top, prefer="younger") if ics_resolve_age_bound else (None, None)
+    # AUDIT-2026-10-02: the same guard darwin_core._resolve_age_bounds has
+    # carried since REVIEW-2026-07-31. Without it the two export consumers
+    # disagreed about the SAME row, measured over reversed-endpoint rows:
+    #
+    #   range_base="Induan",        range_top="Wuchiapingian"
+    #       DwC  ->  (None, None)                       suppressed
+    #       PBDB ->  (251.902, 254.14)                 published
+    #   range_base="250 Ma",        range_top="260 Ma"
+    #       DwC  ->  (None, None)                       suppressed
+    #       PBDB ->  (250.0, 260.0)                    published
+    #
+    # A reversed FAD/LAD is what a model emits when it swaps the endpoints --
+    # the same shape aggregate.py records as `bed_index_order_swapped` and
+    # quality.py as `quality.bed_index_order_swapped` -- so this is an
+    # ordinary OCR slip, not a hand-crafted payload. DwC suppressed the numbers
+    # and kept the stage labels, so the same chart told one database nothing and
+    # the other a range that runs backwards in time. The PBDB row is the worse
+    # of the two: _stage_endpoint_names' own docstring records that a
+    # self-contradicting interval row is one "PBDB validators reject", so the
+    # researcher's upload fails with nothing pointing at the offending row.
+    #
+    # Direction is DwC's: the guard is a safety property of the DATA (a
+    # published interval must not run backwards), not a presentational
+    # preference, so it belongs in both writers rather than being a
+    # darwin_core-local choice.
+    if e_ma is not None and l_ma is not None and e_ma < l_ma:
+        e_ma = None
+        l_ma = None
     return e_stage, l_stage, e_ma, l_ma
 
 
