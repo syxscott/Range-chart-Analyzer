@@ -166,7 +166,18 @@ class Database:
         # rca_core), so this affected callers outside the app too.
         _parent = os.path.dirname(self.path)
         if _parent:
-            os.makedirs(_parent, exist_ok=True)
+            # AUDIT-2026-09-30: mode=0o700 added. rca.db sits in the same
+            # ~/.range_chart_analyzer as providers.json, fernet_key.fek and the
+            # PBKDF2 salt, and secrets_store._base_dir() states the invariant
+            # explicitly: that directory "used to be created with
+            # os.makedirs(..., exist_ok=True) and left at the process umask
+            # default (0777 & ~umask, i.e. usually 0755). Everything this
+            # module stores in it is key material". It enforced that at its own
+            # two call sites while this one -- which on a fresh install is a
+            # perfectly ordinary first thing to run -- created it with no mode,
+            # and whichever writer ran first fixed the mode for every other.
+            # No-op on Windows, where mode bits are advisory.
+            os.makedirs(_parent, mode=0o700, exist_ok=True)
         self._lock = threading.RLock()
         # REVIEW-2026-09-20 (finding 6/7): explicit lifecycle + transaction
         # nesting state. ``_closed`` turns the post-close AttributeError into
@@ -236,7 +247,78 @@ class Database:
             # pre-existing databases that predate this schema. Idempotent
             # — silent no-op if columns already exist.
             self._add_provenance_columns(self._conn)
+            self._add_usage_columns(self._conn)
             self._conn.commit()
+
+    # Columns added to `usage` after it first shipped. A pre-existing database
+    # keeps whatever schema it had, because SCHEMA uses CREATE TABLE IF NOT
+    # EXISTS and never rewrites a table.
+    #
+    # AUDIT-2026-10-01 [item 9.8]: the row reader in rca_core.usage was made
+    # tolerant of a missing column in the previous commit, and that fix is
+    # correct but NOT sufficient -- UsageStore.summary() names these columns
+    # inside AGGREGATE SQL
+    #     COALESCE(SUM(cache_read_tokens), 0)
+    #     CASE WHEN status_code BETWEEN 200 AND 299 ...
+    # and SQLite resolves a column name when the statement is prepared, so a
+    # database without the column fails before any row is read. Measured: 10 of
+    # the 16 non-indexed columns break summary() with
+    # "sqlite3.OperationalError: no such column", while the same database is
+    # read fine by the tolerant reader. The usage dashboard was still dead, so
+    # this is the part that actually fixes it.
+    #
+    # (id, timestamp and provider_id are not listed: they are named by SCHEMA's
+    # own indexes, so a table without them cannot be opened at all -- no
+    # migration could help, and none is possible.)
+    #
+    # The earlier commit argued against a migration on the grounds that the
+    # reader could absorb the difference. That premise was wrong: it covered
+    # list()/get() and not the aggregation, which is the screen people look at.
+    _USAGE_ADDED_COLUMNS = (
+        ("endpoint", "TEXT"),
+        ("mode", "TEXT"),
+        ("cache_read_tokens", "INTEGER DEFAULT 0"),
+        ("cache_creation_tokens", "INTEGER DEFAULT 0"),
+        ("input_tokens_estimated", "INTEGER DEFAULT 0"),
+        ("output_tokens_estimated", "INTEGER DEFAULT 0"),
+        ("total_cost_usd", "REAL"),
+        ("latency_ms", "INTEGER"),
+        ("first_token_ms", "INTEGER"),
+        ("status_code", "INTEGER"),
+        ("error_message", "TEXT"),
+        ("request_id", "TEXT"),
+        ("model", "TEXT"),
+        ("provider_name", "TEXT"),
+        ("input_tokens", "INTEGER DEFAULT 0"),
+        ("output_tokens", "INTEGER DEFAULT 0"),
+    )
+
+    def _add_usage_columns(self, conn: sqlite3.Connection) -> None:
+        """Bring a pre-existing `usage` table up to the current column set.
+
+        Mirrors ``_add_provenance_columns`` exactly: SQLite has no IF NOT EXISTS
+        for ALTER TABLE ADD COLUMN in older versions, so the existing columns
+        are read from pragma_table_info first. Idempotent, and a silent no-op on
+        a current database.
+        """
+        try:
+            existing = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(usage)").fetchall()
+            }
+        except sqlite3.DatabaseError:
+            return
+        if not existing:
+            return          # no usage table yet; SCHEMA just created it
+        for col, decl in self._USAGE_ADDED_COLUMNS:
+            if col in existing:
+                continue
+            try:
+                conn.execute(f"ALTER TABLE usage ADD COLUMN {col} {decl}")
+            except sqlite3.DatabaseError:
+                # Defensive, same as the history path: pragma above should have
+                # caught it. Re-creating the database is the user's recourse.
+                pass
 
     def _add_provenance_columns(self, conn: sqlite3.Connection) -> None:
         """Add edit_provenance columns to existing history table.
@@ -364,10 +446,21 @@ class Database:
             "SELECT version FROM _schema_version LIMIT 1"
         ).fetchone()
         current = int(row["version"]) if row else 0
-        for from_v, _to_v, sql in self._MIGRATIONS:
+        for from_v, to_v, sql in self._MIGRATIONS:
             if current == from_v:
                 conn.executescript(sql)
-                current = from_v + 1
+                # AUDIT-2026-09-29: this advanced by ``from_v + 1`` and
+                # ignored ``to_v`` entirely (it was bound as ``_to_v``, the
+                # usual "deliberately unused" spelling, which is why no linter
+                # flagged it). Harmless today because the single migration is
+                # (0, 1) and 0 + 1 happens to equal its to_v. It stops being
+                # harmless the moment a migration spans more than one version
+                # -- a combined "(0, 2, ...)" would set current to 1, and the
+                # next migration's from_v would then never match, so it would
+                # be SILENTLY SKIPPED on every launch while _schema_version
+                # still got written as the final target. to_v is what the
+                # tuple actually declares; trust it.
+                current = to_v
         # Record the final state on disk. INSERT OR REPLACE handles both
         # first-launch (no row) and subsequent launches (idempotent).
         conn.execute(
@@ -458,6 +551,26 @@ class Database:
             return self._require_conn().execute(sql, params)
 
     def executemany(self, sql: str, params_list: list[Any]) -> sqlite3.Cursor:
+        """Run one statement for each parameter set and COMMIT immediately.
+
+        WARNING, identical in kind to ``execute()``'s and for the same reason
+        (finding 7): inside ``transaction()`` this commits the enclosing
+        ``BEGIN IMMEDIATE`` block after its first statement, so a later
+        failure cannot roll the earlier rows back.
+
+        AUDIT-2026-09-29: the warning existed on ``execute()`` and was simply
+        absent here, which made the safe-looking ``run()`` look like it had a
+        batch counterpart that it does not have. There is no ``run_many()``, so
+        a caller that needs a batch inside a transaction currently has no
+        correct method to reach for -- and the only alternative looks like the
+        obvious one.
+
+        The one production call site, HistoryStore._insert_raw_responses, is
+        NOT inside a transaction (verified: the only transaction() in
+        history.py is in update_result, which never calls it), so nothing is
+        broken today. Do not wrap ``HistoryStore.add`` in a transaction without
+        changing that call first.
+        """
         with self._lock:
             conn = self._require_conn()
             cur = conn.executemany(sql, params_list)

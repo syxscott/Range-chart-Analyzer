@@ -136,7 +136,15 @@ class TestExportInvariants:
         }
         try:
             to_xlsx(bad_data)
-            assert False, "to_xlsx must raise ValueError on invariant violation"
+            # AUDIT-2026-09-29 (ruff B011): this used to be
+            # `assert False, "..."`, which python -O removes ENTIRELY -- the
+            # try body then became "call to_xlsx and assert nothing", so a
+            # to_xlsx that stopped raising this test would pass silently. CI
+            # does not pass -O, which is exactly why it survived. Raising
+            # AssertionError is not caught by `except ValueError` below, so
+            # the failure surfaces with the same message either way.
+            raise AssertionError(
+                "to_xlsx must raise ValueError on invariant violation")
         except ValueError as exc:
             assert "export invariants violated" in str(exc)
             # issues must be non-empty

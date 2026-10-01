@@ -111,9 +111,35 @@ def write_private_bytes(path: str, data: bytes, *, exclusive: bool = False) -> N
     Raises ``OSError`` (or ``FileExistsError``) on failure; callers must treat
     that as fatal rather than continue with unsaved key material.
 
-    NOTE: ``rca_core/llm.py`` (providers.json writer) still uses the old
-    open+chmod pattern and should call this helper — see the review report; it
-    is outside this change's allowed file set.
+    NOTE (corrected 2026-09-30): this note used to read "rca_core/llm.py
+    (providers.json writer) still uses the old open+chmod pattern and should
+    call this helper". That was half wrong. llm.py's ``ProviderStore.save``
+    is NOT a plain open+chmod -- it already does tmp + ``os.fsync`` +
+    ``os.replace``, under a module-level lock, with a ``finally`` that removes
+    the tmp file on every path (REVIEW-2026-09-20 #25). So the "half-written
+    file on crash" hole this helper's first paragraph describes was closed
+    there by other means.
+
+    What is still true is narrower, and worth keeping: llm.py does not call
+    this helper. It writes a FIXED ``providers.json.tmp`` with a plain
+    ``open(tmp, "w")``, so on POSIX that file exists at the umask default
+    (0644) for the whole duration of the write and is tightened only
+    afterwards, and a plain open FOLLOWS a symlink -- a local attacker who
+    pre-creates that path as a symlink redirects the write out of the home
+    directory. Both are what this helper exists to close.
+
+    NOT MEASURED, read off the source: those two holes are POSIX-only (on
+    Windows ``_chmod_user_only`` is a documented no-op and the ACL model
+    differs, and creating a symlink needs extra privilege), so the numbers
+    above could not be reproduced on the Windows dev box this note was
+    corrected from -- ``stat`` there reports 0o666/0o777 for any file. Treat
+    the claim as a code-reading, and re-measure on a POSIX host before
+    deciding it is worth changing.
+
+    Switching the call site over also means preserving the concurrent-save
+    behaviour its fixed tmp name and module lock currently provide, which is
+    why this has stayed a TODO rather than a one-line edit. Verified by
+    reading llm.py:862-898.
     """
     directory = os.path.dirname(path) or "."
     if directory:
@@ -272,10 +298,16 @@ def _get_or_create_salt() -> bytes:
         raced = _read_private_bytes(path)
         if raced is not None and len(raced) >= 16:
             return raced
+        # AUDIT-2026-09-29 (ruff B904): `from None` deliberately, and this is
+        # the rule for the four translation-style raises in this module. The
+        # FileExistsError was EXPECTED and already handled -- that is what the
+        # read above is for -- so chaining it would present a normal race as an
+        # unexpected failure. The message already carries the one actionable
+        # thing: re-run once it settles.
         raise RuntimeError(
             f"secrets_store: another process created {path} but it is not "
             "readable/usable yet. Re-run once it settles."
-        )
+        ) from None
     except OSError as exc:
         # REVIEW-2026-09-20 (item 20): the old fallback derived the salt from
         # the machine fingerprint and RETURNED it without ever writing it, so
@@ -332,10 +364,12 @@ def _get_or_create_fernet_key() -> bytes:
         raced = _read_private_bytes(path)
         if raced:
             return raced
+        # Same `from None` rule as the salt path above: an expected race that
+        # was already handled, not an unexpected failure.
         raise RuntimeError(
             f"secrets_store: another process created {path} but it is not "
             "readable yet. Re-run once it settles."
-        )
+        ) from None
     except OSError as exc:
         raise RuntimeError(
             f"secrets_store: cannot create the key file at {path}: {exc}. "
@@ -384,17 +418,24 @@ _warned_obfuscation = False
 def encryption_status() -> str:
     """Report which key source would be used for NEW encryption.
 
-    REVIEW-2026-07-31: returns ``"passphrase"`` / ``"keyring"`` /
-    ``"fingerprint"`` / ``"plaintext"`` so the GUIs can surface the
-    at-rest protection level to the user (the RuntimeWarning from
-    ``_warn_obfuscation_only`` is invisible in a windowed app).
+    REVIEW-2026-07-31: returns ``"keyring"`` / ``"fingerprint"`` /
+    ``"plaintext"`` so the GUIs can surface the at-rest protection level to the
+    user (the RuntimeWarning from ``_warn_obfuscation_only`` is invisible in a
+    windowed app). AUDIT-2026-09-30: this list also claimed ``"passphrase"``,
+    which no code path returns -- a passphrase is a parameter of
+    ``_active_fernet_key``, not a state of this function -- so a reader was
+    looking for four states where there are three. The value set is now pinned
+    by tests/test_encryption_status_contract.py, which drives both feature
+    flags and requires every reachable value to be one the GUIs act on.
 
     REVIEW-2026-09-20: the ``"fingerprint"`` VALUE IS KEPT even though the
     source it names is now the random key file (item 18), because
     ``gui.py`` / ``gui_fluent.py`` branch on that exact string to show their
     "at-rest protection is weak" notice — renaming it would silently drop the
     warning. See the report: a follow-up should return ``"keyfile"`` and have
-    both GUIs accept ``("keyfile", "fingerprint", "plaintext")``.
+    both GUIs accept ``("keyfile", "fingerprint", "plaintext")``. Until that
+    coordinated change lands, the same guard test also reads the accepted
+    values out of the two GUI sources, so one side cannot move alone.
     """
     if not _HAS_FERNET:
         return "plaintext"
@@ -537,13 +578,24 @@ def _legacy_decrypt(envelope: str) -> str:
     try:
         ct = base64.urlsafe_b64decode(b64.encode("ascii"))
     except Exception:
-        raise ValueError("secrets_store: corrupt envelope (base64)")
+        # `from None` for the same reason as the race handlers above, and with
+        # the same payoff: the caller is told exactly which envelope is broken
+        # and the only action available is to re-enter the key. A binascii
+        # "Invalid base64-encoded string: number of data characters (N) cannot
+        # be 1 more than a multiple of 4" adds nothing a user can act on, and
+        # this path is reachable from a corrupt providers.json -- so the lower
+        # traceback is noise at best.
+        raise ValueError("secrets_store: corrupt envelope (base64)") from None
     ks = _keystream(key, len(ct))
     pt = bytes(a ^ b for a, b in zip(ct, ks))
     try:
         return pt.decode("utf-8")
     except UnicodeDecodeError:
-        raise ValueError("secrets_store: corrupt envelope (utf-8)")
+        # Same reasoning: the keystream decoded to bytes that are not text,
+        # which means the envelope or the key is wrong. Naming which of the two
+        # is not something this layer can do, and the raw decode error says
+        # only which byte offset failed.
+        raise ValueError("secrets_store: corrupt envelope (utf-8)") from None
 
 
 def encrypt(plaintext: str, passphrase: str | None = None) -> str:
@@ -596,5 +648,34 @@ def is_obfuscated(value: str) -> bool:
     return bool(value) and (value.startswith(_FER_TAG) or value.startswith(_OBF_TAG))
 
 
-__all__ = ["encrypt", "decrypt", "is_obfuscated", "write_private_bytes",
-           "encryption_status"]
+def decrypt_or_none(envelope: str, passphrase: str | None = None):
+    """Decrypt, or return ``None`` when the envelope cannot be read.
+
+    AUDIT-2026-09-27 P1: the module docstring has always promised a
+    "decrypt_or_fallback -> undecryptable values trigger a re-prompt" policy,
+    but the function did not exist, so callers had to write
+    ``try: decrypt(...) except ValueError: api_key = ""`` — and that is what
+    destroyed keys. The realistic trigger is a keyring that was AVAILABLE
+    when the key was written and UNAVAILABLE at the next launch (no D-Bus
+    secret service, a locked Windows Credential Locker, a headless run). The
+    ``fer:v1:`` envelope can then only be opened with the keyring key; the key
+    file and the legacy fingerprint key do not match. ``LlmProvider.from_dict``
+    blanked the key, and then the very next ``ProviderStore`` mutation called
+    ``save()``, whose ``to_dict()`` only re-encrypts a NON-EMPTY key — so the
+    ciphertext was replaced with ``""`` on disk and every provider's paid API
+    credential was gone, with no backup.
+
+    ``None`` is the honest answer for "there is a key but I cannot read it".
+    Callers must keep the envelope verbatim so it can be written back
+    unchanged, and prompt the user for a new key rather than inventing one.
+    """
+    if not envelope:
+        return envelope
+    try:
+        return decrypt(envelope, passphrase)
+    except Exception:
+        return None
+
+
+__all__ = ["encrypt", "decrypt", "decrypt_or_none", "is_obfuscated",
+           "write_private_bytes", "encryption_status"]

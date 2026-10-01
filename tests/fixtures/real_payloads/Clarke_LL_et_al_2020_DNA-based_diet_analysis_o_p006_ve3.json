@@ -1,0 +1,1115 @@
+{
+ "metadata": {
+  "title": "",
+  "x_axis_label": "",
+  "y_axis_label": "",
+  "z_axis_label": "",
+  "x_unit": "dimensionless",
+  "y_unit": "dimensionless",
+  "n_points": 160,
+  "grouping_variable": "species"
+ },
+ "groups": [
+  {
+   "name": "Bathylagus sp.",
+   "color": "#555555",
+   "marker": "circle",
+   "n_points_visible": 50,
+   "description": "gray filled circles"
+  },
+  {
+   "name": "E. antarctica",
+   "color": "#E74C3C",
+   "marker": "square",
+   "n_points_visible": 25,
+   "description": "red filled squares"
+  },
+  {
+   "name": "G. braueri",
+   "color": "#5B9BD5",
+   "marker": "circle",
+   "n_points_visible": 35,
+   "description": "blue filled circles"
+  },
+  {
+   "name": "G. nicholsi",
+   "color": "#70AD47",
+   "marker": "triangle",
+   "n_points_visible": 25,
+   "description": "green filled triangles"
+  },
+  {
+   "name": "G. opisthopterus",
+   "color": "#B084CC",
+   "marker": "diamond",
+   "n_points_visible": 25,
+   "description": "purple/lilac filled diamonds"
+  }
+ ],
+ "points": [
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 480,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 95,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 545,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 95,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 610,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 95,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 675,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 95,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 740,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 95,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 805,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 95,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 260,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 250,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 330,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 250,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 395,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 250,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 460,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 250,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 525,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 250,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 590,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 250,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 655,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 250,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 720,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 250,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 785,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 250,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "Bathylagus sp.",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 850,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 250,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "E. antarctica",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 230,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "E. antarctica",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 265,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "E. antarctica",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 300,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "E. antarctica",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 335,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "E. antarctica",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 370,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "E. antarctica",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 405,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. braueri",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 280,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. braueri",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 350,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. braueri",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 420,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. braueri",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 490,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. braueri",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 560,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. nicholsi",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 625,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. nicholsi",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 660,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. nicholsi",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 695,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. nicholsi",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 730,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. opisthopterus",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 700,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 540,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "E. antarctica",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 230,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 905,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "E. antarctica",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 265,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 905,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "E. antarctica",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 300,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 905,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "E. antarctica",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 335,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 905,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. braueri",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 290,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 905,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. braueri",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 355,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 905,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. braueri",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 420,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 905,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. braueri",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 485,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 905,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. nicholsi",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 575,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 875,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. nicholsi",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 640,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 875,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. nicholsi",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 705,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 905,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  },
+  {
+   "x": "",
+   "y": "",
+   "z": "",
+   "group": "G. nicholsi",
+   "label": "",
+   "note": "",
+   "geometry": {
+    "version": 1,
+    "scale": "pos_0_999",
+    "calibrated": false,
+    "points": {
+     "x_pos_0_999": {
+      "pos": 770,
+      "axis": "x"
+     },
+     "y_pos_0_999": {
+      "pos": 875,
+      "axis": "y"
+     }
+    }
+   },
+   "response_kind": "extracted"
+  }
+ ],
+ "outliers": [],
+ "statistics": {
+  "correlation": "",
+  "regression_line": "",
+  "r_squared": "",
+  "p_value": ""
+ },
+ "confidence": 0.45
+}

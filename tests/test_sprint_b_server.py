@@ -53,6 +53,44 @@ def _reset_server_rate_limit():
         srv._rate_history = saved
 
 
+@pytest.fixture(autouse=True)
+def _no_dns_lookup_for_hostnames(monkeypatch):
+    """Do not let these tests depend on the machine's resolver.
+
+    server.py's _handle_extract_body validates the provider endpoint BEFORE it
+    dispatches to srv.extract (server.py:2439 -> ssrf.validate_endpoint ->
+    is_private_host), and the default endpoint is a real public host. The tests
+    below fake srv.extract, but not that validation, so they were doing a LIVE
+    DNS lookup of api.minimaxi.com on every run. When resolution failed the
+    request failed with err.badEndpoint instead of the timeout / partial-run
+    behaviour each test is actually about.
+
+    Same fixture as tests/test_llm_fixes.py and
+    tests/test_sprint_b_pipeline.py (commit 30e8428), and the loopback servers
+    this file starts are unaffected because literal IPs and localhost still go
+    through the real predicate. The policy itself stays covered by
+    tests/test_ssrf.py, which still fails when the network is genuinely dead --
+    as it should.
+    """
+    import ipaddress
+    import rca_core.ssrf as ssrf
+
+    real = ssrf.is_private_host
+
+    def stub(host):
+        name = str(host).strip("[]")
+        low = name.lower()
+        if low == "localhost" or low.endswith(".localhost"):
+            return real(host)
+        try:
+            ipaddress.ip_address(name)
+        except ValueError:
+            return False        # a NAME: assume public, never touch DNS
+        return real(host)       # a literal IP: real policy, no lookup needed
+
+    monkeypatch.setattr(ssrf, "is_private_host", stub)
+
+
 class _Handler(srv.Handler):
     def log_message(self, *args, **kwargs):
         pass
@@ -152,13 +190,27 @@ def test_multi_run_hung_extract_returns_err_timeout():
         from rca_core.extractor import ExtractResult
         return ExtractResult(ok=True, data={"sections": []})
 
-    # Shrink the batch budget: the inline clamp would otherwise force a
-    # >= 20 s wait (timeout_sec >= 10 plus 10 s slack).
+    # Shrink the batch budget. AUDIT-2026-09-27: the budget is no longer
+    # ``timeout_sec + _MULTI_RUN_TIMEOUT_SLACK_SEC`` — it is now ONE shared
+    # derivation, ``_extraction_wall_clock_budget_sec()`` =
+    # ``timeout_sec * _SINGLE_RUN_MAX_ATTEMPTS + slack``, because a single
+    # extraction can legitimately spend ~4 x timeout_sec (the transport retry
+    # plus the silent-miss re-ask) and the old batch number abandoned
+    # slow-but-successful runs while still billing them. So shrinking only the
+    # two old knobs left the budget at 31 s and the 3 s fake extract correctly
+    # completed instead of timing out. Shrink the attempt count too, which is
+    # what actually makes the budget 1 s.
     saved_min = srv._MIN_EXTRACT_TIMEOUT_SEC
     saved_slack = srv._MULTI_RUN_TIMEOUT_SLACK_SEC
+    saved_attempts = srv._SINGLE_RUN_MAX_ATTEMPTS
+    saved_deadline_slack = srv._SINGLE_RUN_DEADLINE_SLACK_SEC
     srv.extract = hung_extract
     srv._MIN_EXTRACT_TIMEOUT_SEC = 0
     srv._MULTI_RUN_TIMEOUT_SLACK_SEC = 0
+    srv._SINGLE_RUN_MAX_ATTEMPTS = 1
+    srv._SINGLE_RUN_DEADLINE_SLACK_SEC = 0
+    assert srv._extraction_wall_clock_budget_sec(1) == 1, \
+        "the shrink must actually produce a 1s budget"
     base, httpd, t = _start()
     try:
         t0 = time.monotonic()
@@ -182,6 +234,8 @@ def test_multi_run_hung_extract_returns_err_timeout():
         srv.extract = real_extract
         srv._MIN_EXTRACT_TIMEOUT_SEC = saved_min
         srv._MULTI_RUN_TIMEOUT_SLACK_SEC = saved_slack
+        srv._SINGLE_RUN_MAX_ATTEMPTS = saved_attempts
+        srv._SINGLE_RUN_DEADLINE_SLACK_SEC = saved_deadline_slack
         _stop(httpd, t)
 
 

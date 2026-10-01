@@ -6,7 +6,16 @@ from app.js. The Phase K fix added the call. Verify the call chain
 end-to-end: a successful extraction populates state.result.quality.
 """
 
+import os
+
 import pytest
+
+# AUDIT-2026-09-30: this file read js/app.js and js/quality.js by RELATIVE path,
+# so all five of its tests failed when pytest was started from anywhere other
+# than the repo root -- an IDE with a different cwd, a subdirectory invocation,
+# a packaging change. CI happens to run from the root, which is exactly why the
+# fragility was invisible. Resolved from __file__ instead.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class TestJsQualityBadgeCallChain:
@@ -22,7 +31,7 @@ class TestJsQualityBadgeCallChain:
     def test_app_js_invokes_scoreRangeChart(self):
         """Grep scan: js/app.js must reference scoreRangeChart in a
         code path that runs after extraction completes."""
-        with open('js/app.js', encoding='utf-8') as f:
+        with open(os.path.join(REPO_ROOT, 'js', 'app.js'), encoding='utf-8') as f:
             app_src = f.read()
         # Must reference scoreRangeChart somewhere after
         # ``state.result = res.data;`` (line ~553 prior to Phase K fix).
@@ -42,7 +51,7 @@ class TestJsQualityBadgeCallChain:
     def test_quality_module_exposes_global(self):
         """js/quality.js must expose scoreRangeChart on globalThis
         so app.js can reach it without a module system."""
-        with open('js/quality.js', encoding='utf-8') as f:
+        with open(os.path.join(REPO_ROOT, 'js', 'quality.js'), encoding='utf-8') as f:
             q_src = f.read()
         # Look for either window.scoreRangeChart or globalThis.scoreRangeChart.
         assert 'scoreRangeChart' in q_src

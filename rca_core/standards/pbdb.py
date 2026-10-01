@@ -9,6 +9,12 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+# AUDIT-2026-10-02: shared explicit-age pattern text; see rca_core/age_patterns.py.
+from ..age_patterns import (
+    AGE_RANGE_WITH_UNIT_PATTERN,
+    AGE_VALUE_WITH_UNIT_PATTERN,
+)
+
 # C-4 (REVIEW-2026-07-25): wire the ICS 2024 table into the PBDB export path
 # so stage-name -> numeric Ma conversion happens here (previously ICS was
 # only imported by quality.py, so PBDB emitted empty max_ma/min_ma for text
@@ -314,12 +320,40 @@ def _split_taxon_name(name: Any) -> dict[str, str]:
     # alone cannot tell those apart; order can.
     def _paren(m: "re.Match[str]") -> str:
         inner = m.group(1).strip()
+        # AUDIT-2026-09-27 P2: the ABBREVIATED subgenus, tested FIRST. It used
+        # to be unreachable twice over: the rule below only accepted a fully
+        # spelled word, and the SPACE test classified "L. ?" as an authority
+        # citation. Abbreviated subgenera are the NORM in radiolarian
+        # taxonomy -- this app's own domain -- and five recorded payloads use
+        # exactly that shape ("Cephalodiscus (L.) amygdala", "Podocyrtis
+        # (P.) phyxis", "Lophocyrtis (L.) ampla", "Podocyrtis (L.?) cf.
+        # phyxis", "Lophocyrtis (L. ?) barbodense"), so the PBDB/DwC export
+        # was publishing an incomplete name for the most common form here.
+        #
+        # Ordering is what makes it safe. A real authorship is never a bare
+        # capital-plus-stop: "(L. Moore)" and "(Ehrenberg 1840)" both fail this
+        # test, and the tests BELOW still catch them.
+        #
+        # A trailing doubt is emitted OUTSIDE the sentinel so the existing
+        # pending-qualifier machinery resolves it into ``subgenus_reso`` --
+        # the docstring's rule that a marker MOVES from the name into its
+        # resolution column.
+        # A trailing doubt stays INSIDE the sentinel: the consumer strips a
+        # trailing "?" off the rank and records it in ``subgenus_reso``. An
+        # earlier version emitted it as a separate token, which the pending
+        # machinery then handed to the SPECIES -- the wrong rank. The species
+        # path does the same thing correctly ("Genus speciaes?").
+        m_abbr = re.match(r"^([A-Z])\.\s*(\?*)$", inner)
+        if m_abbr:
+            return " \x00%s%s\x00 " % (m_abbr.group(1) + ".", m_abbr.group(2))
         if _YEAR_IN_TEXT_RE.search(inner) or "," in inner or " " in inner:
             return " "                      # authority citation
-        if re.match(r"^[A-Z][a-z]{2,}$", inner):
+        if re.match(r"^[A-Z][a-z]{2,}\??$", inner):
             # FIX-2026-09-22 (item 5): keep the group in place as a marker
             # instead of consuming it immediately. Reading "(Ehrenberg)" at the
             # end of a binomial as a subgenus invented a rank nobody stated.
+            # AUDIT-2026-09-27 P2: the "?" is tolerated here so a doubtful
+            # subgenus keeps its RANK; the consumer strips it into subgenus_reso.
             return " \x00%s\x00 " % inner
         return " "
 
@@ -359,8 +393,36 @@ def _split_taxon_name(name: Any) -> dict[str, str]:
         if tok.startswith("\x00") and tok.endswith("\x00") and len(tok) > 2:
             if genus and not species and not subgenus:
                 subgenus = tok.strip("\x00")
-                resos["subgenus"] = resos["subgenus"] or _clamp_reso(
-                    "subgenus", pending)
+                # AUDIT-2026-09-27 P2: a doubt glued to the subgenus MOVES to
+                # its resolution slot, exactly as it does for every other rank
+                # ("Genus speciaes?" -> species "speciaes" + reso "?"). It
+                # used to be dropped on the floor: the full-word parenthesis
+                # pattern did not tolerate the "?", so "(Parkinsonina?)" failed
+                # the shape test and the RANK ITSELF vanished -- the module's
+                # docstring rule ("a doubt marker MOVES from the name into its
+                # resolution column") was broken for exactly one rank.
+                # AUDIT-2026-09-27 P2: a doubt glued to the subgenus MOVES to
+                # its resolution slot, exactly as it does for every other rank
+                # ("Genus speciaes?" -> species "speciaes" + reso "?"). It
+                # used to be dropped on the floor: the full-word parenthesis
+                # pattern did not tolerate the "?", so "(Parkinsonina?)" failed
+                # the shape test and the RANK ITSELF vanished -- the module's
+                # docstring rule ("a doubt marker MOVES from the name into its
+                # resolution column") was broken for exactly one rank.
+                # AUDIT-2026-09-27 P2: a doubt glued to the subgenus MOVES to
+                # its resolution slot, exactly as it does for every other rank
+                # ("Genus speciaes?" -> species "speciaes" + reso "?"). It
+                # used to be dropped on the floor: the full-word parenthesis
+                # pattern did not tolerate the "?", so "(Parkinsonina?)" failed
+                # the shape test and the RANK ITSELF vanished -- the module's
+                # docstring rule ("a doubt marker MOVES from the name into its
+                # resolution column") was broken for exactly one rank.
+                if subgenus.endswith("?"):
+                    subgenus = subgenus[:-1]
+                    resos["subgenus"] = (resos["subgenus"]
+                                         or _clamp_reso("subgenus", "?"))
+                resos["subgenus"] = (resos["subgenus"]
+                                     or _clamp_reso("subgenus", pending))
             pending, expect_subspecies = "", False
             i += 1
             continue
@@ -713,6 +775,34 @@ def _resolve_pbdb_bounds(row):
     # FAD/base is the OLDER (larger Ma) end, LAD/top the YOUNGER end.
     e_stage, e_ma = ics_resolve_age_bound(base, prefer="older") if ics_resolve_age_bound else (None, None)
     l_stage, l_ma = ics_resolve_age_bound(top, prefer="younger") if ics_resolve_age_bound else (None, None)
+    # AUDIT-2026-10-02: the same guard darwin_core._resolve_age_bounds has
+    # carried since REVIEW-2026-07-31. Without it the two export consumers
+    # disagreed about the SAME row, measured over reversed-endpoint rows:
+    #
+    #   range_base="Induan",        range_top="Wuchiapingian"
+    #       DwC  ->  (None, None)                       suppressed
+    #       PBDB ->  (251.902, 254.14)                 published
+    #   range_base="250 Ma",        range_top="260 Ma"
+    #       DwC  ->  (None, None)                       suppressed
+    #       PBDB ->  (250.0, 260.0)                    published
+    #
+    # A reversed FAD/LAD is what a model emits when it swaps the endpoints --
+    # the same shape aggregate.py records as `bed_index_order_swapped` and
+    # quality.py as `quality.bed_index_order_swapped` -- so this is an
+    # ordinary OCR slip, not a hand-crafted payload. DwC suppressed the numbers
+    # and kept the stage labels, so the same chart told one database nothing and
+    # the other a range that runs backwards in time. The PBDB row is the worse
+    # of the two: _stage_endpoint_names' own docstring records that a
+    # self-contradicting interval row is one "PBDB validators reject", so the
+    # researcher's upload fails with nothing pointing at the offending row.
+    #
+    # Direction is DwC's: the guard is a safety property of the DATA (a
+    # published interval must not run backwards), not a presentational
+    # preference, so it belongs in both writers rather than being a
+    # darwin_core-local choice.
+    if e_ma is not None and l_ma is not None and e_ma < l_ma:
+        e_ma = None
+        l_ma = None
     return e_stage, l_stage, e_ma, l_ma
 
 
@@ -738,34 +828,37 @@ def _stage_endpoint_names(stages):
 
 
 def _parse_coords(text):
-    if not text or not isinstance(text, str):
-        return None, None
-    text = text.strip()
-    if re.search(r"not\s*visible|unknown|missing", text, re.IGNORECASE):
-        return None, None
-    m = re.search(r"([+-]?\d+\.?\d*)\s*([NSns]),?\s*([+-]?\d+\.?\d*)\s*([EWew])", text)
-    if m:
-        lat_val = float(m.group(1))
-        lon_val = float(m.group(3))
-        # REVIEW-2026-07-31: hemisphere comes from the matched letter
-        # group, not a whole-text scan ("31N, 117E (south bank)" used to
-        # flip the latitude to -31).
-        if m.group(2).upper() == "S": lat_val = -abs(lat_val)
-        if m.group(4).upper() == "W": lon_val = -abs(lon_val)
-        return lat_val, lon_val
-    return None, None
+    """Delegate to the Darwin Core parser so the two standards cannot drift.
+
+    AUDIT-2026-09-27 P2: this used to keep its own copy of the regex, two
+    revisions behind ``darwin_core._parse_coordinates``. Executed on the same
+    section text: ``"31.2°N, 120.5°E"`` gave DwC ``(31.2, 120.5)`` but PBDB
+    ``(None, None)`` - so the same chart produced georeferenced occurrences in
+    the Darwin Core archive and UNLOCATED ones in the PBDB upload sheets, which
+    is a large scientific loss for a map-first database. And the reverse: the
+    PBDB copy had no magnitude check, so ``"95N, 200E"`` was published verbatim
+    as an impossible locality that a curator must reject or mis-plot.
+
+    The DwC parser already strips degree signs (REVIEW-2026-09-20), rejects
+    out-of-range magnitudes, and returns ``(None, None)`` for everything it
+    cannot read. One implementation, one answer.
+    """
+    from .darwin_core import _parse_coordinates
+    return _parse_coordinates(text)
 
 
+# AUDIT-2026-10-02: the text now comes from rca_core.age_patterns, shared with
+# standards/ics.py and quality.py. These were byte-for-byte copies carrying the
+# same Unicode-aware `(?<![\w.])` guard, so the CJK-prefix defect fixed in
+# ics.py was still live in the PBDB writer -- the module whose output goes to
+# the Paleobiology Database. The shared module's docstring records the
+# direction and why `re.ASCII` would have been the wrong repair.
 _AGE_RANGE_WITH_UNIT = re.compile(
-    r"(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
-    r"(?:[-–—]|\bto\b)\s*"
-    r"([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
-    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b",
+    AGE_RANGE_WITH_UNIT_PATTERN,
     re.IGNORECASE,
 )
 _AGE_VALUE_WITH_UNIT = re.compile(
-    r"(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
-    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b",
+    AGE_VALUE_WITH_UNIT_PATTERN,
     re.IGNORECASE,
 )
 

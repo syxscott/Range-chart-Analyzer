@@ -23,12 +23,20 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest
+          pip install pytest ruff
           # Optional deps used by tests (at-rest encryption, XLSX,
           # image enhancement). UI-REVIEW-2026-09-07: Pillow added -
           # tests/test_enhance.py used to error the whole collection
           # run when it was missing (CI red since 2026-08-19).
           pip install cryptography keyring openpyxl Pillow
+          # AUDIT-2026-09-27: PySide6 + qfluentwidgets are intentionally NOT
+          # installed here. The desktop GUI's behavioural suites are Qt-gated
+          # and would add ~200MB and several minutes to every matrix entry;
+          # they run in the separate `qt` job below, which is the gate that
+          # actually protects the GUI. The Qt-FREE contract suite
+          # (tests/test_gui_page_contract.py) runs right here, so the
+          # structural invariants the Qt suites depend on stay enforced on
+          # every matrix entry.
 
       - name: Set up Node (frontend parity tests)
         uses: actions/setup-node@v4
@@ -37,6 +45,35 @@ jobs:
 
       - name: Run full pytest suite
         run: python -m pytest tests/ tests_core.py -q --tb=short
+
+      # AUDIT-2026-09-29: F821 (undefined name) only, deliberately.
+      #
+      # Three rounds of line-by-line review had gone through server.py and
+      # extractor.py without seeing either of these, and neither had a test:
+      #
+      #   server.py  _send_json called `_strip_nonfinite_shallow` unqualified
+      #              while it is a @staticmethod ON THE CLASS, so the name
+      #              never resolved and the NaN/Infinity fallback FIX-2026-09-22
+      #              added for exactly those payloads had never once run --
+      #              50 call sites, every non-finite response a 500.
+      #   server.py  _handle_extract_body used prompt_version_for_mode with no
+      #              binding in scope; the file's only import of it is inside
+      #              another function, so every batched (runs > 1) extraction
+      #              died while stamping its own provenance.
+      #   extractor.py  the enhance helpers annotate "Image.Image" but Pillow
+      #              was only ever imported function-locally, so
+      #              typing.get_type_hints() raised NameError.
+      #
+      # F821 is the narrowest useful rule here: it is pure dead-name
+      # detection with no style opinions, so it will not fight the codebase
+      # the way the full default rule set does (176 unused-imports, most of
+      # them __init__.py re-exports). A new F821 is a runtime NameError
+      # waiting for the right input, which is exactly the class that shipped.
+      - name: No undefined names (F821)
+        run: |
+          ruff check . --select F821 \
+            --exclude node_modules,outputs,proxy,references \
+            --output-format concise
 
       - name: Run tests_core standalone (exit code reflects failures)
         run: python tests_core.py
@@ -51,11 +88,48 @@ jobs:
           node tests_contrast.js
           node tests_aggregate.js
 
+      # AUDIT-2026-09-27: the same rot had recurred on the JS side - 9 of the
+      # 12 root Node suites were not executed anywhere, including
+      # tests_edit_history.js (334 assertions), tests_sharpen.js (175) and
+      # tests_viz.js (161), so a regression in the table editor, the sharpen
+      # worker or the linked canvas could land silently. They are all
+      # dependency-free `node <file>` scripts; run every one of them.
+      # A root *.js suite added later must be added here too.
+      - name: Run every remaining Node suite
+        run: |
+          node tests_viz.js
+          node tests_sharpen.js
+          node tests_edit_history.js
+          node tests_export_parity.js
+          node tests_contract_mirror_2026_09_22.js
+          node tests_names_i18n_fixes_2026_09_22.js
+          node tests_ui_fixes_2026_09_22.js
+          node tests_ui_fixes_2026_09_27.js
+          node tests_history_fixes_2026_09_21.js
+          # Differential harness: replays fixtures generated from rca_core
+          # through the JS normalizers. It prints a per-field table and always
+          # exits 0, so the gate is its summary line's divergence count
+          # ("... N matched, M documented, K diverged"). Cases the team has
+          # consciously parked appear as SKIP lines and count as "documented",
+          # not "diverged", so a newly introduced divergence fails the build.
+          node tests_diff_frontend_parity.js | tee /tmp/parity.log
+          grep -E "[0-9]+ matched, [0-9]+ documented, [0-9]+ diverged" /tmp/parity.log
+          if grep -qE "[1-9][0-9]* diverged" /tmp/parity.log; then
+            echo "::error::Python/JS parity divergence detected"
+            exit 1
+          fi
+
       # REVIEW-2026-09-10: 14 root-level Python test files were outside
       # `testpaths = tests`, so nothing ran them. Each must exit non-zero on
       # failure (several print "N passed, M failed" and sys.exit accordingly).
       # tests_onboarding.py touches $HOME, so it runs with a scratch HOME to
       # keep it from depending on (or polluting) the runner's home directory.
+      #
+      # AUDIT-2026-09-27: a root *.py added later must be added here too.
+      # `python_files = test_*.py` does not match `tests_*.py`, so pytest
+      # never collects these on its own. This is the third recurrence of that
+      # exact rot (Python side REVIEW-2026-09-10, JS side this round, and
+      # root .py files here).
       - name: Run root-level Python test files
         run: |
           set -e
@@ -76,3 +150,101 @@ jobs:
         run: |
           python tests/fixtures/gold/_gen_canned.py >/dev/null
           git diff --exit-code -- tests/fixtures/gold/
+
+  # AUDIT-2026-09-27 [item 0.4]: the desktop GUI had ZERO effective assertion
+  # coverage in CI. Three gates were open at the same time:
+  #   (a) PySide6 was not installed, so every Qt-gated suite skipped silently;
+  #   (b) tests_gui_fluent.py's `check()` only PRINTED and had no autouse
+  #       fixture, so under pytest its soft assertions passed unconditionally
+  #       — including all four page-objectName pins;
+  #   (c) its two halves were disjoint (run_all() never called any test_*,
+  #       pytest never called run_all()), so no single path ran both.
+  # (a) is fixed by this job; (b) and (c) were fixed in tests_gui_fluent.py
+  # itself (its check() now feeds an autouse guard, run_all() now calls every
+  # test_*, and the window contract moved into a real test function so pytest
+  # sees it too).
+  #
+  # Kept out of the matrix on purpose: ~200MB of Qt plus the headless
+  # WebEngine setup should not slow down every Python version, and a Qt failure
+  # should be attributable to Qt rather than to the project.
+  qt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Qt system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libfontconfig1
+
+      - name: Install Python + Qt dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest cryptography keyring openpyxl Pillow
+          pip install PySide6 PySide6-Fluent-Widgets
+          # PhyloTreeWidget is a QWebEngineView. Without Addons the GUI takes
+          # its documented no-engine fallback, which is a legitimate build but
+          # leaves the WebEngine teardown path untested.
+          pip install PySide6-Addons
+
+      - name: Run the GUI contract suite (needs no Qt)
+        run: python -m pytest tests/test_gui_page_contract.py -v --tb=short
+
+      - name: Run the Qt-gated GUI suites (headless)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          # Qt resolves ZERO font families under the offscreen plugin, so text
+          # metrics are meaningless there. Nothing asserted here depends on
+          # glyphs; the full-resolution visual pass is a local concern and uses
+          # QT_QPA_PLATFORM=windows instead.
+          #
+          # AUDIT-2026-09-28: the scratch HOME is not paranoia about this
+          # runner -- it is about the developer who runs the same command
+          # locally. Constructing a RangeChartFluentWindow schedules
+          # maybe_show_onboarding (gui_fluent.py), whose closeEvent
+          # unconditionally calls mark_onboarding_seen, so this suite was
+          # writing ~/.range_chart_analyzer/onboarding_seen into the home of
+          # whoever ran it.
+          _scratch_home="$(mktemp -d)"
+          HOME="$_scratch_home" python -m pytest tests/ -q --tb=short \
+            -k "gui or fluent or dwc_archive or table_widgets"
+          rc=$?
+          rm -rf "$_scratch_home"
+          exit $rc
+
+      - name: Run root-level GUI suites standalone
+        # AUDIT-2026-09-27: for these files the EXIT CODE is the only thing
+        # that reflects the soft assertions, so each must be run as a script
+        # (pytest would not collect them: python_files = test_*.py does not
+        # match tests_*.py) and `set -e` must propagate the failure.
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set -e
+          for f in tests_gui_fluent.py tests_drag.py tests_history.py \
+                   tests_modern_ui.py; do
+            echo "=== $f ==="
+            python "$f"
+          done
+          # AUDIT-2026-09-28: tests_onboarding.py must NOT be in the loop
+          # above, and this is the reason the matrix job already takes it out
+          # of its loop too. `test_seen_round_trip` asserts `before is False`,
+          # i.e. that the onboarding marker does not yet exist -- but the Qt
+          # step in this very job has already created one, because every
+          # window that step builds marks onboarding as seen on close. Given
+          # the real HOME the assertion sees `before is True` and fails. The
+          # scratch HOME below is the fix the matrix job uses; this job
+          # originally reused the real one and went red on its first run.
+          echo "=== tests_onboarding.py (scratch HOME) ==="
+          _scratch_home="$(mktemp -d)"
+          HOME="$_scratch_home" python tests_onboarding.py
+          rm -rf "$_scratch_home"

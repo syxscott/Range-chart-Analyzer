@@ -38,8 +38,81 @@ _SCHEMA_VERSION = 1
 _INIT_LOCK = threading.Lock()
 
 
-def _ensure_dir() -> None:
-    os.makedirs(_CACHE_DIR, exist_ok=True)
+def _ensure_dir(path: str) -> None:
+    """Create the parent directory of ``path``.
+
+    AUDIT-2026-09-29: this used to take no argument and create the MODULE
+    level ``_CACHE_DIR`` -- the directory of the default path, which has
+    nothing to do with whatever path the instance was actually given. So
+    ``ResultCache(db_path=".../does/not/exist/cache.sqlite")`` created
+    ``~/.range_chart_analyzer`` and then failed with::
+
+        sqlite3.OperationalError: unable to open database file
+
+    Measured, not inferred: the parent directory was still absent after the
+    failure. Nothing was broken for the default path, which is why it
+    survived -- and why every existing test passes a FLAT filename inside an
+    already-created tempdir, so no test ever reached it.
+
+    rca_core/db.py gets this right forty lines away in the same package::
+
+        _parent = os.path.dirname(self.path)
+        if _parent:
+            os.makedirs(_parent, exist_ok=True)
+
+    Two storage layers, one of them wrong, in the same codebase.
+    """
+    parent = os.path.dirname(path)
+    if parent:
+        # AUDIT-2026-09-30: mode=0o700 added. The default cache lives in the
+        # same ~/.range_chart_analyzer as providers.json, fernet_key.fek and the
+        # PBKDF2 salt; secrets_store._base_dir() states the invariant for that
+        # directory ("Everything this module stores in it is key material, so
+        # it is now 0700 best-effort") and enforced it at its own two call
+        # sites, but three writers created it with no mode at all. Whichever
+        # ran first decided the mode for the whole install. No-op on Windows,
+        # where mode bits are advisory.
+        os.makedirs(parent, mode=0o700, exist_ok=True)
+
+
+def stable_extra_headers(prov_obj) -> list:
+    """Sorted (name, value) pairs of a provider's extra headers.
+
+    Sorted so different header VALUES produce different keys. The extraction
+    keys in server.py used to hash only the header NAMES, so flipping the
+    Authorization value still hit the cache and served another identity's
+    response.
+
+    Lives here rather than inside the request handler that first needed it,
+    because extractor.py builds a cache key too and must not re-derive this
+    (AUDIT-2026-10-01 [item 9.9]): the chart-classify key omitted these two
+    fields entirely, so two providers differing only in credentials or vendor
+    routing shared one cached classification -- and mode="auto" derives the
+    EXTRACTION mode from that classification, so the stale verdict silently
+    picked the wrong prompt / normalizer / merge schema.
+    """
+    if not prov_obj:
+        return []
+    return sorted(
+        (k, str(v)) for k, v in (getattr(prov_obj, "extra_headers", None)
+                                 or {}).items()
+    )
+
+
+def stable_extra_body(prov_obj) -> list:
+    """Sorted (name, value) pairs of a provider's extra_body.
+
+    P1-4 (REVIEW-2026-07-25): extra_body is a provider field that changes the
+    LLM request shape (e.g. Anthropic prompt-caching toggles, custom sampling
+    parameters). Two requests with different extra_body MUST NOT share a cache
+    entry.
+    """
+    if not prov_obj:
+        return []
+    return sorted(
+        (k, str(v)) for k, v in (getattr(prov_obj, "extra_body", None)
+                                 or {}).items()
+    )
 
 
 def _rowid_for(conn: sqlite3.Connection, key: str) -> int | None:
@@ -80,7 +153,7 @@ class ResultCache:
         across instances; the instance lock covers same-instance re-entry.
         """
         with _INIT_LOCK, self._lock:
-            _ensure_dir()
+            _ensure_dir(self._path)
             self._conn = sqlite3.connect(self._path, check_same_thread=False)
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._create_table()

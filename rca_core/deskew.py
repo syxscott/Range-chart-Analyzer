@@ -630,8 +630,27 @@ def estimate_skew_angle(
     rotating" filter lives in :func:`deskew_image`, so a caller that wants to
     report a sub-threshold skew to the operator still can.
     """
+    # AUDIT-2026-09-29: this used to validate the caller's max_angle against
+    # MIN_USEFUL_ANGLE, because MIN_USEFUL_ANGLE was passed as the `min_angle`
+    # argument purely to satisfy the signature. _check_params requires
+    # `min_angle < max_angle`, so any search window at or below the module
+    # constant was rejected outright:
+    #     estimate_skew_angle(img, max_angle=0.1) -> DeskewError
+    #     "min_angle must satisfy 0 <= min_angle < max_angle (0.1)"
+    # The check is meaningless here: this function does not filter by
+    # min_angle at all (the docstring above says so, and _min_angle was
+    # already discarded), so it had no business rejecting an input. A caller
+    # who wants to know whether a plate is off by a fifth of a degree -- the
+    # exact regime MIN_USEFUL_ANGLE exists to describe -- is the one caller
+    # this function is documented to serve, and it was the one caller that
+    # could not call it.
+    #
+    # 0.0 is the honest value: it is the only "no lower bound" value that
+    # still satisfies `0 <= min_angle < max_angle` for every legal
+    # max_angle. deskew_image keeps validating the caller's real min_angle
+    # (there a min_angle >= max_angle IS a contradiction worth reporting).
     max_angle, downsample, _min_angle, axis, method = _check_params(
-        max_angle, downsample, MIN_USEFUL_ANGLE, axis, method
+        max_angle, downsample, 0.0, axis, method
     )
     _check_image(pil_img)
     if method in ("auto", "hough"):

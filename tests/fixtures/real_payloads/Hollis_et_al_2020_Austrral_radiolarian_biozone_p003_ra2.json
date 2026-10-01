@@ -1,0 +1,782 @@
+{
+ "zonations": [
+  {
+   "name": "Radiolarian zone LL (RP)",
+   "region": "",
+   "framework": "radiolarian",
+   "reference": ""
+  },
+  {
+   "name": "Radiolarian zone SO (aRP)",
+   "region": "",
+   "framework": "radiolarian",
+   "reference": ""
+  },
+  {
+   "name": "Radiolarian zone Austral (RPA)",
+   "region": "",
+   "framework": "radiolarian",
+   "reference": ""
+  },
+  {
+   "name": "Magnetochron",
+   "region": "",
+   "framework": "magnetostratigraphic",
+   "reference": ""
+  },
+  {
+   "name": "Planktonic Foram. zones",
+   "region": "",
+   "framework": "other",
+   "reference": ""
+  },
+  {
+   "name": "Calcareous nannofossil zones",
+   "region": "",
+   "framework": "nannofossil",
+   "reference": ""
+  },
+  {
+   "name": "NZ Stage",
+   "region": "",
+   "framework": "chronostratigraphic",
+   "reference": ""
+  },
+  {
+   "name": "Epoch / Age",
+   "region": "",
+   "framework": "chronostratigraphic",
+   "reference": ""
+  }
+ ],
+ "zones": [
+  {
+   "name": "RP21b",
+   "zonation": "Radiolarian zone LL (RP)",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "25.0",
+   "top_age": "27.0",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "RP21a",
+   "zonation": "Radiolarian zone LL (RP)",
+   "rank": "zone",
+   "age_span": "late Chattian – early Rupelian",
+   "base_age": "27.0",
+   "top_age": "28.5",
+   "stage": "Chattian/Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "RP20c",
+   "zonation": "Radiolarian zone LL (RP)",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "28.5",
+   "top_age": "30.5",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "RP20b",
+   "zonation": "Radiolarian zone LL (RP)",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "31.5",
+   "top_age": "33.0",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "RP20a",
+   "zonation": "Radiolarian zone LL (RP)",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "33.0",
+   "top_age": "33.5",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "RP19",
+   "zonation": "Radiolarian zone LL (RP)",
+   "rank": "zone",
+   "age_span": "latest Eocene – early Rupelian",
+   "base_age": "33.7",
+   "top_age": "35.5",
+   "stage": "Priabonian/Rupelian",
+   "defined_by": "",
+   "note": "base approximately at E. antiquum datum"
+  },
+  {
+   "name": "RP18",
+   "zonation": "Radiolarian zone LL (RP)",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "35.5",
+   "top_age": "36.5",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "RP17",
+   "zonation": "Radiolarian zone LL (RP)",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "36.5",
+   "top_age": "37.5",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "S. rad",
+   "zonation": "Radiolarian zone SO (aRP)",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "25.0",
+   "top_age": "26.5",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": "low-latitude SO zone"
+  },
+  {
+   "name": "C. robusta",
+   "zonation": "Radiolarian zone SO (aRP)",
+   "rank": "zone",
+   "age_span": "late Chattian – early Rupelian",
+   "base_age": "26.5",
+   "top_age": "28.5",
+   "stage": "Chattian/Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "L. conica",
+   "zonation": "Radiolarian zone SO (aRP)",
+   "rank": "zone",
+   "age_span": "late Chattian – early Rupelian",
+   "base_age": "28.5",
+   "top_age": "30.0",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "A.? irregularis",
+   "zonation": "Radiolarian zone SO (aRP)",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "30.0",
+   "top_age": "33.5",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "E. spinosum",
+   "zonation": "Radiolarian zone SO (aRP)",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "35.5",
+   "top_age": "37.7",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "RPA18",
+   "zonation": "Radiolarian zone Austral (RPA)",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "25.0",
+   "top_age": "26.5",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "RPA17",
+   "zonation": "Radiolarian zone Austral (RPA)",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "26.5",
+   "top_age": "28.0",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "RPA16",
+   "zonation": "Radiolarian zone Austral (RPA)",
+   "rank": "zone",
+   "age_span": "late Chattian – early Rupelian",
+   "base_age": "28.0",
+   "top_age": "30.0",
+   "stage": "Chattian/Rupelian",
+   "defined_by": "",
+   "note": "top approximately at L. aff. conicum datum"
+  },
+  {
+   "name": "RPA15",
+   "zonation": "Radiolarian zone Austral (RPA)",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "30.0",
+   "top_age": "33.5",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": "defined by A.? irregularis"
+  },
+  {
+   "name": "RPA14",
+   "zonation": "Radiolarian zone Austral (RPA)",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "33.7",
+   "top_age": "37.7",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": "defined by E. spinosum"
+  },
+  {
+   "name": "CNO5",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "25.0",
+   "top_age": "26.5",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "CNO4",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "26.5",
+   "top_age": "28.5",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "CNO3",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "28.5",
+   "top_age": "32.0",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "CNO2",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "32.0",
+   "top_age": "33.0",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "CNO1",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "latest Eocene – early Rupelian",
+   "base_age": "33.0",
+   "top_age": "33.7",
+   "stage": "Priabonian/Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "CNE21",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "33.7",
+   "top_age": "34.5",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "CNE20",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "34.5",
+   "top_age": "35.5",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "CNE19",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "35.5",
+   "top_age": "36.5",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "CNE18",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "36.5",
+   "top_age": "37.0",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "CNE17",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "37.0",
+   "top_age": "37.7",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "NP24",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "25.0",
+   "top_age": "26.5",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": "spans across forams column"
+  },
+  {
+   "name": "NP23",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "late Chattian – early Rupelian",
+   "base_age": "26.5",
+   "top_age": "29.5",
+   "stage": "Chattian/Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "NP22",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "29.5",
+   "top_age": "32.0",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "NP21",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "32.0",
+   "top_age": "33.0",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "NP19–20",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "34.5",
+   "top_age": "36.5",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": "combined NP19/NP20 interval"
+  },
+  {
+   "name": "NP18",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "36.5",
+   "top_age": "37.0",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "NP17",
+   "zonation": "Calcareous nannofossil zones",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "37.0",
+   "top_age": "37.7",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "O6",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "25.0",
+   "top_age": "26.5",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "O5",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "26.5",
+   "top_age": "28.0",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "O4",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "28.0",
+   "top_age": "29.0",
+   "stage": "Chattian/Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "O3",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "29.0",
+   "top_age": "29.5",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "O2",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "29.5",
+   "top_age": "31.5",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "O1",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "31.5",
+   "top_age": "33.0",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "E16",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "latest Eocene – early Rupelian",
+   "base_age": "33.0",
+   "top_age": "34.0",
+   "stage": "Priabonian/Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "E15",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "34.0",
+   "top_age": "35.5",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "E14",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "35.5",
+   "top_age": "37.7",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "AO4",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "25.0",
+   "top_age": "26.5",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "AO3",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "late Chattian – early Rupelian",
+   "base_age": "26.5",
+   "top_age": "29.0",
+   "stage": "Chattian/Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "AO2",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "29.0",
+   "top_age": "30.0",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "AO1",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "30.0",
+   "top_age": "33.5",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "AE10",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "latest Eocene",
+   "base_age": "33.7",
+   "top_age": "34.5",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "AE9",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "34.5",
+   "top_age": "35.5",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "AE8",
+   "zonation": "Planktonic Foram. zones",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "35.5",
+   "top_age": "37.7",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "C8",
+   "zonation": "Magnetochron",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "25.0",
+   "top_age": "26.5",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "C9",
+   "zonation": "Magnetochron",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "26.5",
+   "top_age": "28.0",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "C10",
+   "zonation": "Magnetochron",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "28.0",
+   "top_age": "29.0",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "C11",
+   "zonation": "Magnetochron",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "29.0",
+   "top_age": "30.5",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "C12",
+   "zonation": "Magnetochron",
+   "rank": "zone",
+   "age_span": "early Rupelian",
+   "base_age": "30.5",
+   "top_age": "33.0",
+   "stage": "Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "C13",
+   "zonation": "Magnetochron",
+   "rank": "zone",
+   "age_span": "latest Eocene – early Rupelian",
+   "base_age": "33.0",
+   "top_age": "34.0",
+   "stage": "Priabonian/Rupelian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "C15",
+   "zonation": "Magnetochron",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "34.0",
+   "top_age": "35.0",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "C16",
+   "zonation": "Magnetochron",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "35.0",
+   "top_age": "36.5",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "C17",
+   "zonation": "Magnetochron",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "36.5",
+   "top_age": "37.7",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": ""
+  },
+  {
+   "name": "C14",
+   "zonation": "Magnetochron",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "",
+   "top_age": "",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": "unclear; not visibly labelled but expected between C13 and C15"
+  },
+  {
+   "name": "Ld",
+   "zonation": "NZ Stage",
+   "rank": "zone",
+   "age_span": "late Chattian",
+   "base_age": "25.0",
+   "top_age": "27.5",
+   "stage": "Chattian",
+   "defined_by": "",
+   "note": "New Zealand local stage"
+  },
+  {
+   "name": "Lwh",
+   "zonation": "NZ Stage",
+   "rank": "zone",
+   "age_span": "late Chattian – early Rupelian",
+   "base_age": "27.5",
+   "top_age": "29.5",
+   "stage": "Chattian/Rupelian",
+   "defined_by": "",
+   "note": "New Zealand local stage"
+  },
+  {
+   "name": "Ak",
+   "zonation": "NZ Stage",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "34.5",
+   "top_age": "36.5",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": "New Zealand local stage; Runangan between Ak and Lwh"
+  },
+  {
+   "name": "Runangan (unnamed substage/interval)",
+   "zonation": "NZ Stage",
+   "rank": "zone",
+   "age_span": "late Eocene",
+   "base_age": "34.5",
+   "top_age": "36.5",
+   "stage": "Priabonian",
+   "defined_by": "",
+   "note": "label partly obscured; stages labelled between Ak and Lwh"
+  },
+  {
+   "name": "Whaingaroan",
+   "zonation": "NZ Stage",
+   "rank": "zone",
+   "age_span": "",
+   "base_age": "",
+   "top_age": "",
+   "stage": "",
+   "defined_by": "",
+   "note": ""
+  }
+ ],
+ "correlations": [],
+ "confidence": 0.0
+}

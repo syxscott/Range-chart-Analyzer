@@ -135,12 +135,30 @@ _STEMS = ("phylogen", "molecular phylogen", "palyno", "zonation",
 
 
 def _match_kw(text: str, needle: str) -> bool:
-    """Match one keyword against ``text`` (already lowercased)."""
+    """Match one keyword against ``text`` (already lowercased).
+
+    AUDIT-2026-09-28: ``re.ASCII`` is load-bearing. Both sides of this mirror
+    write ``\\b``, but they do not mean the same thing by it: Python's ``\\w`` is
+    UNICODE-aware for str patterns, while a JavaScript RegExp without the ``u``
+    flag treats ``\\w`` as ASCII-only. So for a caption that runs an ASCII
+    keyword straight into CJK or Cyrillic, the boundary exists in the browser
+    and does not exist here:
+
+        "pollen丰度图"   python: no match -> range_chart (default)
+                         js:     match     -> abundance_diagram
+
+    That is precisely the divergence this module exists to prevent -- its
+    docstring promises the web frontend and both desktop GUIs "classify the
+    same caption identically" -- and the branch order means the two engines
+    then run DIFFERENT EXTRACTION PIPELINES on the same figure. ``re.ASCII``
+    makes Python's ``\\b`` mean what JavaScript's means. Pure-ASCII captions
+    are unaffected, because both notions of word character agree there.
+    """
     if any(ord(c) > 127 for c in needle):
         # CJK: plain substring — no word boundaries in CJK text.
         return needle in text
     pat = r"\b" + re.escape(needle) + ("" if needle in _STEMS else r"\b")
-    return re.search(pat, text) is not None
+    return re.search(pat, text, re.ASCII) is not None
 
 
 def _hit(t: str, ascii_keys: tuple[str, ...], cjk_keys: tuple[str, ...],

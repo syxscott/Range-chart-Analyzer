@@ -502,12 +502,28 @@
 
   // Phase C: keep the segmented control buttons in sync with the hidden
   // <select> that remains the source of truth for rcaResolveMode().
+  // AUDIT-2026-09-27 (item 8d): tabindex travels with aria-checked. A
+  // radiogroup is ONE tab stop and the arrows move the selection inside it —
+  // #lang-switch already models it that way, but all three #conn-mode-seg
+  // radios were tabbable, so two visually identical controls promised
+  // arrow-key navigation and behaved differently. The `tabbableTaken` fallback
+  // keeps exactly one entry point even if the stored value is unknown.
   function syncSegmentedFromSelect() {
     const seg = $('conn-mode-seg');
     const sel = $('conn-mode');
     if (!seg || !sel) return;
-    seg.querySelectorAll('button[role=radio]').forEach((b) => {
-      b.setAttribute('aria-checked', b.getAttribute('data-value') === sel.value ? 'true' : 'false');
+    const btns = seg.querySelectorAll('button[role=radio]');
+    let checked = null;
+    btns.forEach((b) => {
+      if (b.getAttribute('data-value') === sel.value) checked = b;
+    });
+    let taken = false;
+    btns.forEach((b) => {
+      const isChecked = b === checked;
+      b.setAttribute('aria-checked', isChecked ? 'true' : 'false');
+      const tabbable = isChecked || !taken;
+      if (tabbable) taken = true;
+      b.setAttribute('tabindex', tabbable ? '0' : '-1');
     });
   }
 
@@ -1519,7 +1535,16 @@
       // Re-append the original element (preserving any DOM state inside
       // it — handlers, child nodes, attribute changes — that a fresh
       // <div id="viz-host" hidden></div> clone would lose).
-      content.appendChild(vizHost);
+      //
+      // AUDIT-2026-09-27 (item 5): insert as the FIRST child, not appended
+      // last. It used to land after the toolbar, every result table and the
+      // raw <details>, i.e. entirely below the fold on any real result — so
+      // the advertised "hover a bar to highlight its row" affordance had no
+      // row on screen to highlight, and the hint plus the text alternative
+      // were pushed off-screen with it. The canvas is the visual anchor for
+      // the data below it.
+      if (content.firstChild) content.insertBefore(vizHost, content.firstChild);
+      else content.appendChild(vizHost);
     }
     content.classList.remove('hidden');
     // Phase D: cross-fade the result in (skip animation under reduced motion).
@@ -1950,6 +1975,23 @@
     document.documentElement.lang = map[RCA_LANG] || RCA_LANG;
   }
 
+  // AUDIT-2026-09-27 (item 8g): the selection bar's row unit was a hard-coded
+  // Chinese CSS `content: " 行"` with a single html[lang="en"] twin, so the ja
+  // UI silently printed the Chinese form — and because the string lives in
+  // `content` it is not in the DOM at all: no key in js/i18n.js can reach it and
+  // rcaApplyI18n's walk never sees it. Emitting it from JS puts the one string
+  // that varies with the language in the one place the language lives.
+  // (The literals live here rather than in js/i18n.js because the catalogue is
+  // a Python-mirrored file this change must not touch; when a key is added
+  // there, swap the map for the catalogue's t() lookup and delete nothing
+  // else.)
+  const RCA_ROW_UNITS = { zh: ' 行', en: ' row(s)', ja: ' 行' };
+  function applyRowsUnit() {
+    const style = document.documentElement && document.documentElement.style;
+    if (!style || typeof style.setProperty !== 'function') return;
+    style.setProperty('--rca-rows-unit', RCA_ROW_UNITS[RCA_LANG] || RCA_ROW_UNITS.en);
+  }
+
   function switchLang(lang) {
     rcaSetLang(lang);
     rcaApplyI18n(document);
@@ -2020,6 +2062,7 @@
     rcaApplyI18n(document);
     applyLangButtons();
     applyDocLangAttr();
+    applyRowsUnit();
 
     loadSettings();
     syncFooterRuntime();
@@ -2181,15 +2224,33 @@
     // attribute is missing.
     const captionEl = $('caption');
     const counterEl = $('caption-counter');
+    const counterLiveEl = $('caption-counter-live');
     if (captionEl && counterEl) {
       const capMax = parseInt(captionEl.getAttribute('maxlength'), 10) || 500;
       const softWarn = Math.max(60, Math.round(capMax * 0.6));
       const hardWarn = capMax;
+      // AUDIT-2026-09-27 (item 8e): #caption-counter used to BE the
+      // aria-live="polite" region, and its text is rewritten on every
+      // keystroke — a screen reader narrated "37 / 2000", "38 / 2000", …
+      // through a 2000-character caption (hundreds of announcements for one
+      // field, drowning everything else on the page). The counter is now a
+      // plain visible span and #caption-counter-live is the polite region,
+      // written ONLY when the length crosses the warn / over band: the
+      // threshold is the only thing a non-sighted user needs told, and the
+      // visible count keeps updating silently.
+      let lastBand = '';
       const updateCounter = () => {
         const n = captionEl.value.length;
         counterEl.textContent = n + ' / ' + capMax;
-        counterEl.classList.toggle('warn', n >= softWarn && n < hardWarn);
-        counterEl.classList.toggle('over', n >= hardWarn);
+        const band = n >= hardWarn ? 'over' : (n >= softWarn ? 'warn' : '');
+        counterEl.classList.toggle('warn', band === 'warn');
+        counterEl.classList.toggle('over', band === 'over');
+        if (band === lastBand) return;
+        lastBand = band;
+        if (!counterLiveEl) return;
+        counterLiveEl.textContent = band
+          ? t('upload.caption') + ' ' + n + ' / ' + capMax
+          : '';
       };
       captionEl.addEventListener('input', updateCounter);
       updateCounter();
@@ -2266,6 +2327,10 @@ cards.forEach((c, i) => {
         });
         // reflect into hidden <select>
         sel.value = val;
+        // AUDIT-2026-09-27 (item 8d): the roving tab stop follows the click, so
+        // re-entering the group with Tab lands on the current choice instead
+        // of always on the first button.
+        syncSegmentedFromSelect();
         // fire change so any later watcher (and the existing logic) sees it
         sel.dispatchEvent(new Event('change'));
         // Footer copy depends on the resolved transport (backend vs direct);
@@ -2275,20 +2340,29 @@ cards.forEach((c, i) => {
       // keep segmented in sync with external programmatic changes
       seg.addEventListener('keydown', (e) => {
         const order = ['auto', 'backend', 'direct'];
+        // AUDIT-2026-09-27 (item 8d): `.click()` selects but does not move the
+        // caret, so with a roving tabindex the keyboard user would stay parked
+        // on the button they started from while the selection walked away.
+        // Focus the button that is now checked.
+        const pick = (value) => {
+          const target = seg.querySelector(`button[data-value="${value}"]`);
+          if (!target) return;
+          target.click();
+          if (typeof target.focus === 'function') target.focus();
+        };
         if (e.key === 'Home') {
-          seg.querySelector(`button[data-value="${order[0]}"]`).click();
+          pick(order[0]);
           e.preventDefault();
           return;
         }
         if (e.key === 'End') {
-          seg.querySelector(`button[data-value="${order[order.length - 1]}"]`).click();
+          pick(order[order.length - 1]);
           e.preventDefault();
           return;
         }
         if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
         const i = order.indexOf(sel.value);
-        const next = order[(i + (e.key === 'ArrowRight' ? 1 : -1) + 3) % 3];
-        seg.querySelector(`button[data-value="${next}"]`).click();
+        pick(order[(i + (e.key === 'ArrowRight' ? 1 : -1) + 3) % 3]);
         e.preventDefault();
       });
     }

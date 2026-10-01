@@ -1,0 +1,370 @@
+{
+ "sections": [
+  {
+   "id": "A",
+   "group": "Ratburi Group / Kaeng Krachan Group (combined section per Raksaskulwong and Wongwanich 1993)",
+   "lithology_blocks": [
+    {
+     "pattern": "thin bedded limestone",
+     "range_top_idx": 17,
+     "range_base_idx": 16
+    },
+    {
+     "pattern": "mudstone/shale with sandstone interbeds",
+     "range_top_idx": 15,
+     "range_base_idx": 10
+    },
+    {
+     "pattern": "sandstone (with pebbly mudstone/sandstone)",
+     "range_top_idx": 9,
+     "range_base_idx": 8
+    },
+    {
+     "pattern": "sandstone",
+     "range_top_idx": 8,
+     "range_base_idx": 7
+    },
+    {
+     "pattern": "mudstone/shale with sandstone interbeds and lenticular chert",
+     "range_top_idx": 6,
+     "range_base_idx": 4
+    },
+    {
+     "pattern": "pebbly mudstone/sandstone",
+     "range_top_idx": 4,
+     "range_base_idx": 3
+    },
+    {
+     "pattern": "sandstone with lenticular chert/chert nodules",
+     "range_top_idx": 3,
+     "range_base_idx": 1
+    }
+   ],
+   "age_units": [
+    {
+     "label": "Ratburi Group (uppermost Lower–Middle Permian)",
+     "range_top_idx": 17,
+     "range_base_idx": 16
+    },
+    {
+     "label": "Kaeng Krachan Group – Khao Phra Formation (Lower Permian)",
+     "range_top_idx": 15,
+     "range_base_idx": 9
+    },
+    {
+     "label": "Kaeng Krachan Group – Ko He Formation (Lower Permian)",
+     "range_top_idx": 9,
+     "range_base_idx": 5
+    },
+    {
+     "label": "Ko He Formation (?)",
+     "range_top_idx": 5,
+     "range_base_idx": 4
+    },
+    {
+     "label": "Kaeng Krachan Group – Spillway Formation (Upper Carboniferous)",
+     "range_top_idx": 4,
+     "range_base_idx": 1
+    }
+   ],
+   "samples": [],
+   "coordinates_text": "Not visible in chart",
+   "thickness_m": "100 m (scale bar shown for part of section)",
+   "confidence_by_section": 0.55,
+   "_extras": {
+    "note": "Bed-level resolution is approximate; only gross formation-level packages are clearly delineated. '?' marks an uncertain boundary within Ko He Formation."
+   }
+  },
+  {
+   "id": "B",
+   "group": "Ratburi Group / Kaeng Krachan Group (combined section per Chaodumrong et al. 2007)",
+   "lithology_blocks": [
+    {
+     "pattern": "thin bedded limestone with thick bedded limestone (Unconformity marked at base of Um Luk)",
+     "range_top_idx": 24,
+     "range_base_idx": 23
+    },
+    {
+     "pattern": "thin bedded limestone (Um Luk Formation)",
+     "range_top_idx": 23,
+     "range_base_idx": 21
+    },
+    {
+     "pattern": "thin bedded limestone with thin beds (Phanom Wang Formation)",
+     "range_top_idx": 21,
+     "range_base_idx": 19
+    },
+    {
+     "pattern": "thin bedded limestone (Phap Pha Formation)",
+     "range_top_idx": 19,
+     "range_base_idx": 17
+    },
+    {
+     "pattern": "thin bedded limestone (Thung Nang Ling Formation)",
+     "range_top_idx": 17,
+     "range_base_idx": 15
+    },
+    {
+     "pattern": "shale/mudstone with dropstones and lonestones (basal Kaeng Krachan)",
+     "range_top_idx": 15,
+     "range_base_idx": 13
+    },
+    {
+     "pattern": "sandstone (Khao Chao Formation)",
+     "range_top_idx": 13,
+     "range_base_idx": 12
+    },
+    {
+     "pattern": "mudstone/shale interbedded with sandstone and lenticular chert (Khao Phra Formation)",
+     "range_top_idx": 12,
+     "range_base_idx": 8
+    },
+    {
+     "pattern": "sandstone (Ko He Formation)",
+     "range_top_idx": 8,
+     "range_base_idx": 6
+    },
+    {
+     "pattern": "mudstone/shale with pebbly mudstone/sandstone and chert nodules (Ko He–Spillway transition)",
+     "range_top_idx": 6,
+     "range_base_idx": 3
+    },
+    {
+     "pattern": "sandstone/mudstone with chert nodules (Spillway Formation)",
+     "range_top_idx": 3,
+     "range_base_idx": 2
+    },
+    {
+     "pattern": "mudstone/shale (Laem Mai Phai Formation)",
+     "range_top_idx": 2,
+     "range_base_idx": 1
+    }
+   ],
+   "age_units": [
+    {
+     "label": "Ratburi Group – Um Luk Formation (uppermost Lower–Middle Permian)",
+     "range_top_idx": 24,
+     "range_base_idx": 22
+    },
+    {
+     "label": "Ratburi Group – Phanom Wang Formation",
+     "range_top_idx": 22,
+     "range_base_idx": 20
+    },
+    {
+     "label": "Ratburi Group – Phap Pha Formation",
+     "range_top_idx": 20,
+     "range_base_idx": 18
+    },
+    {
+     "label": "Ratburi Group – Thung Nang Ling Formation",
+     "range_top_idx": 18,
+     "range_base_idx": 16
+    },
+    {
+     "label": "Kaeng Krachan Group – Khao Chao Formation (Lower Permian)",
+     "range_top_idx": 13,
+     "range_base_idx": 13
+    },
+    {
+     "label": "Kaeng Krachan Group – Khao Phra Formation (Lower Permian)",
+     "range_top_idx": 12,
+     "range_base_idx": 9
+    },
+    {
+     "label": "Kaeng Krachan Group – Ko He Formation (Lower Permian)",
+     "range_top_idx": 9,
+     "range_base_idx": 7
+    },
+    {
+     "label": "Kaeng Krachan Group – Spillway Formation",
+     "range_top_idx": 7,
+     "range_base_idx": 4
+    },
+    {
+     "label": "Laem Mai Phai Formation (basal)",
+     "range_top_idx": 4,
+     "range_base_idx": 1
+    }
+   ],
+   "samples": [],
+   "coordinates_text": "Not visible in chart",
+   "thickness_m": "100 m (scale bar at bottom of section)",
+   "confidence_by_section": 0.65,
+   "_extras": {
+    "note": "Bed counts and pattern boundaries are estimated from formation labels; small-scale alternations of sandstone/mudstone within each formation are not individually resolvable."
+   }
+  },
+  {
+   "id": "C",
+   "group": "Ratburi Group / Kaeng Krachan Group (combined section per Ueno and Chareontitirat 2011)",
+   "lithology_blocks": [
+    {
+     "pattern": "thin bedded limestone (Ratburi Group – Upper Member)",
+     "range_top_idx": 15,
+     "range_base_idx": 11
+    },
+    {
+     "pattern": "mudstone/shale with lenticular chert/chert nodules (Ratburi–Kaeng Krachan transition)",
+     "range_top_idx": 11,
+     "range_base_idx": 9
+    },
+    {
+     "pattern": "shale/mudstone with lonestones and dropstones (glaciomarine basal Kaeng Krachan)",
+     "range_top_idx": 9,
+     "range_base_idx": 7
+    },
+    {
+     "pattern": "sandstone with thin mudstone/shale interbeds",
+     "range_top_idx": 7,
+     "range_base_idx": 6
+    },
+    {
+     "pattern": "thin mudstone/shale",
+     "range_top_idx": 6,
+     "range_base_idx": 5
+    },
+    {
+     "pattern": "sandstone",
+     "range_top_idx": 5,
+     "range_base_idx": 4
+    },
+    {
+     "pattern": "thin mudstone/shale",
+     "range_top_idx": 4,
+     "range_base_idx": 3
+    },
+    {
+     "pattern": "sandstone (base)",
+     "range_top_idx": 3,
+     "range_base_idx": 1
+    }
+   ],
+   "age_units": [
+    {
+     "label": "Ratburi Group – Upper member (Roadian–Capitanian)",
+     "range_top_idx": 15,
+     "range_base_idx": 11
+    },
+    {
+     "label": "Ratburi Group – Lower member (Kungurian–Roadian)",
+     "range_top_idx": 11,
+     "range_base_idx": 10
+    },
+    {
+     "label": "Kaeng Krachan Group (Sakmarian–Kungurian)",
+     "range_top_idx": 10,
+     "range_base_idx": 1
+    }
+   ],
+   "samples": [],
+   "coordinates_text": "Not visible in chart",
+   "thickness_m": "100 m (scale bar near base)",
+   "confidence_by_section": 0.6,
+   "_extras": {
+    "note": "Section C in this figure is schematic/condensed; only major Ratburi vs. Kaeng Krachan lithologic packages are labelled, with no formation-level subdivisions of the Kaeng Krachan Group shown."
+   }
+  }
+ ],
+ "fossil_legend": [],
+ "lithology_legend": [
+  {
+   "marker": "",
+   "pattern": "yellow stippled",
+   "meaning": "sandstone"
+  },
+  {
+   "marker": "",
+   "pattern": "horizontal dashes",
+   "meaning": "mudstone"
+  },
+  {
+   "marker": "",
+   "pattern": "horizontal lines",
+   "meaning": "shale"
+  },
+  {
+   "marker": "",
+   "pattern": "black",
+   "meaning": "chert"
+  },
+  {
+   "marker": "",
+   "pattern": "light blue brick",
+   "meaning": "thick bedded limestone"
+  },
+  {
+   "marker": "",
+   "pattern": "blue brick",
+   "meaning": "thin bedded limestone"
+  },
+  {
+   "marker": "",
+   "pattern": "teardrop",
+   "meaning": "dropstone"
+  },
+  {
+   "marker": "",
+   "pattern": "pentagon",
+   "meaning": "lonestone"
+  },
+  {
+   "marker": "",
+   "pattern": "black ellipse",
+   "meaning": "pebbly mudstone/sandstone"
+  },
+  {
+   "marker": "",
+   "pattern": "lens",
+   "meaning": "lenticular chert/chert nodule"
+  }
+ ],
+ "cross_beds": [
+  {
+   "from_section": "A",
+   "from_bed_idx": 17,
+   "to_section": "B",
+   "to_bed_idx": 15,
+   "_extras": {
+    "note": "Correlation line: Ratburi Group limestone of A tied to upper Ratburi/Thung Nang Ling unit of B"
+   }
+  },
+  {
+   "from_section": "A",
+   "from_bed_idx": 15,
+   "to_section": "B",
+   "to_bed_idx": 13,
+   "_extras": {
+    "note": "Correlation line: Khao Phra Formation of A tied to Khao Chao–Khao Phra of B"
+   }
+  },
+  {
+   "from_section": "A",
+   "from_bed_idx": 9,
+   "to_section": "B",
+   "to_bed_idx": 7,
+   "_extras": {
+    "note": "Correlation line: Ko He Formation of A tied to Ko He–Spillway of B"
+   }
+  },
+  {
+   "from_section": "B",
+   "from_bed_idx": 15,
+   "to_section": "C",
+   "to_bed_idx": 10,
+   "_extras": {
+    "note": "Correlation line: base of Ratburi Group / top of Kaeng Krachan Group in B tied to Ratburi–Kaeng Krachan contact in C"
+   }
+  },
+  {
+   "from_section": "B",
+   "from_bed_idx": 4,
+   "to_section": "C",
+   "to_bed_idx": 3,
+   "_extras": {
+    "note": "Correlation line: Laem Mai Phai / Spillway of B tied to basal sandstone of C"
+   }
+  }
+ ],
+ "confidence": 0.6
+}

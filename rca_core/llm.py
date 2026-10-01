@@ -38,6 +38,10 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
+# AUDIT-2026-09-29: shared with server.py on purpose -- see
+# rca_core/redact.py for why a second copy of that pattern is a liability.
+from .redact import redact_error_body
+
 from .ssrf import (
     _NoRedirect,
     make_pinning_opener,
@@ -93,7 +97,19 @@ class LlmProvider:
     name: str = "New provider"
     api_format: ApiFormat = ApiFormat.ANTHROPIC
     endpoint: str = ""
-    api_key: str = ""
+    # AUDIT-2026-09-27 P2: repr=False. As a plain dataclass field this was
+    # rendered IN CLEARTEXT by repr()/str() -- measured, and the neighbouring
+    # `_unreadable_envelope` below already uses repr=False for the same
+    # reason, so the omission was an oversight rather than a decision. No code
+    # in the repo formats a provider into a log or an exception today (an AST
+    # scan of every logging/print call found none), so nothing depended on
+    # the key being visible; it is one debug line or one traceback away from
+    # writing a live credential into a log file.
+    #
+    # to_dict()/from_dict() are unaffected: dataclass fields are still
+    # compared, serialised and loaded, so persistence and equality are
+    # unchanged. Only the diagnostic rendering loses the value.
+    api_key: str = field(default="", repr=False)
     model: str = ""
     extra_headers: dict[str, str] = field(default_factory=dict)
     extra_body: dict[str, Any] = field(default_factory=dict)
@@ -108,6 +124,61 @@ class LlmProvider:
     # GUI (the badge displays ✗, ✗2, ✗3+) so any value above 3 is fine
     # here but not very informative.
     consecutive_failures: int = 0
+
+    # AUDIT-2026-09-27 P1: the ``fer:v1:``/``obf:v1:`` envelope of a key this
+    # process could NOT decrypt, kept verbatim so ``to_dict`` can write it back
+    # unchanged. Not a dataclass field: it is runtime provenance about the
+    # envelope, never user data, and it must not be serialised as a key of its
+    # own. ``api_key`` is "" in this state, so the UI prompts for re-entry, but
+    # the ciphertext survives every ``ProviderStore.save()`` in the meantime.
+    _unreadable_envelope: str = field(default="", repr=False, compare=False)
+
+    @property
+    def needs_key_reentry(self) -> bool:
+        """True when a stored key exists but could not be decrypted this launch.
+
+        The GUI shows a re-entry prompt; it must NOT have already overwritten
+        the stored key by the time it does.
+        """
+        return bool(self._unreadable_envelope)
+
+    def __repr__(self) -> str:
+        """Render the provider WITHOUT its credentials.
+
+        AUDIT-2026-09-27 P2: ``api_key`` alone was made ``repr=False``, but
+        this class's docstring invites the opposite leak --
+        ``extra_headers`` exists "to accommodate proxies or non-standard
+        gateways", which is exactly where a user puts
+        ``Authorization: Bearer ...``, and ``extra_body`` is free-form and
+        routinely carries another ``api_key``. Measured: repr() rendered all
+        three in cleartext while to_dict() encrypted only the first.
+
+        The header and body NAMES are still shown, because the useful part of
+        a diagnostic is knowing WHICH proxy headers are set; only the values
+        are masked. Masking selectively -- by whether the header NAME looks
+        secret-ish -- would hand the safety of a credential to a name the
+        user chose, and "X-Whatever" is a perfectly good place to put a token.
+
+        A dataclass-generated __repr__ would otherwise win; dataclasses
+        ._set_new_attribute does not touch an attribute the class body
+        already defines, so this one is kept.
+        """
+        def _masked(d: Any) -> Any:
+            if not isinstance(d, dict):
+                return d
+            return {k: ("***" if v not in (None, "") else v)
+                    for k, v in d.items()}
+
+        return (
+            f"{type(self).__name__}(id={self.id!r}, name={self.name!r}, "
+            f"api_format={self.api_format!r}, endpoint={self.endpoint!r}, "
+            f"api_key={('***' if self.api_key else '')!r}, model={self.model!r}, "
+            f"extra_headers={_masked(self.extra_headers)!r}, "
+            f"extra_body={_masked(self.extra_body)!r}, "
+            f"is_current={self.is_current!r}, "
+            f"created_at={self.created_at!r}, sort_index={self.sort_index!r}, "
+            f"consecutive_failures={self.consecutive_failures!r})"
+        )
 
     def __post_init__(self) -> None:
         if isinstance(self.api_format, str):
@@ -128,15 +199,24 @@ class LlmProvider:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["api_format"] = self.api_format.value
+        # The unreadable-envelope marker is runtime provenance, not stored state.
+        d.pop("_unreadable_envelope", None)
         # P2-2 (REVIEW-2026-07-25): obfuscate the API key at rest.
         from rca_core.secrets_store import encrypt
         if d.get("api_key"):
             d["api_key"] = encrypt(d["api_key"])
+        elif self._unreadable_envelope:
+            # AUDIT-2026-09-27 P1: a key we could not decrypt must be written
+            # back BYTE-FOR-BYTE. This branch used to be absent, so `save()`
+            # replaced an undecryptable `fer:v1:` envelope with "" and the
+            # user's paid credential was destroyed the first time anything
+            # touched the store - switching the current provider was enough.
+            d["api_key"] = self._unreadable_envelope
         return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "LlmProvider":
-        from rca_core.secrets_store import decrypt, is_obfuscated
+        from rca_core.secrets_store import decrypt_or_none, is_obfuscated
         d = dict(d)
         fmt_raw = d.get("api_format", "anthropic")
         try:
@@ -147,13 +227,21 @@ class LlmProvider:
         # P2-2 (REVIEW-2026-07-25): decode obfuscated key (or pass
         # legacy plaintext through untouched).
         raw_key = d.get("api_key") or ""
+        unreadable = ""
         if raw_key and is_obfuscated(raw_key):
-            try:
-                d["api_key"] = decrypt(raw_key)
-            except ValueError:
-                # Salt lost or envelope corrupted — force re-prompt.
+            plain = decrypt_or_none(raw_key)
+            if plain is None:
+                # AUDIT-2026-09-27 P1: keep the envelope so ``to_dict`` can
+                # round-trip it. Blank in memory so nothing tries to call the
+                # API with ciphertext, and flag it so the user is prompted.
                 d["api_key"] = ""
+                unreadable = raw_key
+            else:
+                d["api_key"] = plain
+        elif raw_key:
+            d["api_key"] = raw_key
         provider = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+        provider._unreadable_envelope = unreadable
         provider.api_format = fmt
         return provider
 
@@ -777,7 +865,22 @@ class ProviderStore:
         # concurrent saves across instances; the per-instance RLock still
         # serializes nested CRUD within a single store.
         with _PROVIDER_STORE_SAVE_LOCK:
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            # AUDIT-2026-09-30: mode=0o700 added. This is the same directory
+            # rca_core/secrets_store.py::_base_dir() creates, and that function
+            # states the invariant in its own docstring: the directory "used to
+            # be created with os.makedirs(..., exist_ok=True) and left at the
+            # process umask default (0777 & ~umask, i.e. usually 0755).
+            # Everything this module stores in it is key material, so it is now
+            # 0700 best-effort." It was enforcing that for its own two call
+            # sites while this one -- which is quite likely the FIRST to run on
+            # a fresh install, since saving a provider needs no key material --
+            # created it with no mode at all. Whichever writer ran first decided
+            # the mode for the whole install, and this one handed a 0755
+            # directory to the module holding the Fernet key and the salt.
+            # No-op on Windows, where mode bits are advisory (the real ACL comes
+            # from the profile directory); the existing _chmod_user_only call
+            # further down documents the same caveat.
+            os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
             data = {
                 "version": 1,
                 "current_id": self.current_id,
@@ -1416,7 +1519,16 @@ def _call_openai(
     if payload_bytes is None:
         return None, False, status, err_str, None
     try:
-        payload = json.loads(payload_bytes.decode("utf-8"))
+        # AUDIT-2026-09-28: "utf-8-sig", not "utf-8", at all FIVE provider
+        # payload decodes (this one, 1662, 1724, 2074, 2126). A gateway or
+        # proxy that prepends a UTF-8 BOM made json.loads raise
+        # "Unexpected UTF-8 BOM" on a perfectly good 2xx body, and the
+        # except below then reported the whole response as an error body.
+        # rca_core/json_utils.safe_json_loads got the same treatment earlier
+        # the same day; this layer bypasses that chain, so it needed its own
+        # fix -- the same guard missing on a sibling path. utf-8-sig is a
+        # no-op when there is no BOM, so nothing else changes.
+        payload = json.loads(payload_bytes.decode("utf-8-sig"))
     except Exception:
         # REVIEW-2026-09-10: a 2xx that is not JSON (a WAF page, an SSE
         # stream) must hand its bytes back as the error body, not vanish.
@@ -1575,7 +1687,7 @@ def _call_gemini(
     if payload_bytes is None:
         return None, False, status, err_str, None
     try:
-        payload = json.loads(payload_bytes.decode("utf-8"))
+        payload = json.loads(payload_bytes.decode("utf-8-sig"))
     except Exception:
         # REVIEW-2026-09-20 #20: a 2xx that is not JSON (a WAF page, an SSE
         # stream) used to be reported with the *stale* empty err_str, so the
@@ -1637,7 +1749,7 @@ def _read_response(
     if payload_bytes is None:
         return None, False, status, err_str, None
     try:
-        payload = json.loads(payload_bytes.decode("utf-8"))
+        payload = json.loads(payload_bytes.decode("utf-8-sig"))
     except Exception:
         # REVIEW-2026-09-10: a 2xx whose body is not JSON (a WAF/login HTML
         # page, an SSE stream) discarded the bytes entirely, so the caller
@@ -1892,7 +2004,24 @@ def call_llm_api_with_retry(
             backoff_factor=backoff_factor,
         )
         backoff = delay
-        suffix = f"[retry {attempt + 1}/{retries} after {backoff:.1f}s]"
+        is_final = attempt == retries - 1
+        if is_final:
+            # AUDIT-2026-09-27 P2: no retry follows this attempt, so a
+            # "[retry N/N after Xs]" line promises a delay that is never
+            # waited and an attempt that never happens. It is also the LAST
+            # line the user reads, because each attempt's fresh err_body
+            # replaces the previous one -- so on a 429/503 that exhausts the
+            # budget (the common case for a rate-limited API) every failed
+            # extraction ends by claiming another retry is coming.
+            # The network-error branch above already reports the attempts
+            # actually made (REVIEW-2026-09-10); this is the same repair for
+            # the status branch, which that review did not cover.
+            made = attempt + 1
+            tail = ("HTTP %s" % status) if status is not None else "network error"
+            suffix = "[%d attempt%s - %s, giving up]" % (
+                made, "" if made == 1 else "s", tail)
+        else:
+            suffix = f"[retry {attempt + 1}/{retries} after {backoff:.1f}s]"
         if err_body:
             err_body = err_body + "\n" + suffix
         elif status is not None:
@@ -1900,7 +2029,7 @@ def call_llm_api_with_retry(
         else:
             err_body = suffix
         last = (text, truncated, status, err_body, usage)
-        if attempt == retries - 1:
+        if is_final:
             return last
         time.sleep(backoff)
     return last
@@ -1917,6 +2046,20 @@ class ConnectionResult:
     latency_ms: int = 0
     status: int | None = None
     error_key: str | None = None
+    # AUDIT-2026-09-29: the upstream's own words, REDACTED, for the failure
+    # case only. The probe already had this string -- `_do_probe` returns it
+    # and the loop assigned it to `last_err_body` on every candidate -- and
+    # the function then dropped it, so a failed connection test could only
+    # say "err.http (HTTP 400)" while the server had actually said "the model
+    # does not exist" or "your quota is exhausted". For a feature whose entire
+    # job is diagnosing a CONFIGURATION, that is the wrong default.
+    #
+    # Redacted, not raw: this body is where a rejected key comes back echoed.
+    # It shares rca_core/redact.py with the server, which is the whole reason
+    # that module exists -- a second copy of that regex is how the AUDIT-
+    # 2026-09-27 `|`-precedence narrowing would have come back. Empty on
+    # success, and empty whenever there was no body to redact.
+    error_body: str = ""
     models_sample: list[str] = field(default_factory=list)
     # Consecutive failures count — used to badge card health and for retry
     # decisions in the UI layer.
@@ -1970,7 +2113,7 @@ def _probe_openai_models(provider: LlmProvider, timeout_sec: int) -> ConnectionR
     # /models returned a usable listing — done.
     if payload_bytes is not None:
         try:
-            payload = json.loads(payload_bytes.decode("utf-8"))
+            payload = json.loads(payload_bytes.decode("utf-8-sig"))
         except Exception:
             res.error_key = "err.parse"
             return res
@@ -2005,7 +2148,11 @@ def _probe_gemini_models(provider: LlmProvider, timeout_sec: int) -> ConnectionR
     # /v1beta/models is a GET-only listing endpoint. Same fix as the OpenAI
     # probe: the previous POST implementation 405'd against the official
     # Google Generative Language gateway.
-    model = provider.model or "gemini-2.5-pro"
+    #
+    # AUDIT-2026-09-29: `model = provider.model or "gemini-2.5-pro"` sat here
+    # and was never read (ruff F841). A listing endpoint takes no model
+    # parameter, so the binding was inert; it is removed rather than "used",
+    # because there is nothing to pass it to.
     base = _api_base(provider.endpoint)
     # C4: put API key in x-api-key header (same as _call_gemini). Earlier
     # this function put it in the URL via ?key=... which leaked the key
@@ -2022,7 +2169,7 @@ def _probe_gemini_models(provider: LlmProvider, timeout_sec: int) -> ConnectionR
     res = ConnectionResult(ok=False, latency_ms=_now_ms() - t0, status=status)
     if payload_bytes is not None:
         try:
-            payload = json.loads(payload_bytes.decode("utf-8"))
+            payload = json.loads(payload_bytes.decode("utf-8-sig"))
         except Exception:
             res.error_key = "err.parse"
             return res
@@ -2157,7 +2304,21 @@ def _probe_minimal_generate(
             pass
 
     # All candidates exhausted.
-    res = ConnectionResult(ok=False, latency_ms=last_latency, status=last_status or None)
+    res = ConnectionResult(ok=False, latency_ms=last_latency,
+                           status=last_status or None)
+    # AUDIT-2026-09-29: `last_err_body` was tracked through every candidate
+    # and then dropped on the floor. This is the same shape as the
+    # `best_latency` bug REVIEW-2026-11-07 fixed one line above it -- a
+    # measurement taken carefully and never reported -- and the fix is the
+    # same: report the LAST probe's value. Redacted on the way in, because an
+    # upstream error body is exactly where a rejected key comes back.
+    #
+    # _decode_err_body first, and that is not cosmetic: _post_json returns the
+    # body as BYTES, and redact_error_body answers "" for anything that is not
+    # a str (it is a shared helper and refuses to guess). Passing the bytes
+    # straight in produced a redacted-to-nothing string -- the fix looked
+    # present and was inert. Caught by the end-to-end probe, not by reading.
+    res.error_body = redact_error_body(_decode_err_body(last_err_body))
     if last_status == 401:
         res.error_key = "err.401"
     elif last_status == 403:

@@ -233,6 +233,43 @@ class AxisCalibration:
             "residual_tolerance",
             abs(_as_float(self.residual_tolerance, "residual_tolerance")),
         )
+        # AUDIT-2026-09-27: audit bug 5-3's clamp was on from_json and (as of
+        # the same review) on fit(), but NOT here -- so the third route the
+        # 5-7 comment above names, "direct construction", still took a
+        # tolerance verbatim. Measured: AxisCalibration(..., anchors spanning
+        # 205, residuals (0.83, -1.67, 0.83), residual_tolerance=1e30) came
+        # back is_trusted=True. This is the gate 5-7 already claims for every
+        # route, so the guard belongs HERE rather than in each caller.
+        #
+        # The other two clamps stay: from_json's is load-bearing for the
+        # anchor-less branch, and removing a working guard to avoid duplication
+        # is how the three drifted apart in the first place. This one is
+        # idempotent -- the auto fraction is at most 2% of the span, far under
+        # the half-span bound, so re-clamping is a no-op.
+        if self.anchors:
+            span = max(a.data_value for a in self.anchors) - min(
+                a.data_value for a in self.anchors
+            )
+            if span > 0 and self.residual_tolerance > (
+                    _TOLERANCE_SPAN_FRACTION * abs(span)):
+                object.__setattr__(
+                    self, "residual_tolerance",
+                    max(1e-9, RESIDUAL_FRACTION * abs(span)),
+                )
+        # AUDIT-2026-09-27: audit bug 5-3's clamp was on from_json and (as of
+        # the same review) on fit(), but NOT here -- so the third route the
+        # 5-7 comment above names, "direct construction", still took a
+        # tolerance verbatim. Measured: AxisCalibration(..., anchors spanning
+        # 205, residuals (0.83, -1.67, 0.83), residual_tolerance=1e30) came
+        # back is_trusted=True. This is the gate 5-7 already claims for every
+        # route, so the guard belongs HERE rather than in each caller.
+        #
+        # The other two clamps stay: from_json's is load-bearing for the
+        # anchor-less branch below, and removing a working guard to avoid
+        # duplication is how the three drifts apart again. This one is
+        # idempotent -- the auto fraction is at most 2% of the span, far under
+        # the half-span bound, so re-clamping is a no-op.
+
         object.__setattr__(
             self,
             "residuals",
@@ -258,15 +295,33 @@ class AxisCalibration:
             direction = _direction_for(slope)
         else:
             direction = _check_direction(direction)
+        span = max(a.data_value for a in picked) - min(
+            a.data_value for a in picked
+        )
+        auto_tolerance = max(1e-9, RESIDUAL_FRACTION * abs(span))
         if residual_tolerance is None:
-            span = max(a.data_value for a in picked) - min(
-                a.data_value for a in picked
-            )
-            residual_tolerance = max(1e-9, RESIDUAL_FRACTION * abs(span))
+            residual_tolerance = auto_tolerance
         else:
             residual_tolerance = abs(
                 _as_float(residual_tolerance, "residual_tolerance")
             )
+            # FIX-2026-09-22 (audit bug 5-3): the comment at the top of this
+            # module claims this clamp exists. It did NOT here -- the clamp was
+            # only ever implemented on the from_json LOAD path (line ~493,
+            # using _TOLERANCE_SPAN_FRACTION), so a tolerance passed straight
+            # to fit() was taken verbatim and the exact defect the audit
+            # measured came straight back: tolerance 1e9 on an axis spanning
+            # 205 gives residuals of ~1.67 and `is_trusted` True, i.e. a
+            # visibly wrong calibration confidently declared usable, and every
+            # point georeferenced through it inherits the error. A tolerance
+            # wider than HALF the data span is not a judgement about this fit
+            # -- it accepts any line at all -- so such a payload falls back to
+            # the auto fraction. The SAME constant as the load path, so tuning
+            # one moves both. A tolerance at or below the bound is still
+            # honoured verbatim, which is the point of accepting one.
+            if residual_tolerance > _TOLERANCE_SPAN_FRACTION * abs(span):
+                residual_tolerance = auto_tolerance
+
         return cls(
             axis=axis,
             name=name or axis,

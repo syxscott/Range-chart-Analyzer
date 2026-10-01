@@ -287,8 +287,21 @@ function rcaLooksLikePayloadRoot(parsed) {
 // inner row. Accepted when (a) the MAJORITY of the elements are objects — a
 // [...] of bare scalars is far more likely a prose fragment than an extraction —
 // and (b) either one of those objects carries a known root key (an array of
-// wrapper objects) or at least one looks like a DATA ROW (>= 2 fields, which is
-// what a cut row array contains).
+// wrapper objects) or the array is uniformly row-shaped.
+//
+// AUDIT-2026-09-27 P0-2: the row-shape test used to demand >= 2 fields, which
+// rejected exactly the single-field rows that `sections`, `biozones`, `sites`,
+// `zones` and the paleomap tables are made of — a cut
+// [{"name":"Z1"},{"name":"Z2"},{"name":"Z3 was repaired correctly and then
+// discarded, and Level 4 rescued ONE arbitrary inner row. The sibling DICT
+// path has no such gap (_looks_like_payload_root only needs one known root
+// key), so the bare-array form of a payload lost data the object form kept.
+// A one-field row is admitted only when EVERY object in the array is
+// one-field: a lone {"a": 1} does not satisfy that, and a real single-row
+// payload still has nowhere else to land (Level 4 drops arrays). An array that
+// merely CONTAINS a multi-field object was already, and still is, admitted by
+// the loop above - it carries an unambiguous data row, which is the whole
+// point of the test.
 function rcaLooksLikePayloadList(parsed) {
   if (!Array.isArray(parsed) || parsed.length === 0) return false;
   const dicts = parsed.filter(
@@ -300,7 +313,11 @@ function rcaLooksLikePayloadList(parsed) {
   for (const d of dicts) {
     if (Object.keys(d).length >= 2) return true;
   }
-  return false;
+  // Every object one-field: the single-field-table case.
+  for (const d of dicts) {
+    if (Object.keys(d).length !== 1) return false;
+  }
+  return true;
 }
 
 // Mirror of _try_parse_object: strict parse; object/array or null.

@@ -45,14 +45,27 @@ def _normalize_taxon(name: str, *, preserve_qualifiers: bool = True) -> str:
     if not name:
         return ""
     s = re.sub(r"\s+", " ", str(name).strip().lower())
+    # AUDIT-2026-10-02: the qualifier patterns below used a bare `\b`, which on
+    # a Python str is Unicode-aware, while the product's own notion of a
+    # qualifier is ASCII-bounded (aggregate.py::_ascii_b and the lookarounds in
+    # names.py::clean_name_for_lookup, both fixed the same day for the same
+    # reason). So for "中华虫sp." this function neither canonicalised the
+    # marker nor removed it in the LENIENT pass -- and the lenient metric is
+    # precisely the one that is supposed to ignore qualifiers, so it
+    # under-counted a match the product's own dedup was counting correctly.
+    # An evaluation harness that scores against a different notion of taxon
+    # identity than the code under test makes every number it reports
+    # untrustworthy, so both passes are pinned to the ASCII boundary here too.
+    nb = r"(?<![A-Za-z0-9_])"   # ASCII \b
+    na = r"(?![A-Za-z0-9_])"
     canonical = (
-        (r"\bex\s+gr(?:oup)?\.?(?=\s|$)", "ex gr."),
-        (r"\bsensu\s+lato\b|\bs\.?\s*l\.?(?=\s|$)", "s.l."),
-        (r"\bsensu\s+stricto\b|\bs\.?\s*str\.?(?=\s|$)", "s.str."),
-        (r"\bcf\.?(?=\s|$)", "cf."),
-        (r"\baff\.?(?=\s|$)", "aff."),
-        (r"\bspp\.?(?=\s|$)", "spp."),
-        (r"\bsp\.?(?=\s|$)", "sp."),
+        (nb + r"ex\s+gr(?:oup)?\.?(?=\s|$)", "ex gr."),
+        (nb + r"sensu\s+lato" + na + r"|" + nb + r"s\.?\s*l\.?(?=\s|$)", "s.l."),
+        (nb + r"sensu\s+stricto" + na + r"|" + nb + r"s\.?\s*str\.?(?=\s|$)", "s.str."),
+        (nb + r"cf\.?(?=\s|$)", "cf."),
+        (nb + r"aff\.?(?=\s|$)", "aff."),
+        (nb + r"spp\.?(?=\s|$)", "spp."),
+        (nb + r"sp\.?(?=\s|$)", "sp."),
     )
     for pattern, replacement in canonical:
         s = re.sub(pattern, replacement, s)
@@ -62,13 +75,13 @@ def _normalize_taxon(name: str, *, preserve_qualifiers: bool = True) -> str:
         return s
 
     qualifier_patterns = (
-        r"\bex\s+gr\.\s*",
-        r"\bs\.l\.\s*",
-        r"\bs\.str\.\s*",
-        r"\bcf\.\s*",
-        r"\baff\.\s*",
-        r"\bspp\.\s*",
-        r"\bsp\.\s*",
+        nb + r"ex\s+gr\.\s*",
+        nb + r"s\.l\.\s*",
+        nb + r"s\.str\.\s*",
+        nb + r"cf\.\s*",
+        nb + r"aff\.\s*",
+        nb + r"spp\.\s*",
+        nb + r"sp\.\s*",
         r"\s*\?\s*",
     )
     for pattern in qualifier_patterns:
@@ -1633,12 +1646,58 @@ def _matched_pair_indices(
     return pairs
 
 
+# AUDIT-2026-10-01 [item 9.6]: a subscript's position INSIDE its bed, as a
+# fraction of one bed interval. Half-step offsets keep every letter strictly
+# inside (0, 1): no letter is 0.0, so a sub-bed never collides with the bare
+# bed, and none is 1.0, so it never collides with the NEXT bed. The previous
+# constant, 0.001, was 0.001 for EVERY letter, so all 26 sub-beds of a bed sat
+# on one point.
+_SUB_LETTERS = 26.0
+
+
+def _sub_offset(sub: str) -> float:
+    """Where a subscript sits inside its bed, in [0, 1).
+
+    ``a`` -> 0.5/26, ``z`` -> 25.5/26. Monotonic in the letter, and bounded so
+    that ``_bed_num`` stays strictly between ``bed_num`` and ``bed_num + 1``.
+    A multi-letter subscript (which parse_bed can return for a "Bed"-prefixed
+    label) falls back to its first letter, matching how _bin_distance treats
+    the token.
+    """
+    if not sub:
+        return 0.0
+    first = sub[0].lower()
+    if not ("a" <= first <= "z"):
+        return 0.0
+    return (ord(first) - ord("a") + 0.5) / _SUB_LETTERS
+
+
 def _bed_num(row: dict[str, Any], field: str) -> float | None:
-    """Comparable up-section position of one endpoint (bed index, else age)."""
+    """Comparable up-section position of one endpoint (bed index, else age).
+
+    AUDIT-2026-10-01 [item 9.6]: this used to add a flat 0.001 for ANY
+    subscript, which put 23a, 23c and 23z on the same point. That is the exact
+    failure ``rca_core.bed_parser`` exists to prevent -- its own docstring
+    records that "a predicted Bed 23c and ground truth Bed 23d would both score
+    as integer 23 -> false positive accuracy" -- reappearing in the reasoning
+    track, while ``_bin_distance`` in this same file handled subscripts
+    correctly. Measured consequences before the fix:
+
+        _span(23a -> 23z)                       = 0.0     (a real range, zero)
+        _span(23 -> 23a)                        = 0.0010000000000012221
+        _overlap_extent([23a..23z], [23a..23c]) = 0.0     (they share 23a..23c)
+        base_order, A@23c predicted / @23a true  = 1.0     (a wrong order,
+                                                          scored as agreement)
+
+    Spacing differs from ``_bin_distance``'s one-bin-per-difference on purpose:
+    that is a DISTANCE metric and wants unit steps, this is a POSITION and
+    wants even spacing inside a bed. Both agree on ordering and on distinctness,
+    which is what the two consumers rely on.
+    """
     bed = _parse_bed(row.get(field))
     if bed is not None:
         try:
-            return float(bed["bed_num"]) + (0.001 if _bed_sub(bed) else 0.0)
+            return float(bed["bed_num"]) + _sub_offset(_bed_sub(bed))
         except (TypeError, ValueError):  # pragma: no cover
             return None
     return _age_in_myr(row.get(field), require_unit=False)

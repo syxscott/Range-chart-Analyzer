@@ -82,7 +82,18 @@ from rca_core.extractor import (  # noqa: E402
     clamp_max_tokens,
 )
 from rca_core import ProviderStore  # noqa: E402
-from rca_core.llm import ApiFormat, LlmProvider, PROVIDER_PRESETS  # noqa: E402
+# AUDIT-2026-09-27 [item 7.2]: ProviderPreset was missing from this import
+# while three annotations below named it (`selected_preset: ProviderPreset |
+# None`, `list[ProviderPreset]`, `_show_details(preset: ProviderPreset |
+# None)`). Harmless only because `from __future__ import annotations` makes
+# annotations strings; it breaks mypy and would become a live NameError the
+# moment anyone calls typing.get_type_hints() on this module.
+from rca_core.llm import (  # noqa: E402
+    ApiFormat,
+    LlmProvider,
+    PROVIDER_PRESETS,
+    ProviderPreset,
+)
 # Phase J: history audit-trail persistence (was previously a no-op on
 # the Tkinter path).
 try:
@@ -1116,13 +1127,27 @@ class RangeChartApp:
         for c, d in self._chart_type_map:
             if c == code:
                 return d
-        return self._chart_type_map[0][1]
+        # AUDIT-2026-09-27 [item 1.10] (B-10): this used to fall back to
+        # `_chart_type_map[0][1]` == "Auto". At startup the caller seeds the
+        # display variable with this value and the `<<ComboboxSelected>>` trace
+        # then maps it BACK to a code — so any code this build does not know
+        # was silently rewritten to "auto". The two front-ends' code tables
+        # happen to match exactly today, which is why it never bit; it is
+        # latent on the very path the Fluent GUI needs: configure a provider
+        # there, fall back to Tk (no PySide6), and the FIRST mode that exists
+        # in only one front-end vanishes with no error.
+        #
+        # Keep the raw code visible instead. An unrecognised value in the
+        # combo is a legible "I don't know this" and is preserved; silently
+        # substituting a different mode is not.
+        return str(code) if code else self._chart_type_map[0][1]
 
     def _code_to_chartlang_display(self, code: str) -> str:
         for c, d in self._chart_lang_map:
             if c == code:
                 return d
-        return self._chart_lang_map[0][1]
+        # AUDIT-2026-09-27 [item 1.10]: see _code_to_chart_type_display.
+        return str(code) if code else self._chart_lang_map[0][1]
 
     def _on_cmb_chart_type_change(self):
         # Combobox display var holds the localized label; map back to code.
@@ -1179,16 +1204,23 @@ class RangeChartApp:
                             font=(FONT_FAMILY, 10),
                             justify="center", wraplength=420),
                   "text", "results.emptyHint").pack(pady=(0, 12))
-        btn_open = self._reg(tk.Button(empty, text=self._t("image.choose"),
-                                        command=self._choose_image,
-                                        bg=COLORS["primary"], fg="#ffffff",
-                                        activebackground=COLORS["primary_hover"],
-                                        activeforeground="#ffffff",
-                                        relief="flat", bd=0,
-                                        padx=16, pady=8,
-                                        cursor="hand2",
-                                        font=(FONT_FAMILY, 10, "bold")),
-                              "text", "image.choose").pack(pady=(0, 16))
+        # AUDIT-2026-09-29 (ruff F841): this read `btn_open = ` and the
+        # binding was never used. It was worse than noise -- self._reg()
+        # returns the widget and .pack() returns None, so `btn_open` held
+        # None, not the button, and reading it suggests the reference is what
+        # keeps the widget alive. The reference that does that is the one
+        # _reg() appends to self._i18n, which is why dropping the prefix is
+        # safe and not a leak.
+        self._reg(tk.Button(empty, text=self._t("image.choose"),
+                            command=self._choose_image,
+                            bg=COLORS["primary"], fg="#ffffff",
+                            activebackground=COLORS["primary_hover"],
+                            activeforeground="#ffffff",
+                            relief="flat", bd=0,
+                            padx=16, pady=8,
+                            cursor="hand2",
+                            font=(FONT_FAMILY, 10, "bold")),
+                  "text", "image.choose").pack(pady=(0, 16))
 
     # ----------
     # NOTE: the compact header intentionally drops the subtitle to keep the
@@ -2113,14 +2145,18 @@ class RangeChartApp:
             # to flag. Columnar sections get the same field stamped by the
             # merge routine but agreement across runs is much higher (every
             # row keeps its id) so painting them yellow is misleading.
-            is_range_chart = "species_ranges" in (self.result or {})
+            #
+            # AUDIT-2026-09-29 (ruff F841): this used to be computed as
+            # `is_range_chart` and then never read -- the test below
+            # re-derives it from cfg["id"] on every row, which is both
+            # correct (it is per-config, not per-result) and cheaper. The
+            # reason the test exists at all moved down to where it is used.
             for idx, item in enumerate(items):
                 if not isinstance(item, dict):
                     continue
                 cells = cfg["row"](item)
                 values = [str(idx + 1)] + ["" if c is None else str(c) for c in cells]
                 tag = "odd" if idx % 2 else ""
-                primary_field = "species" if cfg["id"] == "species_ranges" else "id"
                 if multi and cfg["id"] == "species_ranges":
                     ac = int(item.get("agreement_count", 0) or 0)
                     values[1] = f"{values[1]}  [{item.get('agreement', '')}]"

@@ -40,6 +40,16 @@ _BARE_NUM_RE = re.compile(r"^(\d+)\s*([a-zA-Z]*)")
 # from the exporter's range_base_le_range_top constraint. A trailing unit is
 # therefore an explicit rejection, and a bare-number form only accepts a
 # SINGLE-letter subscript (what bed labels use: 23c, 27a).
+# AUDIT-2026-09-29: the trailing ``a`` in the alternation is DEAD, and that is
+# deliberate rather than an oversight. The only call site guards on
+# ``len(sub) > 1`` before consulting this table (single letters are decided
+# earlier, by the "m" check and then by _SUB_RE), so "a" can never match here
+# and "27a" stays a bed label -- which is what the _sub_is_bed_label docstring
+# says and what real range charts mean by it. It is kept in the list so the
+# table reads as a complete inventory of the suffixes this domain uses, and so
+# that lifting the len>1 guard does not silently change "a" from bed to unit.
+# The alternative -- deleting the entry -- leaves the next reader wondering
+# why annus is missing from a table of time units.
 _UNIT_WORDS_RE = re.compile(
     r"^(ma|myr|mya|m\.y\.|m\.y\.?|ka|kyr|ga|gyr|yr|cm|mm|km|ft|a)$",
     re.IGNORECASE,
@@ -145,4 +155,37 @@ def parse_bed_int(value: Any) -> Optional[int]:
     return int(info["bed_num"])
 
 
-__all__ = ["parse_bed", "parse_bed_int"]
+def bed_position(value: Any) -> float | None:
+    """A bed's position on a continuous scale, subscript included.
+
+    ``23`` -> 23.0, ``23a`` -> 23.019..., ``23z`` -> 23.981..., ``24`` -> 24.0.
+    Monotonic in the letter, and strictly inside ``(bed_num, bed_num + 1)``:
+    the half-step offset keeps every sub-bed above the bare bed and below the
+    next one, so a position can never be confused with a different bed.
+
+    This exists because returning the bare integer is lossy in a way that is
+    invisible downstream. ``parse_bed_int("23a") == parse_bed_int("23b")`` is
+    true, and code that sorts or compares on that number cannot tell 23a from
+    23b -- so it either forgave a real inversion or invented one. Both
+    happened: eval_metrics._bed_num returned a flat +0.001 for every letter
+    (fixed 2026-10-01), and quality._score_biozone_order still used
+    parse_bed_n, whose alphabetical tie-break then decided which of two
+    same-bed species was treated as the younger one.
+
+    Half-steps also keep the arithmetic well-conditioned: the old 0.001 was
+    not exactly representable, and its binary error reached a reported metric
+    (0.0010000000000012221).
+    """
+    info = parse_bed(value)
+    if info is None:
+        return None
+    sub = (info.get("bed_sub") or "").lower()
+    if not sub:
+        return float(info["bed_num"])
+    first = sub[0]
+    if not ("a" <= first <= "z"):
+        return float(info["bed_num"])
+    return float(info["bed_num"]) + (ord(first) - ord("a") + 0.5) / 26.0
+
+
+__all__ = ["parse_bed", "parse_bed_int", "bed_position"]

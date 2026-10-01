@@ -85,6 +85,138 @@ function rcaLooksZonationChart(data) {
   return false;
 }
 
+function rcaLooksPaleomap(data) {
+  // exporter.py `_looks_paleomap` — mirror. Any paleomap-exclusive key that
+  // actually holds rows. The exclusivity matters: `metadata` / `confidence`
+  // overlap every mode, and a range chart may legitimately carry a `note`.
+  if (!data) return false;
+  const KEYS = ['continents', 'oceans_seas', 'tectonic_features',
+    'biogeographic_realms', 'paleolatitude_indicators', 'fossil_sites'];
+  return KEYS.some((k) => Array.isArray(data[k]) && data[k].length > 0
+    && rcaIsDict(data[k][0]));
+}
+
+function rcaPaleomapConfigs(data, multi) {
+  // exporter.py `_paleomap_tables` — mirror.
+  //
+  // AUDIT-2026-09-27 [item 4.2]. These tables were already in the extractor's
+  // output all along and were being thrown away: measured over 66 recorded
+  // real responses, 7 palaeomap results carried 24 tables in total (9
+  // continents, 16 fossil sites with coordinates, tectonic features,
+  // biogeographic realms) while this function fell through to the four
+  // range-chart shapes, which for such a payload are four EMPTY sheets. Both
+  // surfaces now render them, so the desktop GUI and the browser agree.
+  //
+  // Every cell is plain descriptive text (names, types, coordinates), so all
+  // columns stay editable-as-text, matching the Python side which declares no
+  // numeric validation for them.
+  const g = (k) => data[k];
+  return [
+    {
+      id: 'continents',
+      titleKey: 'sec.continents',
+      cols: ['col.name', 'col.type', 'col.paleolatitude', 'col.coordinates'],
+      edit: [rcaEC('name'), rcaEC('type'), rcaEC('paleolatitude'), rcaEC('coordinates')],
+      italicCol: -1,
+      row: (r) => [r.name, r.type, r.paleolatitude, r.coordinates],
+    },
+    {
+      id: 'oceans_seas',
+      titleKey: 'sec.oceansSeas',
+      cols: ['col.name', 'col.type', 'col.coordinates', 'col.note'],
+      edit: [rcaEC('name'), rcaEC('type'), rcaEC('coordinates'), rcaEC('note')],
+      italicCol: -1,
+      row: (r) => [r.name, r.type, r.coordinates, r.note],
+    },
+    {
+      id: 'tectonic_features',
+      titleKey: 'sec.tectonicFeatures',
+      cols: ['col.name', 'col.type', 'col.direction', 'col.description', 'col.coordinates'],
+      edit: [rcaEC('name'), rcaEC('type'), rcaEC('direction'),
+        rcaEC('description'), rcaEC('coordinates')],
+      italicCol: -1,
+      row: (r) => [r.name, r.type, r.direction, r.description, r.coordinates],
+    },
+    {
+      id: 'biogeographic_realms',
+      titleKey: 'sec.biogeographicRealms',
+      cols: ['col.name', 'col.type', 'col.characteristicFauna', 'col.coordinates'],
+      edit: [rcaEC('name'), rcaEC('type'), rcaEC('characteristic_fauna'),
+        rcaEC('coordinates')],
+      italicCol: -1,
+      row: (r) => [r.name, r.type, r.characteristic_fauna, r.coordinates],
+    },
+    {
+      id: 'paleolatitude_indicators',
+      titleKey: 'sec.paleolatitudeIndicators',
+      cols: ['col.type', 'col.coordinates'],
+      edit: [rcaEC('type'), rcaEC('coordinates')],
+      italicCol: -1,
+      row: (r) => [r.type, r.coordinates],
+    },
+    {
+      id: 'fossil_sites',
+      titleKey: 'sec.fossilSites',
+      cols: ['col.name', 'col.age', 'col.coordinates', 'col.fossil', 'col.fossilMarker'],
+      edit: [rcaEC('name'), rcaEC('age'), rcaEC('lat_lon'), rcaEC('fossils'),
+        rcaEC('marker_type')],
+      italicCol: -1,
+      row: (r) => [r.name, r.age, r.lat_lon, r.fossils, r.marker_type],
+    },
+  ].filter((c) => Array.isArray(g(c.id)) && g(c.id).length > 0);
+}
+
+// AUDIT-2026-09-27 [item 6.1] — the generalisation fix, mirrored from
+// exporter.py `_generic_tables`. A real 48-figure corpus run measured 4
+// results carrying 131 rows (chemical_stratigraphy: data_points / events /
+// intervals; scatter_plot: groups / points / outliers) that rendered ZERO
+// tables — the same silent data loss as paleomap. Adding a branch per mode
+// does not scale, because the model can return a key nobody anticipated.
+function rcaGenericConfigs(data, claimed) {
+  if (!data || typeof data !== 'object') return [];
+  const taken = claimed || new Set();
+  const out = [];
+  Object.keys(data).forEach((key) => {
+    if (taken.has(key)) return;
+    const v = data[key];
+    if (!Array.isArray(v) || v.length === 0 || !rcaIsDict(v[0])) return;
+    const colKeys = Object.keys(v[0]).filter((k) => typeof k === 'string');
+    if (colKeys.length === 0) return;
+    out.push({
+      id: key,
+      titleKey: rcaHumanize(key),
+      generic: true,
+      cols: colKeys.map((k) => rcaColLabel(k)),
+      edit: colKeys.map((k) => rcaEC(k)),
+      italicCol: -1,
+      row: (r) => colKeys.map((k) => (r[k] === undefined ? '' : r[k])),
+    });
+  });
+  return out;
+}
+
+function rcaHumanize(key) {
+  return String(key)
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+// col.<camel> when that translation exists, else the humanised literal.
+// Translator.t() returns an unknown key verbatim, so a literal renders as
+// itself — same trick as exporter.py `_col_label`.
+function rcaColLabel(key) {
+  const camel = String(key).replace(/_([a-z])/g, (m, c) => c.toUpperCase());
+  const i18nKey = 'col.' + camel;
+  if (typeof t === 'function') {
+    try {
+      if (t(i18nKey) !== i18nKey) return i18nKey;
+    } catch (e) { /* not initialised yet; fall through to the literal */ }
+  }
+  return rcaHumanize(key);
+}
+
 // Table definitions: key on the result object, i18n title, columns, and a
 // row-extractor producing an array of cell values in column order.
 // `italic` marks the species column for styling. These configs are shared
@@ -95,17 +227,11 @@ function rcaLooksZonationChart(data) {
 // M4 (REVIEW-2026-09-20): the branch ORDER is the mirror of
 // rca_core/exporter.py get_configs_for_result — zonation → abundance →
 // columnar (incl. the empty-sections fallback) → phylogenetic tree →
-// range chart (default). The JS used to test abundance first and zonation
+// paleomap (AUDIT-2026-09-27 item 4.2) → range chart (default) → generic
+// fallback (item 6.1). The JS used to test abundance first and zonation
 // fourth, so a payload that carried both `abundances` rows and zonation
-// descriptors rendered as an abundance diagram in the browser and as a
-// zones table in the GUI/Excel export.
-//
-// LEFTOVER (documented, not mirrored): Python runs `detect_tableless_mode`
-// FIRST and returns NO configs for the assistant modes (chemical_stratigraphy
-// / paleomap / scatter_plot), so the GUI hides the table tab instead of
-// "exporting" four empty range-chart sheets. js/table.js has no equivalent
-// and keeps rendering empty tables; index.html also has no option to reach
-// those modes from the browser.
+// descriptors rendered as an abundance diagram in the browser and as a zones
+// table in the GUI/Excel export.
 function rcaTableConfigs(data) {
   const multi = data && Number(data.runs) > 1;
   if (rcaLooksZonationChart(data)) return rcaZonationChartConfigs(data, multi);
@@ -114,7 +240,29 @@ function rcaTableConfigs(data) {
     return rcaColumnarSectionConfigs(data, multi);
   }
   if (rcaLooksPhylogeneticTree(data)) return rcaPhylogeneticTreeConfigs(data, multi);
-  return rcaRangeChartConfigs(data, multi);
+  if (rcaLooksPaleomap(data)) return rcaPaleomapConfigs(data, multi);
+  // AUDIT-2026-09-27 [item 10.1]: the range-chart branch returns its four
+  // configs UNCONDITIONALLY, and that is deliberate, not an oversight.
+  // tests_frontend.js pins it twice: an empty `abundances` placeholder (every
+  // normalised result's default) must still route to the range-chart shapes,
+  // and a name-only `sections` payload must too. The browser is the EDITING
+  // surface, so the table shells have to exist even when empty, otherwise the
+  // user cannot add a first row to `biozones` or `other_fossils`.
+  //
+  // I first "fixed" this to drop configs whose key is absent, reasoning that
+  // four header-only tables are the same lie as the empty workbook
+  // exporter.py's `_nonempty_or_none` avoids. That broke
+  // tests_edit_history.js::empty-table-keeps-addrow and two dispatch cases:
+  // the shells ARE the addrow affordance. Python and JS legitimately differ
+  // here — the desktop shows its own empty-state page instead — so which
+  // side should drop unclaimed shapes is a product call, not a bug fix, and
+  // this file now records the reasoning rather than changing the behaviour.
+  const specific = rcaRangeChartConfigs(data, multi);
+  if (specific && specific.length) {
+    return specific.concat(rcaGenericConfigs(
+      data, new Set(specific.map((c) => c.id))));
+  }
+  return rcaGenericConfigs(data, new Set());
 }
 
 // ---- editable column metadata (FE-BORROW-2026-09-20, 域T) ------------
@@ -1528,35 +1676,169 @@ const RCA_EDIT_EXTRAS_KEY = '_extras';
 
 // capture_edits() for ONE list. See editable.py:133-212 for the source rules;
 // each branch below cites them.
-function rcaCaptureListEdits(beforeList, afterList) {
+// The business key of a row, per list — a PRIORITY LIST of candidate key
+// tuples, strongest first. Mirror of rca_core/editable.py:_ROW_ID_KEYS. Used to
+// ALIGN rows across a diff so an insertion cannot shift a neighbouring row's
+// edit onto it.
+const RCA_EDIT_ROW_ID_KEYS = {
+  species_ranges: [['species', 'section'], ['species']],
+  sections: [['id'], ['name']],
+  biozones: [['name', 'section'], ['name']],
+  abundances: [['taxon', 'site', 'level'], ['taxon', 'level'], ['taxon']],
+  sites: [['name']],
+  zones: [['name']],
+  zonations: [['name']],
+  correlations: [['from_zone', 'to_zone'], ['from_zone']],
+  nodes: [['id']],
+};
+
+// Mirror of editable.py:_row_key — the strongest usable identity key for a row,
+// or null when it has none. A scalar row keys on its own text, exactly as
+// Python's ("\x00scalar", str(row)) does.
+function rcaEditRowKey(row, idKeys) {
+  if (!rcaIsDict(row)) return ['\u0000scalar', String(row)];
+  for (const keys of (idKeys || [])) {
+    if (!keys || !keys.length) continue;
+    const parts = [];
+    let usable = true;
+    for (const k of keys) {
+      const v = row[k];
+      if (v === null || v === undefined
+          || (typeof v === 'string' && !v.trim())) { usable = false; break; }
+      parts.push(String(v).trim().toLowerCase());
+    }
+    if (usable && parts.length) return parts;
+  }
+  return null;
+}
+
+// Mirror of editable.py:_align_rows — pair b/a rows, in a's order, as
+// [bIdx | null, aIdx].
+//
+// AUDIT-2026-10-01: this function did not exist here. The diff paired rows
+// POSITIONALLY, which is the behaviour rca_core abandoned in AUDIT-2026-09-27
+// P1 after it produced, on the desktop, a mid-table insert that applied as
+// [Alpha, Beta, Delta(_extras='Fig Gamma'), Gamma(_extras='Fig Gamma')] — a
+// FABRICATED plate figure on a new taxon and a DUPLICATED one — and a pure
+// re-sort that left Alpha wearing Beta's _extras. Measured here, the positional
+// diff still reports "row 0 and row 2 changed" for a pure re-sort (the desktop
+// reports no edits at all) and encodes a mid-table insert as "B changed to D,
+// C changed to B" instead of one new_1.
+//
+// The reason _extras is what breaks is worth keeping in mind when reading this:
+// it is deliberately EXCLUDED from the cell diff, so under a positional pairing
+// it stays welded to the slot and follows whatever row slides into it. Aligning
+// by identity first is what stops that.
+//
+// Two passes, and the second is what keeps this compatible with the pre-existing
+// behaviour: pair what identity can decide (a weak single-field key only when
+// its value is unambiguous across the before-rows), then pair whatever is left
+// POSITIONALLY, in order. Only an a-row with no b-row at all is genuinely new.
+function rcaEditAlignRows(b, a, idKeys) {
+  const pairs = new Array(a.length).fill(null);
+  const claimedB = new Set();
+  const keyOf = (i) => rcaEditRowKey(b[i], idKeys);
+  const keyOfA = (j) => rcaEditRowKey(a[j], idKeys);
+
+  const bIndex = new Map();
+  const weakCounts = new Map();
+  for (let i = 0; i < b.length; i += 1) {
+    const k = keyOf(i);
+    if (!k) continue;
+    const id = JSON.stringify(k);
+    if (!bIndex.has(id)) bIndex.set(id, []);
+    bIndex.get(id).push(i);
+    if (k.length === 1) weakCounts.set(id, (weakCounts.get(id) || 0) + 1);
+  }
+
+  // Pass 1 - identity.
+  for (let j = 0; j < a.length; j += 1) {
+    const k = keyOfA(j);
+    if (!k) continue;
+    const id = JSON.stringify(k);
+    const bucket = bIndex.get(id);
+    if (!bucket || !bucket.length) continue;
+    if (k.length === 1 && (weakCounts.get(id) || 0) > 1) continue;  // ambiguous
+    for (const i of bucket) {
+      if (!claimedB.has(i)) {
+        claimedB.add(i);
+        pairs[j] = [i, j];
+        break;
+      }
+    }
+  }
+
+  // Pass 2 - positional, for whatever pass 1 left undecided.
+  const freeB = [];
+  for (let i = 0; i < b.length; i += 1) if (!claimedB.has(i)) freeB.push(i);
+  let cursor = 0;
+  for (let j = 0; j < a.length; j += 1) {
+    if (pairs[j] !== null) continue;
+    if (cursor < freeB.length) {
+      const i = freeB[cursor];
+      cursor += 1;
+      claimedB.add(i);
+      pairs[j] = [i, j];
+    } else {
+      pairs[j] = [null, j];      // genuinely beyond the end -> a new row
+    }
+  }
+
+  // Before-rows no after-row claimed are deletions; the caller already replaces
+  // the whole list when it shrank, so these are only reported.
+  for (let i = 0; i < b.length; i += 1) {
+    if (!claimedB.has(i)) pairs.push([i, null]);
+  }
+  return pairs;
+}
+
+function rcaCaptureListEdits(beforeList, afterList, listKey) {
   const b = Array.isArray(beforeList) ? beforeList : [];
   const a = Array.isArray(afterList) ? afterList : [];
   // editable.py:147-154 — a deletion cannot be represented index-wise, so the
   // whole AFTER list replaces the list.
   if (a.length < b.length) return { _replaced: rcaClone(a) };
   const edits = {};
-  const n = Math.min(b.length, a.length);
   let scalarChanged = false;
-  for (let i = 0; i < n; i += 1) {
-    const bDict = rcaIsDict(b[i]);
-    const aDict = rcaIsDict(a[i]);
-    // editable.py:166-170 — dict vs scalar row: no per-cell merge possible.
-    if (bDict !== aDict) { scalarChanged = true; continue; }
-    if (!aDict) {
-      // editable.py:171-175 — both rows are scalars, compare the values.
-      if (rcaPyNotEqual(rcaCoerceVal(a[i]), rcaCoerceVal(b[i]))) scalarChanged = true;
+  // AUDIT-2026-10-01: mirror of capture_edits' alignment branch. The old loop
+  // here was `for (let i = 0; i < n; i += 1)` -- purely positional.
+  const idKeys = (RCA_EDIT_ROW_ID_KEYS[listKey] || []);
+  const pairs = rcaEditAlignRows(b, a, idKeys);
+  const aligned = pairs.some((p) => p && p[0] !== null && p[0] !== p[1]);
+  for (const pair of pairs) {
+    const biIdx = pair ? pair[0] : null;
+    const aiIdx = pair ? pair[1] : null;
+    if (aiIdx === null) continue;                 // deletion
+    if (biIdx === null) {
+      // A row that exists only in `after`: a genuine insertion, recorded at its
+      // own position. A SCALAR row cannot be encoded as `new_<i>` (the payload
+      // is an object and rcaApplyEdits drops a non-dict insertion), so it routes
+      // to the list replacement instead.
+      if (rcaIsDict(a[aiIdx])) edits['new_' + aiIdx] = rcaClone(a[aiIdx]);
+      else scalarChanged = true;
       continue;
     }
-    const bi = b[i] || {};
-    const ai = a[i] || {};
+    const bRow = b[biIdx];
+    const aRow = a[aiIdx];
+    const bDict = rcaIsDict(bRow);
+    const aDict = rcaIsDict(aRow);
+    // Row-type mismatch (dict vs scalar): no per-cell merge is possible.
+    if (bDict !== aDict) { scalarChanged = true; continue; }
+    if (!aDict) {
+      // Both rows are scalars — compare the values directly.
+      if (rcaPyNotEqual(rcaCoerceVal(aRow), rcaCoerceVal(bRow))) scalarChanged = true;
+      continue;
+    }
+    const bi = bRow || {};
+    const ai = aRow || {};
     const cellEdits = {};
-    // editable.py:186 — the UNION of both rows' keys, before-keys first.
+    // The UNION of both rows' keys, before-keys first (editable.py:186).
     const cols = Object.keys(bi);
     for (const k of Object.keys(ai)) {
       if (cols.indexOf(k) === -1) cols.push(k);
     }
     for (const col of cols) {
-      if (col === RCA_EDIT_EXTRAS_KEY) continue;   // editable.py:187
+      if (col === RCA_EDIT_EXTRAS_KEY) continue;
       const inA = Object.prototype.hasOwnProperty.call(ai, col);
       const inB = Object.prototype.hasOwnProperty.call(bi, col);
       if (inA && inB) {
@@ -1564,28 +1846,37 @@ function rcaCaptureListEdits(beforeList, afterList) {
           cellEdits[col] = ai[col];
         }
       } else if (inA) {
-        // editable.py:192-196 — new key: compare against None, so an added
-        // `col: ""` IS an edit ('' != None in Python).
+        // New key: compare against null, so an added `col: ""` IS an edit.
         if (rcaPyNotEqual(rcaCoerceVal(ai[col]), rcaCoerceVal(null))) {
           cellEdits[col] = ai[col];
         }
       } else {
-        // editable.py:197-199 — present before, gone after: a deletion.
+        // Present before, gone after -> travels as a _deleted_keys list that
+        // rcaApplyEdits replays with a pop.
         if (!Array.isArray(cellEdits[RCA_EDIT_DELETED_KEYS])) {
           cellEdits[RCA_EDIT_DELETED_KEYS] = [];
         }
         cellEdits[RCA_EDIT_DELETED_KEYS].push(col);
       }
     }
-    if (Object.keys(cellEdits).length > 0) edits[i] = cellEdits;
+    if (Object.keys(cellEdits).length > 0) edits[biIdx] = cellEdits;
   }
-  // editable.py:202-204 — a scalar row change replaces the list (and wins on
-  // replay, because apply_edits tests `_replaced` first).
+  // A scalar row change replaces the list (and wins on replay, because
+  // rcaApplyEdits tests `_replaced` first).
   if (scalarChanged) edits._replaced = rcaClone(a);
-  // editable.py:205-209 — appended rows ride as `new_<index>`; only dicts,
-  // and by reference (the deep copy happens on apply).
-  for (let i = n; i < a.length; i += 1) {
-    if (rcaIsDict(a[i])) edits['new_' + i] = a[i];
+  // Rows past the end ride as `new_<index>`, but only when the alignment could
+  // not pair anything at all -- the same guard the Python side keeps, so an
+  // ordinary append and an ordinary two-row cell edit both stay on the paths
+  // every pre-existing caller expects.
+  if (!aligned) {
+    for (let i = Math.min(b.length, a.length); i < a.length; i += 1) {
+      if (rcaIsDict(a[i])) {
+        edits['new_' + i] = rcaClone(a[i]);
+      } else if (!scalarChanged) {
+        scalarChanged = true;
+        edits._replaced = rcaClone(a);
+      }
+    }
   }
   return edits;
 }
@@ -1598,7 +1889,7 @@ function rcaCaptureEdits(before, after) {
     const b = before[key] || [];
     const a = after[key] || [];
     if (!Array.isArray(b) || !Array.isArray(a)) continue;
-    const edits = rcaCaptureListEdits(b, a);
+    const edits = rcaCaptureListEdits(b, a, key);
     if (Object.keys(edits).length > 0) out[key] = edits;
   }
   return out;
@@ -1770,11 +2061,25 @@ function rcaBedPairInverted(topVal, baseVal) {
 
 // The species range pair: quality.js tries the bed numbers first and only
 // falls back to Ma ages when either side reads like an age.
+//
+// AUDIT-2026-10-01: the bed branch also asks rcaSubbedInverted, so editing a
+// row to range_base="9a" / range_top="9" draws the same red frame the quality
+// badge now reports. Without it the editor accepted the row that
+// rca_core's exporter rejects with range_base_le_range_top, so the browser
+// was the only transport that could save an impossible range.
 function rcaRangePairInverted(topVal, baseVal) {
   const top = rcaParseBedN(topVal);
   const base = rcaParseBedN(baseVal);
   const agey = rcaLooksLikeAgeText(topVal) || rcaLooksLikeAgeText(baseVal);
-  if (top !== null && base !== null && !agey) return top < base;
+  if (top !== null && base !== null && !agey) {
+    // typeof-guarded for the same reason the rcaPyRound call in quality.js is:
+    // rcaSubbedInverted is defined in quality.js, and several suites load
+    // table.js on its own (tests_edit_history.js does). index.html loads
+    // quality.js first, so the real app always has it; standalone, the
+    // subscript check is skipped rather than throwing.
+    return top < base
+      || (typeof rcaSubbedInverted === 'function' && rcaSubbedInverted(topVal, baseVal));
+  }
   const topMa = rcaAgeTextToMa(topVal);
   const baseMa = rcaAgeTextToMa(baseVal);
   if (topMa === null || baseMa === null) return null;   // not comparable
@@ -3456,6 +3761,13 @@ function rcaEditHandleKey(ev) {
     if (key === 'Enter' && !ev.shiftKey) { ev.preventDefault && ev.preventDefault(); return rcaEditNavigate(cell, +1, 0); }
     if (key === 'Enter' && ev.shiftKey) { ev.preventDefault && ev.preventDefault(); return rcaEditNavigate(cell, -1, 0); }
     if (key === 'Escape' || key === 'Esc') { ev.preventDefault && ev.preventDefault(); return rcaEditRevertCell(cell); }
+    // AUDIT-2026-09-27 P1: Tab commits and then MOVES, so a valid value is
+    // saved the same way Enter saves it, and an invalid one is reverted by
+    // rcaEditOnFocusOut (which releases focus). The default is NOT prevented:
+    // letting the browser advance is what keeps WCAG 2.1.2 satisfied even if
+    // the commit path ever fails again. There was no Tab case at all before,
+    // which is half of why the focusout re-focus became an inescapable trap.
+    if (key === 'Tab') { rcaEditCommitCell(cell); return false; }
     if (key === 'ArrowDown') { ev.preventDefault && ev.preventDefault(); return rcaEditNavigate(cell, +1, 0); }
     if (key === 'ArrowUp') { ev.preventDefault && ev.preventDefault(); return rcaEditNavigate(cell, -1, 0); }
     if (key === 'ArrowRight') { ev.preventDefault && ev.preventDefault(); return rcaEditNavigate(cell, 0, +1); }
@@ -3499,9 +3811,25 @@ function rcaEditOnFocusIn(ev) {
 function rcaEditOnFocusOut(ev) {
   const cell = rcaEditRefFromCell(ev && ev.target) ? ev.target : null;
   if (!cell) return;
-  // A failed validation LOCKS the focus (Tabulator's blocked editor): hand the
-  // caret straight back and leave the red frame up.
-  if (RCA_EDIT_DOM.invalid === cell) { rcaEditFocus(cell); return; }
+  // AUDIT-2026-09-27 P1 (WCAG 2.1.2, No Keyboard Trap — Level A): this used
+  // to `rcaEditFocus(cell); return;` on any failed validation, which LOCKED
+  // the caret in place. `rcaEditHandleKey` has no Tab case, so Tab produced a
+  // focusout, which re-focused the cell; Enter failed validation for the same
+  // reason; a click elsewhere was undone. Only Escape escaped. The whole trap
+  // was reachable by an ordinary typo — "Ma" typed into a numeric column —
+  // and the results panel simply looked frozen.
+  //
+  // The honest behaviour is to KEEP THE MODEL and RELEASE THE FOCUS:
+  // `rcaEditRevertCell` repaints the cell from the model, clears the invalid
+  // state and blurs, so focus moves on. The reason was already announced when
+  // the value was rejected (rcaEditMarkInvalid -> rcaEditAnnounce), and the
+  // cell is no longer invalid once it shows the model value again — leaving the
+  // red frame on a cell the user has left would claim an error that is not
+  // there. A researcher's typo must never be able to hold the keyboard.
+  if (RCA_EDIT_DOM.invalid === cell) {
+    rcaEditRevertCell(cell);
+    return;
+  }
   if (RCA_EDIT_DOM.reverting) return;
   // FE-FIX-2026-09-21 (audit item 3): the caret only VISITED this cell — the
   // text is byte-identical to the focus-in snapshot. Before the placeholder

@@ -313,9 +313,17 @@ def pinned_endpoint_ip(endpoint: str) -> str:
         except (ValueError, IndexError):
             # An entry we cannot classify is treated as unsafe (fail closed),
             # matching is_private_host()'s handling of the same shape.
+            #
+            # AUDIT-2026-09-29 (ruff B904): `from None` on purpose. This is a
+            # deliberate refusal, not a crash, and the message already carries
+            # the one thing that matters -- the offending address. The chained
+            # ipaddress error ("does not appear to be an IPv4 or IPv6 address")
+            # restates the message without telling the caller anything they
+            # can do differently, and a security check that prints a traceback
+            # reads like a bug rather than a policy.
             raise ValueError(
                 f"host {bare!r} resolved to an unclassifiable address "
-                f"{addr!r}")
+                f"{addr!r}") from None
         if not loopback_ok and not _ALLOW_PRIVATE and _is_non_public_ip(ip):
             raise ValueError(
                 f"host {bare!r} resolves to non-public IP {ip}; "
@@ -438,8 +446,10 @@ def make_pinning_opener():
     pinned.
 
     NOTE (REVIEW-2026-09-20, corrected FIX-2026-09-22 item 3):
-    ``install_opener`` at the bottom of this module is a PROCESS-WIDE side
-    effect, not scoped to rca_core: every ``urllib.request.urlopen`` in the
+    ``make_pinning_opener``'s result is passed to
+    ``urllib.request.install_opener`` by the CALLERS -- ``llm.py`` and
+    ``server.py`` -- and that is a PROCESS-WIDE side effect, not scoped to
+    rca_core: every ``urllib.request.urlopen`` in the
     interpreter — including any GBIF / mindat lookup that still uses the
     global opener — goes through this handler, so those calls are pinned and
     no-redirect too. It used to claim pinning "protects" those public-host
@@ -516,8 +526,32 @@ def make_pinning_opener():
 
     class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         def https_open(self, req):
-            # Only reached for direct requests; ProxyHandler handles proxied
-            # ones before us, so req.host is the real target (host:port).
+            # AUDIT-2026-09-27 [item 5.2]. The comment below used to claim
+            # "ProxyHandler handles proxied ones before us", so req.host is
+            # always the real target. That is FALSE for https, and the cost was
+            # that no https request was ever proxied:
+            #
+            #   ProxyHandler exposes http_open/proxy_open, not https_open. For
+            #   an https URL it runs its `proxy_request` hook instead, which
+            #   calls req.set_proxy(proxy) — and set_proxy stores the ORIGINAL
+            #   host in `req._tunnel_host` before overwriting req.host with the
+            #   proxy address, so the request is tunnelled by do_open.
+            #
+            #   `_pin` then did `req.host = <pinned IP>`, clobbering the proxy
+            #   address that ProxyHandler had just installed. The request went
+            #   DIRECT to a resolved IP, which on a filtered network is a
+            #   hijacked one, and came back HTTP 418 with an empty body.
+            #
+            #   So the pin has to be skipped when the request is tunnelled —
+            #   which is also the only correct behaviour: a CONNECT tunnel
+            #   resolves the name at the proxy, so there is no DNS to pin here.
+            #   Verified by a real call: identical URL and headers returned 200
+            #   through a private proxying opener and 418 through this one.
+            if getattr(req, "_tunnel_host", None):
+                # Proxied: let the stock handler run the CONNECT tunnel, with
+                # no IP pinning. `_PinnedHTTPSHandler` is only about the direct
+                # path.
+                return super().https_open(req)
             sni = _pin(req, "https")
 
             def _conn_factory(host_arg, timeout=req.timeout, **kw):
@@ -530,6 +564,32 @@ def make_pinning_opener():
 
     class _PinnedHTTPHandler(urllib.request.HTTPHandler):
         def http_open(self, req):
+            # AUDIT-2026-10-01 [item 28]. The https twin above skips the pin
+            # for a proxied request, because the proxy resolves the name and
+            # there is therefore no DNS here to pin.  It detects that with
+            # ``req._tunnel_host`` -- but ``Request.set_proxy`` only sets that
+            # flag for https.  For plain http it leaves it alone and instead
+            # copies the full URL into ``req.selector``:
+            #
+            #   https://target/v1  -> host='proxy:7890' _tunnel_host='target'
+            #   http://target:11434/v1
+            #                       -> host='proxy:7890' _tunnel_host=None
+            #
+            # So ``req.host`` was ALREADY the proxy address when _pin ran: it
+            # resolved and pinned the PROXY, then
+            # ``add_unredirected_header("Host", <proxy name>)`` replaced the
+            # real one.  The request-line still named the target (so the proxy
+            # connected to the right place) but the origin vhosted the wrong
+            # name -- the same failure shape as the HTTP 418 of AUDIT-2026-09-27
+            # item 5.2, on the cleartext path.
+            #
+            # Match on the selector STARTING with a scheme, never merely
+            # CONTAINING one: a direct request's selector is a path, and a
+            # query string such as ``?next=http://x`` would otherwise smuggle
+            # "://" in and switch the pin off for an attacker-chosen host.
+            if (req.selector or "").startswith(("http://", "https://")):
+                # Proxied: connect to the proxy and let it resolve the target.
+                return super().http_open(req)
             # REVIEW-2026-09-20 (item 17): plain HTTP is pinned with the exact
             # same code path as HTTPS (see _PinnedHTTPConnection).
             _pin(req, "http")
@@ -539,12 +599,42 @@ def make_pinning_opener():
 
             return self.do_open(_conn_factory, req)
 
+    # AUDIT-2026-09-27 [item 5.1] (found by making a REAL call after the user
+    # asked for one — every attempt had returned HTTP 418 with an empty body,
+    # which read like a rejected credential). The real cause was this opener.
+    #
+    # `make_pinning_opener` is installed PROCESS-WIDE by llm.py, and it
+    # replaced the default urllib opener that DOES carry a ProxyHandler. So on
+    # any network that needs a proxy — which is most of mainland China, where
+    # this project is used — every outbound model call went DIRECT, landed on
+    # DNS that returns hijacked addresses, and came back 418 from a
+    # transparent filter. A key that works perfectly through the proxy was
+    # unreachable without it.
+    #
+    # The irony is exact: the module that exists to stop connections to
+    # UNSAFE hosts was the one preventing the legitimate one. The comment in
+    # _PinnedHTTPSHandler above already assumed a ProxyHandler sat in front of
+    # it ("ProxyHandler handles proxied ones before us") — it never did.
+    #
+    # `ProxyHandler()` with no argument reads HTTPS_PROXY / https_proxy (and
+    # NO_PROXY) from the environment via getproxies(), which is the standard
+    # behaviour the default opener had. Pinning still applies to DIRECT
+    # connections; for a proxied request the proxy resolves the name itself,
+    # so the pin is bypassed — the same tradeoff the comment describes, and the
+    # only behaviour a proxy can have.
     return urllib.request.build_opener(
+        urllib.request.ProxyHandler(),
         _PinnedHTTPSHandler(), _PinnedHTTPHandler(), _NoRedirect())
 
 
 __all__ = [
     "validate_endpoint",
+    # AUDIT-2026-10-01 [item 28]: omitted here while five product modules
+    # (llm.py x3, gui_fluent.py, gui.py) imported it by name -- harmless for
+    # `from .ssrf import x`, but `__all__` is this module's own statement of
+    # what it offers, and the loopback policy is the one an operator is most
+    # likely to reach for by name.
+    "validate_endpoint_local_ok",
     "validate_endpoint_or_raise",
     "is_private_host",
     "pinned_endpoint_ip",

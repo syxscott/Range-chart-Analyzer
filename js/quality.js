@@ -131,6 +131,14 @@ function _detectMode(data) {
   // list. Mirrors rca_core/quality.py:_detect_mode's final branch (the JS
   // mirror used to stop at 'range_chart', so a zonation result was scored
   // with range-chart expectations).
+  //
+  // AUDIT-2026-09-30: detecting the mode was only half of that fix. This
+  // function has two consumers in this file -- scoreCompleteness and
+  // scoreStructure -- and only the first got a 'zonation' branch, so a zonation
+  // payload was still null-checked against range-chart keys in the second and
+  // lost 0.5 on the structure dimension. A guard test now asserts that EVERY
+  // consumer of this function handles 'zonation', because "the detector knows
+  // about it" is not the same as "the code that acts on it does".
   if ('correlations' in data || ('zones' in data && 'zonations' in data)) {
     if (!('species_ranges' in data) && !('abundances' in data)) return 'zonation';
   }
@@ -159,8 +167,141 @@ function _parseBedN(value) {
   }
   const s = String(value).trim();
   if (!s) return null;
-  const m = s.match(/-?\d+/);
+  // AUDIT-2026-10-02: fold first, then match ASCII -- NOT a \p{Nd} regex.
+  // This file already carries _asciiDigits for exactly this reason (see
+  // rcaParseBed below), and rcaParseBed's own comment records why the
+  // two-part fix is needed: matching Unicode digits is only half of it,
+  // because parseInt("９") is NaN. Folding first gets both halves right and
+  // keeps the match ASCII, so nothing else about the pattern has to change.
+  //
+  // Before this, /-?\d+/ was ASCII-only while rca_core/quality.py's _BED_RE
+  // (r"-?\d+") is Unicode-aware, so a reversed bed pair written with
+  // full-width digits was FLAGGED on the desktop and silently SKIPPED here:
+  // measured, range_base="Bed ９" / range_top="Bed ７" grades B on the browser
+  // and C on the desktop, the browser reporting an impossible range as
+  // well-formed. That is the same failure this file's comment above
+  // rcaParseBed records for the missing subscript parser, arriving through a
+  // second door.
+  const m = _asciiDigits(s).match(/-?\d+/);
   return m ? parseInt(m[0], 10) : null;
+}
+
+// ---------------------------------------------------------------------------
+// AUDIT-2026-10-01: subscript-aware bed labels. Mirror of
+// rca_core/bed_parser.py (parse_bed) and rca_core/quality.py's
+// _subbed_inverted, which the desktop has routed through the shared parser
+// since 2026-07-25.
+//
+// _parseBedN above reads "23a" and "23b" BOTH as 23, so a range whose
+// subscript runs backwards -- base="9a", top="9", or base="9b", top="9a" --
+// compared equal and was scored as a well-formed range. The browser had no
+// subscript parser at all, so those rows scored 0.87/B with no warning, the
+// table editor drew no red frame, and -- unlike rca_core, whose exporter
+// enforces range_base_le_range_top and makes to_xlsx raise -- the browser
+// exported the impossible range into the output file.
+//
+// A subscript letter ascends ("23a" is BELOW "23b" and BELOW a bare "23"), and
+// an EMPTY subscript sorts below every letter, which is what makes base="9a"
+// / top="9" inverted too. The unit-word and stray-residue rejections are
+// mirrored too: without them "253 Ma" would read as bed 253 with subscript
+// "ma" and a thickness would read as a bed, which is the exact split
+// rca_core/bed_parser.py was written to end.
+// ---------------------------------------------------------------------------
+// The grammar of Python's str-pattern \d, expressed for ECMAScript. Python's
+// \d is Unicode-aware (every Unicode Nd decimal digit); ECMAScript's is [0-9]
+// and nothing else. AUDIT-2026-10-01: the bed parser is the THIRD site of this
+// split, after ag_34 / ag_35 (the age resolver) and the \b fix in this same
+// file. Measured: "９" (full-width nine) parsed as bed 9 by
+// rca_core/bed_parser.py and as NOTHING here, so a Chinese-language figure
+// whose bed labels are full-width digits was scored on the desktop while the
+// browser had no bed to check. [\p{Nd}] is exactly the class Python's \d
+// matches.
+const _BED_DIGITS = '[\\p{Nd}]';
+const _BED_FULL_RE = new RegExp('^Bed\\s*(' + _BED_DIGITS + '+)\\s*([a-zA-Z]*)', 'iu');
+const _BARE_BED_RE = new RegExp('^(' + _BED_DIGITS + '+)\\s*([a-zA-Z]*)', 'u');
+const _BED_UNIT_RE = /^(ma|myr|mya|m\.y\.|m\.y\.?|ka|kyr|ga|gyr|yr|cm|mm|km|ft|a)$/i;
+const _BED_SUB_RE = /^[a-ln-z]$/i;
+
+function _subIsBedLabel(sub, hadBedWord) {
+  if (!sub) return true;                       // bare number after an explicit "Bed"
+  if (sub.toLowerCase() === 'm') return false; // metres, not a subscript
+  if (sub.length > 1 && _BED_UNIT_RE.test(sub)) return false;
+  if (hadBedWord) return true;
+  return _BED_SUB_RE.test(sub);
+}
+
+function _bedStrayResidue(s, end) {
+  const rest = s.slice(end).trim();
+  return Boolean(rest) && rest.charAt(0) !== '(' && rest.charAt(0) !== '[';
+}
+
+/**
+ * Fold a run of Unicode decimal digits to ASCII, so parseInt can read it.
+ *
+ * AUDIT-2026-10-01: the regexes above now match the same digits Python's \d
+ * does, and that was only half of it -- parseInt("９") is NaN, so the match
+ * produced bed_num: null instead of 9. NFKC covers the compatibility digits
+ * (full-width ９ -> 9, the case that matters for a Chinese-language figure);
+ * the remaining Nd scripts (Arabic-Indic, Devanagari, ...) are not
+ * compatibility-equivalent and are folded by subtracting their block's zero
+ * code point, found by probing rather than from a table.
+ */
+function _asciiDigits(s) {
+  const nfkc = String(s).normalize('NFKC');
+  let out = '';
+  for (const ch of nfkc) {
+    const cp = ch.codePointAt(0);
+    if (cp >= 0x30 && cp <= 0x39) { out += ch; continue; }
+    if (!/\p{Nd}/u.test(ch)) { out += ch; continue; }
+    // Find z such that z..z+9 are all Nd and ch sits inside it: the block zero.
+    let folded = ch;
+    for (let z = cp; z > cp - 10; z -= 1) {
+      let all = true;
+      for (let d = 0; d <= 9; d += 1) {
+        if (!/\p{Nd}/u.test(String.fromCodePoint(z + d))) { all = false; break; }
+      }
+      if (all) { folded = String.fromCodePoint(0x30 + (cp - z)); break; }
+    }
+    out += folded;
+  }
+  return out;
+}
+
+/** Mirror of rca_core.bed_parser.parse_bed: {bed_num, bed_sub, raw} | null. */
+function rcaParseBed(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'boolean') return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  let m = _BED_FULL_RE.exec(s);
+  if (m) {
+    const sub = m[2];
+    if (!_subIsBedLabel(sub, true)) return null;
+    if (_bedStrayResidue(s, m[0].length)) return null;
+    return { bed_num: parseInt(_asciiDigits(m[1]), 10), bed_sub: sub.toLowerCase(), raw: s };
+  }
+  m = _BARE_BED_RE.exec(s);
+  if (m) {
+    const sub = m[2];
+    if (!_subIsBedLabel(sub, false)) return null;
+    if (_bedStrayResidue(s, m[0].length)) return null;
+    return { bed_num: parseInt(_asciiDigits(m[1]), 10), bed_sub: sub.toLowerCase(), raw: s };
+  }
+  return null;
+}
+
+/**
+ * Same bed NUMBER, and the SUBSCRIPT says the range runs backwards.
+ * Mirror of rca_core/quality.py::_subbed_inverted: false whenever the two
+ * sides are not the same bed, or when either label is not a bed at all, so
+ * this can only ever ADD a detection that the integer comparison missed.
+ */
+function rcaSubbedInverted(topRaw, baseRaw) {
+  const top = rcaParseBed(topRaw);
+  const base = rcaParseBed(baseRaw);
+  if (!top || !base) return false;
+  if (top.bed_num !== base.bed_num) return false;
+  return top.bed_sub < base.bed_sub;
 }
 
 function _clamp01(x) { return Math.min(1.0, Math.max(0.0, x)); }
@@ -198,6 +339,29 @@ function _looksLikeAge(v) {
 }
 
 function _regExpEscape(s) { return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'); }
+
+// AUDIT-2026-10-01: Python's \b on a str pattern is UNICODE-aware -- its \w is
+// str.isalnum() plus "_", so an Arabic-Indic digit is a word character and
+// "Hirnantian٣" has NO word boundary after "Hirnantian". JavaScript's \w is
+// ASCII-only ([A-Za-z0-9_]), so the same \b matched there and the browser
+// resolved Hirnantian to 445.2 Ma where rca_core returned (None, None) -- the
+// mirror was more permissive than the module it mirrors, on the very input
+// class ag_34 / ag_35 already document for \d. Measured, both directions:
+//   "Hirnantian٣"  py=None            js=Hirnantian 445.2
+//   "26٠ Ma"       py=Capitanian 260  js=None          (the documented \d case)
+// so the family is "the two engines disagree on Unicode awareness of a regex
+// character class", and \b is the second site. The lookarounds below are \b
+// over the same classes Python uses: letters, numbers, underscore. Every
+// character _regExpEscape escapes is a valid identity escape under /u, so
+// adding the flag is safe for these labels.
+const _NOT_WORD_BEFORE = '(?<![\\p{L}\\p{N}_])';
+const _NOT_WORD_AFTER = '(?![\\p{L}\\p{N}_])';
+
+function _wordBoundaryRe(needle, flags) {
+  const f = flags || '';
+  return new RegExp(_NOT_WORD_BEFORE + _regExpEscape(needle) + _NOT_WORD_AFTER,
+                    f.indexOf('u') === -1 ? f + 'u' : f);
+}
 
 // REVIEW-2026-09-20: the bundled table carries the Cambrian intervals that
 // have no ratified name yet as "Stage 2" … "Stage 10", and TWO of them share
@@ -261,7 +425,7 @@ function _icsParseAgeRange(stages, text) {
   if (!s) return [];
   const matches = [];
   for (const stageName of Object.keys(stages)) {
-    const re = new RegExp('\\b' + _regExpEscape(stageName) + '\\b', 'gi');
+    const re = _wordBoundaryRe(stageName, 'gi');
     let m;
     while ((m = re.exec(s)) !== null) {
       matches.push({ idx: m.index, name: stageName });
@@ -291,6 +455,27 @@ const _PREFER_OLDER = ['older', 'oldest', 'old', 'base', 'bottom'];
 const _PREFER_YOUNGER = ['younger', 'youngest', 'young', 'top', 'upper'];
 
 function _resolvePrefer(prefer) {
+  // AUDIT-2026-10-01: refuse a non-scalar BEFORE stringifying it. Python
+  // stringifies with str() and JS with String(), and the two disagree exactly
+  // where it matters: str(['younger']) is "['younger']" (unknown, so Python
+  // raises) while String(['younger']) is "younger" (a known spelling, so the
+  // browser silently resolved the YOUNGER end). Same for [] -> "[]" vs "",
+  // which defaulted to older. That is the quiet FAD/LAD inversion this
+  // function was rewritten to prevent, and the module's own comment claims an
+  // unknown value raises "instead of quietly inverting" -- it did not.
+  // Reachability measured 2026-10-01: every production caller passes a string
+  // literal (pbdb / darwin_core / exporter / quality on the Python side,
+  // 'older' / 'younger' in this file), so this is a latent hole rather than a
+  // live defect; the guard exists so the first caller that forwards a
+  // payload value cannot inherit it.
+  if (prefer !== null && prefer !== undefined
+      && typeof prefer !== 'string' && typeof prefer !== 'boolean'
+      && typeof prefer !== 'number') {
+    throw new Error('prefer must be an \'older\'/\'younger\' spelling (got '
+      + JSON.stringify(prefer) + '); known values: '
+      + _PREFER_OLDER.concat(_PREFER_YOUNGER).filter(
+        (v, i, arr) => arr.indexOf(v) === i).sort().join(', '));
+  }
   const key = String(prefer === null || prefer === undefined ? '' : prefer)
     .trim().toLowerCase();
   if (!key || _PREFER_OLDER.indexOf(key) !== -1) return true;
@@ -390,7 +575,7 @@ function _resolveAgeBound(text, prefer) {
   const series = globalThis.RCA_ICS_SERIES || {};
   const norm = s.toLowerCase();
   for (const label of Object.keys(series)) {
-    if (!new RegExp('\\b' + _regExpEscape(label) + '\\b').test(norm)) continue;
+    if (!_wordBoundaryRe(label).test(norm)) continue;
     const bounds = _seriesBoundsFor(stages, series[label]);
     if (bounds[0] !== null && bounds[0] !== undefined) {
       return {
@@ -415,7 +600,7 @@ function _resolveAgeBound(text, prefer) {
   const periods = globalThis.RCA_ICS_PERIODS || {};
   const periodNames = globalThis.RCA_ICS_PERIOD_NAMES || {};
   for (const label of Object.keys(periods)) {
-    if (!new RegExp('\\b' + _regExpEscape(label) + '\\b').test(norm)) continue;
+    if (!_wordBoundaryRe(label).test(norm)) continue;
     const b = periods[label];
     if (b && b[0] !== null && b[0] !== undefined) {
       return { name: periodNames[label] || label, ma: wantOlder ? b[0] : b[1] };
@@ -615,6 +800,17 @@ function scoreAccuracy(data) {
         // below use "quality.range_top_lt_base", while the consistency
         // check's bed inversion uses "quality.fad_lt_lad").
         issues.push({severity: 'warning', msg_key: 'quality.range_top_lt_base'});
+      } else if (rcaSubbedInverted(topRaw, baseRaw)) {
+        // AUDIT-2026-10-01: same bed NUMBER, and the SUBSCRIPT decides.
+        // _parseBedN read "9a" and "9" both as 9, so base="9a" / top="9"
+        // passed here while the exporter's range_base_le_range_top -- the
+        // check that makes to_xlsx RAISE -- rejected the row. Same disease
+        // the consistency branch below had, and WORSE here: accuracy is
+        // weighted 0.40 against consistency's 0.20, so the un-flagged
+        // inversions were costing twice as much of the grade. Mirrors
+        // rca_core/quality.py:477-489.
+        fadLadViolations += 1;
+        issues.push({severity: 'warning', msg_key: 'quality.range_top_lt_base'});
       }
     } else {
       const topR = _resolveAgeBound(topRaw, 'younger');
@@ -707,9 +903,22 @@ function scoreAccuracy(data) {
   // Any section containing blocks from more than one era (Paleozoic /
   // Mesozoic / Cenozoic) gets a warning (NOT a hard error — boundary
   // sections such as P/T or K/Pg legitimately span eras).
-  const paleozoicRe2 = /\b(cambrian|ordovician|silurian|devonian|carboniferous|pennsylvanian|mississippian|permian)\b/i;
-  const mesozoicRe2 = /\b(triassic|jurassic|cretaceous)\b/i;
-  const cenozoicRe2 = /\b(paleocene|paleogene|neogene|quaternary|pleistocene|holocene|eocene|oligocene|miocene|pliocene)\b/i;
+  // AUDIT-2026-10-02: these three were the only boundary tests in this file
+  // still written with a BARE \b, while lines 413 / 563 / 588 / 1237 use the
+  // Unicode-aware _wordBoundaryRe. rca_core/quality.py's _PALEOZOIC_RE /
+  // _MESOZOIC_RE / _CENOZOIC_RE use a Unicode-aware \b, so a CJK / Greek /
+  // Cyrillic letter sitting against an era name counted the era in the
+  // browser and not on the desktop -- which is what flips a section's era
+  // count, and with it this warning. Measured on the quality_coverage parity
+  // group. Same repair as the explicit-age and zone-marker guards: the
+  // correct notion of "adjacent identifier character" is ASCII, because a
+  // CJK glyph does not continue an ASCII identifier.
+  // Built directly rather than through _wordBoundaryRe: that helper escapes
+  // its needle, and this is a regex BODY (an alternation), not a literal.
+  const _eraRe = (body) => new RegExp(_NOT_WORD_BEFORE + body + _NOT_WORD_AFTER, 'iu');
+  const paleozoicRe2 = _eraRe('(cambrian|ordovician|silurian|devonian|carboniferous|pennsylvanian|mississippian|permian)');
+  const mesozoicRe2 = _eraRe('(triassic|jurassic|cretaceous)');
+  const cenozoicRe2 = _eraRe('(paleocene|paleogene|neogene|quaternary|pleistocene|holocene|eocene|oligocene|miocene|pliocene)');
   const sects2 = data && Array.isArray(data.sections) ? data.sections : [];
   const erasBySection = {};
   for (const sec of sects2) {
@@ -733,8 +942,26 @@ function scoreAccuracy(data) {
   for (const k of Object.keys(erasBySection)) {
     if (erasBySection[k].size > 1) {
       crossEraCount2 += 1;
-      issues.push({severity: 'warning', msg_key: 'quality.ages_inconsistent', params: {count: String(crossEraCount2)}});
     }
+  }
+  // AUDIT-2026-10-02: the issues.push used to be INSIDE the loop above, so
+  // the warning fired once per offending section and each one carried the
+  // running count rather than the total: a figure with two cross-era
+  // sections produced TWO warnings reading "1" and "2". rca_core/quality.py
+  // counts first and emits one, and the message is
+  // "{count} section(s) span eras" -- i.e. the count is the TOTAL, so the
+  // aggregated form is the intent and the browser was under-reporting its
+  // own first message.
+  //
+  // This is the same defect docs/FRONTEND-FIX-2026-07-27.md fixed when
+  // params.count was hard-coded to '1': that change made the number vary
+  // (1, 2, 3 ...) instead of always 1, which looked like a fix and left the
+  // emit-per-item shape in place. The penalty block immediately below was
+  // already aggregated correctly, which is why the SCORE always agreed and
+  // only the notice diverged -- so no test caught it until a payload with two
+  // offending sections appeared.
+  if (crossEraCount2 > 0) {
+    issues.push({severity: 'warning', msg_key: 'quality.ages_inconsistent', params: {count: String(crossEraCount2)}});
   }
   if (crossEraCount2 > 0) {
     checks += 1;
@@ -811,6 +1038,7 @@ function scoreAccuracy(data) {
   // deduct 0.05 each, capped at 0.3.
   const abSamples = (data && Array.isArray(data.abundances)) ? data.abundances : [];
   let sumViolCount = 0;
+  let sumDeduct = 0;
   if (abSamples.length > 0) {
     const levelSums = {};
     const levelIds = {};
@@ -831,14 +1059,39 @@ function scoreAccuracy(data) {
       if (s < 95 || s > 105) violations.push({sample: levelIds[lvl], sum: s});
     }
     if (violations.length > 0) {
-      const deduction = Math.min(0.3, 0.05 * violations.length);
-      // Degrade the accuracy score by deduction.
-      passed = Math.max(0.0, passed - deduction);
+      // AUDIT-2026-09-30: the deduction is taken from the DIMENSION SCORE,
+      // not from `passed`. Subtracting it from the count made the penalty
+      // (passed - deduction) / checks, i.e. scaled by 1/checks, so the more
+      // completeness checks a result happened to have, the smaller the
+      // sum-to-100 penalty became -- a data-quality rule whose weight depended
+      // on an unrelated count. rca_core/quality.py subtracts from `score`
+      // after `score = passed / checks`, and "deduct 0.05 per violating level"
+      // reads as a deduction from the 0..1 dimension, so that is the semantics
+      // kept here. Measured: with two violating levels Python reported 0.98
+      // where the browser reported 1.
+      sumDeduct = Math.min(0.3, 0.05 * violations.length);
       sumViolCount = violations.length;
       for (const v of violations.slice(0, 5)) {
         issues.push({
           severity: 'warning', msg_key: 'quality.abundance_sum_violation',
-          params: {sample: v.sample, sum: String(Math.round(v.sum * 10) / 10)}
+          // AUDIT-2026-09-30: rcaPyRound, not Math.round(v.sum * 10) / 10.
+          // Same idiom js/reason-codes.js#rcaPyRound was written to replace
+          // -- it rounds halves away from zero, where
+          // rca_core/quality.py's `str(round(total, 1))` rounds them to even.
+          // At ONE decimal the ties are common, not exotic: measured, 8 of 16
+          // tie-shaped sums disagreed (2.25 -> 2.2 vs 2.3, 1.25 -> 1.2 vs 1.3,
+          // 100.25 -> 100.2 vs 100.3, 0.15 -> 0.1 vs 0.2), and this is the
+          // number the operator reads when the sum-to-100 check fires.
+          //
+          // AUDIT-2026-10-01: toFixed(1), not String(). A Python float keeps
+          // its decimal point, so `str(round(3.0, 1))` is "3.0" while
+          // String(3) is "3" -- the same violation was reported as "3.0%" on
+          // the desktop and "3%" in the browser, and only for a sum with no
+          // fractional part, which no tie-shaped case could see.
+          params: {sample: v.sample,
+                   sum: ((typeof rcaPyRound === 'function')
+                     ? rcaPyRound(v.sum, 1)
+                     : Math.round(v.sum * 10) / 10).toFixed(1)}
         });
       }
       issues.push({
@@ -848,8 +1101,22 @@ function scoreAccuracy(data) {
     }
   }
 
-  if (checks === 0) return [1.0, issues];
-  return [_clamp01(passed / checks), issues];
+  // The deduction is applied on BOTH paths, including checks === 0.
+  // rca_core/quality.py assigns `score = 1.0` when there are no checks and
+  // only then subtracts the sum-to-100 deduction; an early `return [1.0]`
+  // skipped it entirely, so a result whose accuracy checks were all vacuous
+  // but whose abundance percentages did not sum to 100 was graded A on the
+  // desktop and A-with-no-penalty in the browser.
+  if (checks === 0) return [_clamp01(1.0 - sumDeduct), issues];
+  // AUDIT-2026-09-30: the sum-to-100 deduction comes off the DIMENSION SCORE,
+  // not off `passed`. Subtracting it from the count made the penalty
+  // (passed - deduction) / checks, i.e. scaled by 1/checks, so a data-quality
+  // rule's weight depended on how many unrelated accuracy checks happened to
+  // run. rca_core/quality.py takes it from `score` after
+  // `score = passed / checks`, and "deduct 0.05 per violating level" reads as a
+  // deduction from the 0..1 dimension. Measured on
+  // qc_abundance_sum_violation: Python 0.98 where this returned 1.
+  return [_clamp01(_clamp01(passed / checks) - sumDeduct), issues];
 }
 
 /**
@@ -897,6 +1164,10 @@ function scoreConsistency(data) {
       const base = _parseBedN(baseRaw);
       if (top === null || base === null) continue;
       if (top < base) {
+        fadViolations += 1;
+      } else if (rcaSubbedInverted(topRaw, baseRaw)) {
+        // AUDIT-2026-10-01: mirror of rca_core/quality.py:773. Same bed
+        // number, backwards subscript -- see rcaSubbedInverted above.
         fadViolations += 1;
       }
     }
@@ -1009,7 +1280,7 @@ function scoreConsistency(data) {
           if (low.indexOf(key) !== -1 && stages2[biozoneStageMap[key]]) return biozoneStageMap[key];
         }
         for (const k of Object.keys(stages2)) {
-          if (new RegExp('\\b' + _regExpEscape(k) + '\\b', 'i').test(low)) return k;
+          if (_wordBoundaryRe(k, 'i').test(low)) return k;
         }
         return null;
       };
@@ -1110,6 +1381,19 @@ function scoreStructure(data) {
     nullCheckKeys = ['sections', 'cross_beds', 'lithology_legend', 'fossil_legend', 'confidence'];
   } else if (mode === 'abundance') {
     nullCheckKeys = ['sections', 'abundances', 'confidence'];
+  } else if (mode === 'zonation') {
+    // AUDIT-2026-09-30: this branch was MISSING, and _detectMode has returned
+    // 'zonation' since UI-REVIEW-2026-09-05 -- so a zonation result fell into
+    // the range_chart `else` below and was null-checked against
+    // sections/biozones/other_fossils, none of which a zonation payload emits.
+    // All three counted as null, the check failed, and the structure dimension
+    // dropped to 0.5. Measured on the committed real payload
+    // Hollis_et_al_2020_Austrral_radiolarian_biozone_p003_ra2.json: the browser
+    // graded the same extraction 0.89 / B while rca_core graded it 0.94 / A --
+    // a full letter grade apart. The other _detectMode consumer in this file,
+    // scoreCompleteness, has had its zonation branch all along, which is why
+    // the detection half of the 2026-09-05 fix looked complete.
+    nullCheckKeys = ['zones', 'correlations', 'zonations', 'confidence'];
   } else {
     nullCheckKeys = ['sections', 'biozones', 'other_fossils', 'confidence'];
   }
@@ -1277,7 +1561,12 @@ function rcaCoverageFor(data) {
   const rows = data[tableKey].filter(
     (r) => r && typeof r === 'object' && !Array.isArray(r));
   return rcaCoverageLedger(rows, {
-    columnKeys: [primaryColumn, 'taxon', 'species', 'sample_id', 'label', 'name'],
+    // AUDIT-2026-10-01 [item 26]: `group` was missing, and for a scatter plot
+    // it IS the taxon (extractor.js keeps it in the known point keys; see
+    // _COVERAGE_EXTRA_COLUMN_KEYS in rca_core/quality.py, which this literal
+    // mirrors — tests/test_coverage_column_identity.py pins the two together).
+    // Appended last so a row carrying its own primary key is unaffected.
+    columnKeys: [primaryColumn, 'taxon', 'species', 'sample_id', 'label', 'name', 'group'],
   });
 }
 

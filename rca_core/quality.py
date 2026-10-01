@@ -29,7 +29,15 @@ js/i18n.js (``quality.*`` keys) so the UI can render localized messages.
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
+# AUDIT-2026-09-27 [item 7.2]: Optional is used in two annotations below
+# (`_resolve_age_ma(...) -> Optional[float]`) but was never imported.
+# Safe at runtime only because of `from __future__ import annotations`;
+# it breaks mypy and would NameError under typing.get_type_hints().
+from typing import Any, Iterable, Optional
+
+# AUDIT-2026-10-02: the explicit-age pattern text is shared with
+# standards/ics.py and standards/pbdb.py; see rca_core/age_patterns.py.
+from .age_patterns import AGE_VALUE_WITH_UNIT_PATTERN
 
 try:
     from .standards.ics import (
@@ -103,9 +111,20 @@ _COLUMNAR_MARKERS: tuple[str, ...] = (
 def _detect_mode(data: dict[str, Any]) -> str:
     """Identify which extraction mode the data belongs to.
 
-    Returns one of: ``"columnar"``, ``"abundance"``, ``"range_chart"``.
+    Returns one of: ``"columnar"``, ``"abundance"``, ``"zonation"``,
+    ``"range_chart"``.
     Columnar wins ties because cross_beds / lithology_legend are unique
-    markers that can't appear in range-chart output."""
+    markers that can't appear in range-chart output.
+
+    AUDIT-2026-09-30: this list omitted ``"zonation"``, which the function has
+    returned since UI-REVIEW-2026-09-05 -- the branch and its comment were added
+    below, the contract above them was not. A caller trusting the docstring
+    would treat a zonation result as impossible, which is the same class of
+    stale-claim bug as js/quality.js's _detectMode comment claiming the zonation
+    problem was solved while one consumer still ignored the mode. This
+    vocabulary is pinned by tests/test_quality_engine_parity.py, which requires
+    both engines' detectors to return the same set.
+    """
     if not isinstance(data, dict):
         return "range_chart"
     for key in _COLUMNAR_MARKERS:
@@ -176,6 +195,33 @@ def _warning_flags(value: Any) -> set:
     return {str(value)}
 
 
+def _subbed_inverted(top_raw: Any, base_raw: Any) -> bool:
+    """Same bed number, and the SUBSCRIPT says the range runs backwards.
+
+    A subscript letters upward, so "23a" is BELOW "23b" and BELOW the bare
+    "23". base="23b" / top="23a" is therefore an inverted range even though
+    _parse_bed_n reports 23 for both, and an empty subscript sorts below every
+    letter -- which is what makes base="23a" / top="23" inverted too.
+
+    Routes through the shared rca_core.bed_parser, which is the whole reason
+    that module exists: its docstring records that "a predicted Bed 23c and
+    ground truth Bed 23d would both score as integer 23 -> false positive
+    accuracy". quality.py kept a third, weaker parser; this is where the two
+    dimensions in this file stop re-deriving the comparison for themselves.
+
+    Returns False for anything the shared parser cannot read, or when the two
+    sides are not the same bed -- those cases belong to the other branches.
+    """
+    from .bed_parser import parse_bed
+    top = parse_bed(top_raw)
+    base = parse_bed(base_raw)
+    if not top or not base:
+        return False
+    if top["bed_num"] != base["bed_num"]:
+        return False
+    return bool(top["bed_sub"] < base["bed_sub"])
+
+
 def _parse_bed_n(value: Any) -> int | None:
     """Parse a bed indicator like ``"Bed 9"``, ``"bed-7"``, ``"5"``, or ``5``
     into an integer.  Returns ``None`` for empty / unparsable values."""
@@ -204,9 +250,17 @@ def _parse_bed_n(value: Any) -> int | None:
 # the first number in the text as the age — so a perfectly valid bed pair
 # like range_base="Madison 3" / range_top="Madison 6" was misread as an
 # inverted age range (3 Ma < 6 Ma) and flagged as an FAD<LAD violation.
+# AUDIT-2026-10-02: the text now comes from rca_core.age_patterns. This was a
+# byte-for-byte copy of the pair in standards/ics.py and standards/pbdb.py, and
+# fixing the CJK-prefix guard in ics.py alone left THIS copy live -- so after
+# that fix the desktop's quality score read "深度260 Ma - 250 Ma" as 250 Ma
+# while ics.py read the same label as 260 Ma. `\w` and `\d` are Unicode-aware
+# on Python str patterns and ASCII-only in the browser's mirror, so a CJK
+# glyph is a word character here and the guard silently dropped the OLDER
+# endpoint. The shared module's docstring records the direction and why
+# `re.ASCII` would have been the wrong repair.
 _AGE_UNIT_PATTERN = re.compile(
-    r"(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
-    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b",
+    AGE_VALUE_WITH_UNIT_PATTERN,
     re.IGNORECASE,
 )
 
@@ -432,6 +486,19 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
                 fad_lad_violations += 1
                 issues.append({"severity": "warning",
                                "msg_key": "quality.range_top_lt_base"})
+            elif _subbed_inverted(top_raw, base_raw):
+                # AUDIT-2026-10-01 [item 9.11]: same bed NUMBER, and the
+                # SUBSCRIPT decides. _parse_bed_n read "23a" and "23b" as 23
+                # both, so base="23b" / top="23a" passed while the exporter's
+                # range_base_le_range_top -- the check that makes to_xlsx
+                # RAISE -- rejected it. This is the same disease the previous
+                # commit removed from the consistency dimension, and it is
+                # WORSE here: accuracy is weighted 0.40 against consistency's
+                # 0.20, so the un-flagged inversions were costing twice as
+                # much of the grade.
+                fad_lad_violations += 1
+                issues.append({"severity": "warning",
+                               "msg_key": "quality.range_top_lt_base"})
         elif _HAS_ICS:
             # M-1 fix (REVIEW-2026-07-25): when the model emits ages
             # ("260–255 Ma") or stage names instead of bed numbers, the
@@ -573,7 +640,7 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
             issues.append({
                 "severity": v.get("severity", "warning"),
                 "msg_key": "quality.stage_order_reversed",
-                "params": {"section": v.get("section", ""), "detail": v.get("issue", "")},
+                "params": {"section": v.get("section", ""), "detail": v.get("detail", "")},
             })
 
     # Biozone section refs (columnar mode uses per-section thickness).
@@ -694,6 +761,29 @@ def _score_consistency(data: dict[str, Any]) -> tuple[float, list[dict[str, str]
             base_n = _parse_bed_n(base)
             if top_n is not None and base_n is not None and top_n < base_n:
                 fad_violations += 1
+                continue
+            # AUDIT-2026-10-01 [item 9.10]: _parse_bed_n takes the first integer
+            # in the string, so "23a" and "23b" are both bed 23 and the
+            # comparison above says they are fine. They are not: a subscript
+            # letters UPWARD, so base="23b" / top="23a" is an inverted range,
+            # and so is base="23a" / top="23".
+            #
+            # This is the same defect rca_core/bed_parser.py was created to
+            # end -- its docstring records that "a predicted Bed 23c and ground
+            # truth Bed 23d would both score as integer 23 -> false positive
+            # accuracy" -- and the same one _bed_num in eval_metrics.py had
+            # until two commits ago. The M-1 fix unified eval_metrics and
+            # exporter; quality.py kept a third, weaker parser.
+            #
+            # It mattered because the two checks are not symmetric. Measured
+            # against the exporter's range_base_le_range_top on 28 shapes, this
+            # was the ONLY direction that disagreed, and it is the expensive
+            # one: the exporter RAISES on those rows, so the user got a
+            # validation error while the quality report -- the thing that is
+            # supposed to explain it -- said everything was fine and the grade
+            # was not penalised.
+            if _subbed_inverted(top, base):
+                fad_violations += 1
         if fad_violations:
             score -= min(0.3, 0.1 * fad_violations)
             issues.append({
@@ -791,7 +881,17 @@ def _score_cross_era_accuracy(sections: list) -> list[dict[str, Any]]:
             if cmp_result > 0:
                 violations.append({
                     "section": sec_name,
-                    "issue": f"Stage order reversed: {stages[i]} above {stages[i + 1]}",
+                    # AUDIT-2026-10-01: this text is consumed as the {detail}
+                    # placeholder of quality.stage_order_reversed, whose
+                    # template is "Stage order reversed in section {section}:
+                    # {detail}" -- so it must NOT repeat the lead-in. It did:
+                    # the badge read "Stage order reversed in section S1:
+                    # Stage order reversed: Hirnantian above Sandbian", and in
+                    # zh / ja the untranslated English fragment sat inside an
+                    # otherwise-localised sentence. Keyed `detail` to match the
+                    # placeholder, and to js/quality.js, which already passed
+                    # the bare pair.
+                    "detail": f"{stages[i]} above {stages[i + 1]}",
                     # REVIEW-2026-09-20: "high" broke the module contract —
                     # this file's docstring and every other emitter only use
                     # "info" / "warning", and js/quality.js reports the same
@@ -879,7 +979,28 @@ def _score_biozone_order(species: list, sections: list) -> tuple[int, list[dict[
             if bed_n is None:
                 continue
             kinds.add("bed")
-            positioned.append((float(bed_n), sp))
+            # AUDIT-2026-10-01 [item 9.12]: use the shared position, not the
+            # bare bed number. With "23a" and "23c" both at 23.0 the sort fell
+            # through to its tie-break --
+            #
+            #     positioned.sort(key=lambda item:
+            #         (item[0], str(item[1].get("species") or "")))
+            #
+            # -- so which of two same-bed species landed in the "younger" slot
+            # was decided ALPHABETICALLY. Measured, that produced both error
+            # directions: species A at 23c / B at 23a, with the younger
+            # biozone on A, was not flagged when the whole-bed equivalent
+            # (A@24 / B@23) is; and A at 23a / B at 23c with the older biozone
+            # on A WAS flagged when the equivalent (A@23 / B@24) is not.
+            #
+            # Different shape from the FAD/LAD gap fixed in the two previous
+            # commits: there the COMPARISON dropped the subscript, here the
+            # ORDER did.
+            from .bed_parser import bed_position as _bed_pos
+            pos = _bed_pos(raw_top)
+            if pos is None:
+                continue
+            positioned.append((pos, sp))
         if len(positioned) < 2 or len(kinds) > 1:
             # Unpositioned rows are excluded rather than invented; a mixed
             # bed/age section has no single ordering scale.
@@ -1221,8 +1342,20 @@ _COVERAGE_TABLES: tuple[tuple[str, str], ...] = (
 #: :func:`coverage_column_keys` is the ONLY producer of this ladder — the
 #: evidence report used to keep its own table list and its own ledger call,
 #: which is how the two audits drifted apart (FIX-2026-09-22, audit item 6).
+#:
+#: AUDIT-2026-10-01 [item 26]: ``group`` was missing, and for a scatter plot it
+#: IS the taxon — ``extractor.py`` lists it in ``_KNOWN_SCATTER_POINT_KEYS``
+#: (:4066) and the normaliser writes it (:4162); ``aggregate.py`` names it in
+#: ``COLUMNAR_SECTION_SCHEMA.primary_id_keys``.  A real payload whose points
+#: carried an empty ``label`` (the table's own primary key) therefore produced
+#: an empty grid — ``cells: 0``, ``honest_coverage: 0.0``,
+#: ``unattributed_rows: 44`` — in the same report block whose rollup said
+#: ``contracted_rows: 44`` and listed 44 decisions, all with ``row: ""``.
+#: Appended LAST so a row that does carry its own primary key is unaffected.
+#: js/quality.js mirrors this tuple as a literal; the two are pinned to the
+#: same key set by tests/test_coverage_column_identity.py.
 _COVERAGE_EXTRA_COLUMN_KEYS: tuple[str, ...] = (
-    "taxon", "species", "sample_id", "label", "name",
+    "taxon", "species", "sample_id", "label", "name", "group",
 )
 
 

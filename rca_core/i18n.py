@@ -109,6 +109,36 @@ TRANSLATIONS["zh"] = {
     "image.dropHint": "拖拽图片到此处，或点击选择",
     "image.dims": "尺寸",
     "image.resized": "（已压缩）",
+    # AUDIT-2026-09-27 [item 2.1] (U-02): shown when a HISTORY record is
+    # loaded and the preview shows its stored thumbnail rather than a live
+    # file. It must be explicit that this is a thumbnail, or a reviewer
+    # mistakes it for the extractable source. All three locales (C8).
+    "image.historyThumbnail": "历史记录缩略图（仅供核对）",
+    # AUDIT-2026-09-27 [item 2.2] (U-01): the preview was a fixed 172px
+    # thumbnail, i.e. a 13-15x downscale of a typical range chart, which
+    # makes the taxon labels — the reason the figure exists — illegible.
+    "image.zoomIn": "放大",
+    "image.zoomOut": "缩小",
+    "image.zoomFit": "适应窗口",
+    "image.viewFull": "查看原图",
+    "image.fullTitle": "原图（全分辨率）",
+    # AUDIT-2026-09-27 [item 2.3 / 2.5] (B-16 / U-03): the Extract page's
+    # right panel was a blank ~55% of the window on a fresh launch, with four
+    # greyed-out row-edit buttons and no indication of what to do next. These
+    # are its empty state and the cancel affordance, which existed ONLY in
+    # closeEvent — a runs=5 extraction could not be stopped without closing the
+    # window. All three locales (C8).
+    "extract.empty": "尚无提取结果",
+    "extract.emptyHint": "在左侧选择或拖入一张地层延限图，然后点击「开始提取」。结果会显示在这里。",
+    "action.cancel": "取消提取",
+    "action.cancelHint": "停止当前提取。已在进行中的请求需要先返回。",
+    "status.cancelling": "正在取消，等待当前请求结束…",
+    # AUDIT-2026-09-27 [item 1.15]: the ProviderWizard validated a form with a
+    # hardcoded English "Please fill in: " prefix, and reported a rejected
+    # extra_headers blob with a hardcoded English f-string. Both were
+    # user-visible strings bypassing the catalogue. All three locales (C8).
+    "wizard.fillRequired": "请填写：",
+    "wizard.extraHeadersIgnored": "已忽略 extra_headers：{reason}",
     "caption.label": "图注 / 备注（可选）",
     "action.extract": "开始提取",
     "action.extracting": "提取中…",
@@ -217,6 +247,17 @@ TRANSLATIONS["zh"] = {
     "err.noEndpoint": "请先选择并配置一个端点。",
     "err.imageRead": "无法读取图片文件。",
     "err.401": "API Key 无效或已过期（401）。",
+    # AUDIT-2026-09-29: this key is emitted by server.py and the
+    # desktop GUI renders it through this catalogue, but no locale
+    # carried it, so the user saw the literal "err.X". See the
+    # commit message for the three that already existed only in
+    # js/i18n.js.
+    "err.badRequest": "\u8bf7\u6c42\u4e0d\u5b8c\u6574\uff08411\uff09\u3002\u8bf7\u53d1\u9001 Content-Length\uff0c\u4e0d\u652f\u6301\u5206\u5757\u4f20\u8f93\u7f16\u7801\u3002",
+    "err.methodNotAllowed": "\u8bf7\u6c42\u65b9\u6cd5\u4e0d\u88ab\u5141\u8bb8\uff08405\uff09\u3002\u6b64\u7aef\u70b9\u4e0d\u652f\u6301 HEAD \u8bf7\u6c42\u3002",
+    "err.serverBusy": "\u670d\u52a1\u5668\u7e41\u5fd9\uff08503\uff09\u3002\u6b63\u5728\u8fdb\u884c\u7684\u5927\u6587\u4ef6\u4e0a\u4f20\u8fc7\u591a\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+    "err.badContentType": "\u8bf7\u6c42 Content-Type \u4e0d\u88ab\u63a5\u53d7\uff0c\u8bf7\u4f7f\u7528 application/json \u91cd\u8bd5\u3002",
+    "err.forbidden": "\u8bbf\u95ee\u88ab\u62d2\u7edd\uff08403\uff09\u3002\u8bf7\u786e\u8ba4\u6765\u6e90 / CSRF \u4ee4\u724c\u662f\u5426\u6709\u6548\u3002",
+    "err.rateLimit": "\u8bf7\u6c42\u8fc7\u4e8e\u9891\u7e41\uff08429\uff09\u3002\u8bf7\u7a0d\u540e\u518d\u8bd5\u6216\u964d\u4f4e\u8fd0\u884c\u6b21\u6570\u3002",
     "err.403": "访问被拒绝（403）。请检查密钥权限与端点。",
     "err.429": "请求过于频繁或额度不足（429）。请稍后再试。",
     "err.timeout": "请求超时。图片可能过大或网络不稳定，请重试。",
@@ -232,9 +273,32 @@ TRANSLATIONS["zh"] = {
     "dialog.saveJson": "保存 JSON 文件",
     "dialog.chooseImage": "选择地层沿线图",
     "results.empty": "暂无提取结果",
-    "results.emptyHint": "请在左侧选择或粘贴图片，然后点击「开始提取」",
+    "results.emptyHint": "本次提取已完成，但没有返回表格数据——该图件可能是地图或古地理图等不含表格结构的图。",
+    "results.tablesNotShown": "本次提取返回了 {n} 组表格数据，但当前表格视图尚不支持这种图件类型，数据未丢失：可用「导出全部 JSON」查看。",
+    # AUDIT-2026-09-27 [item 4.2]: palaeomap table support. These keys were
+    # not "new text" so much as previously unreachable — the tables existed in
+    # the extractor output all along and were discarded by the tableless gate.
+    "sec.continents": "大陆",
+    "sec.oceansSeas": "海洋与海",
+    "sec.tectonicFeatures": "构造要素",
+    "sec.biogeographicRealms": "生物地理区",
+    "sec.paleolatitudeIndicators": "古纬度指标",
+    "sec.fossilSites": "化石产地",
+    "col.type": "类型",
+    "col.paleolatitude": "古纬度",
+    "col.direction": "走向",
+    "col.description": "描述",
+    "col.characteristicFauna": "特征动物群",
     # Step 0 (8.0→9.5): chimera_warnings surfaced as user-visible warning
-    "results.chimera_warning": "检测到 {n} 条嵌合共识行（自然界未观察到），已被自动丢弃",
+    # AUDIT-2026-10-01 [item 9.15]: the old text said the rows were 已被自动丢弃
+    # ("automatically dropped"). They are NOT. AUDIT-2026-09-27 P1 in
+    # aggregate.py reversed that policy on purpose -- deleting taxa was itself
+    # the bug, because "raising `runs`, the documented way to make an
+    # extraction MORE reliable, was deleting taxa". A recombined row is now
+    # KEPT, flagged, and carries the ballots. Telling the operator it was
+    # dropped is the worst of both: they stop looking for a disagreement the
+    # tool still holds. All three languages said the same false thing.
+    "results.chimera_warning": "检测到 {n} 条嵌合共识行（无任何单次运行观察到该组合），已保留并标记待复核",
     "results.phylogeneticTree": "系统发育树",
     "wizard.steps": "步骤",
     "wizard.selectPreset": "选择预设",
@@ -401,7 +465,10 @@ TRANSLATIONS["zh"] = {
     "quality.null_fields": "部分预期字段为空",
     "quality.invalid_result": "提取结果无效",
     # P1-3 (REVIEW-2026-07-25): new keys for the consistency dimension.
-    "quality.chimera_dropped": "嵌合共识行被丢弃（无任何单次运行观察到该 FAD/LAD/生物带组合）",
+    # AUDIT-2026-10-01 [item 9.15]: said 被丢弃 ("dropped"). Nothing is
+    # dropped -- the row is kept, flagged, and carries the ballots. See the
+    # results.chimera_warning note for why that policy was reversed.
+    "quality.chimera_dropped": "嵌合共识行已保留并标记（无任何单次运行观察到该 FAD/LAD/生物带组合），请复核选票",
     "quality.fad_lt_lad": "部分物种的 FAD（首现）晚于 LAD（末现）",
     "quality.agreement_overflow": "agreement_count 异常大于总运行次数",
     "quality.missing_biozone": "部分物种缺失生物带归属",
@@ -545,6 +612,21 @@ TRANSLATIONS["en"] = {
     "image.dropHint": "Drop an image here, or click to choose",
     "image.dims": "Dimensions",
     "image.resized": "(compressed)",
+    "image.historyThumbnail": "History thumbnail (review only)",
+    "image.zoomIn": "Zoom in",
+    "image.zoomOut": "Zoom out",
+    "image.zoomFit": "Fit to panel",
+    "image.viewFull": "View full figure",
+    "image.fullTitle": "Source figure (full resolution)",
+    "extract.empty": "No extraction result yet",
+    "extract.emptyHint": "Choose or drop a range chart on the left, then press "
+                         "Extract. The result appears here.",
+    "action.cancel": "Cancel",
+    "action.cancelHint": "Stop the current extraction. A request already in "
+                         "flight has to finish first.",
+    "status.cancelling": "Cancelling — waiting for the current request…",
+    "wizard.fillRequired": "Please fill in: ",
+    "wizard.extraHeadersIgnored": "extra_headers ignored: {reason}",
     "caption.label": "Caption / note (optional)",
     "action.extract": "Extract",
     "action.extracting": "Extracting...",
@@ -574,7 +656,7 @@ TRANSLATIONS["en"] = {
     "status.saved": "Saved",
     "status.historySaveUnavailable": "History storage is unavailable — the latest record was not saved. Check permissions on ~/.range_chart_analyzer.",
     "tab.sections": "Sections",
-        "tab.extract": "Extract",
+    "tab.extract": "Extract",
     "tab.about": "About",
     "about.desc": "Extract structured data from stratigraphic range charts.",
     "tab.species": "Species Ranges",
@@ -645,6 +727,17 @@ TRANSLATIONS["en"] = {
     "err.noEndpoint": "Please select and configure an endpoint first.",
     "err.imageRead": "Could not read the image file.",
     "err.401": "API key is invalid or expired (401).",
+    # AUDIT-2026-09-29: this key is emitted by server.py and the
+    # desktop GUI renders it through this catalogue, but no locale
+    # carried it, so the user saw the literal "err.X". See the
+    # commit message for the three that already existed only in
+    # js/i18n.js.
+    "err.badRequest": "Malformed request (411). Send a Content-Length; chunked transfer encoding is not supported.",
+    "err.methodNotAllowed": "Method not allowed (405). This endpoint does not support HEAD.",
+    "err.serverBusy": "Server busy (503). Too many large uploads in progress; retry shortly.",
+    "err.badContentType": "Content-Type not accepted. Retry with application/json.",
+    "err.forbidden": "Access denied (403). Verify the origin / CSRF token are valid.",
+    "err.rateLimit": "Too many requests (429). Please retry later or reduce the runs count.",
     "err.403": "Access denied (403). Check key permissions and endpoint.",
     "err.429": "Too many requests or insufficient quota (429). Try later.",
     "err.timeout": "Request timed out. The image may be too large or network unstable.",
@@ -660,9 +753,22 @@ TRANSLATIONS["en"] = {
     "dialog.saveJson": "Save JSON file",
     "dialog.chooseImage": "Choose a range chart",
     "results.empty": "No results yet",
-    "results.emptyHint": "Select or paste an image on the left, then click Extract.",
+    "results.emptyHint": "This extraction returned no tables — the figure may be a map or paleomap, which has no tabular structure.",
+    "results.tablesNotShown": "This extraction returned {n} sets of tabular data, but the table view does not support this figure type yet. Nothing was lost — use Export all JSON to see it.",
+    # AUDIT-2026-09-27 [item 4.2]: palaeomap table support.
+    "sec.continents": "Continents",
+    "sec.oceansSeas": "Oceans & seas",
+    "sec.tectonicFeatures": "Tectonic features",
+    "sec.biogeographicRealms": "Biogeographic realms",
+    "sec.paleolatitudeIndicators": "Palaeolatitude indicators",
+    "sec.fossilSites": "Fossil sites",
+    "col.type": "Type",
+    "col.paleolatitude": "Palaeolatitude",
+    "col.direction": "Direction",
+    "col.description": "Description",
+    "col.characteristicFauna": "Characteristic fauna",
     # Step 0 (8.0→9.5): chimera_warnings surfaced as user-visible warning
-    "results.chimera_warning": "Detected {n} chimeric consensus rows (not observed in any single run) — automatically dropped",
+    "results.chimera_warning": "Detected {n} chimeric consensus rows (not observed in any single run) — kept and flagged for review",
     "results.phylogeneticTree": "Phylogenetic Tree",
 
     # ----- Editable results -----
@@ -833,7 +939,7 @@ TRANSLATIONS["en"] = {
     # which made the GUI render the raw msg_key string for English/Japanese
     # users. Kept in sync with the zh block.
     "quality.agreement_overflow": "Agreement ratio exceeds 1.0 (clamped)",
-    "quality.chimera_dropped": "Chimera row dropped (field combination never observed in any single run)",
+    "quality.chimera_dropped": "Chimera row KEPT and flagged (field combination never observed in any single run) — review the ballots",
     "quality.empty_result": "Empty extraction result",
     "quality.fad_lt_lad": "FAD is younger than LAD (range order inverted)",
     "quality.missing_biozone": "Biozone label missing",
@@ -843,7 +949,23 @@ TRANSLATIONS["en"] = {
     "quality.abundance_sum_violation": "Abundance percentages for '{sample}' sum to {sum}% (should be 100%)",
     "quality.abundance_sum_violation_count": "{count} level(s) have abundance sums not equal to 100%",
     # M-1 fix: previously emitted but missing in the en table.
-    "quality.range_top_lt_base": "Some species have range top younger than their range base (LAD before FAD)",
+    #
+    # AUDIT-2026-09-29: the sentence said "range top younger than their range
+    # base", which is the NORMAL ordering -- a younger top is what a range IS.
+    # The check fires on the opposite condition: the bed branch on `top < base`
+    # (beds are 1-indexed from the bottom, so a smaller top index is an OLDER
+    # top) and the age branch on `base_ma < top_ma` (FAD younger than LAD).
+    # An English researcher reading a real FAD/LAD inversion was told it
+    # described a harmless case, and would have had no reason to look again.
+    # The trailing "(LAD before FAD)" tried to patch the main clause and only
+    # made the sentence contradict itself.
+    #
+    # js/i18n.js already carries the correct wording ("Some taxa have LAD
+    # (last appearance) earlier than FAD (first appearance)") -- this finding
+    # was recorded as CONFIRMED in docs/FRONTEND-REVIEW-2026-08-19.json and
+    # only the browser half of the mirror was ever fixed. Same semantics as the
+    # mirror, "species" rather than "taxa" to match this file's other entries.
+    "quality.range_top_lt_base": "Some species have LAD (last appearance) earlier than FAD (first appearance)",
     "quality.ages_inconsistent": "{count} section(s) span eras (e.g. Paleozoic + Mesozoic); legitimate for boundary sections",
     "quality.stage_order_reversed": "Stage order reversed in section {section}: {detail}",
     "quality.bed_index_order_invalid": "Some lithology / age-unit blocks have invalid bed index order",
@@ -972,6 +1094,20 @@ TRANSLATIONS["ja"] = {
     "image.dropHint": "画像をここにドロップ、またはクリックして選択",
     "image.dims": "寸法",
     "image.resized": "（圧縮済み）",
+    "image.historyThumbnail": "履歴のサムネイル（照合用のみ）",
+    "image.zoomIn": "拡大",
+    "image.zoomOut": "縮小",
+    "image.zoomFit": "パネルに合わせる",
+    "image.viewFull": "原図を表示",
+    "image.fullTitle": "原図（フル解像度）",
+    "extract.empty": "まだ抽出結果がありません",
+    "extract.emptyHint": "左側で層序延限図を選択またはドラッグし、「抽出開始」を"
+                         "押してください。結果はここに表示されます。",
+    "action.cancel": "抽出を中止",
+    "action.cancelHint": "現在の抽出を停止します。進行中のリクエストは完了を待ちます。",
+    "status.cancelling": "中止しています — 現在のリクエストの完了を待っています…",
+    "wizard.fillRequired": "入力してください: ",
+    "wizard.extraHeadersIgnored": "extra_headers は無視されました: {reason}",
     "caption.label": "キャプション / メモ（任意）",
     "action.extract": "抽出開始",
     "action.extracting": "抽出中…",
@@ -1001,7 +1137,7 @@ TRANSLATIONS["ja"] = {
     "status.saved": "保存しました",
     "status.historySaveUnavailable": "履歴ストレージが利用できないため、今回のレコードは保存されませんでした。~/.range_chart_analyzer の権限を確認してください。",
     "tab.sections": "層序断面",
-        "tab.extract": "抽出",
+    "tab.extract": "抽出",
     "tab.about": "情報",
     "about.desc": "層序レンジチャートから構造化データを抽出するツール。",
     "tab.species": "種のレンジ",
@@ -1072,6 +1208,17 @@ TRANSLATIONS["ja"] = {
     "err.noEndpoint": "先にエンドポイントを選択肢して設定してください。",
     "err.imageRead": "画像ファイルを読み込めませんでした。",
     "err.401": "API キーが無効または期限切れです（401）。",
+    # AUDIT-2026-09-29: this key is emitted by server.py and the
+    # desktop GUI renders it through this catalogue, but no locale
+    # carried it, so the user saw the literal "err.X". See the
+    # commit message for the three that already existed only in
+    # js/i18n.js.
+    "err.badRequest": "\u4e0d\u6b63\u306a\u30ea\u30af\u30a8\u30b9\u30c8\u3067\u3059\uff08411\uff09\u3002\u30c1\u30e3\u30f3\u30af\u8ee2\u9001\u306e\u4ee3\u308f\u308a\u306b Content-Length \u3092\u9001\u4fe1\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+    "err.methodNotAllowed": "\u8a31\u53ef\u3055\u308c\u3066\u3044\u306a\u3044\u30e1\u30bd\u30c3\u30c9\u3067\u3059\uff08405\uff09\u3002\u3053\u306e\u30a8\u30f3\u30c9\u30dd\u30a4\u30f3\u30c8\u306f HEAD \u306b\u5bfe\u5fdc\u3057\u3066\u3044\u307e\u305b\u3093\u3002",
+    "err.serverBusy": "\u30b5\u30fc\u30d0\u30fc\u304c\u6df7\u307f\u5408\u3063\u3066\u3044\u307e\u3059\uff08503\uff09\u3002\u5927\u898f\u6a21\u306e\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9\u304c\u96c6\u4e2d\u3057\u3066\u3044\u307e\u3059\u3002\u3057\u3070\u3089\u304f\u3057\u3066\u304b\u3089\u518d\u8a66\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+    "err.badContentType": "Content-Type \u304c\u53d7\u3051\u4ed8\u3051\u3089\u308c\u307e\u305b\u3093\u3002application/json \u3067\u518d\u8a66\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+    "err.forbidden": "\u30a2\u30af\u30bb\u30b9\u304c\u62d2\u5426\u3055\u308c\u307e\u3057\u305f\uff08403\uff09\u3002\u30aa\u30ea\u30b8\u30f3 / CSRF \u30c8\u30fc\u30af\u30f3\u304c\u6709\u52b9\u304b\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+    "err.rateLimit": "\u30ea\u30af\u30a8\u30b9\u30c8\u904e\u591a\u3067\u3059\uff08429\uff09\u3002\u3057\u3070\u3089\u304f\u3057\u3066\u304b\u3089\u518d\u8a66\u884c\u3059\u308b\u304b\u3001\u5b9f\u884c\u56de\u6570\u3092\u6e1b\u3089\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
     "err.403": "アクセスが拒否されました（403）。権限とエンドポイントを確認してください。",
     "err.429": "リクエスト過多またはクォータ不足です（429）。後で再試行してください。",
     "err.timeout": "リクエストがタイムアウトしました。画像が大きすぎるか通信が不安定です。",
@@ -1087,9 +1234,24 @@ TRANSLATIONS["ja"] = {
     "dialog.saveJson": "JSON ファイルを保存",
     "dialog.chooseImage": "レンジチャートを選択",
     "results.empty": "結果がありません",
-    "results.emptyHint": "左側で画像を選択または貼り付けてから、抽出をクリックしてください。",
+    "results.emptyHint": "今回の抽出は完了しましたが、表は返りませんでした。地図や古地理図など、表構造を持たない図の可能性があります。",
+    "results.tablesNotShown": "今回の抽出で {n} 件の表データを得ましたが、この図件の種類はまだ表ビューに対応していません。データは失われていません。「すべて JSON を書き出し」で確認できます。",
+    # AUDIT-2026-09-27 [item 4.2]: palaeomap table support.
+    "sec.continents": "大陸",
+    "sec.oceansSeas": "海洋と海",
+    "sec.tectonicFeatures": "テクトニック要素",
+    "sec.biogeographicRealms": "生物地理区",
+    "sec.paleolatitudeIndicators": "古緯度示準",
+    "sec.fossilSites": "化石産出地",
+    "col.type": "種類",
+    "col.paleolatitude": "古緯度",
+    "col.direction": "走向",
+    "col.description": "説明",
+    "col.characteristicFauna": "特徴的動物群",
     # Step 0 (8.0→9.5): chimera_warnings surfaced as user-visible warning
-    "results.chimera_warning": "{n} 件のキメラ統合行を検出（単一ランでも観察されなかったため自動破棄）",
+    # AUDIT-2026-10-01 [item 9.15]: 除外 / 自動破棄 both claim a removal.
+    # Nothing is removed; the row is kept, flagged and carries the ballots.
+    "results.chimera_warning": "{n} 件のキメラ統合行を検出（単一ランでも観察されなかった組み合わせ）。保持してフラグを付与しました",
     "results.phylogeneticTree": "系統樹",
 
     # ----- Editable results -----
@@ -1260,7 +1422,7 @@ TRANSLATIONS["ja"] = {
     # which made the GUI render the raw msg_key string for English/Japanese
     # users. Kept in sync with the zh block.
     "quality.agreement_overflow": "一致率が1.0を超えています（クランプ済み）",
-    "quality.chimera_dropped": "キメラ行を除外（いずれの単一実行でも観察されなかったフィールド組み合わせ）",
+    "quality.chimera_dropped": "キメラ行は保持してフラグ付け（いずれの単一ランでも観察されなかったフィールド組み合わせ）。投票を確認してください",
     "quality.empty_result": "抽出結果が空です",
     "quality.fad_lt_lad": "FADがLADより新しい（範囲の順序が逆転）",
     "quality.missing_biozone": "生層準ラベルがありません",

@@ -19,7 +19,7 @@ import random
 import time
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
-from typing import Callable, TypeVar
+from typing import Any, Callable, TypeVar
 
 T = TypeVar("T")
 
@@ -75,11 +75,20 @@ class NormalizedError:
 
     @property
     def display_message(self) -> str:
-        """Get the best message for user display."""
+        """Get the best message for user display.
+
+        AUDIT-2026-10-01: the "is there a status" test was truthiness here and
+        ``!== null`` in js/error-utils.js, so a ``status`` of 0 was "no status"
+        on this side and a status on the browser: the desktop rendered
+        "Network error: ..." and dropped the caller's prefix, while the browser
+        rendered "HTTP 0: ...". 0 is not an HTTP status, but a caller that
+        uses it as a "no status" sentinel should be SPELLED that way (None), and
+        a caller that means it should see the same thing on both transports.
+        """
         if self.message_carries_body or not self.body:
             base = self.message
         else:
-            prefix = f"HTTP {self.status}" if self.status else "Network error"
+            prefix = f"HTTP {self.status}" if self.status is not None else "Network error"
             base = f"{prefix}: {self.body}"
         if self.error_code:
             base = f"[{self.error_code}] {base}"
@@ -116,7 +125,19 @@ def normalize_http_error(
 
 
 def _decode_body(body_bytes: bytes | None) -> str:
-    """Best-effort decode of error body bytes."""
+    """Best-effort decode of error body bytes.
+
+    AUDIT-2026-10-01: the ``latin-1`` entry in that tuple is DEAD, and the loop
+    reads as though a legacy latin-1 provider body decodes correctly when it
+    does not. ``errors="replace"`` makes the utf-8 decode unraisable, so the
+    first iteration always returns; measured, a body of invalid utf-8 and a body
+    containing a raw latin-1 byte both come out with U+FFFD in the same place.
+    The browser side agrees, because ``fetch().text()`` also replaces.
+
+    Left in place rather than deleted, and flagged here for the same reason
+    rca_core/bed_parser.py keeps its own deliberately-dead unit entry: a
+    reader should not have to re-measure it. The behaviour is unchanged.
+    """
     if not body_bytes:
         return ""
     for encoding in ("utf-8", "latin-1"):
@@ -148,14 +169,53 @@ def _extract_error_code(body_bytes: bytes | None, body: str) -> str | None:
         if isinstance(data, dict):
             for key in ("error_code", "code", "type", "error.type"):
                 if key in data:
-                    return str(data[key])
+                    code = _usable_error_code(data[key])
+                    if code is not None:
+                        return code
             error = data.get("error", {})
             if isinstance(error, dict):
                 for key in ("error_code", "code", "type"):
                     if key in error:
-                        return str(error[key])
+                        code = _usable_error_code(error[key])
+                        if code is not None:
+                            return code
     except Exception:
         pass
+    return None
+
+
+def _usable_error_code(value: Any) -> str | None:
+    """The machine code to show, or ``None`` when the value is not one.
+
+    AUDIT-2026-10-01: this used to be a bare ``str(value)`` on this side and a
+    bare ``String(value)`` in js/error-utils.js, and for a provider that returns
+    a NON-STRING code the two produced different text in the operator's badge:
+
+        body                     this side            browser
+        {"code": null}           "None"              "null"
+        {"code": true}           "True"              "true"
+        {"code": [1]}            "[1]"               "1"
+        {"code": {"deep": 1}}    "{'deep': 1}"       "[object Object]"
+
+    The array row is the one that loses information rather than just formatting:
+    ``String([1])`` is ``"1"``, indistinguishable from a real numeric code, so
+    the badge asserts a code the provider never sent. The object row put a
+    Python repr inside a user-visible string, which is the same defect
+    ``_stringify_scalar`` was written to stop elsewhere in this codebase.
+
+    So a code is accepted only when it is a string, or an integer (some
+    providers use numeric ids, and both engines already agree on those). A
+    float is excluded rather than coerced: ``str(7.0)`` is ``"7.0"`` where
+    ``String(7)`` is ``"7"``, and a float error code is not a thing. ``None`` is
+    returned for everything else, which also lets the caller keep looking
+    instead of stopping at the first present-but-unusable key.
+    """
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
     return None
 
 
@@ -178,11 +238,18 @@ def format_provider_error(
     normalized: NormalizedError,
     prefix: str | None = None,
 ) -> str:
-    """Format a normalized error for user display."""
+    """Format a normalized error for user display.
+
+    AUDIT-2026-10-01: ``if normalized.status`` was truthiness again, so a
+    ``status`` of 0 dropped BOTH the caller's prefix and the ``HTTP n`` prefix
+    here, where js/error-utils.js#formatError keyed the same two branches on a
+    real "is there a status" test. See NormalizedError.display_message.
+    """
     msg = normalized.display_message
-    if prefix and normalized.status:
+    has_status = normalized.status is not None
+    if prefix and has_status:
         return f"{prefix} ({normalized.status}): {msg}"
-    if normalized.status:
+    if has_status:
         return f"HTTP {normalized.status}: {msg}"
     return msg
 
@@ -196,14 +263,83 @@ def get_retry_delay(
 ) -> float:
     """Calculate retry delay with exponential backoff and jitter.
 
-    Respects Retry-After headers when present, with smart fallback.
-    Mirrors DSH's provider-retry.js getRetryDelayMs() logic.
+    Respects Retry-After headers **when they are passed in**, with smart
+    fallback. Mirrors DSH's provider-retry.js getRetryDelayMs() logic.
+
+    AUDIT-2026-09-28: the "when they are passed in" is load-bearing, and the
+    bare "Respects Retry-After headers when present" this used to say is how
+    that came to be trusted as a live guarantee. The test suite pins the
+    header behaviour at THIS level -- ``get_retry_delay(429, {"retry-after":
+    "7"}) == 7.0`` and a zero Retry-After never meaning zero backoff -- and
+    all of that is correct. But only ONE of the three production call sites
+    can supply headers at all:
+
+        error_utils.retry_with_backoff   headers=get_headers() or None  OK
+        llm.call_llm_api_with_retry      headers=None   <-- LLM calls
+        extractor transport retry        headers=None   <-- image transport
+
+    The two that actually hit a provider's rate limit always pass None,
+    because ``call_llm_api`` reads the response and never captures
+    ``resp.headers`` -- so a server answering ``429 Retry-After: 120`` is
+    backed off by ~0.8 s and retried three times, which is the opposite of
+    what Retry-After asks for and can extend the limit. Carrying the headers
+    out means changing that call's return tuple (consumed in several places)
+    and its js/error-utils.js mirror, so it is left for the owner rather than
+    changed here. Until then: the function honours Retry-After, and the LLM
+    path does not use it.
+
+    AUDIT-2026-10-01: measured, and this note understated the gap in two ways.
+    Both matter to whoever picks the refactor up.
+
+      1. The BROWSER is not in the same position. js/minimax.js's direct-mode
+         transport surfaces 429/408 and rides ``err.headers`` through
+         retryWithBackoff into getRetryDelay (its comment at the throw site
+         says so), and a real ``Headers`` is case-insensitive. So the two
+         transports DISAGREE today: the same 429 is backed off per the server's
+         Retry-After in the browser and per the blind backoff on the desktop.
+         This is a live divergence, not a shared limitation.
+      2. Carrying the headers out is NECESSARY BUT NOT SUFFICIENT. Two further
+         divergences sit inside this function and would survive it. The header
+         lookup was case-sensitive over a plain dict (fixed here -- a no-op in
+         production while both call sites pass None, and pinned by
+         tests/test_error_utils_retry_header_parity.py), and the HTTP-date
+         branch still differs: ``parsedate_to_datetime`` accepts only the
+         RFC 9110 IMF-fixdate, while js/error-utils.js uses ``new Date()``,
+         which also accepts ISO-8601. That one is deliberately left alone --
+         accepting a non-spec format is a judgment call, not a mirror fix.
+
+    So the deferral is a THREE-part job, not one: capture the headers, keep the
+    lookup case-insensitive, and decide the date format.
     """
     delay: float | None = None
 
-    # 1. Check Retry-After-MS header (milliseconds)
+    # AUDIT-2026-10-01: header names are case-INSENSITIVE (RFC 9110 §5.1), and
+    # this function receives a plain dict, so the exact-spelling `.get()` pairs
+    # it used to do honoured two spellings out of the legal set. Measured
+    # against js/error-utils.js: the browser is handed a real `Headers`, whose
+    # `.get()` is case-insensitive, so it honoured Retry-After for
+    # "retry-after", "Retry-After", "RETRY-AFTER", "retry-After" and
+    # "rEtRy-AfTeR" alike, while this side silently fell through to the
+    # exponential backoff (1 s floor) for everything except the two spellings
+    # listed below -- including "RETRY-AFTER", which plenty of proxies and
+    # CDNs emit. One lookup over a lower-cased view of the keys is the whole
+    # fix, and it is a no-op in production today: both live call sites pass
+    # headers=None (llm.py:2001, extractor.py:2281), so nothing that ships
+    # reaches this branch. It matters for the refactor the docstring above
+    # defers -- carrying the headers out is not sufficient on its own.
+    #
+    # The values are looked up as-is, only the KEYS are folded, so a value
+    # that happens to look like a header name is unaffected.
+    folded = None
     if headers:
-        retry_after_ms = headers.get("retry-after-ms") or headers.get("Retry-After-Ms")
+        try:
+            folded = {str(k).lower(): v for k, v in headers.items()}
+        except AttributeError:  # a non-mapping was handed in
+            folded = None
+
+    # 1. Check Retry-After-MS header (milliseconds)
+    if folded:
+        retry_after_ms = folded.get("retry-after-ms")
         if retry_after_ms:
             try:
                 delay = float(retry_after_ms) / 1000.0
@@ -212,7 +348,7 @@ def get_retry_delay(
 
         # 2. Check Retry-After header (seconds or HTTP date)
         if delay is None:
-            retry_after = headers.get("retry-after") or headers.get("Retry-After")
+            retry_after = folded.get("retry-after")
             if retry_after:
                 try:
                     delay = float(retry_after)
@@ -221,6 +357,19 @@ def get_retry_delay(
                         dt = parsedate_to_datetime(retry_after)
                         delay = max(0.0, (dt - datetime.datetime.now(datetime.timezone.utc)).total_seconds())
                     except Exception:
+                        # AUDIT-2026-10-01: measured, and NOT fixed here.
+                        # parsedate_to_datetime accepts the RFC 9110 HTTP-date
+                        # (IMF-fixdate, "Wed, 21 Oct 2026 07:28:00 GMT") and
+                        # nothing else, while js/error-utils.js goes through
+                        # `new Date(string)`, which also accepts ISO-8601. So
+                        # for `Retry-After: 2099-10-21T07:28:00Z` this side
+                        # ignores the header and backs off ~1 s where the
+                        # browser waits the requested time. ISO-8601 is not
+                        # what RFC 9110 asks for, so accepting it is a
+                        # judgment call about gateways and CDNs rather than a
+                        # mirror bug, and it is left for the owner. Recorded
+                        # as a characterisation test in
+                        # tests/test_error_utils_retry_header_parity.py.
                         pass
 
     # 3. Fall back to exponential backoff with jitter

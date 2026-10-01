@@ -29,11 +29,19 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLineEdit,
 )
 
+# AUDIT-2026-09-27 [item B-13] (B-13): PillPushButton / TransparentToolButton /
+# qconfig are new here. The first two replace the four hand-styled action
+# buttons (hardcoded light greys, invisible on an OS dark theme) with
+# components that paint themselves from the active theme; `qconfig` is where
+# qfluentwidgets publishes themeChanged, which NOTHING in this repo was
+# subscribed to, so a live OS theme switch never re-applied any of the
+# hand-written setStyleSheet rules below. `isDarkTheme` (imported but unused
+# until now) is the branch the card's own border uses.
 from qfluentwidgets import (
     CardWidget, ComboBox, FluentIcon as FIF, InfoBar, InfoBarPosition,
-    LineEdit, PasswordLineEdit, PrimaryPushButton, PushButton,
+    LineEdit, PasswordLineEdit, PillPushButton, PrimaryPushButton, PushButton,
     ScrollArea, SearchLineEdit, StrongBodyLabel, BodyLabel, CaptionLabel,
-    TitleLabel, ToolButton, isDarkTheme,
+    TitleLabel, ToolButton, TransparentToolButton, isDarkTheme, qconfig,
 )
 
 from rca_core import (
@@ -160,6 +168,13 @@ class ProviderCard(CardWidget):
         self.setMaximumHeight(120)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.setAttribute(Qt.WA_Hover, True)
+        # AUDIT-2026-09-27 [item B-13] (B-13): the action row was revealed by
+        # enterEvent ONLY, and Qt skips setVisible(False) subtrees when it
+        # builds the focus chain — so a keyboard user could Tab onto a card
+        # and reach none of Test / Set active / Edit / Delete. The card is a
+        # tab stop now, and focusInEvent reveals the same row for the
+        # keyboard path (enterEvent is untouched for the mouse path).
+        self.setFocusPolicy(Qt.StrongFocus)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(4, 8, 4, 10)
@@ -174,12 +189,23 @@ class ProviderCard(CardWidget):
         mid.setSpacing(1)
         name_row = QHBoxLayout()
         name_row.setSpacing(6)
-        self.lbl_name = StrongBodyLabel(provider.name or "Provider")
+        self.lbl_name = StrongBodyLabel(
+            provider.name or translate("settings.llmProvider"))
         name_row.addWidget(self.lbl_name)
-        self.lbl_dot = CaptionLabel("●" if is_active else "○")
-        self.lbl_dot.setStyleSheet(
-            "color:#2563eb;" if is_active else "color:rgba(120,120,120,0.7);"
-        )
+        # AUDIT-2026-09-27 [item B-13] (B-13): this was a bare "●"/"○"
+        # CaptionLabel in a hardcoded #2563eb / rgba(120,120,120,0.7),
+        # carrying the single most important state in the app (which provider
+        # Extract will use) with no text and no accessible name — invisible
+        # to a screen reader and unreadable in a dark theme. It is now a
+        # PillPushButton, which paints itself from the active theme, reading
+        # settings.currentProvider ("当前" / "Active") and shown only while
+        # THIS card is the active provider. The attribute keeps its old name
+        # so nothing outside this file has to learn a new one.
+        self.lbl_dot = PillPushButton(translate("settings.currentProvider"))
+        self.lbl_dot.setFocusPolicy(Qt.NoFocus)   # a state pill, not an action
+        self.lbl_dot.setAccessibleName(translate("settings.currentProvider"))
+        self.lbl_dot.setToolTip(translate("settings.activeConfigHint"))
+        self.lbl_dot.setVisible(is_active)
         name_row.addWidget(self.lbl_dot)
         self._health_badge = HealthBadge(self._health_failures)
         name_row.addWidget(self._health_badge)
@@ -190,84 +216,154 @@ class ProviderCard(CardWidget):
         mid.addWidget(self.lbl_sub)
         row.addLayout(mid, 1)
 
-        # Action buttons — hidden until card is hovered (cc-switch style)
+        # Action buttons — hidden until the card is hovered OR focused
+        # (cc-switch style; see the setFocusPolicy note above).
         self._actions_widget = QWidget()
         self._actions_layout = QHBoxLayout(self._actions_widget)
         self._actions_layout.setContentsMargins(0, 0, 0, 0)
         self._actions_layout.setSpacing(4)
         self._actions_widget.setVisible(False)
 
-        self.btn_test = PushButton(translate("settings.testConnection"))
+        # AUDIT-2026-09-27 [item B-13] (B-13): btn_test / btn_active were
+        # PushButtons whose setStyleSheet hardcoded LIGHT greys (#475569 text
+        # on #f1f5f9 / #e2e8f0), while btn_edit / btn_delete used a lighter
+        # #94a3b8: under setTheme(Theme.AUTO) with an OS dark theme the first
+        # pair fell to ~1.6:1 contrast while the second stayed readable — the
+        # same control in two visual states. All four are now qfluentwidgets
+        # components that paint themselves from the active theme, so there is
+        # no colour left here to go stale. Each also gets a focus policy (they
+        # are the tab targets inside the revealed row), an accessible name
+        # and a tooltip, because an icon-only button is otherwise announced
+        # as "button" with no label. The trade-off: the delete button's custom
+        # red hover is gone — re-adding it would mean hardcoding a hex again
+        # or overriding the component's own paintEvent.
+        self.btn_test = PillPushButton(translate("settings.testConnection"))
         self.btn_test.setFixedHeight(28)
-        self.btn_test.setStyleSheet(
-            "PushButton{background:transparent;color:#475569;border:1px solid #e2e8f0;padding:0 8px;border-radius:6px}"
-            "PushButton:hover{color:#0f172a;background:#f1f5f9}"
-        )
-        self.btn_active = PushButton(translate("wizard.setActive"))
+        self.btn_active = PillPushButton(translate("wizard.setActive"))
         self.btn_active.setFixedHeight(28)
-        self.btn_active.setStyleSheet(
-            "PushButton{background:transparent;color:#475569;border:1px solid #e2e8f0;padding:0 8px;border-radius:6px}"
-            "PushButton:hover{color:#0f172a;background:#f1f5f9}"
-        )
-        self.btn_edit = ToolButton(FIF.EDIT)
+        self.btn_edit = TransparentToolButton(FIF.EDIT)
         self.btn_edit.setFixedSize(28, 28)
-        self.btn_edit.setStyleSheet(
-            "ToolButton{background:transparent;color:#94a3b8;border:none;border-radius:6px;padding:2px}"
-            "ToolButton:hover{color:#0f172a;background:#f1f5f9}"
-        )
-        self.btn_delete = ToolButton(FIF.DELETE)
+        self.btn_delete = TransparentToolButton(FIF.DELETE)
         self.btn_delete.setFixedSize(28, 28)
-        self.btn_delete.setStyleSheet(
-            "ToolButton{background:transparent;color:#94a3b8;border:none;border-radius:6px;padding:2px}"
-            "ToolButton:hover{color:#dc2626;background:#fef2f2}"
-        )
+        for _btn, _name in (
+            (self.btn_test, translate("settings.testConnection")),
+            (self.btn_active, translate("wizard.setActive")),
+            (self.btn_edit, translate("wizard.configure")),
+            (self.btn_delete, translate("wizard.delete")),
+        ):
+            _btn.setFocusPolicy(Qt.StrongFocus)
+            _btn.setAccessibleName(_name)
+            _btn.setToolTip(_name)
         self._actions_layout.addWidget(self.btn_test)
         self._actions_layout.addWidget(self.btn_active)
         self._actions_layout.addWidget(self.btn_edit)
         self._actions_layout.addWidget(self.btn_delete)
         row.addWidget(self._actions_widget)
 
+        # AUDIT-2026-09-27 [item B-13] (B-13): a BOUND METHOD, not a lambda —
+        # PySide6 gives the connection this card's QObject as its context, so
+        # Qt drops it when the card is destroyed. A lambda here would keep
+        # every card ever built alive for the life of the process, which is
+        # the leak B-11 spends its time removing.
+        qconfig.themeChanged.connect(self._apply_theme)
+
         self.set_active(is_active)
 
-    def set_active(self, active: bool):
-        self._active = active
-        self.lbl_dot.setText("●" if active else "○")
-        self.lbl_dot.setStyleSheet(
-            "color:#2563eb;" if active else "color:rgba(120,120,120,0.7);"
-        )
-        if active:
+    def _apply_theme(self, *_args) -> None:
+        """Re-apply the card's OWN border/background for the current theme.
+
+        AUDIT-2026-09-27 [item B-13] (B-13): the inactive card used
+        ``border:1px solid rgba(0,0,0,0.08)`` — a black hairline at 8% alpha,
+        i.e. no border at all on a dark background, and nothing in the repo
+        listened for a theme change, so it could not recover. The idle /
+        hover border colours now branch on isDarkTheme(), and this method is
+        connected to qconfig.themeChanged (see __init__), so a live OS theme
+        switch re-applies them. The four action buttons need no equivalent:
+        they are themed components now.
+        """
+        dark = isDarkTheme()
+        idle = "rgba(255,255,255,0.14)" if dark else "rgba(0,0,0,0.08)"
+        hover = "rgba(96,165,250,0.45)" if dark else "rgba(37,99,235,0.3)"
+        if self._active:
             self.setStyleSheet(
                 "#providerCard{border:1.5px solid rgba(37,99,235,0.55);"
                 "background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
                 "stop:0 rgba(37,99,235,0.08),stop:1 transparent)}"
             )
-            self.btn_active.setVisible(False)
         else:
             self.setStyleSheet(
-                "#providerCard{border:1px solid rgba(0,0,0,0.08)}"
-                "#providerCard:hover{border-color:rgba(37,99,235,0.3)}"
+                f"#providerCard{{border:1px solid {idle}}}"
+                f"#providerCard:hover{{border-color:{hover}}}"
             )
-            self.btn_active.setVisible(True)
+
+    def set_active(self, active: bool):
+        self._active = active
+        # B-13: the state pill carries the meaning the ●/○ glyph used to.
+        self.lbl_dot.setVisible(active)
+        self._apply_theme()
+        # Unchanged behaviour: "set as active" is meaningless on the card
+        # that already is. (setVisible(True) on a child of the still-hidden
+        # action row just clears the explicit-hide flag; the row reveals it.)
+        self.btn_active.setVisible(not active)
 
     def set_testing(self, testing: bool):
         self._testing = testing
         self.btn_test.setEnabled(not testing)
         self.btn_test.setText("⏳" if testing else self._t("settings.testConnection"))
+        # B-13: the ⏳ glyph is decorative — a screen reader needs the word.
+        self.btn_test.setAccessibleName(
+            self._t("settings.testing") if testing
+            else self._t("settings.testConnection"))
+        self.btn_test.setToolTip(self.btn_test.accessibleName())
 
     def set_health(self, consecutive_failures: int):
         """Update the health badge from connection test result."""
         self._health_failures = consecutive_failures
         self._health_badge.set_failures(consecutive_failures)
 
+    def _actions_should_show(self) -> bool:
+        """Visible while the mouse is over the card OR the keyboard focus is
+        anywhere inside it (the card itself or one of its action buttons)."""
+        fw = QApplication.focusWidget()
+        return self.underMouse() or (
+            fw is not None and (fw is self or self.isAncestorOf(fw)))
+
+    def _sync_actions_visibility(self) -> None:
+        self._actions_widget.setVisible(self._actions_should_show())
+
     def enterEvent(self, event):
-        """Show action buttons when mouse hovers over card."""
+        """Show action buttons when mouse hovers over card (mouse path)."""
         self._actions_widget.setVisible(True)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        """Hide action buttons when mouse leaves card."""
-        self._actions_widget.setVisible(False)
+        """Hide action buttons when the mouse leaves — unless the keyboard
+        focus is still inside the card, which is how the row stays reachable
+        after a Tab (B-13)."""
         super().leaveEvent(event)
+        QTimer.singleShot(0, self._sync_actions_visibility)
+
+    def focusInEvent(self, event):
+        """B-13: the keyboard path into the action row. Without this a Tab
+        that lands on a card revealed nothing at all."""
+        self._actions_widget.setVisible(True)
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event):
+        """B-13: hand the row back when focus leaves the card. Deferred by one
+        event-loop turn because Qt delivers focusOut BEFORE the next widget's
+        focusIn, so QApplication.focusWidget() is still this card here."""
+        super().focusOutEvent(event)
+        QTimer.singleShot(0, self._sync_actions_visibility)
+
+
+# AUDIT-2026-09-27 [item B-12] (B-12): the floor for a card's width. It used
+# to be the seed of `setFixedWidth(max(400, self.width()))` in set_cards(),
+# where the FIRST call happens inside ProvidersPage.__init__ — before the page
+# has been laid out — so self.width() was still Qt's default and the result
+# was pinned at 400px for the whole session in a 1240px window. The width is
+# now owned by resizeEvent()/_fit_cards() alone; this is only its minimum.
+CARD_MIN_WIDTH = 400
 
 
 # ---------------------------------------------------------------------------
@@ -282,17 +378,80 @@ class ProviderDragList(QWidget):
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(8)
         self._cards: list[ProviderCard] = []
+        # AUDIT-2026-09-27 [item B-11] (B-11): cards that set_cards() took out
+        # of the layout but could NOT delete yet, because a connection test
+        # is still running against them. They wait here and are released by
+        # flush_parked() when that test finishes — the same park-until-finished
+        # shape the other GUI suites use for orphaned workers
+        # (gui_fluent._park_orphaned_worker), applied to a widget.
+        self._parked: list[ProviderCard] = []
+        # Predicate installed by the page: True => this card is still driving
+        # an in-flight test, so it must outlive the refresh that replaced it.
+        self._retain = None
         self.setAcceptDrops(True)
 
+    def set_retain_hook(self, fn) -> None:
+        """Install the "still in use" predicate (see ``_parked``)."""
+        self._retain = fn
+
+    def _release_card(self, w) -> None:
+        """Detach a card from the list and let it go — or park it."""
+        w.setParent(None)
+        if self._retain is not None and self._retain(w):
+            self._parked.append(w)     # a test is still using it
+        else:
+            w.deleteLater()
+
+    def flush_parked(self) -> None:
+        """deleteLater() every parked card no test is using any more.
+
+        Driven by ProvidersPage._release_parked_cards, i.e. exactly when the
+        last reason to keep a card alive has gone away.
+        """
+        if not self._parked:
+            return
+        keep = []
+        for c in self._parked:
+            if self._retain is not None and self._retain(c):
+                keep.append(c)
+            else:
+                c.deleteLater()
+        self._parked = keep
+
+    # AUDIT-2026-09-27 [item B-12] (B-12): the ONE owner of the card width.
+    # Nothing else in this file may set it.
+    def _fit_cards(self) -> None:
+        w = max(CARD_MIN_WIDTH, self.width())
+        for c in self._cards:
+            if c.width() != w:
+                c.setFixedWidth(w)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_cards()
+
     def set_cards(self, cards: list[ProviderCard]) -> None:
+        """Replace the list's cards, releasing the ones being dropped.
+
+        AUDIT-2026-09-27 [item B-11] (B-11): the old loop only did
+        ``setParent(None)``, so every refresh (language switch, add, delete,
+        reorder) orphaned the previous cards: the C++ widget survived for as
+        long as anything still referenced it — including a connection test
+        in flight, which kept an invisible card alive. Cards that no test is
+        using are now deleteLater()'d; the rest are parked (see
+        ``_release_card``). A widget that is in ``cards`` already (a caller
+        re-showing the same card objects) is only re-added, never released.
+        """
+        incoming = {id(c) for c in cards}
         while self._layout.count():
             item = self._layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
+            w = item.widget()
+            if w is None or id(w) in incoming:
+                continue
+            self._release_card(w)
         self._cards = list(cards)
         for c in cards:
             c.setParent(self)
-            c.setFixedWidth(max(400, self.width()))
             self._layout.addWidget(c)
 
     def _id_order(self) -> list[str]:
@@ -329,14 +488,15 @@ class ProviderDragList(QWidget):
             len(self._cards),
         )
         self._cards.insert(insert_idx, card)
-        # Re-layout.
+        # Re-layout the SAME cards: unlike set_cards() this is a reorder, not
+        # a teardown, so nothing here may be deleteLater()'d (B-11). Width is
+        # owned by resizeEvent() only (B-12).
         while self._layout.count():
             item = self._layout.takeAt(0)
             if item.widget():
                 item.widget().setParent(None)
         for c in self._cards:
             c.setParent(self)
-            c.setFixedWidth(max(400, self.width()))
             self._layout.addWidget(c)
         self._emit_order()
         event.acceptProposedAction()
@@ -593,7 +753,7 @@ class ProviderWizard(QDialog):
                 missing.append(self._t("wizard.fieldName"))
             if not endpoint:
                 missing.append(self._t("wizard.fieldEndpoint"))
-            msg = "Please fill in: " + ", ".join(missing)
+            msg = self._tr.t("wizard.fillRequired") + ", ".join(missing)
             InfoBar.warning("", msg, parent=self, position=InfoBarPosition.TOP)
             return
         try:
@@ -607,7 +767,7 @@ class ProviderWizard(QDialog):
             # silent. The previous version just discarded the input.
             InfoBar.warning(
                 "",
-                f"extra_headers ignored: {headers_err}",
+                self._tr.t("wizard.extraHeadersIgnored", {"reason": headers_err}),
                 parent=self,
                 position=InfoBarPosition.TOP,
             )
@@ -657,8 +817,10 @@ class ProvidersPage(ScrollArea):
         # Provider ids that are currently mid-test, so a `_refresh()` that
         # rebuilds the cards can re-apply the ⏳ state to the new card widget
         # (it otherwise only preserved health). This also prevents the
-        # indeterminate state where a refresh orphans the visible card while
-        # the worker still completes against the stale one (H2).
+        # indeterminate state where a refresh replaces the visible card while
+        # the worker still completes against the old one (H2). Since B-11 the
+        # replaced card is parked or deleted rather than orphaned — the id set
+        # is what lets the NEW card pick the ⏳ back up.
         self._testing_ids: set[str] = set()
         self._search_term = ""
         self._all_cards: list[ProviderCard] = []   # unfiltered list
@@ -705,6 +867,14 @@ class ProvidersPage(ScrollArea):
 
         self.list_widget = ProviderDragList()
         self.list_widget.orderChanged.connect(self._on_order_changed)
+        # AUDIT-2026-09-27 [item B-11] (B-11): tell the list which of its
+        # cards an in-flight connection test is still pointing at, so
+        # set_cards() can delete the ones it replaces instead of orphaning
+        # every card of every refresh — while a card whose test is still
+        # running is parked (not destroyed) until that test finishes. A bound
+        # method, not a lambda: the list holds it for the page's lifetime
+        # either way, but this keeps the intent readable at the call site.
+        self.list_widget.set_retain_hook(self._card_in_flight)
         self.lay.addWidget(self.list_widget)
 
         self.lbl_test = CaptionLabel("")
@@ -805,6 +975,13 @@ class ProvidersPage(ScrollArea):
 
         self._all_cards = cards
         if not cards:
+            # AUDIT-2026-09-27 [item B-11] (B-11): this branch used to return
+            # without touching the list, so the LAST set of cards stayed in
+            # the layout — the 0-provider screen showed the deleted providers
+            # next to "no providers", and those widgets were never released
+            # either. Empty the list on the way to the empty state; the cards
+            # go through the same release/park path as any other refresh.
+            self.list_widget.set_cards([])
             self._show_empty()
             return
         self._hide_empty()
@@ -823,7 +1000,11 @@ class ProvidersPage(ScrollArea):
 
     def _hide_empty(self):
         if hasattr(self, "_empty") and self._empty is not None:
+            # B-11: setParent(None) alone left the widget (and its BodyLabel)
+            # alive with no owner — one leak per 0→N→0 cycle. Nothing can be
+            # mid-test on the empty-state widget, so it can just be deleted.
             self._empty.setParent(None)
+            self._empty.deleteLater()
             self._empty = None
 
     # ---- CRUD — all use a single shared store instance ----
@@ -1016,20 +1197,63 @@ class ProvidersPage(ScrollArea):
         # signature no longer needs the starting card at connect time.
         w.done.connect(self._on_worker_done)
         w.finished.connect(self._on_worker_finished)
+        # B-11: second finish hook — no-argument, so it actually gets called
+        # (see _release_parked_cards / _on_worker_finished). It releases any
+        # card a mid-test _refresh() had to park.
+        w.finished.connect(self._release_parked_cards)
         w.start()
 
     def _on_worker_done(self, worker, res):
         """GUI-thread slot for ``_Worker.done`` (see _test)."""
         self._on_test_done(worker, self._test_workers.get(worker), res)
 
-    def _on_worker_finished(self, worker):
+    def _on_worker_finished(self, *args) -> None:
         """GUI-thread slot for ``QThread.finished``: drop the strong ref.
 
         The old lambda ran in the worker thread and popped the page's dict
         from there — a data race against the GUI thread's own reads of
         _test_workers (and closeEvent's clear()).
+
+        AUDIT-2026-09-27 [item 1.15]: this slot used to take ONE required
+        parameter and was connected straight to ``QThread.finished``, which
+        carries NO argument. Every connection therefore raised TypeError inside
+        the event loop and the body never ran, so ``_test_workers`` never
+        actually drained — the leak B-11 had to work around. The sender is
+        resolved with ``self.sender()`` and the parameter is now optional, so
+        the slot works whether Qt passes the signal's (empty) argument list or
+        a caller supplies the worker explicitly.
         """
-        self._test_workers.pop(worker, None)
+        worker = args[0] if args else self.sender()
+        if worker is not None:
+            self._test_workers.pop(worker, None)
+
+    def _card_in_flight(self, card) -> bool:
+        """B-11: is this card still the target of a running test?
+
+        Keyed on the page's own ``_testing_ids`` set rather than on
+        ``_test_workers`` membership: the id is added in _test() and
+        discarded in _on_test_done(), which is the exact window during which
+        a result still has to reach a card, and it does not depend on
+        _on_worker_finished() (see the note there).
+        """
+        pid = getattr(getattr(card, "provider", None), "id", "") or ""
+        return bool(pid) and pid in self._testing_ids
+
+    def _release_parked_cards(self) -> None:
+        """B-11: the "on finish" half of the park.
+
+        A no-argument bound method, so ``QThread.finished`` can call it and
+        PySide6 still delivers it as a QUEUED connection on the GUI thread
+        (a lambda would have connected DIRECT and run in the worker thread —
+        the data race the _on_worker_finished docstring warns about). By the
+        time it runs, ``done`` has already been handled and _testing_ids no
+        longer names the provider, so every parked card is free to go.
+        """
+        try:
+            self.list_widget.flush_parked()
+        except RuntimeError:
+            # Underlying C++ object already gone (window teardown).
+            pass
 
     def _on_test_done(self, worker, card, res):
         # REVIEW-2026-09-20: `card` may be None when the worker had already
@@ -1039,13 +1263,15 @@ class ProvidersPage(ScrollArea):
             self._testing_ids.discard(
                 getattr(getattr(worker, "_p", None), "id", "") or "")
             return
-        # FIX (H2): the `card` captured at start time may have been orphaned
-        # by a `_refresh()` (setParent(None)) since the worker was launched.
-        # Writing to an orphan updates an invisible widget while the real,
-        # visible card for the same provider stays stuck in ⏳. Resolve the
-        # live card by provider id and update that instead; if the provider
-        # was deleted mid-test, there is no live card and we just clear the
-        # in-flight state.
+        # FIX (H2) + AUDIT-2026-09-27 [item B-11] (B-11): the `card` captured
+        # at start time may no longer be the one on screen — a `_refresh()`
+        # that ran mid-test REPLACED it (the old one is setParent(None)'d and
+        # left parentless; it is now parked or deleted, never an orphan).
+        # Writing to the replaced card would update a widget the user cannot
+        # see while the real, visible card for the same provider stays stuck
+        # in ⏳. Resolve the live card by provider id and update that instead;
+        # if the provider was deleted mid-test, there is no live card and we
+        # just clear the in-flight state.
         live = card
         if card is not None and card.provider is not None:
             pid = card.provider.id
@@ -1101,6 +1327,25 @@ class ProvidersPage(ScrollArea):
             txt = "✗  " + self._t(getattr(res, 'error_key', None) or "err.http")
             if getattr(res, 'status', None):
                 txt += f"  (HTTP {res.status})"
+        # AUDIT-2026-09-29: on failure, put the provider's own words in a
+        # tooltip. The badge is deliberately left as the short form -- a
+        # multi-sentence upstream error in a card label would reflow every
+        # card in the list -- but "err.http (HTTP 400)" on its own cannot tell
+        # a user whether to fix the model name, the key, or their quota, and
+        # that is the entire question this feature exists to answer. The body
+        # arrives already redacted (llm.ConnectionResult.error_body), because
+        # it is where a rejected key comes back echoed. Truncated so a
+        # multi-KB HTML error page cannot build a giant tooltip, and cleared
+        # on success so a previous failure never lingers.
+        detail = ""
+        if not getattr(res, "ok", False):
+            detail = (getattr(res, "error_body", "") or "").strip()
+            if len(detail) > 200:
+                detail = detail[:200] + "…"
+        try:
+            self.lbl_test.setToolTip(detail)
+        except Exception:
+            pass
         # Persist the streak to the provider store so the badge survives
         # an app restart. Write the live by-id record (not card.provider,
         # which may be stale if a concurrent rename/edit rebuilt the cards)

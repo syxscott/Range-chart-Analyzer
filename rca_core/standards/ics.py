@@ -25,6 +25,22 @@ import warnings
 from pathlib import Path
 from typing import Any, Optional
 
+# NO CROSS-PACKAGE IMPORTS IN THIS FILE.
+#
+# scripts/update_ics.py::validate_loads_in_ics_module validates a candidate
+# ICS payload by copying THIS FILE's text alone into a throwaway tree and
+# executing it there (tests/test_update_ics_2026_09_22.py::_load_ics_copy does
+# the same, and it is a PRODUCTION gate: --write refuses to promote a payload
+# that does not load). That synthetic tree has no parent package, so a
+# `from ..anything import ...` fails with "attempted relative import with no
+# known parent package" and the promotion is blocked for the wrong reason.
+#
+# That is why the two patterns below are NOT imported from
+# rca_core.age_patterns, where quality.py and standards/pbdb.py do get them.
+# tests/test_age_pattern_shared.py pins the two texts equal and asserts that
+# this file has no cross-package import, so the constraint is enforced rather
+# than only documented.
+
 # UI-REVIEW-2026-09-07 (evidence-chain report): stage-alignment outputs
 # should say WHICH timescale anchored them. Kept in one place so a future
 # version bump (e.g. ics_2026.json) updates every report stamp at once.
@@ -229,21 +245,39 @@ def ics_parse_age_range(text: str) -> list[str]:
     return ordered
 
 
+# AUDIT-2026-10-02: the pattern text used to be imported from
+# rca_core.age_patterns, which broke 10 tests here with "attempted relative
+# import with no known parent package" -- see the NO CROSS-PACKAGE IMPORTS
+# note at the top of this file. It is a copy of the shared text instead, and
+# tests/test_age_pattern_shared.py pins the two equal.
+#
+# `\w` and `\d` are written out as explicit ASCII classes, and that is the whole
+# fix. Python's `\w` and `\d` are Unicode-aware on str patterns while
+# ECMAScript's are `[A-Za-z0-9_]` and `[0-9]` without the `u` flag, so a CJK
+# glyph is a word character here and the old `(?<![\w.])` guard refused to match
+# "图260 Ma" at all -- and in a split label it dropped the OLDER endpoint, so
+# prefer="older" answered with the YOUNGER age, inverting a column that feeds
+# FAD/LAD in the DwC and PBDB exports. `re.ASCII` would have been the wrong
+# repair: it would also narrow `\s`, and an ideographic or non-breaking space
+# between number and unit is ordinary in CJK typesetting. rca_core/
+# age_patterns.py carries the full reasoning and the JS mirror this aligns to.
 _EXPLICIT_MA_PATTERN = re.compile(
-    r"(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
-    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b",
+    r"(?<![A-Za-z0-9_.])([+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\s*"
+    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
 
 # REVIEW-2026-07-31: also match single-unit ranges like "259.51-254.14 Ma"
 # or "255 to 250 Ma" so a bound written as an interval resolves to BOTH
 # ends (callers pick the older end for FAD/base, the younger for LAD/top).
+# `\bto\b` keeps the shorthand because both engines agree on it there: a space,
+# ASCII or CJK, is a non-word character on both sides.
 _EXPLICIT_MA_RANGE_PATTERN = re.compile(
-    r"(?<![\w.])"
-    r"([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
+    r"(?<![A-Za-z0-9_.])"
+    r"([+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\s*"
     r"(?:[-–—]|\bto\b)\s*"
-    r"([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
-    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b",
+    r"([+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\s*"
+    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
 

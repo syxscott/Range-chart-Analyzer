@@ -1,0 +1,176 @@
+{
+ "metadata": {
+  "time_slice": "Late Mesozoic to Cenozoic (Canadian Cordillera)",
+  "approximate_age_ma": "",
+  "map_title": "Tectonostratigraphic terrane map of the Canadian Cordillera (British Columbia) showing Cache Creek Terrane localities",
+  "projection": "",
+  "scale": "500 km",
+  "source": ""
+ },
+ "continents": [
+  {
+   "name": "North America (western margin)",
+   "type": "continent",
+   "coordinates": [
+    [
+     60.0,
+     -140.0
+    ],
+    [
+     55.0,
+     -130.0
+    ],
+    [
+     50.0,
+     -122.0
+    ],
+    [
+     49.0,
+     -123.0
+    ],
+    [
+     55.0,
+     -138.0
+    ],
+    [
+     60.0,
+     -140.0
+    ]
+   ],
+   "paleolatitude": "",
+   "note": "Includes Alaska, Yukon, and British Columbia; CANADA/USA border shown"
+  },
+  {
+   "name": "Cache Creek Terrane",
+   "type": "terrane",
+   "coordinates": [
+    [
+     60.0,
+     -135.0
+    ],
+    [
+     59.0,
+     -130.0
+    ],
+    [
+     57.0,
+     -128.0
+    ],
+    [
+     56.0,
+     -126.0
+    ],
+    [
+     55.0,
+     -125.0
+    ],
+    [
+     53.0,
+     -124.0
+    ],
+    [
+     51.0,
+     -123.0
+    ],
+    [
+     49.0,
+     -122.0
+    ]
+   ],
+   "paleolatitude": "",
+   "note": "Linear accreted terrane, shown in solid black, running NW-SE through central British Columbia"
+  }
+ ],
+ "oceans_seas": [],
+ "tectonic_features": [
+  {
+   "name": "Eastern limit of Cordilleran deformation",
+   "type": "fault",
+   "coordinates": [
+    [
+     60.0,
+     -122.0
+    ],
+    [
+     49.0,
+     -116.0
+    ]
+   ],
+   "direction": "active",
+   "description": "Eastern limit of Cordilleran deformation, indicated by dashed line"
+  },
+  {
+   "name": "Cache Creek Terrane suture",
+   "type": "suture",
+   "coordinates": [
+    [
+     60.0,
+     -134.0
+    ],
+    [
+     49.0,
+     -122.0
+    ]
+   ],
+   "direction": "closing",
+   "description": "Boundary of Cache Creek Terrane representing an accretionary suture"
+  },
+  {
+   "name": "Fig.3a location",
+   "type": "other",
+   "coordinates": [
+    [
+     51.0,
+     -122.0
+    ]
+   ],
+   "direction": "unknown",
+   "description": "Inset map location marked with black square"
+  }
+ ],
+ "biogeographic_realms": [],
+ "fossil_sites": [
+  {
+   "name": "Teslin Plateau J8",
+   "lat_lon": "~60N, 133W",
+   "age": "",
+   "fossils": "",
+   "marker_type": "circle",
+   "_extras": {
+    "note": ""
+   }
+  },
+  {
+   "name": "Teslin Plateau J7",
+   "lat_lon": "~60N, 133W",
+   "age": "",
+   "fossils": "",
+   "marker_type": "circle",
+   "_extras": {
+    "note": ""
+   }
+  },
+  {
+   "name": "Teslin Plateau J6",
+   "lat_lon": "~60N, 133W",
+   "age": "",
+   "fossils": "",
+   "marker_type": "circle",
+   "_extras": {
+    "note": ""
+   }
+  },
+  {
+   "name": "French Range J5",
+   "lat_lon": "~58N, 131W",
+   "age": "",
+   "fossils": "",
+   "marker_type": "circle",
+   "_extras": {
+    "note": ""
+   }
+  }
+ ],
+ "paleolatitude_indicators": [],
+ "confidence": 0.0
+}

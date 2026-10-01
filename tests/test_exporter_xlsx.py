@@ -194,8 +194,17 @@ class TestBiozonesSectionColumn(unittest.TestCase):
     matching the schema that extractor.normalize_result preserves."""
 
     def test_biozones_has_section_in_cols_and_data_keys(self):
+        # AUDIT-2026-09-27 [item 4.2]: this used to pass an all-empty payload
+        # as a vehicle for inspecting the biozones CONFIG. get_configs_for_result
+        # now drops configs whose top-level source table is empty (that is what
+        # stops a result with no data at all from "exporting" four empty
+        # range-chart sheets), so the biozones config was no longer returned and
+        # next() raised StopIteration. The subject of the test is the column
+        # layout, not the emptiness, so give it one populated table.
         cfgs = exporter.get_configs_for_result({
-            "sections": [], "species_ranges": [], "other_fossils": [],
+            "sections": [{"name": "Pingdingshan"}],
+            "biozones": [{"name": "N. optima Zone", "section": "Pingdingshan"}],
+            "species_ranges": [], "other_fossils": [],
         })
         bz = next(c for c in cfgs if c["id"] == "biozones")
         self.assertIn("col.section", bz["cols"],
@@ -206,8 +215,13 @@ class TestBiozonesSectionColumn(unittest.TestCase):
     def test_biozones_row_extracts_section(self):
         bz_row = {"name": "N. optima Zone", "section": "Pingdingshan",
                   "age": "Latest Changhsingian", "thickness_m": "3m"}
+        # AUDIT-2026-09-27 [item 4.2]: biozones must be PRESENT in the payload
+        # for its config to survive the empty-source filter — see the note on
+        # test_biozones_has_section_in_cols_and_data_keys above.
         cfgs = exporter.get_configs_for_result({
-            "sections": [], "species_ranges": [], "other_fossils": [],
+            "sections": [{"name": "Pingdingshan"}],
+            "biozones": [bz_row],
+            "species_ranges": [], "other_fossils": [],
         })
         bz_cfg = next(c for c in cfgs if c["id"] == "biozones")
         row = bz_cfg["row"](bz_row)

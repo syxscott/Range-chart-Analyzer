@@ -82,6 +82,39 @@ function normalizeError(status, bodyText, message) {
  * @param {string|null} body - Already-truncated error body text
  * @returns {string|null}
  */
+/**
+ * The machine code to show, or null when the value is not one.
+ *
+ * AUDIT-2026-10-01: mirror of rca_core/error_utils.py's _usable_error_code.
+ * This used to be a bare String(data[key]) where the Python side used a bare
+ * str(), and for a provider returning a NON-STRING code the two produced
+ * different text in the operator's badge:
+ *
+ *   body                  this side        browser (before)
+ *   {"code": null}        "null"           "None"
+ *   {"code": true}        "true"           "True"
+ *   {"code": [1]}         "1"              "[1]"     <- "1" is indistinguishable
+ *   {"code": {"deep": 1}} "[object Object]" "{'deep': 1}"
+ *
+ * The array row loses information rather than just formatting: String([1]) is
+ * "1", which reads as a real numeric code the provider never sent. The object
+ * row put a language repr inside a user-visible string, the same defect
+ * _stringify_scalar was written to stop elsewhere in this codebase.
+ *
+ * So a code is accepted only when it is a string or an integer (some providers
+ * use numeric ids, and both engines already agree on those). A non-integer
+ * number is excluded rather than coerced, because String(7.0) is "7" where
+ * str(7.0) is "7.0" and a float error code is not a thing. Returning null also
+ * lets the caller keep looking instead of stopping at the first
+ * present-but-unusable key.
+ */
+function _usableErrorCode(value) {
+    if (typeof value === 'string') return value || null;
+    if (typeof value === 'boolean') return null;
+    if (typeof value === 'number' && Number.isInteger(value)) return String(value);
+    return null;
+}
+
 function extractErrorCode(body) {
     if (!body) return null;
     try {
@@ -89,13 +122,19 @@ function extractErrorCode(body) {
         if (typeof data === 'object' && data !== null) {
             // Common error code locations
             for (const key of ['error_code', 'code', 'type', 'error.type']) {
-                if (key in data) return String(data[key]);
+                if (key in data) {
+                    const code = _usableErrorCode(data[key]);
+                    if (code !== null) return code;
+                }
             }
             // Nested error object
             const error = data.error;
             if (typeof error === 'object' && error !== null) {
                 for (const key of ['error_code', 'code', 'type']) {
-                    if (key in error) return String(error[key]);
+                    if (key in error) {
+                        const code = _usableErrorCode(error[key]);
+                        if (code !== null) return code;
+                    }
                 }
             }
         }
@@ -194,11 +233,32 @@ function getRetryDelay({
 }) {
     let delay = null;
 
-    // 1. Check Retry-After-MS header (milliseconds)
+    // AUDIT-2026-10-01: the plain-object fallback folded nothing, so a
+    // hand-built { 'RETRY-AFTER': '7' } was ignored here while a real Headers
+    // (which is what js/minimax.js hands over: `err.headers = r.headers` on a
+    // fetch Response) honoured it -- and while rca_core/error_utils.py, whose
+    // headers are always a plain dict, honoured only two exact spellings. The
+    // product shapes agreed by accident, on casing nobody controls. Fold the
+    // keys when there is no case-insensitive .get() to do it for us; the
+    // values are never touched.
+    let folded = null;
     if (headers) {
-        const retryAfterMs = headers.get && headers.get('retry-after-ms')
-            ? headers.get('retry-after-ms')
-            : headers['retry-after-ms'];
+        if (typeof headers.get === 'function') {
+            folded = {
+                'retry-after-ms': headers.get('retry-after-ms'),
+                'retry-after': headers.get('retry-after'),
+            };
+        } else if (typeof headers === 'object') {
+            folded = {};
+            for (const key of Object.keys(headers)) {
+                folded[String(key).toLowerCase()] = headers[key];
+            }
+        }
+    }
+
+    // 1. Check Retry-After-MS header (milliseconds)
+    if (folded) {
+        const retryAfterMs = folded['retry-after-ms'];
         if (retryAfterMs) {
             const parsed = parseFloat(retryAfterMs);
             if (!isNaN(parsed)) {
@@ -208,9 +268,7 @@ function getRetryDelay({
 
         // 2. Check Retry-After header (seconds or HTTP date)
         if (delay === null) {
-            const retryAfter = headers.get && headers.get('retry-after')
-                ? headers.get('retry-after')
-                : headers['retry-after'];
+            const retryAfter = folded['retry-after'];
             if (retryAfter) {
                 // Try parsing as float (seconds)
                 const parsed = parseFloat(retryAfter);

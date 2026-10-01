@@ -271,7 +271,19 @@ function mergeConfidenceField(values) {
     if (Number.isFinite(n)) valid.push(Math.max(0, Math.min(1, n)));
   }
   if (valid.length === 0) return NO_MERGE;
-  return Math.round((valid.reduce((a, b) => a + b, 0) / valid.length) * 10000) / 10000;
+  // AUDIT-2026-09-30: rcaPyRound, not `Math.round(x * 10000) / 10000`. That
+  // idiom rounds halves AWAY FROM ZERO, and js/reason-codes.js#rcaPyRound
+  // exists precisely because of it -- its own comment names this exact case:
+  // "1/32 = 0.03125 yields 0.0313 here but 0.0312 in Python (a 32-cell grid is
+  // a normal chart, so this is reachable)". rca_core/aggregate.py rounds with
+  // `round(..., 4)`, which is ties-to-EVEN. Measured over tie-shaped inputs,
+  // this line diverged on 4 of 19: [0.01005], [0.01015], [0.03125] and [1/32].
+  // Falls back to the old idiom only when reason-codes.js is not loaded, which
+  // is the same degradation rcaPyRound's own call sites document.
+  const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
+  return (typeof rcaPyRound === 'function')
+    ? rcaPyRound(mean, 4)
+    : Math.round(mean * 10000) / 10000;
 }
 
 function mergeMappingField(values) {
@@ -436,15 +448,40 @@ function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-// Detect the appropriate keymap from the shape of the first result object.
-// Mirrors Python _auto_detect_schema so both ends agree on the schema.
+// Detect the appropriate keymap from the shape of the result objects.
+//
+// AUDIT-2026-10-02: this function had been left in its ORIGINAL form while
+// rca_core/aggregate.py::_auto_detect_schema was rewritten by REVIEW-2026-09-20.
+// The Python docstring names the old algorithm's defect exactly:
+//
+//   "The fallback compared detectors pairwise (phy > col and phy > ab, then
+//    col > ab), which is NOT a total order: [phylo, columnar] returned phylo,
+//    but adding one more run of any other shape ([phylo, columnar, abundance])
+//    made all three counts equal, the strict > comparisons all failed, and the
+//    answer became RANGE_CHART -- the phylo preference vanished as more data
+//    arrived."
+//
+// Measured by the `aggregate` parity group, 2 cases:
+//   [phylo, columnar, abundance]  py nodes          js species_ranges
+//   [columnar, abundance, range]  py sections       js species_ranges
+// and the same docstring says misdetecting phylo as range-chart "destroys the
+// primary row key" -- so the browser was merging a three-run tree as a range
+// chart. It could fire there and ONLY there: js/app.js:1287 is the sole caller
+// of this function on either engine (the three desktop call sites pass an
+// explicit schema), so the desktop was immune to a bug only the browser had.
+//
+// The rule is now Python's, one rule used twice: a STRICT majority
+// (`count * 2 > n`) decides, and when no shape holds one -- or several do,
+// since the detectors are independent -- the highest count wins, with the
+// declared preference order phylo > columnar > abundance breaking every tie.
+// Being a total order is what makes the choice monotonic: it can no longer
+// depend on the argument order of `results` or on how many runs arrived.
 function rcaAutoDetectKeymap(results) {
   if (!results || !Array.isArray(results) || results.length === 0) {
     return RCA_DEFAULT_KEYMAP;
   }
-  let abCount = 0;
-  let colCount = 0;
-  let phyCount = 0;
+  const n = results.length;
+  let phyCount = 0, colCount = 0, abCount = 0;
   for (const r of results) {
     if (!r || typeof r !== 'object') continue;
     if (Array.isArray(r.abundances) && r.abundances.length > 0) abCount++;
@@ -466,23 +503,19 @@ function rcaAutoDetectKeymap(results) {
       phyCount++;
     }
   }
-  const n = results.length;
-  const half = Math.floor((n + 1) / 2);
-  // Phylo is the most specific shape — it wins over columnar/abundance when
-  // multiple detectors meet the threshold simultaneously.
-  if (phyCount >= half) return RCA_PHYLO_KEYMAP;
-  if (colCount >= half && abCount >= half) {
-    // Both detectors meet threshold — prefer the more specific one.
-    return colCount >= abCount ? RCA_COLUMNAR_KEYMAP : RCA_ABUNDANCE_KEYMAP;
-  }
-  if (colCount >= half) return RCA_COLUMNAR_KEYMAP;
-  if (abCount >= half) return RCA_ABUNDANCE_KEYMAP;
-  // Phylo beats the others when neither of them meets majority but phylo
-  // still has at least one detection (handles the 1-run / 2-run edge case).
-  if (phyCount > colCount && phyCount > abCount) return RCA_PHYLO_KEYMAP;
-  if (colCount > abCount) return RCA_COLUMNAR_KEYMAP;
-  if (abCount > colCount) return RCA_ABUNDANCE_KEYMAP;
-  return RCA_DEFAULT_KEYMAP;  // tie → default to range-chart
+  // Preference order, filtered to the shapes that were actually seen. This
+  // array IS the total order, so `pool` below needs no comparator.
+  const ranked = [];
+  if (phyCount > 0) ranked.push([RCA_PHYLO_KEYMAP, phyCount]);
+  if (colCount > 0) ranked.push([RCA_COLUMNAR_KEYMAP, colCount]);
+  if (abCount > 0) ranked.push([RCA_ABUNDANCE_KEYMAP, abCount]);
+  if (ranked.length === 0) return RCA_DEFAULT_KEYMAP;
+  const majority = ranked.filter((e) => e[1] * 2 > n);
+  const pool = majority.length ? majority : ranked;
+  let best = 0;
+  for (const e of pool) if (e[1] > best) best = e[1];
+  for (const e of pool) if (e[1] === best) return e[0];
+  return RCA_DEFAULT_KEYMAP;  // unreachable, kept as a defensive default
 }
 
 function emptyFor(km, n) {
@@ -505,20 +538,83 @@ function emptyFor(km, n) {
 //
 // P0-5: include section so the same species across different sections
 // are NOT flagged as chimeras (they are legitimate multi-section obs).
-function rcaIsChimericRow(group, merged) {
+function rcaIsChimericRow(group, merged, keys) {
   if (!Array.isArray(group) || group.length < 2) return false;
-  const keys = ['range_base', 'range_top', 'biozone', 'section'];
-  const mergedTuple = keys.map((k) => rcaAggNorm(merged ? merged[k] : ''));
+  // AUDIT-2026-10-01 [item 9.13]: this used to hardcode the range-chart field
+  // names, so for every other keymap the tuple came out all-empty and the
+  // `some()` guard below returned false for EVERY row — the safeguard was
+  // inert outside range charts. On an abundance construction where each
+  // field's 2-of-3 mode came from a different run, a fabricated row (an
+  // abundance value and a unit that never co-occurred) was reported as
+  // "3/3" consensus with no warning. Mirrors
+  // rca_core/aggregate.py:_is_chimeric_row, which was fixed in the same commit
+  // — the parity fixture is what proved the two sides had to move together.
+  //
+  // `keys` is the keymap's strModeFields, i.e. by definition the fields this
+  // schema mode-merges, which is exactly the set whose combination can be
+  // fabricated. For range charts it is a strict superset of the old hardcoded
+  // key (species is part of the primary identity there, so the verdict is
+  // unchanged).
+  const ks = keys || RCA_RECOMBINATION_KEYS;
+  if (!ks || !ks.length) return false;
+  const mergedTuple = ks.map((k) => rcaAggNorm(merged ? merged[k] : ''));
   if (!mergedTuple.some((v) => v)) return false;  // no scientific content
   for (const g of group) {
     if (!g || typeof g !== 'object') continue;
-    const itemTuple = keys.map((k) => rcaAggNorm(g[k]));
+    const itemTuple = ks.map((k) => rcaAggNorm(g[k]));
     if (itemTuple.length === mergedTuple.length
         && itemTuple.every((v, i) => v === mergedTuple[i])) {
       return false;  // at least one source run observed this tuple
     }
   }
   return true;
+}
+
+// The distinct readings a group of runs produced, with a vote count each.
+// AUDIT-2026-09-27 P1: the honest replacement for DELETING a recombined row. A
+// researcher who sees "2 runs read Bed 7-Bed 9 / Zone B, 2 runs read
+// Bed 7-Bed 11 / Zone C" can adjudicate; one who finds the taxon simply
+// missing can only assume the tool lost it.
+// Mirror of rca_core/aggregate.py:_recombination_ballots.
+const RCA_RECOMBINATION_KEYS = ['range_base', 'range_top', 'biozone', 'section'];
+// Order two ballot tuples the way Python's `sorted(..., key=t)` does:
+// element-wise, then shorter-first on a common prefix.
+// AUDIT-2026-09-27 P2: this used to compare `JSON.stringify(tup)`, which
+// orders PREFIXES BACKWARDS. The separator ',' (0x2C) sorts after the space
+// (0x20) that appears inside a value, so "bed 9 (rp13)" compared LESS than
+// "bed 9" -- the exact opposite of the tuple comparison. The two engines
+// therefore showed the same run disagreement in opposite order, and the
+// first ballot listed is the one an operator reads first.
+function rcaTupleCompare(a, b) {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const x = String(a[i] == null ? '' : a[i]);
+    const y = String(b[i] == null ? '' : b[i]);
+    if (x < y) return -1;
+    if (x > y) return 1;
+  }
+  return a.length - b.length;
+}
+function rcaRecombinationBallots(group, keys) {
+  const ks = keys || RCA_RECOMBINATION_KEYS;
+  if (!Array.isArray(group)) return [];
+  const tally = new Map();
+  for (const g of group) {
+    if (!g || typeof g !== 'object') continue;
+    const tup = ks.map((k) => rcaAggNorm(g[k]));
+    if (!tup.some((v) => v)) continue;
+    const key = JSON.stringify(tup);
+    if (!tally.has(key)) tally.set(key, { tup: tup, votes: 0 });
+    tally.get(key).votes += 1;
+  }
+  return Array.from(tally.values())
+    .sort((a, b) => (b.votes - a.votes) || rcaTupleCompare(a.tup, b.tup))
+    .map((e) => {
+      const row = {};
+      ks.forEach((k, i) => { row[k] = e.tup[i]; });
+      row.votes = e.votes;
+      return row;
+    });
 }
 
 // Python `str(row.get(a) or row.get(b) or "")` — the `or` chain treats 0, "",
@@ -535,7 +631,21 @@ function rcaOrChainStr(row, k) {
 //   * Python accepts "inf"/"infinity"/"nan" (case-insensitive) and the
 //     underscore digit separator ("1_000" -> 1000.0), which Number() rejects.
 // Returns null where Python would raise TypeError/ValueError.
-const _PY_FLOAT_RE = /^[+-]?(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d+)?$/;
+// AUDIT-2026-10-02: this pattern was `\d[\d_]*`, which accepts an underscore
+// ANYWHERE after the first digit -- including at the end and doubled -- and
+// had no underscore support in the exponent at all. Python allows `_` only
+// BETWEEN two digits, so the mirror was wrong in both directions, measured by
+// the `aggregate` parity group:
+//   "1_"     -> js 1       / py raises
+//   "1__0"   -> js 10      / py raises
+//   "1_.5"   -> js 1.5     / py raises
+//   "1._5"   -> js 1.5     / py raises
+//   "1e1_0"  -> js raises  / py 1e10      <-- the opposite direction
+//   "1_0e2_0"-> js raises  / py 1e21      <-- and again
+// `\d(?:_?\d)*` is the faithful form: one digit, then any number of
+// ("_" digit) pairs. The exponent gets the same treatment, and the fraction
+// keeps a bare trailing "." because float("5.") is 5.0.
+const _PY_FLOAT_RE = /^[+-]?(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?$/;
 function rcaPyFloat(v) {
   if (typeof v === 'number') return Number.isNaN(v) ? NaN : v;
   if (typeof v === 'boolean') return v ? 1 : 0;   // float(True) == 1.0
@@ -847,13 +957,23 @@ function mergePrimaryList(runs, km, n) {
         rcaAddRowWarning(aggr, 'index_order_swap');
       }
     }
-    // M-1 fix: chimera detection. If every contributing run produced a
+    // M-1 fix: recombination detection. If every contributing run produced a
     // DIFFERENT (range_base, range_top, biozone, section) tuple for this
-    // species — i.e. no run ever observed the merged tuple — flag with
-    // _chimera_dropped so the caller can filter (and so score_consistency
-    // in quality.js can surface chimera_warnings).
-    if (rcaIsChimericRow(group, aggr)) {
-      aggr._chimera_dropped = true;
+    // species — i.e. no run ever observed the merged tuple — flag it.
+    //
+    // AUDIT-2026-09-27 P1: this used to REMOVE the row. That was wrong, and
+    // the vote tie-break is why: the mode breaks a 1-1 tie with a sorted
+    // first-wins rule, so the merged tuple is only ever observed when EVERY
+    // field's winner came from the same run. Two runs that disagree on >= 2
+    // of {range_base, range_top, biozone} therefore ALWAYS produce an
+    // "unobserved" tuple — ordinary OCR disagreement, not fabrication.
+    // Raising `runs`, the documented way to make an extraction MORE
+    // reliable, was deleting taxa. The row is now kept, flagged
+    // `recombined_consensus`, and carries the ballots.
+    if (rcaIsChimericRow(group, aggr, km.strModeFields)) {
+      rcaAddRowWarning(aggr, 'recombined_consensus');
+      aggr._recombination_ballots = rcaRecombinationBallots(group, km.strModeFields);
+      aggr._chimera_recombined = true;
     }
     merged.push(aggr);
   }
@@ -912,9 +1032,23 @@ function mergeNamedLists(runs, km) {
     }
     const groups = new Map();
     const order = [];
+    // AUDIT-2026-09-27 P2: a MIXED list (some runs emit objects, another emits
+    // strings) used to lose every string. The string fast-path above is gated
+    // on "no object anywhere", so one object steered the whole list into the
+    // object branch, whose loop `continue`s on every non-object item.
+    // Executed: ['Brachiopoda', {name:'Crustacea'}] + ['Mollusca'] merged to
+    // [{name:'Crustacea'}] — two taxa gone, no warning — while the single-run
+    // path kept them. A model emitting objects in one run and strings in the
+    // next is an ordinary, expected shape. Non-object items are collected and
+    // merged back as strings rather than dropped. Mirrors the Python fix.
+    const strayStrings = [];
     for (const r of runs) {
       for (const it of r[key] || []) {
-        if (!it || typeof it !== 'object') continue;
+        if (!it || typeof it !== 'object') {
+          const text = String(it === null || it === undefined ? '' : it).trim();
+          if (text) strayStrings.push(text);
+          continue;
+        }
         // UI-REVIEW-2026-09-07: business-identity fields for keys whose
         // items have no natural name (zonation correlations) — group by
         // those so the same edge across runs merges into one row. Mirrors
@@ -995,6 +1129,21 @@ function mergeNamedLists(runs, km) {
       if (Object.keys(rep).length === 0 && group[0]) Object.assign(rep, group[0]);
       merged.push(rep);
     }
+    // AUDIT-2026-09-27 P2: put the mixed-in strings back, deduped
+    // case-insensitively and appended after the object rows so the output
+    // keeps the first-seen ordering of the object half.
+    if (strayStrings.length > 0) {
+      const seen = new Set();
+      for (const it of merged) {
+        if (it && typeof it === 'object') {
+          seen.add(rcaAggNorm(it.name || it.marker || it.meaning || ''));
+        }
+      }
+      for (const text of strayStrings) {
+        const n = rcaAggNorm(text);
+        if (n && !seen.has(n)) { seen.add(n); merged.push(text); }
+      }
+    }
     out[key] = merged;
   }
   return out;
@@ -1054,6 +1203,33 @@ function rcaMergeResults(results, totalRuns, keymap) {
     }
   }
 
+  // AUDIT-2026-09-27 P1: carry over EVERY remaining root key, not just a
+  // hand-picked three. The N-run path builds `out` from the primary list +
+  // listKeys + confidence, so any figure-level key the single-run passthrough
+  // keeps was silently dropped by raising the run count. The concrete case
+  // that matters is `axis_calibration`: a FIRST-CLASS hoisted root key by
+  // contract, declared by no keymap, and read by js/viz.js to turn the rows'
+  // 0-999 positions into real bed/age values. Executed before the fix: present
+  // after totalRuns=1, GONE after totalRuns=2 — running the extraction MORE
+  // carefully destroyed the axis evidence and the vertical axis silently
+  // fell back to uncalibrated positions with no tick labels.
+  //
+  // Rule: any root key the merge does not manage (primary, listKeys,
+  // confidence, `runs`) survives, taken from the FIRST run that carries it,
+  // deep-cloned. Mirrors rca_core/aggregate.py.
+  const managed = new Set([km.primary, km.confidence, 'runs'].concat(km.listKeys || []));
+  for (const run of runs) {
+    if (!run || typeof run !== 'object') continue;
+    for (const key of Object.keys(run)) {
+      if (managed.has(key) || Object.prototype.hasOwnProperty.call(out, key)) continue;
+      const v = run[key];
+      if ((Array.isArray(v) || (v && typeof v === 'object')) && v
+          && Object.keys(v).length > 0) {
+        out[key] = deepClone(v);
+      }
+    }
+  }
+
   // REVIEW-2026-08-17 (P2 follow-up): phylogenetic-tree ``metadata`` and
   // ``legend`` are single dicts (not lists). They are identical across
   // runs for the same image, so preserve them from the first run rather
@@ -1090,7 +1266,19 @@ function rcaMergeResults(results, totalRuns, keymap) {
     wSum += c * w;
     wN += w;
   }
-  out[km.confidence] = wN > 0 ? Math.round((wSum / wN) * 10000) / 10000 : 0;
+  // AUDIT-2026-09-30: same correction as mergeConfidenceField above -- the
+  // weighted mean is rounded with rcaPyRound (ties to even, matching
+  // rca_core/aggregate.py's `round(weight_sum / weight_n, 4)`) rather than
+  // `Math.round(x * 10000) / 10000`, which rounds halves away from zero and is
+  // the exact idiom js/reason-codes.js#rcaPyRound's comment says is wrong.
+  // A weighted mean reaches a tie whenever the runs' confidences average to a
+  // half at the fifth decimal -- 0.03125 among 32 equally weighted runs being
+  // the shape rcaPyRound's comment calls out.
+  out[km.confidence] = wN > 0
+    ? ((typeof rcaPyRound === 'function')
+        ? rcaPyRound(wSum / wN, 4)
+        : Math.round((wSum / wN) * 10000) / 10000)
+    : 0;
 
   // Range-chart-only: also merge the parallel "sections" list of measured
   // sections so the original four-table shape is preserved.
@@ -1127,30 +1315,31 @@ function rcaMergeResults(results, totalRuns, keymap) {
     out[km.extraSections] = merged;
   }
 
-  // M-1 fix: filter chimeric rows from the primary list. Dropped rows
-  // are surfaced via `chimera_warnings` so consumers and the UI can
-  // tell the operator "we dropped X rows because no run ever observed
-  // the merged (FAD/LAD/biozone) tuple together". Mirrors
-  // rca_core/aggregate.py:784-807.
+  // M-1 fix: SURFACE recombined rows via `chimera_warnings`. AUDIT-2026-09-27
+  // P1: the rows are NO LONGER REMOVED here — they stay in the primary list
+  // carrying `_warning: recombined_consensus` and `_recombination_ballots`.
+  // Dropping them is how a 2/2-agreement taxon disappeared from the merged
+  // table. `chimera_warnings` keeps its name because the GUI already reads it;
+  // the reason text now says "runs disagreed", and each entry carries the
+  // ballots so every consumer gets the information, not just the Fluent GUI.
+  // Mirrors rca_core/aggregate.py (merge_results' chimera block).
   const primaryList = out[km.primary];
   if (Array.isArray(primaryList) && primaryList.length > 0) {
-    const chimeras = primaryList.filter((r) => r && r._chimera_dropped);
+    const chimeras = primaryList.filter((r) => r && r._chimera_recombined);
     if (chimeras.length > 0) {
-      const surviving = primaryList.filter((r) => r && !r._chimera_dropped);
-      for (const r of surviving) delete r._chimera_dropped;
-      out[km.primary] = surviving;
-      out.chimera_warnings = [];
+      if (!Array.isArray(out.chimera_warnings)) out.chimera_warnings = [];
       for (const c of chimeras) {
-        const row = {
-          species: c.species, section: c.section, biozone: c.biozone,
-          range_top: c.range_top, range_base: c.range_base,
-        };
         out.chimera_warnings.push({
           table: km.primary,
-          row: row,
-          reason: 'no single run observed the merged (FAD/LAD/biozone) tuple',
+          row: {
+            species: c.species, section: c.section, biozone: c.biozone,
+            range_top: c.range_top, range_base: c.range_base,
+          },
+          reason: 'runs disagreed on the (FAD/LAD/biozone) tuple; '
+            + 'row kept and flagged, not dropped',
+          ballots: c._recombination_ballots || [],
         });
-        delete c._chimera_dropped;
+        delete c._chimera_recombined;
       }
     }
   }

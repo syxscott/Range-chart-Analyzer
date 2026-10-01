@@ -85,9 +85,17 @@ def _coverage_source(data: dict[str, Any]
         return "", [], empty, ()
     key, column_key = picked
     rows = [r for r in (data.get(key) or []) if isinstance(r, dict)]
+    ladder = coverage_column_keys(column_key)
+    # AUDIT-2026-10-01 [item 26]: the rollup used to get a 1-tuple
+    # (``column_keys=(column_key,)``) while the ledger in the SAME report got
+    # the full ladder -- the half of the A2 fix that was never applied.  So a
+    # table whose rows are named by any other ladder key produced a ledger that
+    # could place every row and an evidence chain that could name none of
+    # them: 44 decisions, every ``row: ""``, nothing to audit a decision
+    # against.  Both blocks now read the same ladder.
     return (key, rows,
-            reason_code_rollup(rows, column_keys=(column_key,)),
-            coverage_column_keys(column_key))
+            reason_code_rollup(rows, column_keys=ladder),
+            ladder)
 
 
 def _ics_version() -> str:

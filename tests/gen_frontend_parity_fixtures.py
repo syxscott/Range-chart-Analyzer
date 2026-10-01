@@ -50,7 +50,10 @@ from rca_core.json_utils import safe_json_loads  # noqa: E402
 from rca_core.standards.ics import ics_resolve_age_bound  # noqa: E402
 # BORROW-2026-09-20 (js-data-layer mirror round): the coverage-contract trio.
 import rca_core.reason_codes as RC  # noqa: E402
+from rca_core.editable import apply_edits, capture_edits  # noqa: E402
+from rca_core.extractor import axis_domains_from, pos_to_axis_value  # noqa: E402
 from rca_core.aggregate import SCHEMA_BY_MODE, merge_results  # noqa: E402
+import rca_core.aggregate as AGG  # noqa: E402
 from rca_core.quality import score_range_chart  # noqa: E402
 
 FIXTURE_PATH = ROOT / "tests" / "fixtures" / "frontend_parity_2026_09_20.json"
@@ -59,7 +62,8 @@ GROUPS = (
     "range_chart", "columnar_section", "abundance_diagram",
     "zonation_chart", "phylogenetic_tree", "chart_classification",
     "to_newick", "safe_json_loads", "age_bound",
-    "reason_codes", "merge", "quality_coverage",
+    "reason_codes", "merge", "aggregate", "quality_coverage",
+    "editable", "axis",
 )
 
 
@@ -67,11 +71,203 @@ def _case(group: str, cid: str, payload: Any, extra: Any = None) -> dict:
     return {"group": group, "id": cid, "payload": payload, "extra": extra}
 
 
+# --- the table editor's edit payload: rca_core/editable.py vs js/table.js ----
+# AUDIT-2026-10-01. The editor is how a researcher corrects a model mistake, and
+# the payload it produces is what "Save edits" / "Apply" sends, so the two
+# engines have to agree on the WHOLE thing: not only the diff, but the round
+# trip, because a payload that looks right and replays to the wrong table is
+# worse than one that is visibly wrong.
+#
+# Reading the two implementations side by side suggests a divergence that
+# measurement does not support: capture_edits aligns rows by IDENTITY first
+# (rca_core/editable.py:_align_rows, "so an insertion or a re-sort cannot slide
+# one taxon's edit onto its neighbour") while rcaCaptureListEdits pairs purely by
+# position. Running the branches settles it -- 25 cases including mid-table
+# insert, head insert, re-sort with an edit, scalar-list insert/change/delete,
+# dict<->scalar row changes, both deletion positions, cleared cells, added
+# fields, numeric-vs-string, unicode and _extras all agree, diff AND replay.
+# Recorded here because "the two implementations look different" is exactly the
+# kind of claim that should not be repeated, and because the group was missing:
+# the editor had no cross-engine guard at all.
+def _ed_replay(before: Any, edits: Any) -> Any:
+    """apply_edits(before, edits) restricted to the keys the edits mention."""
+    if not isinstance(edits, dict) or not edits:
+        return None
+    try:
+        after = apply_edits(copy.deepcopy(before), copy.deepcopy(edits))
+    except Exception as exc:  # noqa: BLE001 - a raise is a finding
+        return "__raised__ %s" % type(exc).__name__
+    # A key the replay did not create is None, which is what the JS side answers
+    # for an absent key too; comparing raw would report one spurious difference.
+    return {k: (after.get(k) if isinstance(after, dict) else None) for k in edits}
+
+
+def _editable_python(payload: dict) -> Any:
+    args = payload.get("args") or []
+    if payload.get("op") == "capture_all":
+        edits = capture_edits(copy.deepcopy(args[0]), copy.deepcopy(args[1]))
+        return {"edits": edits, "replay": _ed_replay(args[0], edits)}
+    raise KeyError(payload.get("op"))
+
+
+# --- axis calibration: rca_core/extractor.py vs js/minimax.js ---------------
+# AUDIT-2026-10-01. The normalisation pass only hoists the block verbatim (12
+# adversarial shapes matched), so the FIT is not in that path -- these functions
+# are, and they are what turn the model's 0-999 position into the number a
+# figure is drawn from. "axis_calibration" had appeared ZERO times in this
+# fixture, while the prompt asks for the block in five modes and js/minimax.js's
+# own comment mentions it having "diverged between transports". Measured over the
+# shapes below: 180 comparisons, 0 divergences. Recorded as a group so it cannot
+# start drifting silently.
+_AXIS_CALS = {
+    "normal": {"vertical": {"at_0": 1, "at_999": 24, "unit": "bed"}},
+    "reversed": {"vertical": {"at_0": 24, "at_999": 1, "unit": "bed"}},
+    "fractional": {"vertical": {"at_0": 0.5, "at_999": 99.5, "unit": "bed"}},
+    "negative": {"vertical": {"at_0": -4.0, "at_999": 4.0, "unit": "PC1"}},
+    "zero_span": {"vertical": {"at_0": 7, "at_999": 7, "unit": "bed"}},
+    "float_ends": {"vertical": {"at_0": 0.0, "at_999": 30.0, "unit": "m"}},
+    "two_axes": {"x": {"at_0": -4.0, "at_999": 4.0, "unit": "PC1"},
+                 "y": {"at_0": -3.0, "at_999": 3.0, "unit": "PC2"}},
+    "unknown_axis": {"depth": {"at_0": 0, "at_999": 100, "unit": "cm"}},
+    "no_unit": {"vertical": {"at_0": 1, "at_999": 24}},
+    "anchors_shape": {"vertical": {
+        "anchors": [{"position": 0, "value": 1},
+                    {"position": 999, "value": 24}], "unit": "bed"}},
+    "not_a_dict": "nonsense",
+    "empty": {},
+}
+# Positions chosen to include both ends, the interior, out-of-range values, a
+# fractional one, a non-numeric one, and a missing one.
+_AXIS_POSITIONS = [0, 1, 200, 333, 500, 666, 800, 998, 999, -1, 1000, 12.5, None, "500"]
+# The calibrations whose every position is compared; the other shapes are
+# compared through axis_domains_from alone, which is where a shape that cannot
+# form a domain is caught.
+_AXIS_FULL_SHAPES = ("normal", "reversed", "zero_span", "two_axes")
+
+
+def _axis_payload(cal: Any) -> dict:
+    return {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            {"species": "A", "section": "S1", "range_top": "Bed 9",
+             "range_base": "Bed 7", "top_pos_0_999": 800,
+             "base_pos_0_999": 200},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8,
+        "axis_calibration": cal,
+    }
+
+
+def _axis_python(payload: dict) -> Any:
+    op = payload.get("op")
+    args = payload.get("args") or []
+    if op == "axis_domains_from":
+        return axis_domains_from(copy.deepcopy(args[0]))
+    if op == "pos_to_axis_value":
+        axes = axis_domains_from(copy.deepcopy(args[1]))
+        return {"axes": axes,
+                "v": pos_to_axis_value(args[0], axes.get(args[3]))}
+    raise KeyError(op)
+
+
+# (the axis cases are added below, after _add is defined)
+
+
+def _ed_row(name: str, **kw: Any) -> dict:
+    d = {"species": name, "section": "S1"}
+    d.update(kw)
+    return d
+
+
+def _ed_res(*rows: Any, **kw: Any) -> dict:
+    d = {"sections": [{"name": "S1"}], "species_ranges": list(rows),
+         "biozones": [], "other_fossils": []}
+    d.update(kw)
+    return d
+
+
+_ED_R3 = [_ed_row("A", range_top="9"), _ed_row("B", range_top="8"),
+          _ed_row("C", range_top="7")]
+_ED_PAIRS = [
+    # cell-level edits
+    ("cell_change", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("A", range_top="1"), _ED_R3[1], _ED_R3[2])),
+    ("cell_clear", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("A"), _ED_R3[1], _ED_R3[2])),
+    ("cell_add_field", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("A", range_top="9", range_base="2"), _ED_R3[1], _ED_R3[2])),
+    ("cell_numeric_vs_string", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("A", range_top=9), _ED_R3[1], _ED_R3[2])),
+    ("cell_unicode", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("A", range_top="中华虫"), _ED_R3[1], _ED_R3[2])),
+    ("cell_extras_ignored", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("A", range_top="9", _extras={"x": 1}), _ED_R3[1], _ED_R3[2])),
+    # insertions: the branches the identity alignment exists for
+    ("append_trailing", _ed_res(*_ED_R3),
+     _ed_res(_ED_R3[0], _ED_R3[1], _ED_R3[2], _ed_row("D", range_top="6"))),
+    ("insert_middle", _ed_res(*_ED_R3),
+     _ed_res(_ED_R3[0], _ed_row("D", range_top="6"), _ED_R3[1], _ED_R3[2])),
+    ("insert_head", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("D", range_top="6"), _ED_R3[0], _ED_R3[1], _ED_R3[2])),
+    # deletions: both positions, and the shrink -> _replaced path
+    ("delete_tail", _ed_res(*_ED_R3), _ed_res(_ED_R3[0], _ED_R3[1])),
+    ("delete_middle", _ed_res(*_ED_R3), _ed_res(_ED_R3[0], _ED_R3[2])),
+    # re-sort: same rows, different order, and with an edit riding on it
+    ("resort_only", _ed_res(*_ED_R3), _ed_res(_ED_R3[2], _ED_R3[1], _ED_R3[0])),
+    ("resort_with_edit", _ed_res(*_ED_R3),
+     _ed_res(_ed_row("C", range_top="99"), _ED_R3[1], _ED_R3[0])),
+    # scalar lists (other_fossils)
+    ("scalar_append", _ed_res(*_ED_R3, other_fossils=["F1"]),
+     _ed_res(*_ED_R3, other_fossils=["F1", "F2"])),
+    ("scalar_change", _ed_res(*_ED_R3, other_fossils=["F1", "F2"]),
+     _ed_res(*_ED_R3, other_fossils=["F1", "F9"])),
+    ("scalar_delete", _ed_res(*_ED_R3, other_fossils=["F1", "F2"]),
+     _ed_res(*_ED_R3, other_fossils=["F1"])),
+    # row-type changes
+    ("dict_to_scalar", _ed_res(*_ED_R3, other_fossils=[{"name": "A"}]),
+     _ed_res(*_ED_R3, other_fossils=["A"])),
+    ("scalar_to_dict", _ed_res(*_ED_R3, other_fossils=["A"]),
+     _ed_res(*_ED_R3, other_fossils=[{"name": "A"}])),
+    # no change and degenerate inputs
+    ("identical", _ed_res(*_ED_R3), _ed_res(*_ED_R3)),
+    ("empty_rows", _ed_res(), _ed_res()),
+    ("before_not_dict", "nope", _ed_res()),
+    ("after_not_dict", _ed_res(), 5),
+    # rows with no usable identity: the positional fallback
+    ("no_identity_rows", _ed_res({"range_top": "1"}, {"range_top": "2"}),
+     _ed_res({"range_top": "9"}, {"range_top": "2"})),
+    # other list keys
+    ("sections_edit", _ed_res(*_ED_R3),
+     _ed_res(*_ED_R3, sections=[{"name": "S1", "age_range": "Permian"}])),
+    ("cross_beds_new", _ed_res(*_ED_R3),
+     _ed_res(*_ED_R3, cross_beds=[{"from": "S1", "to": "S2"}])),
+]
+# (the _add(*[...]) call for these lives just below, after _add is defined)
+
+
 CASES: list[dict] = []
 
 
 def _add(*cases: dict) -> None:
     CASES.extend(cases)
+
+
+_add(*[
+    _case("editable", f"ed_{cid}", {"op": "capture_all", "args": [before, after]})
+    for cid, before, after in _ED_PAIRS
+])
+_add(*[
+    _case("axis", f"axdom_{name}", {"op": "axis_domains_from",
+                                     "args": [_axis_payload(cal)]})
+    for name, cal in _AXIS_CALS.items()
+])
+_add(*[
+    _case("axis", f"axpos_{name}_{pos}",
+          {"op": "pos_to_axis_value",
+           "args": [pos, _axis_payload(_AXIS_CALS[name]), None, "vertical"]})
+    for name in _AXIS_FULL_SHAPES
+    for pos in _AXIS_POSITIONS
+])
 
 
 # --- range_chart -----------------------------------------------------------
@@ -107,10 +303,91 @@ _add(
         "sections": ["Alpha"],
         "species_ranges": ["Beta"],
     }),
+    # AUDIT-2026-10-02: the zone_type ladder's only two boundary-guarded
+    # branches. The other seven are plain substring tests and cannot diverge;
+    # `\bzonule\b` / `\bsubzone\b` are `\b` on both engines, and Python's is
+    # Unicode-aware for str patterns while ECMAScript's is not. So a
+    # non-ASCII LETTER touching the keyword makes the desktop fall through to
+    # "biozone" where the browser infers "zonule". Swept mechanically after the
+    # same family was found three more times today (aggregate's qualifier
+    # patterns, and the explicit-age guard in ics/quality/pbdb).
+    _case("range_chart", "rc_biozone_zone_type_ladder", {
+        "biozones": [
+            {"name": "N. optima Zone"},
+            {"name": "Interval zonule"},
+            {"name": "Assemblage Zone"},
+            {"name": "Acme Zone"},
+            {"name": "Lineage Zone"},
+            {"name": "Opel Zone"},
+            {"name": "Taxon-range Zone"},
+            {"name": "Subzone A"},
+            {"name": "Zonule B"},
+        ],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "5", "range_base": "2"}],
+    }),
+    # The adjacency cases: a CJK / Greek / Cyrillic letter touching the keyword,
+    # and the reverse, plus the look-alikes that must still be rejected on BOTH
+    # engines ("zozonule" / "zonules" continue an identifier, and a space or a
+    # hyphen is a boundary both engines agree on).
+    _case("range_chart", "rc_biozone_zone_type_cjk_adjacent", {
+        "biozones": [
+            {"name": "图zonule"},
+            {"name": "zonule图"},
+            {"name": "图subzone"},
+            {"name": "subzone图"},
+            {"name": "αzonule"},
+            {"name": "зона subzone"},
+        ],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "5", "range_base": "2"}],
+    }),
+    _case("range_chart", "rc_biozone_zone_type_boundaries", {
+        "biozones": [
+            {"name": "zozonule"},
+            {"name": "zonules"},
+            {"name": "subzonule"},
+            {"name": "sub-zone"},
+            {"name": "sub zone"},
+            {"name": "sub.zone"},
+            {"name": "ZONULE"},
+            {"name": "SubZone"},
+        ],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "5", "range_base": "2"}],
+    }),
     _case("range_chart", "rc_iron_rule_species", {
         "species_ranges": [
             {"species": "Postouwia Zone", "range_top": "5", "range_base": "2"},
             {"species": "Genuine taxon", "range_top": "6", "range_base": "2"},
+        ],
+    }),
+    # AUDIT-2026-10-02: the iron rule itself. _IRON_RULE_ZONE_RE
+    # (extractor.py) and _RCA_IRON_RULE_ZONE_RE (js/minimax.js) are the same
+    # pattern with the same `\b`, so the same Unicode-vs-ASCII split applies --
+    # and this is the highest-stakes instance of the family, because the rule
+    # exists so a zone-like name is NEVER filed as a taxon: its own comment
+    # says the post-normalize pass exists "instead of silently exporting a
+    # fabricated FAD/LAD for a non-taxon". A CJK letter touching the marker is
+    # a word character to Python and not to JavaScript, so the two engines
+    # disagree on whether these are species at all.
+    _case("range_chart", "rc_iron_rule_cjk_adjacent", {
+        "species_ranges": [
+            {"species": "图zone", "range_top": "5", "range_base": "2"},
+            {"species": "zone图", "range_top": "5", "range_base": "2"},
+            {"species": "生物带zone", "range_top": "5", "range_base": "2"},
+            {"species": "αacme", "range_top": "5", "range_base": "2"},
+            {"species": "图assemblage", "range_top": "5", "range_base": "2"},
+        ],
+    }),
+    _case("range_chart", "rc_iron_rule_boundaries", {
+        "species_ranges": [
+            {"species": "zozone", "range_top": "5", "range_base": "2"},
+            {"species": "zoness", "range_top": "5", "range_base": "2"},
+            {"species": "sub-zone", "range_top": "5", "range_base": "2"},
+            {"species": "zone.5", "range_top": "5", "range_base": "2"},
+            {"species": "ZONE", "range_top": "5", "range_base": "2"},
+            {"species": "Zone 5", "range_top": "5", "range_base": "2"},
         ],
     }),
     _case("range_chart", "rc_index_order_swap", {
@@ -163,11 +440,40 @@ _add(
         "sections": [{"name": "S", "formations": " Nanling Fm ",
                       "coordinates": {"lat": 1}, "thickness_m": 12.5}],
     }),
+    # AUDIT-2026-09-27: the literal "NaN" as a confidence. Both engines accept
+    # it as a float -- Python's float("NaN") and JS's Number("NaN") both give
+    # NaN -- and then they clamp it with the SAME INTENT and the OPPOSITE
+    # result, because the languages disagree: Python's min(1.0, nan) returns
+    # 1.0 (it does not propagate NaN), while JS's Math.min(1, NaN) is NaN and
+    # stays NaN until the falsy fallback turns it into 0. So one model's
+    # `"confidence": "NaN"` becomes a PERFECT 1.0 in the desktop app and a 0 in
+    # the browser. Found by difffuzz_normalize.py. Every other unparseable
+    # value ("bogus", "[]") agrees, so this is the NaN path alone -- which is
+    # why no hand-written confidence fixture ever hit it.
+    _case("range_chart", "rc_root_confidence_nan", {
+        "sections": [], "confidence": "NaN",
+    }),
+    _case("range_chart", "rc_row_confidence_nan", {
+        "sections": [], "confidence": 1,
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "9", "confidence": "NaN"}],
+    }),
 )
 
 # --- columnar_section ------------------------------------------------------
 _add(
     _case("columnar_section", "col_empty", {}),
+    # AUDIT-2026-09-27: a container the model put in an UNRECOGNISED field.
+    # Python's _stringify_scalar renders it as text ("(1, 2)"); the browser's
+    # _extras carry-over keeps the real array. Neither loses the information,
+    # and the repo's stated policy is that the browser is "lossless-or-empty,
+    # never a fabricated Python repr" (rcaStringifyScalar's docstring), so
+    # teaching JS to emit "(1, 2)" is the one option that is definitely wrong.
+    # Tracked rather than fixed. Found by difffuzz_normalize.py.
+    _case("columnar_section", "col_extras_container", {
+        "sections": [{"id": "Ki-1", "group": "G", "lithology": [1, 2]}],
+        "confidence": 1,
+    }),
     _case("columnar_section", "col_foreign", {"totally_unrelated": 1}),
     _case("columnar_section", "col_dict_shaped", {
         "sections": {
@@ -390,6 +696,34 @@ _add(
         "root_ids": ["r"],
         "nodes": ["r"],
     }),
+    # AUDIT-2026-09-30: `metadata` and `legend` are the two OPTIONAL mappings
+    # on a tree, and a model can put a string in either. `raw.get("metadata") or
+    # {}` only rejects FALSY non-mappings, so a truthy string reached
+    # `metadata_raw.get("title", "")` and raised AttributeError on the Python
+    # side, while js/minimax.js's `rcaPyOr` let it through to `Object.keys`,
+    # which yielded ["0","1","2"] and emitted {"0": "s", "1": "t", "2": "r"} --
+    # a string's character positions treated as metadata keys. Found by
+    # difffuzz_normalize.py, whose phylogenetic_tree generator had been raising
+    # on 400/400 cases and scoring that as agreement. Both sides now treat a
+    # non-mapping as absent, matching the `legend` line that was already
+    # guarded. `ph_non_dict_legend` pins that sibling so the two cannot drift
+    # apart again.
+    _case("phylogenetic_tree", "ph_non_dict_metadata", {
+        "root_ids": ["r"],
+        "nodes": [{"id": "r", "parent": None, "name": "A"}],
+        "metadata": "str",
+        "confidence": 0.9,
+    }),
+    _case("phylogenetic_tree", "ph_non_dict_legend", {
+        "root_ids": ["r"],
+        "nodes": [{"id": "r", "parent": None, "name": "A"}],
+        "legend": ["a", "b"],
+    }),
+    _case("phylogenetic_tree", "ph_metadata_list", {
+        "root_ids": ["r"],
+        "nodes": [{"id": "r", "parent": None, "name": "A"}],
+        "metadata": [{"title": "T"}],
+    }),
 )
 
 # --- chart_classification --------------------------------------------------
@@ -408,6 +742,17 @@ _add(
         "chart_type": "zonation_chart", "confidence": 0.87}),
     _case("chart_classification", "cc_non_dict", "range_chart"),
     _case("chart_classification", "cc_empty", {}),
+    # AUDIT-2026-09-30: the same NaN-clamp split rc_root_confidence_nan
+    # records, in a mode that had no case for it. The root/row NaN fixtures
+    # were both added under range_chart, so nothing exercised the identical
+    # `confidence` field on the classification path -- and measured here it
+    # diverges the same way (Python min()/max() do not propagate NaN, so
+    # "NaN" clamps to 1.0; JS Math.min/max do, so it becomes 0). Found by
+    # driving rcaNormalizeChartClassification directly, a function
+    # difffuzz_normalize never called because its MODES table lists only the
+    # five modes whose normaliser exists on BOTH engines.
+    _case("chart_classification", "cc_root_confidence_nan", {
+        "chart_type": "range_chart", "confidence": "NaN", "reason": "r"}),
 )
 
 # --- to_newick (over the NORMALIZED tree) ----------------------------------
@@ -493,6 +838,34 @@ _add(
           "```json\n{\"zonations\": [{\"name\": \"N\"}], \"correlations\": []}\n```"),
     _case("safe_json_loads", "sj_unclosed_fence",
           "```json\n{\"sections\": [{\"name\": \"A\"}]}"),
+    # AUDIT-2026-09-27: a leading UTF-8 BOM. JS trim() removes U+FEFF (it is in
+    # the ECMAScript WhiteSpace production as the historical ZWNBSP) and
+    # Python's str.strip() does not, so a BOM-prefixed reply parsed in the
+    # browser and failed on the desktop/backend. Found by difffuzz_json.py.
+    _case("safe_json_loads", "sj_bom_object", "\ufeff{\"sections\": [{\"name\": \"A\"}]}"),
+    _case("safe_json_loads", "sj_bom_array",
+          "\ufeff[{\"species\": \"A\", \"section\": \"S\"}]"),
+    _case("safe_json_loads", "sj_bom_with_prose",
+          "\ufeffSure! Here it is:\n{\"sections\": [{\"name\": \"A\"}]}\nDone."),
+    # AUDIT-2026-10-01: the two parsers' NESTING limits were measured on a
+    # depth ladder (the numbers are in the expressibility guard's comment
+    # further down) and there is deliberately NO fixture case for them. The
+    # array form is the half that could have been expressed -- Python refuses
+    # it, so there is no value to serialise -- and adding it anyway turned out
+    # to be wrong for a reason worth recording: WHERE Python refuses is
+    # interpreter-dependent, so the case is not stable across the versions this
+    # project tests. Measured:
+    #   CPython 3.10 (sys.getrecursionlimit() == 1000): a 1200-level array
+    #     raises, so the case records python_error.
+    #   CPython 3.12.14 (the CI interpreter): the same 1200-level array PARSES,
+    #     so the case would record a 1200-deep value -- which the guard below
+    #     then refused, and tests/test_frontend_parity_fixtures_2026_09_20.py::
+    #     test_fixture_matches_python failed on 3.12 while passing on 3.10.
+    # A committed fixture has to be byte-identical whichever interpreter
+    # regenerates it, so a case whose Python answer moves with the version
+    # cannot live here. The finding is recorded where it stays true: as the
+    # measurement in the guard's comment, and as a guard on the guard
+    # (tests/test_parity_fixture_expressibility.py).
 )
 
 # --- age bounds (quality.js / ics_table.js vs standards/ics.py) ------------
@@ -530,13 +903,87 @@ _AGE_INPUTS = [
     ("Wuchiapingian", "middle"),
     ("Capitanian", "older"),
     (" Guadalupian ", "younger"),
+    # AUDIT-2026-09-27: non-ASCII decimal digits. Python's `\d` and `float()`
+    # accept every Unicode decimal digit; ECMAScript's `\d` is `[0-9]` and
+    # nothing else. So the desktop/backend path resolves "26<U+0660> Ma" to an
+    # absolute age and the browser path calls it unresolvable — the same label
+    # produces different DwC/PBDB ages depending on which engine read the
+    # figure. Full-width digits are written with \u escapes so this file stays
+    # pure ASCII. Parked in EXPECTED_DIVERGENCES in tests_diff_frontend_parity.js
+    # until someone decides which way the contract should go; it is a behaviour
+    # change on BOTH engines, not a bug fix.
+    ("26٠ Ma", "older"),
+    ("２６０ Ma", "older"),
+    # AUDIT-2026-10-01: the \b half of the same Unicode-awareness family, and
+    # it fails in the OPPOSITE direction, so the two \d cases above could never
+    # have found it. Python's \b on a str pattern is Unicode-aware (\w is
+    # str.isalnum() plus "_"), so "Hirnantian" + an Arabic-Indic digit has no
+    # word boundary and rca_core returns (None, None); ECMAScript's \w is
+    # ASCII-only, so js/quality.js saw a boundary, matched, and assigned
+    # Hirnantian 445.2 Ma. The browser was therefore assigning a FAD/LAD age
+    # the desktop refused to assign, from a label the model can emit.
+    # js/quality.js now builds these patterns through _wordBoundaryRe, whose
+    # lookarounds cover the same classes Python's \b uses.
+    # The two ASCII-digit controls are here because a fix that simply refused
+    # any label containing a digit would satisfy the cases above.
+    ("Hirnantian٣", "older"),
+    ("Hirnantian٣", "younger"),
+    ("Wuchiapingian٣", "older"),
+    ("Induan۳", "older"),
+    ("Hirnantian 3", "older"),
+    ("Hirnantian3", "older"),
+    ("Hirnantian", "older"),
+    # AUDIT-2026-10-01: `prefer` as a single-element ARRAY. Python stringifies
+    # with str() and JS with String(), and they disagree where it hurts:
+    # str(["younger"]) is "['younger']" (unknown -> ValueError) while
+    # String(["younger"]) is "younger" (known -> the browser silently resolved
+    # the YOUNGER end), and [] / [""] defaulted to older instead of raising.
+    # That is the quiet FAD/LAD inversion ics.py's own comment says an unknown
+    # value must not cause. Every production caller passes a literal today
+    # (pbdb / darwin_core / exporter / quality, and 'older' / 'younger' in
+    # js/quality.js), so this is a latent hole; these cases keep it from
+    # reopening. The Python side raises for all of them, so they are recorded
+    # as python_error and the harness requires the mirror to raise too.
+    ("Wuchiapingian", ["younger"]),
+    ("Wuchiapingian", ["older"]),
+    ("Wuchiapingian", []),
+    ("Wuchiapingian", [""]),
+    ("Wuchiapingian", ["older", "younger"]),
+    ("Wuchiapingian", "younger"),
+    # AUDIT-2026-10-02: the age regex is `(?:^|[^\w.])\d+...`. Python's `\w`
+    # and `\d` are UNICODE-aware for str patterns, so BOTH halves of that
+    # guard disagree with JavaScript's ASCII-only ones, and they disagree in
+    # OPPOSITE directions:
+    #   too strict on JS -- full-width / Arabic-Indic digits match Python's
+    #     `\d` and not JS's (already recorded as ag_34 / ag_35);
+    #   too LOOSE on JS -- and this direction was not recorded anywhere -- a
+    #     CJK character immediately before the digits is a `\w` for Python, so
+    #     the `[^\w.]` prefix guard REFUSES to match and the desktop cannot
+    #     read the age at all, while JS sees a non-word character and matches.
+    # "图260 Ma" is not a contrived caption for this product's primary
+    # language; it is what a Chinese or Japanese figure label looks like.
+    ("图260 Ma", "older"),
+    ("深度260 Ma", "younger"),
+    ("図260 Ma", "older"),
+    ("年龄260 Ma", "older"),
+    ("深度260 Ma - 250 Ma", "older"),
+    ("图２６０ Ma", "older"),
+    # ...while the same guard must still REJECT a genuine word character, on
+    # both engines. "_" is a `\w` in ASCII and in Python; "a" likewise.
+    ("a260 Ma", "older"),
+    ("_260 Ma", "older"),
+    ("_260 Ma", "younger"),
+    # Punctuation that is NOT a word character and NOT ".", so the prefix
+    # guard admits it on both engines -- the case the guard was written for.
+    ("．260 Ma", "older"),
+    ("（260 Ma）", "older"),
+    ("2,260 Ma", "older"),
 ]
 for _i, (_text, _prefer) in enumerate(_AGE_INPUTS):
     _add(_case("age_bound", "ag_%02d" % (_i + 1), _text, _prefer))
 
 
-# --- coverage contract: reason codes / response kinds / ledger ---------------
-# BORROW-2026-09-20 (js-data-layer mirror round). Every case dispatches ONE
+# --- coverage contract: reason codes / response kinds / ledger ---------------# BORROW-2026-09-20 (js-data-layer mirror round). Every case dispatches ONE
 # public function of rca_core/reason_codes.py by name; js/reason-codes.js
 # exposes the same functions under the same snake_case keys on its
 # ``RCAReasonCodes`` namespace, so the replay side is one lookup table.
@@ -695,7 +1142,88 @@ def _abrun(row: dict) -> dict:
     return {"abundances": [row], "sites": [], "zones": [], "confidence": 0.9}
 
 
+def _csec(ids, group: str = "g1") -> dict:
+    """One columnar_section run carrying ``ids`` as the primary rows.
+
+    AUDIT-2026-10-02: built so that the merged row ORDER is the only thing the
+    case can distinguish. Two identical runs are used at the call site because
+    a single run is a passthrough and never reaches the sort.
+    """
+    return {
+        "sections": [
+            {"id": i, "group": group, "lithology_blocks": [],
+             "age_units": [], "response_kind": "extracted",
+             "reason_codes": []}
+            for i in ids
+        ],
+        "fossil_legend": [], "lithology_legend": [], "cross_beds": [],
+        "confidence": 0.9,
+    }
+
+
 _add(
+    # AUDIT-2026-10-02: two runs spelling the SAME authorship differently.
+    # The leaf-level `aggregate` group found the mechanism (the "and" case in
+    # the iczn_ cases); these two are the end-to-end proof that it is
+    # REACHABLE, because _norm_iczn_author feeds the species dedup key
+    # (aggregate.py:878) and the key decides whether the rows are one species
+    # or two. Before the fix the desktop produced two rows here and the
+    # browser one -- i.e. a merged range chart could carry a duplicate taxon
+    # that the same merge collapses on the other endpoint.
+    _mg("mrg_author_and_spaced_vs_bracketed", [
+        _mrun({"species": "Pseudoschagerina sp.", "section": "S1",
+               "author_year": "Smith and Jones, 1950",
+               "range_top": "9", "range_base": "7"}),
+        _mrun({"species": "Pseudoschagerina sp.", "section": "S1",
+               "author_year": "Smith (and) Jones, 1950",
+               "range_top": "9", "range_base": "7"}),
+    ]),
+    # The hyphenated spelling. It passed before the fix AND after, for a
+    # reason that is worth stating: the two spellings produce DIFFERENT keys
+    # on both engines ("smith and-jones" vs "smith -jones" before, two rows
+    # either way), so the row count agrees and the end-to-end comparison sees
+    # nothing. The string-level difference is pinned by agiczn_166 instead.
+    # Note that neither engine strips the hyphen, and that is correct: "x-y"
+    # is a compound surname under ICZN Art. 51.2, not a separator.
+    _mg("mrg_author_and_hyphenated", [
+        _mrun({"species": "Pseudoschagerina sp.", "section": "S1",
+               "author_year": "Smith and-Jones, 1950",
+               "range_top": "9", "range_base": "7"}),
+        _mrun({"species": "Pseudoschagerina sp.", "section": "S1",
+               "author_year": "Smith & Jones, 1950",
+               "range_top": "9", "range_base": "7"}),
+    ]),
+    # Same surname, different year must stay TWO species -- the property the
+    # author suffix exists to protect, and the reason the "and" fix above
+    # cannot be "just strip more punctuation".
+    _mg("mrg_author_year_still_splits", [
+        _mrun({"species": "Pseudoschagerina sp.", "section": "S1",
+               "author_year": "Smith and Jones, 1950",
+               "range_top": "9", "range_base": "7"}),
+        _mrun({"species": "Pseudoschagerina sp.", "section": "S1",
+               "author_year": "Smith and Jones, 1960",
+               "range_top": "9", "range_base": "7"}),
+    ]),
+    # AUDIT-2026-10-02: a CONTROL, not a bug guard, and the reason is worth
+    # recording. The obvious way to expose the CJK "\b" divergence end to end
+    # is two runs writing "中华虫属" and "中华虫属sp." and expecting two rows.
+    # That case CANNOT fail: the dedup key is (id_norm, quals) and id_norm
+    # already contains _norm(species) of the same string, and _norm
+    # deliberately keeps the marker, so the two rows separate on id_norm
+    # before the qualifier is ever consulted. It was written, watched pass
+    # against the unfixed code, and deleted rather than left in place with a
+    # misleading name.
+    #
+    # What is left is the spaced control below: the ordinary path, which
+    # worked before and must keep working. If the ASCII-boundary rewrite ever
+    # breaks THIS, the rewrite is wrong -- and unlike the deleted case it can
+    # actually fail.
+    _mg("mrg_qualifier_cjk_with_space", [
+        _mrun({"species": "中华虫属", "section": "S1",
+               "range_top": "9", "range_base": "7"}),
+        _mrun({"species": "中华虫属 sp.", "section": "S1",
+               "range_top": "9", "range_base": "7"}),
+    ]),
     _mg("mrg_divergent_vote", [
         _mrun({"species": "A", "section": "S1", "range_top": "9",
                "range_base": "7", "response_kind": "extracted",
@@ -750,6 +1278,32 @@ _add(
         _mrun({"species": "A", "section": "S1", "range_top": "9",
                "response_kind": "extracted"}),
     ]),
+    # AUDIT-2026-09-27 [P2]: the ballots of a recombined row are ORDERED
+    # (votes desc, then the tuple). The tie-break compares the VALUES, and a
+    # value that is a PREFIX of another is the case that separates a tuple
+    # comparison from a string comparison of its encoding: the JSON separator
+    # ',' (0x2C) sorts after the space (0x20) inside a value, so "bed 1 (rp13)"
+    # used to compare LESS than "bed 1" and the two engines listed the same
+    # disagreement in opposite order. No prior case had two ballot values in a
+    # prefix relationship, which is why this survived.
+    _mg("mrg_ballot_prefix_order", [
+        _mrun({"species": "A", "section": "S1", "range_base": "bed 1",
+               "range_top": "bed 9", "biozone": "zone c"}),
+        _mrun({"species": "A", "section": "S1", "range_base": "bed 1 (rp13)",
+               "range_top": "bed 9", "biozone": "zone b"}),
+    ]),
+    # ...and one where a 2-vote reading must outrank two 1-vote readings, so
+    # the primary sort key is covered and not just the tie-break.
+    _mg("mrg_ballot_majority_first", [
+        _mrun({"species": "A", "section": "S1", "range_base": "bed 9",
+               "range_top": "bed 9", "biozone": "zone b"}),
+        _mrun({"species": "A", "section": "S1", "range_base": "bed 9",
+               "range_top": "bed 9", "biozone": "zone b"}),
+        _mrun({"species": "A", "section": "S1", "range_base": "bed 3",
+               "range_top": "bed 8", "biozone": "zone a"}),
+        _mrun({"species": "A", "section": "S1", "range_base": "bed 4",
+               "range_top": "bed 8", "biozone": "zone a"}),
+    ], total=4),
     _mg("mrg_single_run_passthrough", [
         _mrun({"species": "A", "section": "S1", "response_kind": "not_drawn",
                "reason_codes": ["not_drawn"]}),
@@ -784,7 +1338,667 @@ _add(
                "range_base": "7"}),
         _mrun({"species": "B", "section": "S1", "range_top": "8"}),
     ]),
+    # AUDIT-2026-09-30: the merge group had 13 cases -- twelve range_chart and
+    # one abundance_diagram -- so rca_core/aggregate.py's mode dispatch
+    # (schema.primary_list_key) was never replayed for the other three
+    # schemas, on either engine. Both sides already carry all five keymaps
+    # (SCHEMA_BY_MODE / RCA_KEYMAP_BY_MODE); only the CASES were missing, which
+    # is why every structural check on the harness passed. difffuzz_aggregate.py
+    # does drive all five modes at 400 cases each, but it is deliberately not
+    # in CI, so this is the CI-visible coverage.
+    #
+    # Each case uses the divergent-vote shape (one run extracted, one
+    # not_drawn) because that is the path through the mode-specific row
+    # grouping, not the single-run passthrough.
+    # AUDIT-2026-10-02: the sort machinery, which until now was only reachable
+    # by accident. Python's `_sort_tuple` is a nested closure inside the row
+    # builder, so it has no module-level entry point and the `aggregate` group
+    # cannot call it -- the only way in is merge_results. columnar_section is
+    # the schema whose sort_keys lands on a field that LOOKS numeric
+    # (sort_keys = [("id","asc")]), which is exactly where `_sort_tuple`'s
+    # "rank 0 keeps every number before every string" rule earns its keep:
+    # "2" must sort before "10" on both engines, and "1_0" (a number to
+    # Python) must land among the numbers while "1_" (a string to both, since
+    # 888b40e) lands after them.
+    #
+    # Two identical runs, so the grouping produces every row and the sort is
+    # the ONLY thing that can differ -- a single run is a passthrough.
+    _mg("mrg_sortcol_numeric", [
+        _csec(["1", "2", "10"]), _csec(["1", "2", "10"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_underscore_number", [
+        _csec(["1_0", "2", "10"]), _csec(["1_0", "2", "10"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_underscore_string", [
+        _csec(["1_", "2", "10"]), _csec(["1_", "2", "10"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_mixed_rank", [
+        _csec(["1", "A", "2"]), _csec(["1", "A", "2"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_case", [
+        _csec(["a", "B", "c"]), _csec(["a", "B", "c"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_whitespace", [
+        _csec([" 2 ", "10", "1"]), _csec([" 2 ", "10", "1"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_empty_id", [
+        _csec(["", "1", "2"]), _csec(["", "1", "2"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_unicode", [
+        _csec(["甲", "a", "1"]), _csec(["甲", "a", "1"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_nan", [
+        _csec(["NaN", "1", "2"]), _csec(["NaN", "1", "2"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_inf", [
+        _csec(["inf", "1", "-inf"]), _csec(["inf", "1", "-inf"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_float_spellings", [
+        _csec(["1.0", "1", "1.00"]), _csec(["1.0", "1", "1.00"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_bed_prefix", [
+        _csec(["bed 9", "bed 9 (rp13)", "bed 10"]),
+        _csec(["bed 9", "bed 9 (rp13)", "bed 10"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_boolish", [
+        _csec(["true", "True", "1"]), _csec(["true", "True", "1"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_negative", [
+        _csec(["-1", "2", "-10"]), _csec(["-1", "2", "-10"]),
+    ], mode="columnar_section"),
+    _mg("mrg_sortcol_exponent", [
+        _csec(["1e3", "1000", "999"]), _csec(["1e3", "1000", "999"]),
+    ], mode="columnar_section"),
+    _mg("mrg_columnar_contract", [
+        {"sections": [{"id": "s1", "group": "g1",
+                       "lithology_blocks": [{"name": "sand", "top_depth_m": "10"}],
+                       "age_units": [{"name": "U1", "top_depth_m": "5"}],
+                       "response_kind": "extracted",
+                       "reason_codes": ["inferred"]}],
+         "fossil_legend": [], "lithology_legend": [], "cross_beds": [],
+         "confidence": 0.9},
+        {"sections": [{"id": "s1", "group": "g1",
+                       "lithology_blocks": [{"name": "sand", "top_depth_m": "10"}],
+                       "age_units": [{"name": "U1", "top_depth_m": "5"}],
+                       "response_kind": "not_drawn",
+                       "reason_codes": ["not_drawn"]}],
+         "fossil_legend": [], "lithology_legend": [], "cross_beds": [],
+         "confidence": 0.9},
+    ], mode="columnar_section"),
+    _mg("mrg_zonation_contract", [
+        {"zones": [{"name": "Z1", "age": "290-280 Ma", "level_range": "1-2",
+                    "response_kind": "extracted",
+                    "reason_codes": ["inferred"]}],
+         "zonations": [{"name": "bed 7"}],
+         "correlations": [{"from_zone": "Z1", "to_zone": "Z2"}],
+         "confidence": 0.8},
+        {"zones": [{"name": "Z1", "age": "290-280 Ma", "level_range": "1-2",
+                    "response_kind": "not_drawn",
+                    "reason_codes": ["not_drawn"]}],
+         "zonations": [{"name": "bed 7"}],
+         "correlations": [{"from_zone": "Z1", "to_zone": "Z2"}],
+         "confidence": 0.8},
+    ], mode="zonation_chart"),
+    _mg("mrg_phylo_contract", [
+        {"nodes": [{"id": "n1", "parent": None, "name": "root",
+                    "response_kind": "extracted"}],
+         "root_ids": ["n1"], "metadata": {}, "legend": {}, "confidence": 0.7},
+        {"nodes": [{"id": "n1", "parent": None, "name": "root",
+                    "response_kind": "not_drawn",
+                    "reason_codes": ["not_drawn"]}],
+         "root_ids": ["n1"], "metadata": {}, "legend": {}, "confidence": 0.7},
+    ], mode="phylogenetic_tree"),
 )
+
+
+# --- aggregate leaf functions (rca_core/aggregate.py vs js/aggregate.js) ------
+# AUDIT-2026-10-02. The `merge` group above drives rcaMergeResults end to end,
+# which is the only aggregate coverage the differential harness had. Everything
+# rcaMergeResults CALLS was untested across engines: _norm / _norm_iczn_author
+# / _extract_qualifiers / _str_for_merge / _mode / _merge_scalar_field /
+# _stable_typed_mode / _merge_confidence. Those are the leaves where the
+# decisions live (what counts as the same species, what counts as a missing
+# value, how a tie breaks), and a divergence there silently changes which rows
+# the two engines consider the same taxon.
+#
+# Payload shape mirrors `reason_codes`: {"op", "args"}. The op names are SHORT
+# ALIASES on purpose -- the two implementations name these functions
+# differently (rcaNormIcbnAuthor, and the "Icbn" is a typo that is in the
+# product, not a test artifact), so a shared spelling would have to paper over
+# it. The alias table lives in the runner on BOTH sides and must stay in step.
+#
+# The `_NO_MERGE` / `NO_MERGE` sentinels are normalized to null on BOTH sides
+# inside the runners -- a bare object() and a Symbol are not expressible in
+# JSON, and normalizing on one side only is what produced 751 phantom
+# divergences once already.
+#
+# Result of the first run: 9 divergences in two families, and the two families
+# had OPPOSITE culprits, which is the reason this group was worth building.
+#
+#   1. _norm_iczn_author removed the conjunction as the LITERAL " and ", which
+#      matches only that exact spelling; js/aggregate.js has always used
+#      /\band\b/. Python was wrong. REACHABLE and fixed: the return value is
+#      spliced into the species dedup key (aggregate.py:878), so two runs
+#      spelling one authorship "Smith and Jones, 1950" and
+#      "Smith (and) Jones, 1950" produced on the desktop
+#          .species_ranges: length py=2 js=1
+#          .species_ranges[0].agreement: py="1/2" js="2/2"
+#      -- a duplicate species in the merged chart AND an agreement score
+#      reporting a disagreement the user never had. Pinned end to end by
+#      mrg_author_and_spaced_vs_bracketed.
+#
+#   2. \b in the qualifier patterns and in "and"/"et al." is Unicode-aware on
+#      Python str and ASCII-only in JavaScript. JS was wrong on the leaf, but
+#      NO reachable effect exists: all three _extract_qualifiers call sites
+#      pair the qualifier with _norm() of the same string, and _norm keeps the
+#      markers, so the qualifier is a redundant key component. Fixed anyway
+#      (it removes a class, not an instance) and pinned at the leaf. The
+#      obvious end-to-end case CANNOT fail and was deleted rather than left
+#      behind under a name that implied otherwise -- see
+#      mrg_qualifier_cjk_with_space.
+#
+# Also measured, NOT a cross-engine divergence, and left alone: the "nom."
+# label splices a captured group in with the input's CASE, so
+# "Genus nom. dub." and "GENUS NOM. DUB." produce different qualifier sets
+# ("nom. dub" vs "nom. DUB") and therefore separate in the dedup key even
+# though their _norm values are equal. Both engines do this identically (the
+# uppercase corpus rows all match), so it is an engine-internal inconsistency
+# about a case-insensitive marker, not a transport one. Changing it would
+# alter desktop dedup with no cross-engine reason to, so it is reported rather
+# than fixed.
+#
+# SECOND WAVE -- a clean result, recorded so nobody re-derives it. The block
+# below adds the dispatchers and the mutating mergers (mergeFieldAcrossRuns,
+# mergeMappingField, mergeStructuredField, rcaMergeRowWarnings,
+# rcaAddRowWarning, rcaMergeContractField, rcaIsChimericRow,
+# rcaRecombinationBallots) over 500 more cases: 0 divergences. Those eight
+# have been through several parity rounds and are aligned; the chimera
+# detector in particular survives every key-count in the corpus, which is the
+# shape AUDIT-2026-10-01 [item 9.13] made configurable after it had been
+# hardcoded to the four range-chart field names.
+#
+# THE SORT, and the one structural gap in the group. Python's `_sort_tuple` is
+# a NESTED CLOSURE inside the row builder, so it has no module-level entry
+# point and the aggregate group cannot call it -- merge_results is the only
+# way in. The mrg_sortcol_* cases below close that gap from the outside, on
+# columnar_section, whose sort_keys lands on `id` (a field that looks numeric,
+# which is where the "rank 0 puts every number before every string" rule earns
+# its keep). 15 adversarial orderings, 0 divergences, and 9 of the 15 come out
+# in an order a naive lexical sort would NOT produce, so the rule is doing
+# work rather than agreeing trivially:
+#     numeric              ['1','2','10']      (lexical would be 1,10,2)
+#     underscore_number    ['2','1_0','10']    1_0 is 10.0 to both engines
+#     underscore_string    ['2','10','1_']     1_ is a string to both
+#     negative             ['-10','-1','2']
+#     nan                  ['NaN','1','2']     NaN's own quirk, agreed
+#     whitespace           ['1',' 2 ','10']    both engines trim
+# The underscore_string case is the one that 888b40e's rcaPyFloat fix governs,
+# reached end to end for the first time.
+
+# Harvested from the committed real extraction payloads
+# (tests/fixtures/real_payloads/*.json, 8 files) -- the taxon-shaped strings
+# among their name/species/label/form/genus fields. Real output beats a
+# hand-written corpus, so these are the primary inputs; the hand-written rows
+# below are only the edge shapes real payloads happened not to contain.
+_AGG_REAL = [
+    "A.? irregularis", "Bathylagus sp.", "C. robusta", "E. antarctica",
+    "E. spinosum", "G. braueri", "G. nicholsi", "G. opisthopterus",
+    "L. conica", "S. rad", "Rhizaria sp.", "Acantharia", "Actinommidea",
+    "Acanthodesmoidea", "Aulacanthidae", "Aulosphaeridae, Sagosphaeridae",
+    "Cercozoa (root)", "Collodaria clade", "Nassellaria clade",
+    "Radiolaria clade", "Spumellaria clade", "Phaeodaria clade",
+    "Whaingaroan", "Cache Creek Terrane", "Clade H", "Clade K",
+    "inner node (Rhizaria sp.+Phacodinidae+Clade K)",
+    "inner node (Coelodendridae+Conchariidae)",
+    "inner node (Tuscaroridae+Aulosphaeridae/Sagosphaeridae)",
+    "inner node (Hexalonchidae+Hexastylidae)",
+    "inner node (Theopiliidae+Plagiacanthoidea+Acanthodesmoidea+Sphaerozoidae"
+    "+Collophidiidae+Collospheeridae+Orosphaeridae)",
+    "Late Permian (Wuchiapingian)", "Early Cretaceous — Albian (Alb.)",
+    "Ratburi Group – Um Luk Formation (uppermost Lower–Middle Permian)",
+    "Kaeng Krachan Group – Khao Chao Formation (Lower Permian)",
+    "Chert radiolarian age (Albian–Cenomanian)",
+    "negative δ30Si excursion", "positive δ30Si peak",
+    "Principal 238U-206Pb age peak (Conglomerate, n=95)",
+    "YSG and YC1σ age clusters (Santonian–Coniacian)",
+    "Varicolored shale interval (age uncertain)",
+    "Ko He Formation (?)", "other Cercozoa",
+]
+
+# The real payloads carry no taxonomic authorship at all (no "Smith, 1950"),
+# so this matrix is HAND-WRITTEN and is the one part of the group that is.
+# It is laid out along the axes the implementation actually branches on:
+# comma / no comma, parens, em-dash vs double-dash, "ex" / "in", "&" / "and",
+# "et al.", and the boundary shapes of the word "and".
+_AGG_ICZN = [
+    "Smith, 1950", "(Smith, 1950)", "Smith 1950", "Smith,1950",
+    "SMITH, 1950", "  Smith,  1950  ", "Smith, 1960", "Smith, 50",
+    "Smith", "", "   ", "Smith, 1950a", "Smith, 1950, 1951",
+    "J. Smith, 1950", "K. Smith, 1950", "J. Smith & K. Smith, 1950",
+    "Smith and Jones, 1950", "Smith & Jones, 1950",
+    "Smith, 1950 and Jones, 1951",
+    # The boundary shapes of "and": Python uses replace(" and ", " ") while the
+    # JS mirror uses /\band\b/g. Every one of these has a word boundary
+    # around "and" but NOT a space on both sides.
+    "Smith (and) Jones, 1950", "Smith and(Jones), 1950",
+    "Smith and-Jones, 1950", "Smith and/Jones, 1950",
+    "Smith, and Jones, 1950", "Smith, 1950 and, Jones",
+    "Sanderson, 1950", "Anderson, 1950", "Alexander, 1950",
+    "Brand, 1950", "andersonia, 1950",
+    "Smith—Jones, 1950", "Smith--Jones, 1950", "Smith----Jones, 1950",
+    "Smith ex Jones, 1950", "Smith in Jones, 1950",
+    "Smith ex Jones and Brown, 1950", "Smith et al., 1950",
+    "Smith et al. 1950", "Smith et al, 1950", "Smith et. al., 1950",
+    "Smith,  and  Jones, 1950",
+    "(Smith, 1950) & (Jones, 1951)", "Smith, 9999", "1950",
+    "δ13C, 1950", "O. Smith, 1950",
+    # The \b family again, on the "and" pattern specifically.
+    "中文and文", "和and和", "Smithand和Jones, 1950",
+    "中文et al.文", "和et. al.和",
+]
+
+_AGG_NORM_EDGE = [
+    "", "   ", "\t\n ", "Genus  sp.", "  Genus   sp.  ",
+    "GENUS SP.", "Genus\tsp.", "中文 名称", "ＡＢＣ",
+    "Zoological  Name", "A.B", "A. B.  C",
+]
+
+_AGG_QUAL_EDGE = [
+    "", "Genus cf.", "Genus aff.", "Genus sp.", "Genus spp.",
+    "Genus s.l.", "Genus s. l.", "Genus s.str.", "Genus s. str.",
+    "Genus ex gr.", "Genus ex gr", "Genus ex groupe.",
+    "Genus nom. dub.", "Genus nom. nud.", "Genus nom. nov.",
+    "Genus nom. cons.", "Genus nom. obl.", "Genus nom. van.",
+    "Genus comb. nov.", "Genus stat. nov.", "Genus subsp.",
+    "Genus var.", "A.?", "A.?", "A. ?", "A.?\n", "A. ? ",
+    "Genus cf", "Genus aff", "Genus sp", "Genus spp",
+    "coffee", "affinis", "Genus sp. cf. aff.",
+    "Genus cf. aff. ex gr. s.l. ?",
+    # AUDIT-2026-10-02: the \b family. Python's \b is Unicode-aware on str
+    # (a CJK character counts as a word character); JS's is ASCII-only, so a
+    # CJK character counts as NON-word and manufactures a boundary. A Chinese
+    # author writing a taxon with no space before the marker -- "中华虫属sp." --
+    # is an ordinary thing to produce, not a contrived one.
+    "中华虫属sp.", "中华虫属 sp.", "和sp.和", "和cf.和", "中aff.中",
+    "sp.中华", "cf.中华", "sp.1", "sp.1a", "1sp.", "sp-", "sp_",
+    "A.sp.", "sp. sp.", "Genus sp.",
+    # AUDIT-2026-10-02: the label for the nom./comb. nov. family is built by
+    # splicing a CAPTURED group into a template, so it can carry the input's
+    # case. These pin whether the two engines agree about that.
+    "Genus nom. dub.", "GENUS NOM. DUB.", "Genus NOM. Dub.",
+    "  Genus nom.  dub.", "Genus nom. nov.", "GENUS COMB. NOV.",
+    "Genus comb. nov.", "GENUS STAT. NOV.", "Genus stat. nov.",
+]
+
+_AGG_STRMERGE = [
+    "abc", "", 0, 1, -1, 1.0, 1.5, True, False, None,
+    1e16, 1e-7, 3.0, "1", "1.0", "True", "0",
+    [1, 2], {"a": 1}, 0.1, 1 / 3,
+]
+
+_AGG_MODE = [
+    [], [None, None], ["", "  "], [0, 0, 12], [0, 0], [0, 0.0],
+    ["A", "A", "B"], ["B", "A"], ["A", "B", "C"], ["B", "B", "A", "A"],
+    ["b", "B"], ["B", "b", "C", "c"], [True, True, False],
+    [True, False], [False, True], [True, 1], [1, "1"], [1, 1.0],
+    [1.0, 1], ["0", 0], [0, "0"], [None, "x", "x"],
+    [{"a": 1}, "x", "x"], [[1], "y", "y"],
+    [2, 10, 2, 10, 2], ["10", "2", "10", "2"],
+    ["Zebra", "apple", "Apple"], ["ä", "z", "Z"],
+]
+
+_AGG_SCALAR = [
+    [], [None], ["", " "], ["a", "a", "b"], ["b", "a"],
+    [True, True, False], [True, False], [False, True],
+    [True, "maybe"], [True, False, "maybe"], [0, False], [0, True],
+    [1, "1"], ["1", 1], [1.0, 1], [1.5, 1.5, 2],
+    [None, None, "x"], [{"a": 1}, "x"], [[1], "y"],
+    ["", "", "z"], [0, 0, "a"], ["10", 2, "10", 2],
+]
+
+_AGG_TYPED = [
+    [], [None], [3, 3, 5], [3, 3.0, 5], [3.0, 3.0], [3.5, 3.5],
+    [True, True, 3], [True, 3], ["3", 3], [3, "3", 3.0],
+    [5, 3, 5, 3], [7], [7.0], [-0.0, 0.0], [1e16, 1e16],
+    [3, 3, 3.0, 3.0, 4, 4], [0, 0, 0],
+]
+
+_AGG_CONF = [
+    [], [None], ["", "0.5"], [0.5], [0.5, 0.5], [0.1, 0.2],
+    [0.01005], [0.01015], [0.03125], [1 / 32], [2 / 32], [3 / 32],
+    [-0.5], [1.5], [0], [1], [True, 0.5], ["0.5", 0.5],
+    [0.1, 0.2, 0.3, 0.4], [1 / 3, 1 / 3], [0.33333333],
+]
+
+
+def _agg(cid: str, op: str, args: list) -> dict:
+    return _case("aggregate", cid, {"op": op, "args": args})
+
+
+_agg_cases: list[dict] = []
+for _s in _AGG_REAL + _AGG_NORM_EDGE:
+    _agg_cases.append(_agg("agnorm_%d" % len(_agg_cases), "norm", [_s]))
+    _agg_cases.append(_agg("agqual_%d" % len(_agg_cases), "qualifiers", [_s]))
+for _s in _AGG_QUAL_EDGE:
+    _agg_cases.append(_agg("agqual_%d" % len(_agg_cases), "qualifiers", [_s]))
+for _s in _AGG_ICZN:
+    _agg_cases.append(_agg("agiczn_%d" % len(_agg_cases), "iczn", [_s]))
+for _v in _AGG_STRMERGE:
+    _agg_cases.append(_agg("agstr_%d" % len(_agg_cases), "str_merge", [_v]))
+for _vs in _AGG_MODE:
+    _agg_cases.append(_agg("agmode_%d" % len(_agg_cases), "mode", [_vs]))
+for _vs in _AGG_SCALAR:
+    _agg_cases.append(_agg("agscal_%d" % len(_agg_cases), "merge_scalar", [_vs]))
+for _vs in _AGG_TYPED:
+    # The type argument is a PYTHON-only parameter; the JS mirror
+    # (mergeTypedInteger) has exactly one. Both runners read args[1] and both
+    # must arrive at the same values, so the type is carried in the payload
+    # rather than hard-coded on one side.
+    _agg_cases.append(_agg("agtyped_%d" % len(_agg_cases), "typed_mode", [_vs, "int"]))
+for _vs in _AGG_CONF:
+    _agg_cases.append(_agg("agconf_%d" % len(_agg_cases), "confidence", [_vs]))
+_add(*_agg_cases)
+
+
+# --- aggregate, second wave: the dispatchers and the mutating mergers --------
+# AUDIT-2026-10-02. The first block covered the eight leaves whose OUTPUT is
+# a scalar. These are the ones that dispatch, recurse, or mutate, which is
+# where the shapes get unusual rather than the values. None of them had any
+# cross-engine coverage before this.
+#
+# Real structured items, taken from the committed payloads so the shape is one
+# the product actually emits (tests/fixtures/real_payloads/
+# Bole_et_al_2020_...json intervals[0] and
+# Shimura_Yusuke_et_al_2020_...json intervals[0]):
+_AGG_STRUCT_REAL = [
+    {"name": "Late Permian (Wuchiapingian)", "top_depth_m": "",
+     "base_depth_m": "", "top_age_ma": "260", "base_age_ma": "252",
+     "lithology": "", "geometry": {
+         "version": 1, "scale": "pos_0_999", "calibrated": True,
+         "points": {"top_pos_0_999": {"pos": 0, "axis": "vertical",
+                                      "value": 260.0, "unit": "Ma"}}}},
+    {"name": "Late Cretaceous – Coniacian (Con.)", "top_depth_m": "",
+     "base_depth_m": "", "top_age_ma": "86.3", "base_age_ma": "89.8",
+     "lithology": "Varicolored shale (uncertain)",
+     "reason_codes": ["low_confidence"]},
+]
+# The P1-11 collapse the docstring claims: {"a": 8} and {"a": "8"} must share
+# a signature. The next four pairs are the shapes that could break it -- a
+# bool, a float and a string that HAPPENS to spell a number or a Python repr.
+_AGG_STRUCT_EDGE = [
+    {"a": 8}, {"a": "8"}, {"a": 8, "b": 1}, {"b": 1, "a": 8},
+    {"a": True}, {"a": "True"}, {"a": False}, {"a": "False"},
+    {"a": 1}, {"a": True}, {"a": 1.0}, {"a": "1.0"}, {"a": 0.0}, {"a": -0.0},
+    {"a": None}, {"a": "None"}, {"a": "null"},
+    {"a": []}, {"a": [1]}, {"a": [1, 2]}, {"a": "1,2"}, {"a": "[1, 2]"},
+    {"a": {}}, {"a": {"b": 1}}, {"a": '{"b": 1}'},
+    {"a": ""}, {"a": " "}, {"a": 0}, {"a": "0"}, {"a": ""},
+    {"a": "x", "b": "y"}, {"b": "y", "a": "x"},
+    {"a": 1e16}, {"a": 1e-7}, {"a": "1e+16"}, {"a": "1e-16"},
+]
+
+_AGG_MAPPING = [
+    [], [None], [{}, {}], [{"a": 1}], [{"a": 1}, {"a": 2}],
+    [{"a": 1}, {"b": 2}], [{"a": 1}, {"a": None}], [{"a": None}, {"a": 1}],
+    [{"a": {"b": 1}}, {"a": {"b": 2}}], [{"a": {"b": 1}}, {"a": {"c": 1}}],
+    [{"a": [{"x": 1}]}, {"a": [{"x": 1}, {"y": 2}]}],
+    [{"a": "x"}, {"a": "y"}, {"a": "x"}],
+    [{"a": True, "b": True}, {"a": True, "b": False}],
+    [{"z": 1, "a": 2}, {"a": 3, "z": 4}],
+    [{}, {"a": 1}],
+    [{"a": 1}, "scalar"], ["scalar", {"a": 1}],
+    [{"a": 1}, [{"x": 1}]],
+]
+
+_AGG_ACROSS = [
+    [], [None], [None, None], ["a"], ["a", "a", "b"],
+    [[], []], [[{"a": 1}], [{"a": 1}]], [[{"a": 1}], [{"a": 2}]],
+    [[{"a": 1}], []], [[], [{"a": 1}]],
+    [{}, {}], [{"a": 1}, {"a": 1}], [{"a": 1}, {}],
+    [0, 0, False], [0, False], [1, "1"],
+    [[1], [2]], [["a"], ["b"]], [[{"a": 1}], ["scalar"]],
+    [{"a": 1}, [1]], [1, {"a": 1}],
+    [0.5, 0.7], [True, 1],
+]
+
+_AGG_WARN_TARGETS = [
+    {}, {"_warning": ""}, {"_warning": None},
+    {"_warning": "one"}, {"_warning": ["a", "b"]},
+    {"_warning": ["a", "a", "b"]}, {"_warning": "a", "species": "X"},
+    {"_warning": 0}, {"_warning": False}, {"_warning": ["", "a"]},
+    {"_warning": [1, "a"]}, {"_warning": [[], "a"]},
+]
+_AGG_WARN_VALUES = [
+    [], [None], [""], ["one"], [["a", "b"]], [["b", "c"]],
+    ["one", "two"], [["a"], "b"], [None, "a", ""], ["a", "a"],
+    [0], [False], [1], [[]], [[[]]],
+]
+
+_AGG_CONTRACT_KEYS = ["reason_codes", "response_kind", "geometry", "species", ""]
+_AGG_CONTRACT_VALUES = [
+    [], [None], [["low_confidence"]], [["low_confidence"], ["inferred"]],
+    [[], ["low_confidence"]], ["extracted"], ["not_drawn"],
+    ["extracted", "not_drawn"], ["uncertain"], ["garbage"],
+    ["extracted", "extracted", "not_drawn"],
+    [None, "extracted"], ["", "extracted"],
+    [{"version": 1, "points": {"p": 1}}], [{"version": 1}], [{}],
+    [{"points": {}}, {"points": {"q": 1}}], [None, {"points": {"z": 1}}],
+]
+
+_AGG_CHIMERIC_ROWS = [
+    [],
+    [{"range_base": "9", "range_top": "7", "biozone": "Z1", "section": "S1"}],
+    [{"range_base": "7", "range_top": "9", "biozone": "Z1", "section": "S1"},
+     {"range_base": "7", "range_top": "9", "biozone": "Z1", "section": "S1"}],
+    [{"range_base": "7", "range_top": "9", "biozone": "Z1", "section": "S1"},
+     {"range_base": "7", "range_top": "9", "biozone": "Z2", "section": "S1"}],
+    [{"range_base": "7", "range_top": "9"},
+     {"range_base": "7", "range_top": "9"}],
+    [{"range_base": "9", "range_top": "9"}],
+    [{"range_base": "", "range_top": ""}],
+    [{}, {}],
+    [{"range_base": "9a", "range_top": "9"}, {"range_base": "9", "range_top": "9a"}],
+]
+_AGG_CHIMERIC_KEYS = [
+    ["range_base", "range_top", "biozone", "section"],
+    ["range_base", "range_top"],
+    ["species"],
+    [],
+]
+
+_AGG_BALLOT_ROWS = [
+    [],
+    [{"range_base": "7", "range_top": "9"}],
+    [{"range_base": "7", "range_top": "9"},
+     {"range_base": "7", "range_top": "9"},
+     {"range_base": "8", "range_top": "9"}],
+    [{"range_base": "9", "range_top": "7"}],
+    [{"range_base": "9a", "range_top": "9"}, {"range_base": "9", "range_top": "9a"}],
+    [{}, {}],
+    [{"range_base": " 7 ", "range_top": "9"}, {"range_base": "7", "range_top": "9"}],
+    [{"range_base": "B", "range_top": "9"}, {"range_base": "A", "range_top": "9"}],
+    [{"range_base": "bed 9", "range_top": "9"},
+     {"range_base": "bed 9 (rp13)", "range_top": "9"}],
+]
+_AGG_BALLOT_KEYS = [
+    ["range_base", "range_top", "biozone", "section"],
+    ["range_base", "range_top"],
+    # No `None` entry on purpose. js/aggregate.js writes
+    # `keys || RCA_RECOMBINATION_KEYS`, so a null would silently fall back to
+    # a default there and raise TypeError in Python (`for k in None`). That
+    # asymmetry is unreachable -- Python's parameter is a required positional,
+    # so every call site supplies it -- and putting it in the corpus would
+    # record a calling-convention difference as if it were a behaviour one.
+    ["species", "section"],
+]
+
+_agg2: list[dict] = []
+for _v in _AGG_MAPPING:
+    _agg2.append(_agg("agmap_%d" % len(_agg2), "merge_mapping", [_v]))
+for _v in _AGG_ACROSS:
+    _agg2.append(_agg("agacr_%d" % len(_agg2), "merge_across", [_v]))
+for _i, _v in enumerate(_AGG_STRUCT_REAL + _AGG_STRUCT_EDGE):
+    _agg2.append(_agg("agstr2_%d" % len(_agg2), "merge_structured", [[_v]]))
+    _agg2.append(_agg("agstr2b_%d" % len(_agg2), "merge_structured",
+                      [[_v, _v]]))
+_agg2.append(_agg("agstr2_pair_8", "merge_structured",
+                  [[{"a": 8}, {"a": "8"}]]))
+_agg2.append(_agg("agstr2_pair_true", "merge_structured",
+                  [[{"a": True}, {"a": "True"}]]))
+_agg2.append(_agg("agstr2_pair_1", "merge_structured",
+                  [[{"a": 1}, {"a": 1.0}]]))
+_agg2.append(_agg("agstr2_real_pair", "merge_structured",
+                  [[_AGG_STRUCT_REAL[0], _AGG_STRUCT_REAL[1],
+                    _AGG_STRUCT_REAL[0]]]))
+_agg2.append(_agg("agstr2_mixed", "merge_structured",
+                  [[{"a": 1}, "scalar", None, [1], [{"b": 2}]]]))
+for _t in _AGG_WARN_TARGETS:
+    for _v in _AGG_WARN_VALUES:
+        _agg2.append(_agg("agwarn_%d" % len(_agg2), "row_warnings",
+                          [copy.deepcopy(_t), copy.deepcopy(_v)]))
+for _r in _AGG_WARN_TARGETS:
+    for _flag in ("response_kind_divergent", "", None, "already"):
+        _agg2.append(_agg("agwarnadd_%d" % len(_agg2), "add_row_warning",
+                          [copy.deepcopy(_r), _flag]))
+for _k in _AGG_CONTRACT_KEYS:
+    for _v in _AGG_CONTRACT_VALUES:
+        _agg2.append(_agg("agcon_%d" % len(_agg2), "contract_field",
+                          [_k, copy.deepcopy(_v), {}]))
+for _g in _AGG_CHIMERIC_ROWS:
+    for _keys in _AGG_CHIMERIC_KEYS:
+        _merged = {"range_base": "9", "range_top": "7", "biozone": "Z1",
+                   "section": "S1"}
+        _agg2.append(_agg("agchim_%d" % len(_agg2), "chimeric",
+                          [copy.deepcopy(_g), copy.deepcopy(_merged),
+                           _keys]))
+for _g in _AGG_BALLOT_ROWS:
+    for _keys in _AGG_BALLOT_KEYS:
+        _agg2.append(_agg("agball_%d" % len(_agg2), "ballots",
+                          [copy.deepcopy(_g), _keys]))
+_add(*_agg2)
+
+
+# --- aggregate, third wave: the float() mirror the sort keys are built on ----
+# AUDIT-2026-10-02. js/aggregate.js#rcaPyFloat is a mirror of Python's float()
+# and its own comment enumerates the divergences it has to absorb: Number("")
+# is 0 where float("") raises, Number("0x10") is 16 where float("0x10")
+# raises, and Python accepts "inf"/"infinity"/"nan" case-insensitively plus the
+# underscore digit separator, all of which Number() rejects. It returns null
+# where Python would raise -- a claim, not a measurement, and nothing tested
+# it. The result feeds rcaSortTuple, so a wrong answer here changes the ROW
+# ORDER of a merged export rather than a value.
+#
+# NaN and +-inf are not JSON-expressible, so both runners map the answer onto
+# one shared token vocabulary BEFORE the fixture sees it: a finite float stays
+# a number, and everything else becomes "nan" / "inf" / "-inf" / "raise". A
+# one-sided mapping would have been the whole divergence.
+_AGG_PYFLOAT = [
+    0, 1, -1, 0.0, 3.0, 1e16, 1e-7, -0.0, 1e300,
+    True, False, None, "", "  ", "\t\n",
+    "0", "1", "-1", "3.0", ".5", "-.5", "5.", "+5", "1e5", "1E5",
+    "1_000", "1_0.5", "_1", "1_",
+    "0x10", "0b11", "0o17", "1e", "e5", "--5", "5-", "1.2.3",
+    "inf", "INF", "+inf", "-inf", "Inf", "infinity", "-INFINITY",
+    "nan", "NaN", "NAN", "-nan", "+nan",
+    "  3.5  ", " 1_000 ", "0.0", "-0", "00", "007",
+    # AUDIT-2026-10-02: the underscore rules. Python allows `_` ONLY between
+    # two digits; the mirror's `\d[\d_]*` allowed a trailing one and a
+    # doubled one, so "1_" and "1__0" were accepted as 1 and 10 where
+    # float() raises. Found by agfloat_28 (index 28 == "1_").
+    "1_", "0_", "1_0", "1__0", "1_0_0", "_1", "_1_0", "1_.5", "1._5",
+    "1_.", "._5", "._", "1_0.", "1_0_.5", "1e1_0", "1e_0", "1e1_",
+    "1e5_", "+1_", "-1_", "1_0e2_0", "1__0.5", "0__0",
+    [1], [1, 2], {}, {"a": 1}, "9" * 400, "1e400", "-1e400",
+]
+
+_agg3 = [
+    _agg("agfloat_%d" % i, "py_float", [v]) for i, v in enumerate(_AGG_PYFLOAT)
+]
+_add(*_agg3)
+
+
+# --- aggregate, fourth wave: schema auto-detection ---------------------------
+# AUDIT-2026-10-02. `_auto_detect_schema` and `rcaAutoDetectKeymap` are a
+# 45-line decision tree (three detectors, a majority threshold, a tie-break
+# order, and a 1-run/2-run special case) with ZERO cross-engine coverage --
+# nothing in the `merge` group can reach it, because that group always passes
+# an explicit schema.
+#
+# It is worth knowing whether the two trees agree, SEPARATELY from the fact
+# that only the browser calls it: js/app.js:1287 does
+#     const detectedKm = rcaAutoDetectKeymap(okDatas);
+# under a comment that says "Auto-detect the keymap from data shape so the
+# merge uses the correct schema EVEN WHEN THE USER'S MODE SELECTION WAS
+# WRONG", while all three desktop call sites (gui_fluent.py:686, gui.py:1977,
+# server.py:3109) do
+#     schema = SCHEMA_BY_MODE.get(mode, RANGE_CHART_SCHEMA)
+#     merge_results(..., schema=schema)
+# and never auto-detect. That asymmetry is a product decision, not a
+# defect, and it is reported rather than changed -- but the trees themselves
+# are pinned here so the decision is made on measured ground.
+#
+# The two return types cannot be compared directly (a MergeSchema dataclass
+# vs a keymap object), so both runners project to the one field that decides
+# the merged document's shape: `primary_list_key` / `primary`.
+def _rc(section_id=None, nodes=None, abundances=None, species=None):
+    out = {"confidence": 0.8}
+    if abundances is not None:
+        out["abundances"] = abundances
+    if section_id is not None:
+        out["sections"] = [{"id": section_id, "group": "g"}]
+    if nodes is not None:
+        out["nodes"] = nodes
+    if species is not None:
+        out["species_ranges"] = [{"species": species, "section": "S1"}]
+    return out
+
+
+_PHY = [{"id": "n1", "parent": None, "name": "root"}]
+_PHY_NO_PARENT = [{"id": "n1", "name": "root"}]
+
+_AGG_DETECT = [
+    [],
+    [None], [{}],
+    # one of each shape, alone
+    [_rc(species="A")],
+    [_rc(abundances=[{"taxon": "A", "site": "S", "level": "1", "abundance": "5"}])],
+    [_rc(section_id="Ki-1")],
+    [_rc(nodes=_PHY)],
+    # the same shapes repeated, to cross the majority threshold
+    [_rc(species="A"), _rc(species="B")],
+    [_rc(section_id="a"), _rc(section_id="b"), _rc(section_id="c")],
+    [_rc(abundances=[{"a": 1}]), _rc(abundances=[{"a": 2}])],
+    [_rc(nodes=_PHY), _rc(nodes=_PHY)],
+    # mixtures: threshold vs plurality, and the columnar/abundance tie-break
+    [_rc(section_id="a"), _rc(species="B")],
+    [_rc(section_id="a"), _rc(section_id="b"), _rc(species="C")],
+    [_rc(abundances=[{"a": 1}]), _rc(abundances=[{"a": 2}]), _rc(species="C")],
+    [_rc(section_id="a"), _rc(abundances=[{"x": 1}])],
+    [_rc(section_id="a"), _rc(abundances=[{"x": 1}]), _rc(species="C")],
+    [_rc(section_id="a"), _rc(section_id="b"), _rc(abundances=[{"x": 1}])],
+    [_rc(nodes=_PHY), _rc(section_id="a")],
+    [_rc(nodes=_PHY), _rc(section_id="a"), _rc(abundances=[{"x": 1}])],
+    [_rc(nodes=_PHY), _rc(nodes=_PHY), _rc(section_id="a")],
+    # a phylo payload missing `parent` -- the M2 fix requires BOTH
+    [_rc(nodes=_PHY_NO_PARENT)],
+    [_rc(nodes=_PHY_NO_PARENT), _rc(nodes=_PHY_NO_PARENT)],
+    [_rc(nodes=_PHY_NO_PARENT), _rc(section_id="a"), _rc(section_id="b")],
+    # empty-list variants: the detectors deliberately ignore them
+    [_rc(abundances=[])],
+    [_rc(abundances=[], section_id="a")],
+    [_rc(nodes=[])],
+    [_rc(nodes=[], section_id="a")],
+    # sections present but not section-shaped
+    [_rc(abundances=[], species="A")],
+    [{"sections": []}, {"sections": []}],
+    [{"sections": [{"name": "no id here"}]}],
+    [{"nodes": [{"name": "no id"}]}],
+]
+
+_add(*[
+    _agg("agdet_%d" % i, "auto_detect", [copy.deepcopy(rs)])
+    for i, rs in enumerate(_AGG_DETECT)
+])
 
 
 # --- quality scoring + coverage ledger (js/quality.js) ------------------------
@@ -793,7 +2007,67 @@ _add(
 # table-selection rules of coverage_for (largest contracted table, strict >
 # so first-in-_COVERAGE_TABLES wins ties, per-mode column keys).
 
+# AUDIT-2026-10-02, SWEPT AND CLEAN -- the emit-SHAPE family, recorded so
+# nobody re-derives it. `quality.ages_inconsistent` used to be pushed INSIDE
+# the loop over offending sections (one warning per section, each carrying the
+# running count, so the first said "1" when there were two) while
+# rca_core/quality.py counted first and emitted one; the message is
+# "{count} section(s) span eras" / "{count} 个剖面", so the aggregated form is
+# the intent. Fixed on the JS side this round.
+#
+# With that fixed, both modules' every msg_key site was enumerated and compared
+# by loop nesting along the node's ANCESTOR chain: 25 sites each, identical key
+# sets (no py-only, no js-only), and no key where one side aggregates and the
+# other emits per item. Spot-checked that the aggregator really was in the list
+# before believing it -- quality.ages_inconsistent / empty_result /
+# invalid_result / abundance_sum_violation_count / coverage_ledger all read
+# depth 0 on both sides, and quality.missing_top_level reads (389, depth 1) +
+# (404, depth 0) on Python against (687, depth 1) + (705, depth 0) in JS.
+#
+# Worth recording WHY that spot-check was necessary: the first version of the
+# sweep only extracted msg_keys from nodes that were themselves loop headers,
+# so every Python aggregation site was missing from its list -- which is
+# exactly the set the comparison exists to test. It reported "no mismatches",
+# which was an artifact of the extractor rather than a property of the code. A
+# sweep that cannot see the thing it is looking for returns "clean" forever.
 _add(
+    # AUDIT-2026-10-02: the bed-number READER inside the same file that was
+    # already fixed for full-width digits. js/quality.js carries two bed
+    # parsers: rcaParseBed (the rcaParseBedN/rcaSubbedInverted family, whose
+    # digit class was made Unicode-aware when the full-width bed bug was
+    # fixed) and _parseBedN directly above it, which still uses /-?\d+/ and is
+    # therefore ASCII-only. rca_core/quality.py's _BED_RE is r"-?\d+", which
+    # is Unicode-aware. So a reversed bed pair written with full-width digits
+    # is flagged on the desktop and silently SKIPPED in the browser -- the row
+    # scores as well-formed, which is precisely the failure this file's own
+    # comment describes for the missing subscript parser ("those rows scored
+    # 0.87/B with no warning ... and exported the impossible range").
+    # Base is the SMALLER index in a valid pair, so base 9 / top 7 is the
+    # violation.
+    _case("quality_coverage", "qc_bed_fullwidth_digits", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            {"species": "A", "section": "S1", "range_base": "Bed ９",
+             "range_top": "Bed ７"},
+        ],
+    }),
+    # The reverse control: the same pair in ASCII, and the same pair in the
+    # valid order with full-width digits. Both must already agree, or the new
+    # case would be measuring a pre-existing divergence instead of this one.
+    _case("quality_coverage", "qc_bed_ascii_reversed", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            {"species": "A", "section": "S1", "range_base": "Bed 9",
+             "range_top": "Bed 7"},
+        ],
+    }),
+    _case("quality_coverage", "qc_bed_fullwidth_valid_order", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            {"species": "A", "section": "S1", "range_base": "Bed ７",
+             "range_top": "Bed ９"},
+        ],
+    }),
     _case("quality_coverage", "qc_notdrawn", {
         "sections": [{"name": "S1"}],
         "species_ranges": [{"species": "A", "section": "S1",
@@ -852,7 +2126,251 @@ _add(
             {"sample_id": "DP2", "response_kind": "not_drawn"},
         ],
         "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    # AUDIT-2026-10-01 [item 26]: a scatter table whose points carry NO `label`
+    # (the table's own primary key) but DO carry `group` -- the taxon.  Before
+    # the ladder learned `group` this produced an empty grid (cells 0,
+    # coverage 0.0) for rows that all answered; both engines must agree on the
+    # 2 columns / 3 cells this now yields.
+    # AUDIT-2026-10-02: the cross-era detector's three regexes. js/quality.js
+    # built them with a BARE \b while the rest of the same file uses the
+    # Unicode-aware _wordBoundaryRe (lines 413 / 563 / 588 / 1237), and the
+    # Python side is a Unicode-aware \b -- so the browser counted an era a
+    # CJK letter was sitting against and the desktop did not.
+    #
+    # The SECOND era in each block is load-bearing, and the first draft of
+    # this case got it wrong: "图Permian" + "Permian图" both miss on the
+    # desktop, so its era set is EMPTY and the section is dropped, while the
+    # browser's is {Paleozoic} -- and a single era never triggers the warning
+    # on either side. The case passed against unfixed code because it was
+    # structurally incapable of failing, which is the same trap as planting a
+    # by_day case whose two species differ in _norm(species). Each block
+    # pairs a CJK-adjacent era with a plain second era, so the desktop ends
+    # up with one era (no warning) and the browser with two (a warning).
+    _case("quality_coverage", "qc_cross_era_cjk_adjacent", {
+        "sections": [
+            {"name": "S1", "lithology_blocks": [
+                {"age": "图Permian"}, {"age": "Jurassic"}]},
+            {"name": "S2", "lithology_blocks": [
+                {"age": "Permian图"}, {"age": "Jurassic"}]},
+            {"name": "S3", "lithology_blocks": [
+                {"age": "αcretaceous"}, {"age": "Permian"}]},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    # Two offending sections in one payload, which is the shape that caught
+    # the emit-per-item bug: the browser used to raise one warning per
+    # offending section and the FIRST one said "1" when the truth was 2.
+    _case("quality_coverage", "qc_cross_era_two_sections", {
+        "sections": [
+            {"name": "S1", "lithology_blocks": [
+                {"age": "Permian"}, {"age": "Jurassic"}]},
+            {"name": "S2", "lithology_blocks": [
+                {"age": "Permian"}, {"age": "Jurassic"}]},
+            {"name": "S3", "lithology_blocks": [
+                {"age": "Eocene"}, {"age": "Cretaceous"}]},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_cross_era_boundaries", {
+        "sections": [
+            {"name": "S1", "lithology_blocks": [{"age": "Permian"}]},
+            {"name": "S2", "lithology_blocks": [
+                {"age": "Permian (upper)"}, {"age": "Jurassic"}]},
+            {"name": "S3", "lithology_blocks": [
+                {"age": "xPermianx"}, {"age": "Jurassic"}]},
+            {"name": "S4", "lithology_blocks": [
+                {"age": "Late Permian"}, {"age": "Early Jurassic"}]},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    # ...and the same four sections ONE PER CASE, because the combined payload
+    # diverged in a way the two-line diff could not attribute: py had 2 issues
+    # with count="2", js had 3 with count="1". Splitting is cheaper and more
+    # honest than reimplementing the harness's vm to print both sides.
+    _case("quality_coverage", "qc_cross_era_s1_plain", {
+        "sections": [{"name": "S1", "lithology_blocks": [{"age": "Permian"}]}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_cross_era_s2_paren", {
+        "sections": [{"name": "S2", "lithology_blocks": [
+            {"age": "Permian (upper)"}, {"age": "Jurassic"}]}],
+        "biozones": [], "other_fossills": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_cross_era_s3_glued", {
+        "sections": [{"name": "S3", "lithology_blocks": [
+            {"age": "xPermianx"}, {"age": "Jurassic"}]}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_cross_era_s4_late_early", {
+        "sections": [{"name": "S4", "lithology_blocks": [
+            {"age": "Late Permian"}, {"age": "Early Jurassic"}]}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_group_column", {
+        "sections": [{"name": "S1"}],
+        "points": [
+            {"group": "Bathylagus sp.", "x": 1, "y": 2, "label": "",
+             "response_kind": "extracted"},
+            {"group": "Bathylagus sp.", "x": 3, "y": 4, "label": "",
+             "response_kind": "uncertain"},
+            {"group": "E. antarctica", "x": 5, "y": 6, "label": "",
+             "response_kind": "extracted"},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
     _case("quality_coverage", "qc_empty", {}),
+    # AUDIT-2026-09-30: NO quality_coverage payload carried abundance_unit "%"
+    # before this one, so the sum-to-100 check (P1-8) -- a named scientific
+    # rule with its own weight that emits a warning the operator reads -- had
+    # ZERO differential coverage while the group itself looked fully populated.
+    # The sums here are ties at the first decimal on purpose: the browser
+    # formatted them with Math.round(v.sum * 10) / 10, which rounds halves away
+    # from zero, while rca_core formats with round(total, 1), which rounds them
+    # to even. At one decimal those ties are common rather than exotic --
+    # measured 8 of 16 tie-shaped sums disagreed -- so a single non-tie case
+    # would have hidden it.
+    _case("quality_coverage", "qc_abundance_sum_violation", {
+        "sections": [{"name": "S1", "response_kind": "extracted"}],
+        "abundances": [
+            {"taxon": "A", "site": "S1", "level": "L1", "abundance": "1.25",
+             "abundance_unit": "%", "response_kind": "extracted"},
+            {"taxon": "B", "site": "S1", "level": "L1", "abundance": "1.0",
+             "abundance_unit": "%", "response_kind": "extracted"},
+            {"taxon": "C", "site": "S1", "level": "L2", "abundance": "100.25",
+             "abundance_unit": "%", "response_kind": "extracted"},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    # AUDIT-2026-09-30: every case above resolved to range_chart. The group
+    # existed, its runner existed, and it had eight cases -- so every structural
+    # consistency check on the harness (GROUPS == RUNNERS == groups-with-cases)
+    # passed, while the group was missing two modes outright. That blind spot
+    # is where the real bug lived: js/quality.js's scoreStructure had no
+    # 'zonation' branch, so a zonation result was null-checked against
+    # range-chart keys, lost 0.5 on the structure dimension, and the browser
+    # graded a real published figure 0.89/B where rca_core said 0.94/A.
+    #
+    # The lesson is that "the group exists" is not "the group covers the
+    # modes", so these two cases exist to make the mode coverage explicit.
+    _case("quality_coverage", "qc_zonation", {
+        "zones": [{"name": "Z1", "age": "290-280 Ma", "level_range": "1-2",
+                   "response_kind": "extracted"}],
+        "correlations": [{"from_zone": "Z1", "to_zone": "Z2",
+                          "response_kind": "extracted"}],
+        "zonations": [{"name": "bed 7", "response_kind": "extracted"}],
+        "confidence": 0.8}),
+    _case("quality_coverage", "qc_columnar", {
+        "sections": [{"name": "S1", "age_range": "300-290 Ma",
+                      "response_kind": "extracted"}],
+        "cross_beds": [{"from": "S1", "to": "S2",
+                        "response_kind": "extracted"}],
+        "fossil_legend": [{"label": "A", "response_kind": "extracted"}],
+        "confidence": 0.8}),
+    # AUDIT-2026-10-01: SUB-BED RANGES had no differential coverage at all.
+    # rca_core/quality.py::_subbed_inverted treats a subscript letter as
+    # ascending and an EMPTY subscript as sorting below every letter, so
+    # base="9a" / top="9" is an inverted range even though _parse_bed_n reads
+    # both as the integer 9. js/quality.js had no sub-bed branch anywhere, so
+    # the browser scored those rows 0.87/B with no warning while rca_core
+    # scored them 0.65/C -- and, unlike rca_core, the browser's exporter has
+    # no range_base_le_range_top validation either, so the impossible range
+    # reached the output file. The three "valid" cases are here on purpose:
+    # they are what a fix that simply flagged every subscripted pair would
+    # break, so they keep the rule one-directional.
+    _case("quality_coverage", "qc_subbed_inverted_bare_over_letter", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "9", "range_base": "9a",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_subbed_inverted_letters", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "9a", "range_base": "9b",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_subbed_inverted_uppercase", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "9", "range_base": "9A",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_subbed_inverted_high_number", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "23", "range_base": "23a",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_subbed_valid_letters_ascending", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "9b", "range_base": "9a",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_subbed_valid_letter_over_bare", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "23a", "range_base": "23",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    _case("quality_coverage", "qc_subbed_valid_different_beds", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "10", "range_base": "9a",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    # AUDIT-2026-10-01: the {detail} placeholder of quality.stage_order_reversed.
+    # The template is "Stage order reversed in section {section}: {detail}", and
+    # rca_core/quality.py passed _score_cross_era_accuracy's violation text --
+    # which already begins "Stage order reversed: " -- as {detail}, so the
+    # rendered badge said the phrase twice, and said it in ENGLISH inside the
+    # zh and ja sentences. No quality_coverage payload carried a multi-stage
+    # age_range before this one, so the branch had no differential coverage.
+    _case("quality_coverage", "qc_stage_order_detail_placeholder", {
+        "sections": [{"name": "S1", "age_range": "Hirnantian - Sandbian",
+                      "response_kind": "extracted"}],
+        "species_ranges": [{"species": "A", "section": "S1", "range_top": "9",
+                            "response_kind": "extracted"}],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    # AUDIT-2026-10-01: a sum that is a WHOLE number. rca_core renders
+    # str(round(total, 1)), which always keeps one decimal ("3.0"); the browser
+    # rendered String(3) == "3". The existing qc_abundance_sum_violation cases
+    # are all tie-shaped decimals, so none of them could see a difference that
+    # only exists when the rounded value has no fractional part.
+    _case("quality_coverage", "qc_abundance_sum_whole", {
+        "sections": [{"name": "S1"}],
+        "abundances": [
+            {"taxon": "A", "site": "S1", "level": "L1", "abundance": 1,
+             "abundance_unit": "%", "response_kind": "extracted"},
+            {"taxon": "A", "site": "S1", "level": "L1", "abundance": 1,
+             "abundance_unit": "%", "response_kind": "extracted"},
+            {"taxon": "A", "site": "S1", "level": "L1", "abundance": 1,
+             "abundance_unit": "%", "response_kind": "extracted"},
+        ],
+        "biozones": [], "other_fossils": [], "confidence": 0.8}),
+    # AUDIT-2026-10-01: float repr in a string field, in three parts. The
+    # mirror's note (js/minimax.js) recorded this as a known divergence and
+    # gave the wrong reason -- "the aggregate layer re-normalizes both
+    # spellings", which only covers MERGING, not the exported cell. Measuring
+    # the PARSER instead of the mirror split it by a line I had guessed wrong:
+    # the discriminator is not "does this value need exponent form", it is
+    # "is this value INTEGRAL".
+    #   * NON-INTEGRAL floats keep the information, so the browser can spell
+    #     them the Python way: str(1e-7) is '1e-07' where String(1e-7) is
+    #     '1e-7'. Fixable, and the export path already has the grammar
+    #     (js/table.js#rcaPyFloatStr, verified against Python str() on 16
+    #     values including 1e+16 / 1e-05 / 9.99e-05 / 5e-324 / -0.0). Fixed.
+    #   * INTEGRAL values do NOT, and 1e16 is the case that proves it. The
+    #     browser sees the number 10000000000000000 either way, but Python
+    #     answers '1e+16' for a model that wrote 1e16 and
+    #     '10000000000000000' for one that wrote the digits -- so the gap is
+    #     in the PARSER, not in the number. rc_float_exponent_big and
+    #     rc_float_integral are both pinned in the harness's
+    #     EXPECTED_DIVERGENCES with that reason, next to rc_dict_shaped_sections
+    #     and ag_34 / ag_35, which are the same class of runtime fact.
+    # rc_float_int is the control: an integer payload must keep the integer
+    # spelling on both sides, or the fix has broken the common case.
+    _case("range_chart", "rc_float_exponent_big", {
+        "species_ranges": [{"species": "A", "range_top": 1e16}]}),
+    _case("range_chart", "rc_float_exponent_small", {
+        "species_ranges": [{"species": "A", "range_top": 1e-7}]}),
+    _case("range_chart", "rc_float_exponent_negative", {
+        "species_ranges": [{"species": "A", "range_top": -2.5e-5}]}),
+    _case("range_chart", "rc_float_integral", {
+        "species_ranges": [{"species": "A", "range_top": 3.0}]}),
+    _case("range_chart", "rc_float_int", {
+        "species_ranges": [{"species": "A", "range_top": 3}]}),
 )
 
 
@@ -890,6 +2408,98 @@ def _merge_python(payload: dict) -> Any:
                          schema=SCHEMA_BY_MODE[mode])
 
 
+# Alias table for the `aggregate` group. Kept as an explicit mapping rather than
+# getattr()/string dispatch: the two engines name these differently on purpose
+# (rcaNormIcbnAuthor), and a getattr would happily resolve a typo to nothing.
+# The JS runner carries the same table with the JS names; the two must stay in
+# step or the group silently stops comparing anything.
+_AGG_PY_OPS = {
+    "norm": lambda a: AGG._norm(a[0]),
+    "iczn": lambda a: AGG._norm_iczn_author(a[0]),
+    "qualifiers": lambda a: sorted(AGG._extract_qualifiers(a[0])),
+    "str_merge": lambda a: AGG._str_for_merge(a[0]),
+    "mode": lambda a: AGG._mode(a[0]),
+    "merge_scalar": lambda a: _agg_sentinel(AGG._merge_scalar_field(a[0])),
+    "typed_mode": lambda a: _agg_sentinel(
+        AGG._stable_typed_mode(a[0], int if a[1] == "int" else str)),
+    "confidence": lambda a: _agg_sentinel(AGG._merge_confidence(a[0])),
+    # Second wave. The three mutating mergers are called on a COPY and the
+    # copy is returned, so the JSON comparison sees the mutation on both
+    # sides instead of comparing a None that means "it happened in place".
+    "merge_mapping": lambda a: _agg_sentinel(AGG._merge_mapping_field(a[0])),
+    "merge_structured": lambda a: AGG._merge_structured_field(a[0]),
+    "merge_across": lambda a: _agg_sentinel(AGG._merge_field_across_runs(a[0])),
+    "row_warnings": lambda a: _agg_mutate(AGG._merge_row_warnings, a),
+    "add_row_warning": lambda a: _agg_mutate(AGG._add_row_warning, a),
+    # _merge_contract_field returns a bool AND mutates the target, so the
+    # payload carries the "returns True" half explicitly -- otherwise a
+    # JS runner that returned only the target would silently agree with a
+    # Python runner that returned only True.
+    "contract_field": lambda a: _agg_contract_py(a),
+    "chimeric": lambda a: bool(AGG._is_chimeric_row(a[0], a[1], tuple(a[2]))),
+    # ballots takes (group, keys) -- TWO arguments, so keys is args[1].
+    # Writing args[2] here is the same arity mistake the JS runner would
+    # have made in mirror image; both read [1] and the payload carries two.
+    "ballots": lambda a: AGG._recombination_ballots(a[0], tuple(a[1])),
+    "py_float": lambda a: _agg_py_float(a[0]),
+    # Only the primary key is projected, because that is the field that
+    # decides the shape of the merged document; the rest of a MergeSchema
+    # and a keymap object are not field-for-field comparable.
+    "auto_detect": lambda a: AGG._auto_detect_schema(
+        copy.deepcopy(a[0])).primary_list_key,
+}
+
+
+def _agg_py_float(v) -> Any:
+    """Python ``float(v)`` on a shared token vocabulary with rcaPyFloat.
+
+    NaN / +-inf cannot go into JSON, and the harness's expressibility guard
+    would (correctly) reject the whole fixture. Both sides therefore map to
+    the same four tokens before the value is recorded.
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "raise"
+    if f != f:                       # NaN is the only self-unequal float
+        return "nan"
+    if f == float("inf"):
+        return "inf"
+    if f == float("-inf"):
+        return "-inf"
+    return f
+
+
+def _agg_mutate(fn, a):
+    """Call an in-place merger on a copy and return the mutated copy."""
+    target = copy.deepcopy(a[0])
+    if fn is AGG._add_row_warning:
+        fn(target, a[1])
+    else:
+        fn(target, copy.deepcopy(a[1]))
+    return target
+
+
+def _agg_contract_py(a) -> Any:
+    key, values, target = a[0], a[1], copy.deepcopy(a[2])
+    handled = AGG._merge_contract_field(key, values, target)
+    return {"handled": bool(handled), "target": target}
+
+
+def _agg_sentinel(value: Any) -> Any:
+    """``_NO_MERGE`` -> None. The JS runner maps its NO_MERGE Symbol to null in
+    the same place; doing it on one side only is what turned a real finding
+    into a few hundred phantom rows once already."""
+    return None if value is AGG._NO_MERGE else value
+
+
+def _aggregate_python(payload: dict) -> Any:
+    op = payload["op"]
+    if op not in _AGG_PY_OPS:
+        raise KeyError(op)
+    return _AGG_PY_OPS[op](list(payload.get("args") or []))
+
+
 _PY_RUNNERS = {
     "range_chart": normalize_result,
     "columnar_section": normalize_columnar_result,
@@ -913,8 +2523,14 @@ def compute_python_case(case: dict) -> Any:
         return _reason_codes_python(copy.deepcopy(payload))
     if group == "merge":
         return _merge_python(copy.deepcopy(payload))
+    if group == "aggregate":
+        return _aggregate_python(copy.deepcopy(payload))
     if group == "quality_coverage":
         return score_range_chart(copy.deepcopy(payload))
+    if group == "editable":
+        return _editable_python(payload)
+    if group == "axis":
+        return _axis_python(payload)
     payload = copy.deepcopy(payload)  # the normalizers mutate in place
     fn = _PY_RUNNERS[group]
     if group == "to_newick":
@@ -922,6 +2538,91 @@ def compute_python_case(case: dict) -> Any:
         # JS mirror under test (rcaToNewick) is only compared on that pipeline.
         return to_newick(_normalize_phylogenetic_tree_into(payload))
     return fn(payload)
+
+
+def _iter_values(value: Any) -> Any:
+    """Yield every value in a JSON-shaped structure, ITERATIVELY.
+
+    A recursive walk is not an option here: the depth guard below exists
+    precisely because these structures can be thousands of levels deep, and
+    recursing over one blows the interpreter stack before the guard can report
+    anything useful.
+    """
+    stack = [value]
+    while stack:
+        cur = stack.pop()
+        yield cur
+        if isinstance(cur, dict):
+            stack.extend(cur.values())
+        elif isinstance(cur, (list, tuple)):
+            stack.extend(cur)
+
+
+# AUDIT-2026-10-01: two classes of Python result CANNOT be written into this
+# fixture, and both failed in ways that pointed nowhere near the cause.
+#
+#   1. A non-finite float. json.dumps writes it as the bare literal Infinity /
+#      NaN, and the harness reads the fixture with JSON.parse, which rejects
+#      both. The symptom was a SyntaxError at JSON.parse in
+#      tests_diff_frontend_parity.js pointing at a payload that looked fine.
+#      Measured reachable: safe_json_loads('{"a": 1e400}') returns {'a': inf}.
+#   2. A structure nested deeper than the serialisers can carry. json.dumps is
+#      recursive, so writing one raises RecursionError inside this generator.
+#
+# The nesting boundary was measured on both product functions
+# (rca_core.json_utils.safe_json_loads vs js/json-utils.js#safeJsonLoads), and
+# it is NOT the same number everywhere -- which is why the measurement lives in
+# a comment and not in a case:
+#   * array form, depth <  1000   both engines parse
+#   * array form, depth >= 1000   CPython 3.10 refuses (sys.getrecursionlimit()
+#                                 == 1000); the browser parses to at least 10000
+#   * array form, depth == 1200   CPython 3.12.14 -- the CI interpreter --
+#                                 PARSES it. So "where Python refuses" moves
+#                                 with the interpreter, and a fixture case
+#                                 built on it cannot stay byte-identical across
+#                                 the versions this project tests. That is
+#                                 exactly how it was caught: the case passed on
+#                                 3.10 and failed on 3.12.
+#   * object form, depth >= 1000  both parse, but CPython 3.10 returns a
+#                                 structure truncated at depth 992 and reports
+#                                 SUCCESS, while the browser returns it whole
+# The object row is the dangerous half and is worth knowing about: a silently
+# truncated payload that looks like a success is the same shape as the
+# refused-extraction gap, one level up. Neither half is fixed here -- changing
+# either engine's limit is a product decision, and no realistic range-chart
+# reply nests a thousand deep.
+#
+# The limits below are the serialisers', not the product's: they only decide
+# what this harness is able to compare. The guard itself is pinned by
+# tests/test_parity_fixture_expressibility.py, because a guard that has never
+# been seen to refuse anything is not a guard.
+_MAX_FIXTURE_DEPTH = 400
+
+
+def _assert_expressible(value: Any, case_id: str) -> None:
+    stack = [(value, 1)]
+    while stack:
+        cur, depth = stack.pop()
+        if isinstance(cur, float) and (
+                cur != cur or cur in (float("inf"), float("-inf"))):
+            raise ValueError(
+                f"case {case_id!r} produced the non-finite float {cur!r}. Python's "
+                "json writes that as a bare Infinity / NaN literal and the "
+                "harness reads the fixture with JSON.parse, which rejects it, so "
+                "the case cannot be expressed as a differential case. Compare it "
+                "with a direct probe instead (see docs/ or the audit notes), or "
+                "change the case so the value is finite.")
+        if depth > _MAX_FIXTURE_DEPTH:
+            raise ValueError(
+                f"case {case_id!r} nests deeper than {_MAX_FIXTURE_DEPTH} levels "
+                f"(measured {depth}). json.dumps is recursive and would raise "
+                "RecursionError here, so the case cannot be expressed as a "
+                "differential case. Note that the two product parsers ALSO "
+                "disagree past depth 1000 -- see the table in the comment above.")
+        if isinstance(cur, dict):
+            stack.extend((x, depth + 1) for x in cur.values())
+        elif isinstance(cur, (list, tuple)):
+            stack.extend((x, depth + 1) for x in cur)
 
 
 def _jsonable(value: Any) -> Any:
@@ -941,6 +2642,7 @@ def build_fixture() -> dict:
                 entry["python_error"] = type(exc).__name__
                 entry["python_message"] = str(exc)
             else:
+                _assert_expressible(result, str(case.get("id")))
                 entry["python"] = _jsonable(result)
             out["cases"].append(entry)
     return out

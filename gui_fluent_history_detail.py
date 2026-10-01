@@ -194,7 +194,15 @@ def _build_webengine_html(rec: HistoryRecord, tr: Translator) -> str:
     # without changing the parsed value. This is the standard inline-JSON defense
     # recommended by Google/Mozilla.
     _defuse = lambda s: s.replace("</", "<\\/")
-    i18n_payload = _defuse(json.dumps(getattr(tr, "translations", {}) or {}, ensure_ascii=False))
+    # AUDIT-2026-09-29: an `i18n_payload` binding used to sit here, holding
+    # json.dumps(tr.translations). It was never injected (ruff F841), and the
+    # bootstrap below documents exactly why injecting it would BREAK the page:
+    # the inlined js/i18n.js already declares RCA_I18N at module top level, so
+    # a second declaration raises SyntaxError in WebEngine and aborts the
+    # render. The page translates from the JS mirror with the right language
+    # code (RCA_LANG = lang_code), and the two catalogues are pinned by the
+    # parity tests -- so the correct fix is to NOT inject it. Left as a
+    # comment because "obvious improvement" is exactly the wrong move here.
     lang_code = getattr(tr, "lang", "zh")
     result_payload = _defuse(json.dumps(rec.result or {}, ensure_ascii=False, default=str))
     raw_payload = _defuse(json.dumps(rec.raw or "", ensure_ascii=False))
@@ -323,11 +331,28 @@ def _thumbnail_widget(thumb_bytes: bytes) -> QWidget:
         v.addStretch(1)
         return w
     pix = QPixmap()
-    pix.loadFromData(thumb_bytes, "PNG")
-    if pix.isNull():
-        # Try JPEG fallback (HistoryStore stores JPEG or PNG depending on source).
-        pix.loadFromData(thumb_bytes, "JPG")
-    if pix.isNull():
+    # AUDIT-2026-09-27 [item 1.5] (B-17): this used to try "PNG" first and fall
+    # back to "JPG", under a comment claiming the store keeps "JPEG or PNG
+    # depending on source". That has been false since REVIEW-2026-09-20
+    # (finding 9): HistoryStore.add runs every thumbnail through
+    # make_thumbnail_with_size, which always re-encodes with
+    # ``img.save(..., format="JPEG")``. So the PNG attempt failed on EVERY row
+    # and the "fallback" was the only branch that ever ran — the nominal
+    # primary case was dead code, and the comment documented a storage
+    # behaviour that had not existed for months.
+    # Sniff the magic bytes instead: one comparison each, and a row written by
+    # any other producer (or before the re-encode landed) still decodes.
+    if thumb_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        fmt = "PNG"
+    elif thumb_bytes[:3] == b"\xff\xd8\xff":
+        fmt = "JPG"
+    else:
+        fmt = ""  # unrecognised header — let Qt sniff it
+    if fmt:
+        ok = pix.loadFromData(thumb_bytes, fmt)
+    else:
+        ok = pix.loadFromData(thumb_bytes)
+    if not ok or pix.isNull():
         lbl = CaptionLabel("(could not decode thumbnail)")
         v.addWidget(lbl)
         v.addStretch(1)

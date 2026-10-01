@@ -99,43 +99,161 @@ class TestExtractPageUiStates(unittest.TestCase):
         # Reuse the teardown helpers proven suite-safe in
         # tests/test_gui_sprint_b.py (WebEngine teardown ordering).
         import importlib
-        mod = importlib.import_module("tests.test_gui_sprint_b")             if importlib.util.find_spec("tests.test_gui_sprint_b")             else importlib.import_module("test_gui_sprint_b")
+        if importlib.util.find_spec("tests.test_gui_sprint_b"):
+            mod = importlib.import_module("tests.test_gui_sprint_b")
+        else:
+            mod = importlib.import_module("test_gui_sprint_b")
         mod._destroy_window(win)
+        # AUDIT-2026-09-27: drain the event loop so the C++ deletion actually
+        # COMPLETES before the next test builds a window. shiboken.delete() only
+        # schedules the destruction; WebEngine's own teardown is asynchronous,
+        # so window N+1 could otherwise be constructed while window N was still
+        # being torn down and die with an access violation partway through
+        # SettingsPage.__init__ (seen ~1 run in 2 on this file). Draining is a
+        # mitigation, not a proof — the teardown ordering itself is still the
+        # WebEngine one documented in tests/test_gui_sprint_b.py.
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None:
+            for _ in range(3):
+                app.processEvents()
 
     @_requires_qt
     def test_empty_state_disables_export_actions(self):
+        """The action gate, pinned to the contract that replaced a defective one.
+
+        AUDIT-2026-09-27 [item 1.3] (B-03). This test used to assert that
+        merely having ``page.result`` enabled all six buttons. That WAS the
+        defect: a result carrying zero rendered tables left Add / Delete /
+        Discard / Apply live, and every one of them returned silently — Apply
+        iterated an empty dict and showed no toast at all. The edit row was
+        also never hidden at construction, so a fresh launch showed four
+        dead buttons, and nothing disabled the row-edit buttons while an
+        extraction was running.
+
+        The gate is now ``_update_result_actions()`` alone, and it requires a
+        result AND a rendered table AND (for the exports) a pending image AND
+        not-busy. The assertions below are therefore STRICTER than the ones
+        they replace: three states are now pinned that the old test could not
+        express.
+        """
         win, _hs = self._make_window()
         try:
             page = win.extract_page
-            for b in (page.btn_export, page.btn_export_xlsx,
-                      page.btn_add_row, page.btn_del_row,
-                      page.btn_discard, page.btn_apply_edits):
-                assert not b.isEnabled(), "export/edit actions must start disabled"
-            # a result enables them again
+            edit_buttons = (page.btn_add_row, page.btn_del_row,
+                            page.btn_discard, page.btn_apply_edits)
+            all_buttons = (page.btn_export, page.btn_export_xlsx) + edit_buttons
+
+            # 1. Fresh page: everything disabled AND the edit row not shown.
+            #    `isHidden()` (not `isVisible()`) is the right probe here: it
+            #    reports the widget's OWN explicit hidden flag, whereas
+            #    isVisible() also folds in every ancestor — and this test
+            #    never calls win.show(), so the whole tree is hidden and
+            #    isVisible() would read False for a row that IS shown.
+            for b in all_buttons:
+                assert not b.isEnabled(), "actions must start disabled"
+            assert page.edit_row_widget.isHidden(), (
+                "the row-edit row must be hidden before any result, not shown "
+                "with four dead buttons")
+
+            # 2. A result with NO rendered table must NOT enable the row-edit
+            #    buttons. This is the state the old test wrongly blessed.
             page.result = {"species_ranges": [{"species": "X"}]}
+            page.tables = {}
             page._update_result_actions()
-            for b in (page.btn_export, page.btn_export_xlsx,
-                      page.btn_add_row, page.btn_del_row,
-                      page.btn_discard, page.btn_apply_edits):
-                assert b.isEnabled(), "actions must enable once a result exists"
+            for b in edit_buttons:
+                assert not b.isEnabled(), (
+                    "a result with no rendered table cannot be row-edited; "
+                    "enabling these produced four buttons that silently no-op")
+            assert page.edit_row_widget.isHidden(), \
+                "the edit row must stay hidden while there is no table"
+
+            # 3. A real result WITH a table and a pending image enables them.
+            page.tables = {"species_ranges": object()}
+            page.image_b64 = "QUFB"
+            page._update_result_actions()
+            assert not page.edit_row_widget.isHidden(), \
+                "the edit row must appear once there is a result to edit"
+            for b in all_buttons:
+                assert b.isEnabled(), \
+                    "actions must enable once a result, a table and an image exist"
+
+            # 4. Going busy disables them again — previously only the Extract
+            #    and export buttons were touched, so a row edit could land on
+            #    the previous result mid-run.
+            #    Mirror the production order: `_on_extract` sets the flag on
+            #    the line BEFORE calling `_set_busy` (gui_fluent.py:1445/1503),
+            #    and the gate reads `self.busy`, so the test has to do the same
+            #    or it is asserting against a stale flag.
+            page.busy = True
+            page._set_busy(True)
+            try:
+                for b in all_buttons:
+                    assert not b.isEnabled(), \
+                        "no action may stay live while a worker is running"
+            finally:
+                page.busy = False
+                page._set_busy(False)
         finally:
             self._destroy_window(win)
 
     @_requires_qt
-    def test_inline_selectors_mirror_settings(self):
+    def test_extract_page_owns_the_chart_selectors(self):
+        """D2: the Extract page's inline selectors are the canonical state.
+
+        This used to be ``test_inline_selectors_mirror_settings`` and it
+        asserted the OPPOSITE direction — that a change on the inline combo
+        writes through to Settings "as the source of truth". AUDIT-2026-09-27
+        reversed that: the control sitting next to "choose an image" is the one
+        the user's action depends on, and the Settings pair became a HIDDEN
+        MIRROR. The old contract made the contextually-right control a pure
+        view of a control the user had to go elsewhere to change, and kept two
+        copies in sync by hand.
+
+        The cross-page INDEX equality is deliberately no longer asserted. It is
+        still true, but it is now a consequence of the mirror, not the
+        contract; pinning it as the contract is what let the two drift apart in
+        the first place. What is pinned instead:
+          * the Extract page OWNS the code tables,
+          * the window accessors read the Extract page,
+          * a change on the inline combo propagates to the mirror,
+          * a change on the mirror is pulled back (so the two can never
+            disagree even if something drives the hidden control directly).
+        """
         win, _hs = self._make_window()
         try:
             page = win.extract_page
-            # UI-REVIEW-2026-09-05: zonation_chart added → 6 options.
+            sp = win.settings_page
+            # UI-REVIEW-2026-09-05: zonation_chart added -> 6 options.
             assert page.cmb_ctype_inline.count() == 6
             assert page.cmb_clang_inline.count() == 5
-            assert page.cmb_ctype_inline.currentIndex() ==                 win.settings_page.cmb_ctype.currentIndex()
-            # inline change must write through to settings (source of truth)
+            # D2: the tables live on the Extract page now.
+            assert page._ctype_codes[0] == "auto"
+            assert "zonation_chart" in page._ctype_codes
+            assert page._clang_codes == ["auto", "zh", "en", "ja", "ru"]
+            # The window accessors read the Extract page.
+            assert win.chart_type() == page.chart_type_code()
+            assert win.chart_lang() == page.chart_lang_code()
+            # The mirror row is collapsed, not destroyed.
+            assert sp._selector_mirror_holder.isHidden(), (
+                "the Settings copy of the chart selectors must be hidden — it "
+                "is state now, and showing state as an editable control is how "
+                "the two drifted")
+
+            # inline change -> mirror follows
             page.cmb_ctype_inline.setCurrentIndex(1)
-            assert win.settings_page.cmb_ctype.currentIndex() == 1
-            # and back
-            win.settings_page.cmb_ctype.setCurrentIndex(0)
-            assert page.cmb_ctype_inline.currentIndex() == 0
+            assert win.chart_type() == "range_chart"
+            assert sp.cmb_ctype.currentIndex() == 1
+
+            # mirror changed directly -> pulled back, so they cannot disagree
+            sp.cmb_ctype.setCurrentIndex(3)
+            assert page.cmb_ctype_inline.currentIndex() == 3
+            assert win.chart_type() == page._ctype_codes[3]
+
+            # same for the language pair
+            page.cmb_clang_inline.setCurrentIndex(2)
+            assert win.chart_lang() == "en"
+            assert sp.cmb_clang.currentIndex() == 2
         finally:
             self._destroy_window(win)
 

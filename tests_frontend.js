@@ -618,15 +618,34 @@ function _pyI18nKeysByLocale() {
   const out = {};
   for (const lang of ['zh', 'en', 'ja']) {
     const keys = new Set();
+    const shared = new Set();
     const start = pySrc.indexOf('TRANSLATIONS["' + lang + '"] = {');
     if (start !== -1) {
       const end = pySrc.indexOf('\n}', start);
       const body = pySrc.slice(start, end === -1 ? undefined : end);
       let m;
-      const rx = /^    "((?:col|sec|quality|names|reason_code)\.[A-Za-z0-9_]+)":/gm;
-      while ((m = rx.exec(body)) !== null) keys.add(m[1]);
+      // AUDIT-2026-09-27: the completeness regex used to whitelist FIVE
+      // prefixes -- /^(?:col|sec|quality|names|reason_code)\./ -- so only
+      // those were checked for zh/en/ja coverage. The fallback chain in
+      // rca_core/i18n.py is lang -> en -> RAW KEY, so a zh-only key under any
+      // other prefix renders as a dotted key for en/ja operators and CI
+      // stayed green. That is how `tab.extract` (zh only) shipped: an
+      // English operator saw the literal string "tab.extract" in the tab
+      // strip. Completeness is therefore checked over EVERY key.
+      const rx = /^\s+"([A-Za-z0-9_.\-]+)":/gm;
+      while ((m = rx.exec(body)) !== null) {
+        keys.add(m[1]);
+        // The two catalogues are deliberately asymmetric in BOTH directions
+        // -- rca_core carries the Tk GUI's wizard./usage./history.detail./
+        // tab. namespaces that the browser has no use for, and js carries
+        // err./upload./settings./preset. that the desktop has no page for --
+        // so the CROSS-catalogue check below is scoped to the namespaces both
+        // surfaces actually render, not to the whole catalogue.
+        if (/^(col|sec|quality|names|reason_code)\./.test(m[1])) shared.add(m[1]);
+      }
     }
     out[lang] = keys;
+    out[lang + ':shared'] = shared;
   }
   return out;
 }
@@ -653,11 +672,20 @@ function test_i18n_parity() {
     'zh=' + zh.length + ' en=' + en.length);
   check('i18n-zh-ja-parity', JSON.stringify(zh) === JSON.stringify(ja),
     'zh=' + zh.length + ' ja=' + ja.length);
-  // 3. The keys the oracle carries must not be MISSING from the JS zh
-  //    catalog either (shared-parity covers both directions per locale, but
-  //    this pins the oracle-catalogue relationship for all namespaces).
-  const missing = [...allPy].filter((k) => !(k in ctx.RCA_I18N.zh));
-  check('i18n-js-covers-py-catalog', missing.length === 0, missing.join(','));
+  // 3. Cross-catalogue: the namespaces BOTH surfaces render must be present
+  //    in the browser catalogue too. Scoped deliberately -- the desktop-only
+  //    namespaces (wizard./usage./history.detail./tab./about./...) have no
+    //    There is deliberately NO reverse check either: the
+    //    browser-only upload./settings./preset./err. namespaces have
+    //    no desktop page, so NEITHER direction can be an equality.
+    //    Measured 2026-09-27: 212 keys are desktop-only and 102 are
+    //    browser-only, and both sets are intentional.
+  //    false failures when completeness was widened.
+  const allPyShared = new Set([...py['zh:shared'], ...py['en:shared'],
+                               ...py['ja:shared']]);
+  const missing = [...allPyShared].filter((k) => !(k in ctx.RCA_I18N.zh));
+  check('i18n-js-covers-py-shared-namespaces', missing.length === 0,
+    missing.join(','));
 }
 
 // ---- Phase B: theme.js contract ----
@@ -1173,6 +1201,41 @@ function test_quality_fad_lad_ma_branch() {
   });
   check('quality "Madison 3/6" bed pair not flagged', !bedOk.issues.some(i => i.msg_key === 'quality.fad_lt_lad'));
 }
+
+// ---- AUDIT-2026-10-01: sub-bed ranges (base="9a" / top="9") -----------------
+// _parseBedN reads "9a" and "9" both as 9, so the backwards-subscript case
+// compared equal. rca_core has flagged it since _subbed_inverted landed
+// (rca_core/quality.py:477); the browser had no subscript parser at all, so
+// the badge said 0.87/B and -- because js/export.js has no
+// range_base_le_range_top validation -- the row was exported as printed.
+// The scorer and the table editor's red frame are both checked, and the
+// ASCENDING pair is checked too so a fix cannot simply flag every subscript.
+function test_quality_subbed_range() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const mk = (top, base) => ctx.scoreRangeChart({
+    sections: [{ name: 'S1' }],
+    species_ranges: [{ species: 'A', section: 'S1', range_top: top, range_base: base }],
+    confidence: 0.8,
+  });
+  const flagged = (r) => r.issues.some(
+    (i) => i.msg_key === 'quality.range_top_lt_base' || i.msg_key === 'quality.fad_lt_lad');
+  check('subbed-bare-over-letter-flagged', flagged(mk('9', '9a')));
+  check('subbed-letters-ascending-not-flagged', !flagged(mk('9b', '9a')));
+  check('subbed-letter-over-bare-not-flagged', !flagged(mk('23a', '23')));
+  check('subbed-grade-penalised', mk('9', '9a').grade === 'C');
+  // The editor's own validator must agree with the badge.
+  if (typeof ctx.rcaRangePairInverted !== 'function') {
+    check('subbed-editor-validator-exposed', false);
+    return;
+  }
+  check('subbed-editor-validator-exposed', true);
+  check('editor-flags-bare-over-letter', ctx.rcaRangePairInverted('9', '9a') === true);
+  check('editor-allows-ascending', ctx.rcaRangePairInverted('9b', '9a') === false);
+  check('editor-allows-letter-over-bare', ctx.rcaRangePairInverted('23a', '23') === false);
+  check('editor-still-flags-different-beds', ctx.rcaRangePairInverted('7', '9') === true);
+}
+test_quality_subbed_range();
 
 function test_quality_cross_era_proportional() {
   const ctx = buildContext();
@@ -3969,10 +4032,23 @@ function test_i18n_placeholder_parity() {
   }
   // The quality scorer must actually pass those params, or the placeholder
   // would render literally.
+  //
+  // AUDIT-2026-09-30: this used to be a fixed 200-character window after the
+  // msg_key, which is the wrong shape -- it asserts the params object is close
+  // to the key rather than that it is in the SAME issue object, so any
+  // explanatory comment added between them broke the build without any
+  // contract changing. Anchored on the next msg_key instead: `sample:` and
+  // `sum:` must appear between this key and the one that ends the object.
   const qsrc = require('fs').readFileSync(
     path.join(__dirname, 'js', 'quality.js'), 'utf8');
+  const _keyAt = qsrc.indexOf("msg_key: 'quality.abundance_sum_violation'");
+  const _nextKeyAt = _keyAt < 0 ? -1
+    : qsrc.indexOf('msg_key:', _keyAt + 10);
+  const _issueBody = (_keyAt < 0 || _nextKeyAt < 0) ? '' : qsrc.slice(_keyAt, _nextKeyAt);
   check('i18n-abundance-params-passed',
-    /abundance_sum_violation[\s\S]{0,200}sample:/.test(qsrc));
+    _keyAt >= 0 && /sample:/.test(_issueBody) && /sum:/.test(_issueBody),
+    'the abundance_sum_violation issue must pass both sample and sum params '
+    + 'inside its own object');
 }
 
 // (R5) The accuracy path reports inverted ranges as range_top_lt_base

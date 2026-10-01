@@ -75,24 +75,41 @@ def test_bug2_by_day_uses_local_offset():
         db = Database(path=os.path.join(td, "t.db"))
         try:
             store = UsageStore(db=db)
-            # One row at noon UTC on day 5.
-            store.record(_make_usage_rec(86400.0 * 5 + 43200))
+            # One row at 23:00 UTC on day 5.
+            #
+            # AUDIT-2026-10-02 [item 10.1]: this used to plant the row at NOON
+            # UTC, which is the one instant of a UTC day where "the local date
+            # of this row" and "the local date holding the majority of the UTC
+            # day" are the same expression -- date(D + offset + 43200) -- for
+            # every offset. The fixture was therefore degenerate and could not
+            # detect the majority-of-the-UTC-day rule at all, which is what
+            # let two earlier revisions of that rule pass unnoticed. 23:00
+            # UTC is already the next local day east of UTC and already the
+            # previous local day west of it.
+            ts = 86400.0 * 5 + 23 * 3600
+            store.record(_make_usage_rec(ts))
             s = store.summary()
             # by_day must be non-empty and have exactly 1 entry.
             check("bug2-by-day-single-bucket", len(s.by_day) == 1)
             if s.by_day:
-                # The bucket key must reflect local-midnight alignment:
-                # day_bucket = int(ts/86400)*86400 + local_offset_at_noon.
-                # REVIEW-2026-11-07: the 07-31 fix corrected the SIGN of
-                # tm_gmtoff (it is seconds EAST of UTC; local = UTC +
-                # offset). This expectation still carried the pre-fix
-                # negation, so it failed on every non-UTC zone (e.g.
-                # UTC+8). Match the implementation: no negation.
                 import time as _t
-                local_offset = _t.localtime(86400 * 5 + 43200).tm_gmtoff
-                expected_day = int((86400 * 5 + 43200) // 86400) * 86400 + local_offset
-                check("bug2-by-day-key-uses-local-offset",
-                      s.by_day[0]["day"] == expected_day)
+                utc_day = (ts // 86400) * 86400
+                local_offset = _t.localtime(utc_day + 43200).tm_gmtoff
+                key = s.by_day[0]["day"]
+                # Derived from the row, not from any formula: the local wall
+                # clock at the request's timestamp is ts + offset, and the
+                # consumer re-localises the key the same way. This is also
+                # the only machine-independent way to say "the offset is not
+                # negated" -- the check that used to stand here
+                # (``local_offset >= 0``) was really an assertion that the
+                # developer is east of UTC, and it failed outright on a
+                # machine in New York.
+                got = _t.strftime("%Y-%m-%d", _t.gmtime(key + local_offset))
+                want = _t.strftime("%Y-%m-%d", _t.gmtime(ts + local_offset))
+                check("bug2-by-day-key-is-the-rows-own-day", got == want)
+                check("bug2-by-day-local-midnight-invariant",
+                      (key + local_offset) % 86400 == 0)
+                check("bug2-by-day-bucket-count", s.by_day[0]["count"] == 1)
         finally:
             db.close()
 

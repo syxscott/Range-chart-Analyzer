@@ -42,9 +42,28 @@ def compute_image_sha256_from_b64(image_b64: str) -> str:
         if "," in s:
             s = s.split(",", 1)[1]
     try:
-        return compute_image_sha256(base64.b64decode(s, validate=False))
+        raw = base64.b64decode(s, validate=False)
     except Exception:
-        return compute_image_sha256(s.encode("utf-8", errors="replace"))
+        raw = b""
+    # AUDIT-2026-09-28: `validate=False` means b64decode DISCARDS every
+    # character outside the base64 alphabet instead of raising, so the
+    # "on decode failure we hash the raw text" fallback above almost never
+    # ran. Measured: a TRUNCATED payload, a `data:` URL with no comma, and a
+    # run of plain letters each produced a confident-looking hash of garbage
+    # bytes that will never match anything, with no signal that anything went
+    # wrong. Worse, inputs with no base64 content at all -- "!!!!####",
+    # "   " -- decoded to ZERO bytes and so returned e3b0c442...b855, the
+    # documented sentinel for "no image". A corrupt upload was therefore
+    # indistinguishable from no upload at all, in the one column whose stated
+    # purpose is a five-year audit of where the record came from.
+    #
+    # Decoded-but-empty from a non-empty input is exactly that case, so fall
+    # back to the raw text the contract already promises. Genuinely empty
+    # input returned at the top, and any real image decodes to real bytes, so
+    # neither of those paths changes.
+    if raw:
+        return compute_image_sha256(raw)
+    return compute_image_sha256(s.encode("utf-8", errors="replace"))
 
 
 __all__ = [

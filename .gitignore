@@ -37,6 +37,18 @@ _huge.bin
 # paper figures + per-run API test results stay local, never on GitHub.
 outputs/e2e_radiolaria/
 outputs/e2e_oa/
+# Same class of data, larger (AUDIT-2026-09-28): the lit2020 corpora are 522
+# cropped figures out of 2020 stratigraphy papers -- 299.66 MB across the three
+# directories. They are INPUT to tests_real_corpus.py, not fixtures; the
+# committed half of that work is tests/fixtures/real_payloads/ (8 model
+# responses, 113 KB) plus the invariant checks in tests/test_generic_tables.py,
+# so the corpus itself stays local for the same licensing reason as above.
+outputs/lit2020/
+outputs/lit2020_all/
+outputs/lit2020_sample/
+# Per-run report written by tests_real_corpus.py (its --report default). It
+# embeds captions and table counts from those copyrighted figures.
+outputs/real_corpus_report.json
 # Local API credentials for the e2e harness (defense in depth — the file
 # itself lives outside the repo in %TEMP%).
 rca_e2e_api.env

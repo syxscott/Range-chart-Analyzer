@@ -13,6 +13,7 @@ auto-detect between range-chart and columnar-section using the row shape
 from __future__ import annotations
 
 import copy
+import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -29,26 +30,86 @@ from .reason_codes import merge_reason_codes, merge_response_kinds
 # Long-pattern forms must appear before shorter sub-patterns (e.g. ex gr.
 # before gr., s.str. before s. — the ordering only matters for the labels
 # this list produces, not for correctness of the match).
+#
+# AUDIT-2026-10-02: every pattern below goes through ``_ascii_b`` rather than
+# using ``\b`` directly. Python's ``\b`` is Unicode-aware on str — a CJK
+# character counts as a word character — while JavaScript's ``\b`` is defined
+# on ``[A-Za-z0-9_]`` and nothing else, so a CJK character counts as
+# NON-word and manufactures a boundary Python does not see. Measured at the
+# leaf over a 136-string corpus: 16 strings disagree, all of them CJK
+# adjacent, e.g. "中华虫属sp." -> python 0 qualifiers, js 1 ("sp.").
+#
+# HONEST SCOPE: this is a LATENT divergence. No reachable effect was found in
+# the current call graph, and the reason is structural rather than lucky.
+# All three call sites pair the qualifier with ``_norm()`` of the SAME string:
+#   * _merge_primary_list: the key is ``(id_norm, quals)`` and ``id_norm``
+#     already holds ``_norm(species)``; ``_norm`` deliberately does NOT strip
+#     open-nomenclature markers (see its own docstring), so two species that
+#     differ in their marker differ in ``id_norm`` too and the qualifier
+#     component is redundant. Verified: of 429 corpus pairs sharing an
+#     ``_norm`` value, only 7 have differing qualifiers, and all 7 differ only
+#     because the "nom." label splices a captured group in with the input's
+#     case (both engines do this identically, so it is not a cross-engine
+#     divergence either -- measured, and left alone).
+#   * the species-spelling restoration block: it counts originals by
+#     ``_norm`` equality, so the originals it compares differ only in case
+#     and whitespace, which cannot move a boundary.
+#   * merge_named_lists: same shape as the first one.
+#
+# The fix is worth landing anyway -- it removes a divergence class rather
+# than an instance, and any refactor that consumes the qualifier WITHOUT
+# pairing it with ``_norm`` would silently reintroduce a species-level split.
+# But it is not a fix for anything a user could have observed, and the
+# end-to-end merge cases cannot falsify it (an attempt is recorded in
+# tests/gen_frontend_parity_fixtures.py under mrg_qualifier_cjk_with_space).
+
+
+def _ascii_b(pattern: str) -> str:
+    """Rewrite a leading and/or trailing ``\\b`` to an ASCII-only boundary.
+
+    Equivalent to JavaScript's ``\\b`` for every input, because JavaScript
+    defines a word character as exactly ``[A-Za-z0-9_]``.
+
+    Raises on a mid-pattern ``\\b`` instead of quietly leaving it
+    Unicode-aware: that residue would be a silent cross-engine divergence
+    again, and it is not a shape any pattern in this module currently has.
+    """
+    if pattern.startswith(r"\b"):
+        pattern = r"(?<![A-Za-z0-9_])" + pattern[2:]
+    if pattern.endswith(r"\b"):
+        pattern = pattern[:-2] + r"(?![A-Za-z0-9_])"
+    if r"\b" in pattern:
+        raise ValueError(
+            "mid-pattern \\b would stay Unicode-aware and diverge from "
+            "js/aggregate.js: %r" % (pattern,)
+        )
+    return pattern
+
+
+def _qpat(pattern: str, name: str):
+    return (re.compile(_ascii_b(pattern), re.IGNORECASE), name)
+
+
 _QUALIFIER_PATTERNS = [
-    (re.compile(r"\bex\s+gr(?:oup)?\.?\b", re.IGNORECASE), "ex gr."),
-    (re.compile(r"\bs\.?\s*l\.?\b", re.IGNORECASE), "s.l."),
-    (re.compile(r"\bs\.?\s*str\.?\b", re.IGNORECASE), "s.str."),
-    (re.compile(r"\bsp\.?\b", re.IGNORECASE), "sp."),
-    (re.compile(r"\bspp\.?\b", re.IGNORECASE), "spp."),
+    _qpat(r"\bex\s+gr(?:oup)?\.?\b", "ex gr."),
+    _qpat(r"\bs\.?\s*l\.?\b", "s.l."),
+    _qpat(r"\bs\.?\s*str\.?\b", "s.str."),
+    _qpat(r"\bsp\.?\b", "sp."),
+    _qpat(r"\bspp\.?\b", "spp."),
     # REVIEW-2026-09-20: cf./aff. required TRAILING WHITESPACE (`\s+`), so the
     # very common trailing-suffix forms "Genus cf." / "Genus aff." — nothing
     # after the marker — never matched and the specimen was deduped together
     # with the identified "Genus". `\b` after the optional dot matches at an
     # end of string as well, and still rejects look-alikes ("coffee",
     # "affinis") because the dot is optional on both sides of the boundary.
-    (re.compile(r"\bcf\.?\b", re.IGNORECASE), "cf."),
-    (re.compile(r"\baff\.?\b", re.IGNORECASE), "aff."),
+    _qpat(r"\bcf\.?\b", "cf."),
+    _qpat(r"\baff\.?\b", "aff."),
     (re.compile(r"\?\s*$"), "?"),
-    (re.compile(r"\bnom\.?\s+(dub|nud|nov|cons|obl|rej|van)\b", re.IGNORECASE), "nom. \\1"),
-    (re.compile(r"\bcomb\.?\s+nov\.?\b", re.IGNORECASE), "comb. nov."),
-    (re.compile(r"\bstat\.?\s+nov\.?\b", re.IGNORECASE), "stat. nov."),
-    (re.compile(r"\bsubsp\.?\b", re.IGNORECASE), "subsp."),
-    (re.compile(r"\bvar\.?\b", re.IGNORECASE), "var."),
+    _qpat(r"\bnom\.?\s+(dub|nud|nov|cons|obl|rej|van)\b", "nom. \\1"),
+    _qpat(r"\bcomb\.?\s+nov\.?\b", "comb. nov."),
+    _qpat(r"\bstat\.?\s+nov\.?\b", "stat. nov."),
+    _qpat(r"\bsubsp\.?\b", "subsp."),
+    _qpat(r"\bvar\.?\b", "var."),
 ]
 
 
@@ -117,9 +178,30 @@ def _norm_iczn_author(s):
     author = re.sub(r"\s+in\s+\S+(\s+\S+)*", "", author)
     # Strip ICZN-style punctuation: commas, parentheses, ampersands,
     # multiple spaces, "et", "al.", "&".
-    author = author.replace("&", " ").replace(" and ", " ")
+    #
+    # AUDIT-2026-10-02: the conjunction used to be removed as the LITERAL
+    # ``" and "``, which only ever matches the one spelling with exactly one
+    # space on each side. The JS mirror has always used ``/\band\b/``, so every
+    # other way of writing the same conjunction -- "(and)", "and(", "and-",
+    # "and/" -- kept the word in Python's key and dropped it in the browser's.
+    #
+    # This is not a string-comparison curiosity: the return value is spliced
+    # into the species dedup key (this function's result is appended to
+    # ``id_norm`` a few lines below), so the two engines disagreed about
+    # whether two runs described the same taxon. Measured end to end
+    # (tests_diff_frontend_parity.js mrg_author_and_spaced_vs_bracketed), two
+    # runs differing only in that bracket produced on the desktop
+    #     .species_ranges: length py=2 js=1
+    #     .species_ranges[0].agreement: py="1/2" js="2/2"
+    # -- a duplicate species row in the merged chart AND an agreement score
+    # that reported a disagreement the user never had. The browser was right:
+    # "and" is a separator in every one of those spellings, and the surname
+    # look-alikes the word-boundary form is there to protect ("Sanderson",
+    # "Alexander", "Anderson", "andersonia") all still pass untouched.
+    author = re.sub(_ascii_b(r"\band\b"), " ", author)
+    author = author.replace("&", " ")
     author = re.sub(r"[(),.;:'`\"]", " ", author)
-    author = re.sub(r"\bet\.?\s+al\.?\b", "", author)  # "et al."
+    author = re.sub(_ascii_b(r"\bet\.?\s+al\.?\b"), "", author)  # "et al."
     author = re.sub(r"\s+", " ", author).strip()
     return f"{author}|{year}" if year else author
 
@@ -137,8 +219,36 @@ def _str_for_merge(v: Any) -> str:
     """
     if isinstance(v, bool):  # bool is an int subclass - keep "True"/"False"
         return "True" if v else "False"
-    if isinstance(v, float) and v.is_integer():
-        return str(int(v))
+    if isinstance(v, float):
+        # AUDIT-2026-09-30 [non-finite vote keys]: Python renders float('nan')
+        # / float('inf') as "nan" / "inf" while JS String() gives "NaN" /
+        # "Infinity", so the two engines built DIFFERENT vote keys for the same
+        # value. A tie at the top count is broken by SORTING those keys, so the
+        # engines could select different runs and merge the field to different
+        # values. Concretely, on a tie between float('inf') and the string
+        # "info": Python sorted ["inf", "info"] -> "inf" (i-n-f beats i-n-f-o)
+        # while JS sorted ["Infinity", "info"] -> "Infinity" (uppercase I sorts
+        # before lowercase i), so the two engines returned different values.
+        # js/aggregate.js:rcaStrForMerge listed this as a known residual and
+        # called it "not fixable in JS" -- true of String(), but the PYTHON
+        # side is the one that can be made to match it. Checked before
+        # is_integer(), which is False for nan/inf anyway.
+        #
+        # NOTE: this is NOT what the difffuzz_aggregate.py mismatches were
+        # about. Those (py=nan/js=0.0, py=inf/js=0.75) came from the missing
+        # guards in _merge_confidence and merge_results, which are what actually
+        # made the engines disagree on the top-level confidence. This change
+        # closes a narrower tie-break divergence the fuzzer does not currently
+        # generate a case for, and is pinned by
+        # tests/test_aggregate_nonfinite_confidence.py.
+        if v != v:  # NaN
+            return "NaN"
+        if v == math.inf:
+            return "Infinity"
+        if v == -math.inf:
+            return "-Infinity"
+        if v.is_integer():
+            return str(int(v))
     return str(v)
 
 
@@ -370,6 +480,19 @@ def _merge_confidence(values):
         try:
             parsed = float(value)
         except (TypeError, ValueError):
+            continue
+        # AUDIT-2026-09-30 [NaN clamp]: Python's min()/max() do NOT propagate
+        # NaN -- min(1.0, nan) is 1.0, because `nan < 1.0` is False -- so a
+        # non-finite confidence used to be clamped to 1.0 and averaged in as
+        # MAXIMUM certainty. Measured: a row whose only confidence was "NaN"
+        # reported a perfect 1.0, [0.1, NaN] reported 0.55, and [0.5, NaN]
+        # reported 0.75. That contradicted this function's own docstring
+        # (missing values are EXCLUDED from the average, not counted) and
+        # js/aggregate.js mergeConfidenceField, which guards with
+        # Number.isFinite and drops non-finite values entirely. Mirror the
+        # guard so "unknown" can never be reported as certain, and so the two
+        # engines agree instead of diverging on the same input.
+        if not math.isfinite(parsed):
             continue
         valid.append(max(0.0, min(1.0, parsed)))
     if not valid:
@@ -691,7 +814,7 @@ def _empty_for(schema: MergeSchema, runs_n: int) -> dict[str, Any]:
     return out
 
 
-def _is_chimeric_row(group: list, merged: dict) -> bool:
+def _is_chimeric_row(group: list, merged: dict, keys: tuple) -> bool:
     """P1-1 (REVIEW-2026-07-25): return True if the merged row's
     (range_base, range_top, biozone, section) tuple never appears in any
     single source run — i.e. the per-field mode vote produced a
@@ -707,12 +830,35 @@ def _is_chimeric_row(group: list, merged: dict) -> bool:
     consistent (base ≤ top, biozone plausible for that range), but it
     is not what the chart showed. Mark it so the caller can drop or
     surface it explicitly.
+
+    AUDIT-2026-10-01 [item 9.13]: the key was HARDCODED to those four
+    range-chart field names, so for every other schema the tuple came out
+    all-empty and the ``not any(...)`` guard returned False for EVERY row —
+    the safeguard was inert outside range charts. Measured, on an abundance
+    construction where each field's 2-of-3 mode came from a different run:
+
+        r1 (depth 120cm, abundance 35, unit %)
+        r2 (depth 120cm, abundance 40, unit ind)
+        r3 (depth 150cm, abundance 35, unit ind)
+
+    no run ever saw (120cm, 35, ind), and the merged row was reported as
+    ``agreement: "3/3"`` with no warning and no ballot record — a fabricated
+    data point, labelled as unanimous consensus, in the very column a
+    researcher would cite.
+
+    ``keys`` is now the schema's ``primary_str_mode_fields``, which is by
+    definition "the fields this schema mode-merges" — precisely the set whose
+    combination can be fabricated. For range charts it is a strict superset of
+    the old key (species is in it, and species is part of the primary identity,
+    so the verdict is unchanged); for the others it is the first correct key
+    they have had.
     """
     if len(group) < 2:
         return False
+    if not keys:
+        return False
     # P0-5 fix: include section so same species across different sections
     # are NOT flagged as chimeras (they are legitimate multi-section obs).
-    keys = ("range_base", "range_top", "biozone", "section")
     merged_tuple = tuple(_norm(merged.get(k, "")) for k in keys)
     if not any(merged_tuple):
         return False  # no scientific content to compare
@@ -723,6 +869,34 @@ def _is_chimeric_row(group: list, merged: dict) -> bool:
         if item_tuple == merged_tuple:
             return False  # at least one source run observed this tuple
     return True
+
+
+def _recombination_ballots(group: list, keys: tuple) -> list:
+    """The distinct readings a group of runs produced, with a vote count each.
+
+    AUDIT-2026-09-27 P1: the honest replacement for DELETING a recombined row.
+    A researcher who sees "2 runs read Bed 7-Bed 9 / Zone B, 2 runs read
+    Bed 7-Bed 11 / Zone C" can adjudicate the disagreement; one who finds the
+    taxon simply missing can only assume the tool lost it.
+    """
+    tally = {}
+    order = []
+    for g in group:
+        if not isinstance(g, dict):
+            continue
+        tup = tuple(_norm(g.get(k, "")) for k in keys)
+        if not any(tup):
+            continue
+        if tup not in tally:
+            tally[tup] = 0
+            order.append(tup)
+        tally[tup] += 1
+    out = []
+    for tup in sorted(order, key=lambda t: (-tally[t], t)):
+        row = dict(zip(keys, tup))
+        row["votes"] = tally[tup]
+        out.append(row)
+    return out
 
 
 def _mode_keys(d_items, keys):
@@ -891,15 +1065,77 @@ def _merge_primary_list(runs, schema, n):
         # P1-1 (REVIEW-2026-07-25): bio-geological consistency gate.
         # If every contributing run produced a DIFFERENT (range_base,
         # range_top, biozone) tuple for this species — i.e. no run ever
-        # observed the merged tuple — DROP this row instead of emitting a
-        # chimeric "consensus" the data never supported.
-        if _is_chimeric_row(group, aggr):
-            # Still append, but mark it so downstream consumers can flag
-            # it. The merge caller checks this flag and excludes from
-            # final output via the `_drop_chimeras` toggle.
-            aggr["_chimera_dropped"] = True
-            merged.append(aggr)
-            continue
+        # observed the merged tuple — the row is a per-field RECOMBINATION.
+        #
+        # AUDIT-2026-09-27 P1: this used to DROP the row. That was wrong, and
+        # the mode-vote tie-break is why: `_mode` breaks a 1-1 tie with
+        # `sorted(top_keys)[0]`, so the merged tuple is only ever observed
+        # when EVERY field's winner came from the same run. Two runs that
+        # disagree on >= 2 of {range_base, range_top, biozone} therefore
+        # ALWAYS produce an "unobserved" tuple — which is ordinary OCR
+        # disagreement, not fabrication. Executed before the fix: run A
+        # {Bed 7, Bed 9, Zone B} + run B {Bed 7, Bed 11, Zone C}, both
+        # observing the species, merged to `species_ranges: []`. Raising
+        # `runs` — the documented way to make an extraction MORE reliable —
+        # was deleting taxa, and `chimera_warnings` was read by
+        # gui_fluent.py alone, so server.py and the whole browser path never
+        # learned a row had vanished.
+        #
+        # The row is now KEPT, flagged `recombined_consensus`, and carries the
+        # ballots so the operator can adjudicate. The predicate itself is
+        # unchanged — only its consequence moved.
+        # AUDIT-2026-09-27 [item 11.1] (measured, NOT changed): the flag fires
+        # only when >=2 of {range_base, range_top, biozone} differ, i.e. when
+        # NO run observed the merged tuple. A ONE-field disagreement takes the
+        # other branch: the merged tuple still equals one run's observation,
+        # so it is not flagged, yet which run wins is decided by `_mode`'s
+        # alphabetical tie-break. Demonstrated on a real recorded payload --
+        # run A range_top="Sample 1 (RP13, C20r, uppermost)" vs run B
+        # range_top="ZZZ-DIFFERENT" merges to run A's value with
+        # `agreement = "2/2"` and no warning of any kind.
+        #
+        # That matches the documented meaning of `agreement` ("how many runs
+        # produced this row", i.e. presence consensus, see the line ~827 that
+        # builds it), so it is not a contract violation. It IS a reading
+        # hazard: 2/2 is the strongest marker the table offers, a single
+        # misread endpoint is the commonest multi-run failure, and a
+        # minority-reported value can win on alphabetical order while
+        # displaying 2/2.
+        #
+        # Left alone deliberately. Flagging it means a new row field, a new
+        # REASON_CODES entry, a matching branch in js/aggregate.js (which
+        # mirrors this predicate at ~line 495) and an i18n message in three
+        # locales -- a behaviour change on two surfaces, not a bug fix.
+        # Raised for a decision rather than done unilaterally.
+        #
+        # AUDIT-2026-09-27 [item 11.2] ATTEMPTED, THEN REVERTED. The flag was
+        # built and measured; it turned 4 contract tests red:
+        #   test_majority_agreement_with_one_outlier_kept
+        #   test_divergent_merge_preserves_zone_warning
+        #   test_single_warning_stays_a_bare_string_in_both_engines
+        #   test_fixture_matches_python
+        # Together those say dissent is not a defect: an outlier is what the
+        # multi-run vote EXISTS to outvote, and warning per dissenting row
+        # turns the strongest channel in the table into noise the operator
+        # learns to dismiss.
+        #
+        # There is also no way to calibrate the threshold here. Every one of
+        # the 74 recorded payloads (outputs/e2e_oa/results/*.json = 66, plus
+        # tests/fixtures/real_payloads/*.json = 8) is SINGLE-run: none carries
+        # a `runs`/`results`/`attempts` container or a run-count field, so 0
+        # of 74 would exercise this branch. "How often does one run dissent"
+        # -- the only question that decides whether the warning is worth
+        # having -- is unmeasurable from anything in this repo today.
+        #
+        # To unblock it: record a few genuinely multi-run extractions
+        # (>=2 runs of the same figure) into the corpus, then measure the
+        # dissent rate before choosing a threshold. Do not re-implement the
+        # flag against synthetic data and assume the rate transfers.
+        if _is_chimeric_row(group, aggr, schema.primary_str_mode_fields):
+            _add_row_warning(aggr, "recombined_consensus")
+            aggr["_recombination_ballots"] = _recombination_ballots(
+                group, schema.primary_str_mode_fields)
+            aggr["_chimera_recombined"] = True
 
         merged.append(aggr)
 
@@ -968,10 +1204,24 @@ def _merge_named_lists(runs, schema):
 
         groups = {}
         order = []
+        # AUDIT-2026-09-27 P2: a MIXED list (some runs emit objects, another
+        # emits strings) used to lose every string. The string fast-path above
+        # is gated on "no dict anywhere", so one dict steered the whole list
+        # into the dict branch, whose loop `continue`s on every non-dict item.
+        # Executed: `['Brachiopoda', {'name': 'Crustacea'}]` + `['Mollusca']`
+        # merged to `[{'name': 'Crustacea'}]` — two taxa gone, no warning, and
+        # the single-run path kept them. A model emitting objects in one run
+        # and strings in the next is an ordinary, expected shape.
+        # Non-dict items are therefore collected and merged back as strings
+        # rather than dropped.
+        stray_strings: list[str] = []
         for r in runs:
             items = r.get(key) or []
             for it in items:
                 if not isinstance(it, dict):
+                    text = str(it).strip()
+                    if text:
+                        stray_strings.append(text)
                     continue
                 # UI-REVIEW-2026-09-07: business-identity fields for keys
                 # whose items have no natural name (zonation correlations).
@@ -1062,6 +1312,16 @@ def _merge_named_lists(runs, schema):
             if not rep and group:
                 rep = dict(group[0])
             merged.append(rep)
+        # AUDIT-2026-09-27 P2: put the mixed-in strings back, deduped
+        # case-insensitively and appended after the object rows so the output
+        # keeps the first-seen ordering of the object half.
+        if stray_strings:
+            seen = {_norm(it.get("name") or it.get("marker") or it.get("meaning") or "")
+                    for it in merged if isinstance(it, dict)}
+            for text in stray_strings:
+                if _norm(text) and _norm(text) not in seen:
+                    seen.add(_norm(text))
+                    merged.append(text)
         out[key] = merged
     return out
 
@@ -1161,6 +1421,35 @@ def merge_results(
                     out[key] = copy.deepcopy(run[key])
                     break
 
+    # AUDIT-2026-09-27 P1: carry over EVERY remaining root key, not just a
+    # hand-picked three. The N-run path builds `out` from the primary list +
+    # list_keys + confidence, so any figure-level key the single-run path
+    # keeps was silently dropped by raising the run count. The concrete case
+    # that matters is `axis_calibration`: it is a FIRST-CLASS hoisted root key
+    # by contract (extractor.py `_fold_axis_calibration`), no MergeSchema
+    # declares it, and js/viz.js reads it to turn the rows' 0-999 positions
+    # into real bed/age values. Executed before the fix: present after
+    # `total_runs=1`, GONE after `total_runs=2` — i.e. running the extraction
+    # MORE carefully destroyed the axis evidence, and the vertical axis
+    # silently fell back to uncalibrated positions with no tick labels.
+    #
+    # Rule: any root key that is not one the merge manages (the primary list,
+    # the declared list_keys, the confidence field, `runs`) survives, taken
+    # from the FIRST run that carries it, deep-copied. Same "first run that
+    # has it" rule as `_extras` / `_warnings` above, and the same deep-copy
+    # discipline: an alias would let a caller's in-place edit of the merged
+    # result rewrite the source run, breaking audit integrity.
+    managed = {sch.primary_list_key, sch.confidence_field, "runs"}
+    managed.update(sch.list_keys)
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        for key, value in run.items():
+            if key in managed or key in out:
+                continue
+            if isinstance(value, (list, dict)) and value:
+                out[key] = copy.deepcopy(value)
+
     # Weighted-mean confidence (M-1 / REVIEW-2026-09-20 comment correction).
     # The claim that this is a "simple average" was wrong: each run is
     # weighted by its OWN ``runs`` field, so a run that itself already
@@ -1182,6 +1471,18 @@ def merge_results(
         try:
             c = float(raw)
         except (TypeError, ValueError):
+            continue
+        # AUDIT-2026-09-30 [non-finite poisons the mean]: `weight_sum += c * w`
+        # has no finite guard, and ONE non-finite run destroys the confidence
+        # of every OTHER run -- `weight_n` keeps counting while `weight_sum`
+        # becomes NaN, so a single "confidence": "NaN" out of three runs made
+        # the merged top-level confidence NaN and discarded the two legitimate
+        # values. That NaN then serialises as a bare NaN token (invalid JSON)
+        # into the export and the history record. js/aggregate.js guards the
+        # same accumulation with `if (!Number.isFinite(c)) continue;` (line
+        # 1200); this is the second site where the Python side had drifted from
+        # a guard the JS mirror already had, the first being _merge_confidence.
+        if not math.isfinite(c):
             continue
         try:
             w = int(r.get("runs") or 1)
@@ -1255,19 +1556,23 @@ def merge_results(
     # output. Dropped rows are surfaced via ``chimera_warnings`` so the
     # UI can tell the operator "we dropped X rows because no run ever
     # observed the merged (FAD/LAD/biozone) tuple together".
+    # P1-1 (REVIEW-2026-07-25): surface recombined rows via
+    # ``chimera_warnings`` so the UI can tell the operator "the runs read this
+    # range differently". AUDIT-2026-09-27 P1: the rows are NO LONGER REMOVED
+    # here — they stay in ``out`` carrying ``_warning: recombined_consensus``
+    # and ``_recombination_ballots``. Dropping them is how a 2/2-agreement
+    # taxon disappeared from the merged table.
+    #
+    # ``chimera_warnings`` keeps its name because gui_fluent.py already reads
+    # it; the reason text changed from "we dropped this" to "runs disagreed",
+    # and each entry now carries the ballots so the same information is
+    # available to every consumer instead of only the Fluent GUI.
     primary_key = sch.primary_list_key
     chimeras = [
         r for r in out.get(primary_key, [])
-        if r.get("_chimera_dropped")
+        if r.get("_chimera_recombined")
     ]
     if chimeras:
-        out[primary_key] = [
-            r for r in out.get(primary_key, [])
-            if not r.get("_chimera_dropped")
-        ]
-        # Strip the internal marker from any rows that remain.
-        for r in out.get(primary_key, []):
-            r.pop("_chimera_dropped", None)
         if "chimera_warnings" not in out:
             out["chimera_warnings"] = []
         for c in chimeras:
@@ -1275,10 +1580,12 @@ def merge_results(
                 "table": primary_key,
                 "row": {k: c.get(k) for k in ("species", "section", "biozone",
                                               "range_top", "range_base")},
-                "reason": "no single run observed the merged (FAD/LAD/biozone) tuple",
+                "reason": "runs disagreed on the (FAD/LAD/biozone) tuple; "
+                          "row kept and flagged, not dropped",
+                "ballots": c.get("_recombination_ballots") or [],
             }
             out["chimera_warnings"].append(w)
-            c.pop("_chimera_dropped", None)
+            c.pop("_chimera_recombined", None)
 
     return out
 

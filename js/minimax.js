@@ -685,9 +685,19 @@ function rcaSplitDataUrl(dataUrl) {
 //      "{'a': 1}" server-side where JS yields "". JS is lossless-or-empty,
 //      never a fabricated Python repr; no test pins the Python repr.
 //   2. Float repr: Python str(1.0) == "1.0" and str(1e-7) == "1e-07", JS
-//      String(1.0) == "1" and String(1e-7) == "1e-7". Only reachable when the
-//      model emits a raw number in a string field; the aggregate layer
-//      re-normalizes both spellings through rcaPyFloat before comparing.
+//      String(1.0) == "1" and String(1e-7) == "1e-7". Reachable only when the
+//      model emits a raw number in a string field.
+//      AUDIT-2026-10-01: this note used to say the divergence was contained
+//      because "the aggregate layer re-normalizes both spellings through
+//      rcaPyFloat before comparing". That was the wrong reason -- the
+//      aggregate layer only covers MERGING, and the EXPORTED CELL kept
+//      whichever spelling the run emitted. Measured instead, the split is:
+//        - a NON-INTEGRAL float keeps the information, so rcaStringifyScalar
+//          now spells it with Python's exponent grammar (see below). Fixed.
+//        - an INTEGRAL float does not: JSON.parse('3.0') is the number 3 and
+//          Number.isInteger(3) is true, so the browser cannot know a float was
+//          written. Pinned as rc_float_integral in the differential harness's
+//          EXPECTED_DIVERGENCES, with THAT reason.
 //   3. Booleans: Python str(True) == "True", _stringify_scalar == "true";
 //      both engines use the lowercase "true"/"false" form here (rule 1 means
 //      the two range-chart str() fields are again the exception).
@@ -695,6 +705,38 @@ function rcaStringifyScalar(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (Array.isArray(value) || typeof value === 'object') return '';
+  // AUDIT-2026-09-30: a non-finite number stringifies to Python's repr
+  // spelling, not JavaScript's. rca_core/extractor.py:_stringify_scalar -- the
+  // function this mirrors -- yields "nan" / "inf" / "-inf", while
+  // String(NaN) is "NaN" and String(Infinity) is "Infinity", so the same
+  // payload rendered as `nan` on the desktop and `NaN` in the browser. This
+  // file's own js/table.js#rcaPyFloatStr already made that choice for the
+  // export path, with a comment saying it reproduces repr(float('nan')); two
+  // functions in the same product were spelling the same number two ways.
+  if (typeof value === 'number') {
+    if (Number.isNaN(value)) return 'nan';
+    if (value === Infinity) return 'inf';
+    if (value === -Infinity) return '-inf';
+    // AUDIT-2026-10-01: a NON-INTEGRAL float is spelled with Python's
+    // exponent grammar. str(1e16) is '1e+16' where String(1e16) is
+    // '10000000000000000', and str(1e-7) is '1e-07' where String is '1e-7',
+    // so the same model payload reached the CSV/XLSX cell as two different
+    // strings. js/table.js#rcaPyFloatStr already implements that grammar for
+    // the export path (checked against Python str() on 16 values, including
+    // 1e+16 / 1e-05 / 9.99e-05 / 5e-324 / -0.0), so this delegates rather than
+    // growing a third spelling of the same number in this product.
+    //
+    // An INTEGRAL value deliberately stays on String(). JSON.parse collapses
+    // the model's 3.0 to the number 3, and Number.isInteger(3) is true, so the
+    // browser cannot know a float was written; rcaPyFloatStr(3) would answer
+    // '3.0' for an ordinary integer payload. That residue is recorded in
+    // tests_diff_frontend_parity.js's EXPECTED_DIVERGENCES as
+    // rc_float_integral, next to rc_dict_shaped_sections and ag_34 / ag_35 --
+    // the same class of runtime fact rather than a mirror defect.
+    if (!Number.isInteger(value) && typeof rcaPyFloatStr === 'function') {
+      return rcaPyFloatStr(value);
+    }
+  }
   return String(value);
 }
 
@@ -1291,11 +1333,26 @@ function rcaBedIndex(value) {
 // exponents as `1e-07`; `String(1.0)` gives "1". Only reachable through the
 // Newick serializer (support / branch_length), where the two spellings produce
 // two different tree files from the same payload.
-function rcaPyFloatStr(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return String(value);
-  if (Number.isInteger(value) && Math.abs(value) < 1e21) return value.toFixed(1);
-  return String(value);
-}
+// AUDIT-2026-09-30: the local `rcaPyFloatStr` that used to sit here is
+// GONE, deliberately. It was a 3-line stub --
+//     if (typeof value !== 'number' || !Number.isFinite(value)) return String(value);
+//     if (Number.isInteger(value) && Math.abs(value) < 1e21) return value.toFixed(1);
+//
+// -- carrying the same name as js/table.js's 50-line reproduction of Python's
+// repr(), and the two disagreed about every non-finite value: this one spelled
+// NaN as "NaN" and Infinity as "Infinity", the other as "nan" and "inf", which
+// is what a function named rcaPyFloatStr is supposed to produce. Which one ran
+// was decided only by <script> order, and index.html happens to load
+// table.js AFTER this file -- so the app was correct BY ACCIDENT, while
+// difffuzz_normalize.py and difffuzz_aggregate.py load minimax.js last and were
+// therefore measuring the WRONG one. A whole-family hazard: the four call sites
+// below write a phylo row's `support` and the branch lengths inside the
+// exported Newick string.
+//
+// js/table.js was the only correct definition of the 438 global functions in
+// js/, and this was the only one defined twice, so deleting the stub leaves a
+// single definition that every load order agrees on.
+// See tests/test_nonfinite_spelling.py.
 
 // Mirror of _quote_newick_label: Newick tokens `( ) [ ] ; ,` (and a `:`, which
 // would otherwise split `name:branch_length`) force single quotes, embedded
@@ -1329,10 +1386,21 @@ function rcaExtractedAny(out) {
 // readable label out of a dict-shaped fossil entry, else keep a scalar's text,
 // else drop the record (a dict with real content but no label is noise the
 // table cannot render).
-// Mirror of Python json.dumps(value, sort_keys=True, ensure_ascii=True)
+// Mirror of Python json.dumps(value, sort_keys=True, ensure_ascii=FALSE)
 // for the flat/nested dict+list+scalar shapes the lift contract needs.
+//
+// AUDIT-2026-09-27: this function's own comment used to say ensure_ascii=True
+// and the implementation escaped every non-ASCII char as \uXXXX, while the
+// Python it claims to mirror (extractor.py:771) passes ensure_ascii=False. The
+// comment misstated its own oracle, so the divergence was invisible: a
+// label-less other_fossils entry containing any non-ASCII text rendered as
+// {"note": "\u6c49"} in the browser and as the actual characters on the
+// desktop and in CSV/XLSX. That is the Chinese-taxon case this software
+// exists to handle, and the escapes are also not round-trip safe — an edit
+// and re-save turns them into permanent literal text.
+// Found by difffuzz_normalize.py. Only the escaping is removed; key sorting,
+// the ", "/": " separators and the recursive shape are unchanged.
 function rcaPyDumps(value) {
-  const BS = String.fromCharCode(92);
   if (value === null) return 'null';
   if (Array.isArray(value)) {
     return '[' + value.map(rcaPyDumps).join(', ') + ']';
@@ -1342,11 +1410,7 @@ function rcaPyDumps(value) {
     const parts = keys.map((k) => rcaPyDumps(String(k)) + ': ' + rcaPyDumps(value[k]));
     return '{' + parts.join(', ') + '}';
   }
-  let out = JSON.stringify(value);
-  // ensure_ascii: escape every non-ASCII char as \uXXXX
-  out = out.replace(new RegExp('[^' + BS + 'x00-' + BS + 'x7F]', 'g'),
-    (ch) => BS + 'u' + ch.charCodeAt(0).toString(16).padStart(4, '0'));
-  return out;
+  return JSON.stringify(value);
 }
 
 
@@ -1409,6 +1473,10 @@ function rcaMergeOtherFossils(existing, raw) {
 // Mirror of _row_from_string: a bare-string list entry becomes one row whose
 // primary identifier is the string. Deliberately NOT for `abundances` (a taxon
 // row needs a level/abundance to mean anything; tests_core pins the drop).
+// AUDIT-2026-09-27 P1: the paleomap / scatter / chemical branches were added on
+// the Python side this round and are mirrored here for parity. Those modes have
+// no browser normalizer yet, so nothing reaches them from JS today — but a
+// half-mirrored helper is exactly how the `sections` divergence below survived.
 function rcaRowFromString(item, kind) {
   const text = String(item).trim();
   if (!text) return null;
@@ -1416,6 +1484,15 @@ function rcaRowFromString(item, kind) {
     return { name: text };
   }
   if (kind === 'species_ranges') return { species: text };
+  if (['continents', 'oceans_seas', 'tectonic_features',
+       'biogeographic_realms', 'fossil_sites', 'groups',
+       'events', 'intervals'].indexOf(kind) !== -1) {
+    return { name: text };
+  }
+  if (kind === 'paleolatitude_indicators') return { type: text };
+  if (kind === 'data_points') return { sample_id: text };
+  // Deliberately NOT abundances / scatter points / outliers / correlations /
+  // nodes: a bare string there is far more likely junk than a record.
   return null;
 }
 
@@ -1434,16 +1511,31 @@ const RCA_PRIMARY_ID_KEYS = {
   data_points: 'sample_id',
 };
 
-// Mirror of _dict_rows: dict-shaped named arrays recover their values; bare
-// strings are skipped (the caller decides whether the key has a natural
-// single-field row shape). Returns an array rather than a generator — the
-// Python generator exists only to avoid an intermediate list.
-function rcaDictRows(raw) {
+// Mirror of _dict_rows: dict-shaped named arrays recover their values; when a
+// `kind` is supplied, a LIST entry that is a bare string is coerced to a row
+// and the repair is flagged in `warnings`. Returns an array rather than a
+// generator — the Python generator exists only to avoid an intermediate list.
+//
+// AUDIT-2026-09-27 P1: `kind`/`warnings` existed on the Python side and were
+// MISSING here, so every call site silently discarded a bare-string row. For
+// columnar `sections` that meant {"sections": ["Section 1"]} — a very natural
+// thing for a model to emit — produced a populated table in the desktop app
+// and an EMPTY table in the browser, with no warning anywhere. Python calls
+// this silent data loss; see the `_dict_rows` docstring in
+// rca_core/extractor.py. Fixing this is mirroring an existing Python contract,
+// not a new behaviour: Python's side of it was already shipped and flagged.
+function rcaDictRows(raw, kind, warnings) {
   const out = [];
+  const flag = (tag) => { if (warnings) rcaPushWarning(warnings, tag); };
   if (raw && typeof raw === 'object') {
     if (Array.isArray(raw)) {
       for (const item of raw) {
-        if (item && typeof item === 'object' && !Array.isArray(item)) out.push(item);
+        if (item && typeof item === 'object' && !Array.isArray(item)) {
+          out.push(item);
+        } else if (typeof item === 'string' && kind) {
+          const row = rcaRowFromString(item, kind);
+          if (row !== null) { out.push(row); flag('string_row_coerced'); }
+        }
       }
     } else {
       for (const value of Object.values(raw)) {
@@ -2199,7 +2291,10 @@ function rcaNormalizeColumnarResult(parsed) {
   };
 
   const sections = [];
-  for (const sec of rcaDictRows(parsed.sections)) {
+  // AUDIT-2026-09-27 P1: `sections` is a name-bearing table, so a bare-string
+  // entry is coerced and reported. Mirrors extractor.py:2421-2422 / 2464-2466.
+  const sectionWarnings = [];
+  for (const sec of rcaDictRows(parsed.sections, 'sections', sectionWarnings)) {
     const row = {
       id: asStr(sec.id),
       group: asStr(sec.group),
@@ -2238,6 +2333,11 @@ function rcaNormalizeColumnarResult(parsed) {
   };
   // Python keeps BOTH legends' identical `legend_input_is_string` flags (no
   // dedup), so a plain array — not rcaPushWarning — is the faithful mirror.
+  // The section coercion flags are appended DEDUPED after them, which is what
+  // extractor.py:2464-2466 does (`if w not in legend_warnings`).
+  for (const w of sectionWarnings) {
+    if (legendWarnings.indexOf(w) === -1) legendWarnings.push(w);
+  }
   if (legendWarnings.length) out._warnings = legendWarnings;
   // Columnar is the one mode whose root extras KEEP the array-root wrapper
   // keys (Python builds `root_extras` without _pop_array_root_extras).
@@ -2517,7 +2617,15 @@ function rcaNormalizePhylogeneticTreeResult(parsed) {
     nodesOut.push(row);
   }
 
-  const metaRaw = rcaPyOr(raw.metadata, {});
+  // AUDIT-2026-09-30: `rcaPyOr(raw.metadata, {})` rejected only FALSY
+  // non-mappings, so a truthy string reached `Object.keys(...)` and produced
+  // {"0": "s", "1": "t", "2": "r"} -- a string's character positions treated
+  // as metadata keys. The Python mirror raised AttributeError on the same
+  // payload. Neither is useful; a non-mapping is not a mapping. Guarded to
+  // match the `legend` line below, which was already right on both engines,
+  // and to match rca_core/extractor.py, which now does the same.
+  const metaRaw = (raw.metadata && typeof raw.metadata === 'object'
+    && !Array.isArray(raw.metadata)) ? raw.metadata : {};
   const metadata = {
     title: rcaStringifyScalar(Object.prototype.hasOwnProperty.call(metaRaw, 'title')
       ? metaRaw.title : ''),

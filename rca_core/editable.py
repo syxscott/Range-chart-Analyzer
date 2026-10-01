@@ -130,6 +130,133 @@ def _coerce(value: Any) -> Any:
     return value
 
 
+#: The business key of a row, per list — a PRIORITY LIST of candidate key
+#: tuples, strongest first. Mirrors the primary-id idea in
+#: ``rca_core.extractor._PRIMARY_ID_KEYS`` and the identity keys in
+#: ``rca_core.exporter``. Used to ALIGN rows across a diff so an insertion
+#: cannot shift a neighbouring row's edit onto it.
+#:
+#: AUDIT-2026-09-27: the first version demanded that EVERY key of a single
+#: tuple be present, which broke plain ``[{"name": "a"}, ...]`` section lists
+#: (no ``id``): nothing was identifiable, every row looked new, and appending
+#: three rows produced four ``new_*`` entries on top of an existing row. The
+#: key sets are therefore tried strongest-first, and a weaker single-field key
+#: is accepted only when its value is UNIQUE among the before-rows.
+_ROW_ID_KEYS = {
+    "species_ranges": [("species", "section"), ("species",)],
+    "sections": [("id",), ("name",)],
+    "biozones": [("name", "section"), ("name",)],
+    "abundances": [("taxon", "site", "level"), ("taxon", "level"), ("taxon",)],
+    "sites": [("name",)],
+    "zones": [("name",)],
+    "zonations": [("name",)],
+    "correlations": [("from_zone", "to_zone"), ("from_zone",)],
+    "nodes": [("id",)],
+}
+
+
+def _row_key(row: Any, id_keys: list) -> tuple:
+    """The strongest usable identity key for *row*, or () if it has none.
+
+    Key sets are tried in priority order. A single-field key is accepted only
+    when its value is unique among the rows being aligned, so two taxa that
+    share a species name in different sections are never paired by the weak
+    fallback when the strong key was available.
+    """
+    if not isinstance(row, dict):
+        return ("\x00scalar", str(row))
+    for keys in id_keys or [()]:
+        if not keys:
+            continue
+        parts = []
+        for k in keys:
+            v = row.get(k)
+            if v is None or (isinstance(v, str) and not v.strip()):
+                parts = None
+                break
+            parts.append(str(v).strip().lower())
+        if parts:
+            return tuple(parts)
+    return ()
+
+
+def _align_rows(b: list, a: list, id_keys: list) -> list:
+    """Pair up ``b``/``a`` rows, in ``a``'s order, as ``(b_idx | None, a_idx)``.
+
+    AUDIT-2026-09-27 P1: the diff was purely POSITIONAL, so a mid-table insert
+    could not be expressed. Executed: ``[Alpha, Beta, Gamma]`` with ``Delta``
+    inserted at index 2 came back as "row 2 changed" plus "append a copy of the
+    old last row", and applying it produced
+    ``[Alpha, Beta, Delta(_extras='Fig Gamma'), Gamma(_extras='Fig Gamma')]`` —
+    a FABRICATED plate figure on a new taxon and a DUPLICATED one. A pure
+    re-sort was worse still: ``Alpha`` kept ``Beta``'s ``_extras``.
+
+    The root cause is that ``_extras`` is deliberately excluded from the cell
+    diff (``continue`` below), so it stays welded to the POSITIONAL slot and
+    follows whatever row slides into it. Aligning by identity first fixes both
+    the insert and the re-sort.
+
+    Two passes, and the second one is what keeps this compatible with the JS
+    mirror (``js/table.js``) and with every pre-existing caller:
+
+    1. pair what identity can decide (a weak single-field key is used only
+       when its value is unambiguous across the before-rows);
+    2. pair everything still unpaired POSITIONALLY, in order — i.e. exactly the
+       old behaviour for whatever the identity pass could not decide.
+
+    Only an ``a``-row left with no ``b``-row at all is genuinely new. An
+    earlier version returned ``(None, j)`` for every unmatched row and the
+    caller then emitted ``new_<j>`` for each, which turned a plain two-row
+    cell edit into "two brand new rows" and broke parity with the JS engine.
+    """
+    pairs: list = [None] * len(a)
+    claimed_b: set = set()
+
+    b_index: dict = {}
+    weak_counts: dict = {}
+    for i, row in enumerate(b):
+        k = _row_key(row, id_keys)
+        if not k:
+            continue
+        b_index.setdefault(k, []).append(i)
+        if len(k) == 1:
+            weak_counts[k] = weak_counts.get(k, 0) + 1
+
+    # Pass 1 - identity.
+    for j, row in enumerate(a):
+        k = _row_key(row, id_keys)
+        if not k or not b_index.get(k):
+            continue
+        if len(k) == 1 and weak_counts.get(k, 0) > 1:
+            continue          # ambiguous single-field key: leave it to pass 2
+        for i in b_index[k]:
+            if i not in claimed_b:
+                claimed_b.add(i)
+                pairs[j] = (i, j)
+                break
+
+    # Pass 2 - positional, for whatever pass 1 left undecided.
+    free_b = [i for i in range(len(b)) if i not in claimed_b]
+    cursor = 0
+    for j in range(len(a)):
+        if pairs[j] is not None:
+            continue
+        if cursor < len(free_b):
+            i = free_b[cursor]
+            cursor += 1
+            claimed_b.add(i)
+            pairs[j] = (i, j)
+        else:
+            pairs[j] = (None, j)      # genuinely beyond the end -> a new row
+
+    # Before-rows no after-row claimed are deletions. The caller already
+    # replaces the whole list when it shrank, so these are only reported.
+    for i in range(len(b)):
+        if i not in claimed_b:
+            pairs.append((i, None))
+    return pairs
+
+
 def capture_edits(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     """Diff two result dicts and return a normalized edits payload.
 
@@ -154,23 +281,50 @@ def capture_edits(before: dict[str, Any], after: dict[str, Any]) -> dict[str, An
             continue
         edits: dict[str, Any] = {}
         n = min(len(b), len(a))
+        # AUDIT-2026-09-27 P1: align by row identity first, so an insertion or
+        # a re-sort cannot slide one taxon's edit onto its neighbour. Falls
+        # back to the positional pairing when the rows carry no usable key
+        # (scalar rows, or objects with an empty identifier).
+        pairs = _align_rows(b, a, _ROW_ID_KEYS.get(key, ()))
+        aligned = any(bi is not None and bi != ai for bi, ai in pairs)
         # Capture scalar-row edits via _replaced so lists like
         # other_fossils (a list of plain strings) are not silently
         # dropped. Per-cell diffing is impossible for non-dict rows
         # (bi/ai both default to {} and the diff loop never fires),
         # so a list-level replacement is the correct edit encoding.
         scalar_changed = False
-        for i in range(n):
+        for bi_i, ai_i in pairs:
+            if bi_i is None:
+                # A row that exists only in `after`: a genuine insertion.
+                # Recorded at its own position so apply_edits puts it there.
+                #
+                # AUDIT-2026-09-27 P1: a SCALAR row cannot be encoded as
+                # `new_<i>` -- the payload is a dict, and apply_edits drops a
+                # non-dict insertion on the floor -- so it was not recorded at
+                # all. Adding one fossil to `other_fossils` produced an EMPTY
+                # edits payload, is_dirty() returned False, and the row was
+                # silently discarded on Save. The repair for a scalar row is
+                # the list-level replacement, which is exactly what the
+                # "both rows are scalars" branch below already uses.
+                if ai_i is not None:
+                    if isinstance(a[ai_i], dict):
+                        edits[f"new_{ai_i}"] = copy.deepcopy(a[ai_i])
+                    else:
+                        scalar_changed = True
+                continue
+            if ai_i is None:
+                continue   # deletion; the shrink case above replaced the list
+            i = bi_i
             bi = b[i] if isinstance(b[i], dict) else {}
-            ai = a[i] if isinstance(a[i], dict) else {}
+            ai = a[ai_i] if isinstance(a[ai_i], dict) else {}
             # Row-type mismatch (dict vs scalar): cannot merge cell
             # edits; fall through to list-replacement semantics.
-            if isinstance(b[i], dict) != isinstance(a[i], dict):
+            if isinstance(b[i], dict) != isinstance(a[ai_i], dict):
                 scalar_changed = True
                 continue
-            if not isinstance(a[i], dict):
+            if not isinstance(a[ai_i], dict):
                 # Both rows are scalars — compare values directly.
-                if _coerce(a[i]) != _coerce(b[i]):
+                if _coerce(a[ai_i]) != _coerce(b[i]):
                     scalar_changed = True
                 continue
             cell_edits: dict[str, Any] = {}
@@ -202,11 +356,25 @@ def capture_edits(before: dict[str, Any], after: dict[str, Any]) -> dict[str, An
         if scalar_changed:
             # Copy the entire 'after' list so apply_edits can replay it.
             edits["_replaced"] = copy.deepcopy(a)
-        # Newly appended rows: encode the whole dict so they can be
-        # reconstructed verbatim.
-        for i in range(n, len(a)):
-            if isinstance(a[i], dict):
-                edits[f"new_{i}"] = a[i]
+        # AUDIT-2026-09-27 P1: the old loop here emitted `new_<i>` only for
+        # i >= len(b), i.e. rows appended at the END. A mid-table insert is
+        # now emitted by the alignment loop above at its real position, so
+        # this fallback is kept only for the case where alignment could not
+        # pair anything at all (unidentifiable rows) — and it is deep-copied
+        # like the other branch, so a later in-place edit cannot alias.
+        if not aligned:
+            for i in range(n, len(a)):
+                if isinstance(a[i], dict):
+                    edits[f"new_{i}"] = copy.deepcopy(a[i])
+                elif not scalar_changed:
+                    # AUDIT-2026-09-27 P1: same reason as the alignment loop --
+                    # a trailing SCALAR row is not encodable as `new_<i>`, so
+                    # appending one fossil to `other_fossils` fell out of the
+                    # fallback and was dropped. Route it to the replacement.
+                    # `scalar_changed` is consumed ABOVE this block, so the
+                    # replacement is written here rather than by setting it.
+                    scalar_changed = True
+                    edits["_replaced"] = copy.deepcopy(a)
         if edits:
             out[key] = edits
     return out
