@@ -45,14 +45,27 @@ def _normalize_taxon(name: str, *, preserve_qualifiers: bool = True) -> str:
     if not name:
         return ""
     s = re.sub(r"\s+", " ", str(name).strip().lower())
+    # AUDIT-2026-10-02: the qualifier patterns below used a bare `\b`, which on
+    # a Python str is Unicode-aware, while the product's own notion of a
+    # qualifier is ASCII-bounded (aggregate.py::_ascii_b and the lookarounds in
+    # names.py::clean_name_for_lookup, both fixed the same day for the same
+    # reason). So for "中华虫sp." this function neither canonicalised the
+    # marker nor removed it in the LENIENT pass -- and the lenient metric is
+    # precisely the one that is supposed to ignore qualifiers, so it
+    # under-counted a match the product's own dedup was counting correctly.
+    # An evaluation harness that scores against a different notion of taxon
+    # identity than the code under test makes every number it reports
+    # untrustworthy, so both passes are pinned to the ASCII boundary here too.
+    nb = r"(?<![A-Za-z0-9_])"   # ASCII \b
+    na = r"(?![A-Za-z0-9_])"
     canonical = (
-        (r"\bex\s+gr(?:oup)?\.?(?=\s|$)", "ex gr."),
-        (r"\bsensu\s+lato\b|\bs\.?\s*l\.?(?=\s|$)", "s.l."),
-        (r"\bsensu\s+stricto\b|\bs\.?\s*str\.?(?=\s|$)", "s.str."),
-        (r"\bcf\.?(?=\s|$)", "cf."),
-        (r"\baff\.?(?=\s|$)", "aff."),
-        (r"\bspp\.?(?=\s|$)", "spp."),
-        (r"\bsp\.?(?=\s|$)", "sp."),
+        (nb + r"ex\s+gr(?:oup)?\.?(?=\s|$)", "ex gr."),
+        (nb + r"sensu\s+lato" + na + r"|" + nb + r"s\.?\s*l\.?(?=\s|$)", "s.l."),
+        (nb + r"sensu\s+stricto" + na + r"|" + nb + r"s\.?\s*str\.?(?=\s|$)", "s.str."),
+        (nb + r"cf\.?(?=\s|$)", "cf."),
+        (nb + r"aff\.?(?=\s|$)", "aff."),
+        (nb + r"spp\.?(?=\s|$)", "spp."),
+        (nb + r"sp\.?(?=\s|$)", "sp."),
     )
     for pattern, replacement in canonical:
         s = re.sub(pattern, replacement, s)
@@ -62,13 +75,13 @@ def _normalize_taxon(name: str, *, preserve_qualifiers: bool = True) -> str:
         return s
 
     qualifier_patterns = (
-        r"\bex\s+gr\.\s*",
-        r"\bs\.l\.\s*",
-        r"\bs\.str\.\s*",
-        r"\bcf\.\s*",
-        r"\baff\.\s*",
-        r"\bspp\.\s*",
-        r"\bsp\.\s*",
+        nb + r"ex\s+gr\.\s*",
+        nb + r"s\.l\.\s*",
+        nb + r"s\.str\.\s*",
+        nb + r"cf\.\s*",
+        nb + r"aff\.\s*",
+        nb + r"spp\.\s*",
+        nb + r"sp\.\s*",
         r"\s*\?\s*",
     )
     for pattern in qualifier_patterns:

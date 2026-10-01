@@ -159,3 +159,67 @@ class TestTopAndBaseAreSymmetric:
             base_answer = EM.range_base_accuracy(swap(CORPUS), swap(CORPUS),
                                                 tolerance=tolerance)
             assert top_answer == base_answer, (tolerance, top_answer, base_answer)
+
+
+class TestTaxonNormalisationAgreesWithTheProduct:
+    """AUDIT-2026-10-02. An evaluation harness must score against the SAME
+    notion of a taxon the code under test dedups on, or every number it
+    reports is untrustworthy.
+
+    rca_core/eval_metrics.py::_normalize_taxon used a bare ``\\b``, which on a
+    Python str is Unicode-aware, while the product's own notion is
+    ASCII-bounded (aggregate.py::_ascii_b, and the lookarounds in
+    names.py::clean_name_for_lookup -- all three fixed the same day for the
+    same reason). The visible consequence was in the LENIENT pass, which exists
+    precisely to ignore open-nomenclature qualifiers: for "中华虫sp." the marker
+    survived, so the lenient metric scored it as a different taxon from "中华虫"
+    while aggregate's dedup was correctly keeping them apart. Measured before
+    and after:
+
+        "Genus sp."          lenient  genus          ->  genus        (unchanged)
+        "中华虫 sp."          lenient  中华虫          ->  中华虫        (unchanged)
+        "中华虫sp."          lenient  中华虫sp.  WRONG ->  中华虫        (fixed)
+        "图cf. Genus"        lenient  图cf. genus  WRONG ->  图 genus     (fixed)
+        "中华虫cfsp. yini"   lenient  unchanged      ->  unchanged    (look-alike)
+
+    The rows below are the property, not the fix: whatever the implementation
+    does, the lenient pass must be INSENSITIVE to where a qualifier sits, and
+    must agree with _extract_qualifiers about whether one is there at all.
+    """
+
+    QUALIFIERS = ["sp.", "spp.", "cf.", "aff."]
+
+    @pytest.mark.parametrize("marker", QUALIFIERS)
+    @pytest.mark.parametrize("gap", ["", " ", "  "])
+    def test_lenient_is_insensitive_to_where_the_marker_sits(self, marker, gap):
+        base = "中华虫"
+        for text in (f"{base}{gap}{marker}", f"{base}{gap}{marker[:-1]}"):
+            assert EM._normalize_taxon(text, preserve_qualifiers=False) == \
+                EM._normalize_taxon(base, preserve_qualifiers=False), text
+
+    @pytest.mark.parametrize("marker", QUALIFIERS)
+    def test_lenient_agrees_with_the_products_own_qualifier_detection(self, marker):
+        """The harness and the code under test must not disagree about whether
+        a marker is present -- that disagreement is what turns an accuracy
+        number into a fiction."""
+        from rca_core.aggregate import _extract_qualifiers
+        for text in (f"中华虫{marker}", f"中华虫 {marker}", f"Genus {marker}"):
+            has_marker = bool(_extract_qualifiers(text))
+            lenient = EM._normalize_taxon(text, preserve_qualifiers=False)
+            strict = EM._normalize_taxon(text, preserve_qualifiers=True)
+            if has_marker:
+                assert lenient == strict.replace(marker, "").strip() or \
+                    marker not in strict, (text, strict, lenient)
+            else:
+                assert lenient == strict, (text, strict, lenient)
+
+    def test_a_lookalike_is_not_a_qualifier(self):
+        """The guard must still reject an ASCII identifier that merely
+        contains the marker -- the same look-alikes every other site in this
+        family pins."""
+        from rca_core.aggregate import _extract_qualifiers
+        for text in ("中华虫cfsp. yini", "Genus nearness", "Gencf. Foo"):
+            assert _extract_qualifiers(text) == set(), text
+            assert EM._normalize_taxon(
+                text, preserve_qualifiers=False) == \
+                EM._normalize_taxon(text, preserve_qualifiers=True), text
