@@ -134,6 +134,17 @@ function buildContext() {
       mergeScalarField: typeof mergeScalarField !== 'undefined' ? mergeScalarField : null,
       mergeTypedInteger: typeof mergeTypedInteger !== 'undefined' ? mergeTypedInteger : null,
       mergeConfidenceField: typeof mergeConfidenceField !== 'undefined' ? mergeConfidenceField : null,
+      // Second wave: the dispatchers and the mutating mergers. The three
+      // mutators are called on a COPY and the copy returned, so the JSON
+      // comparison sees the mutation on both sides rather than a bare true.
+      mergeMappingField: typeof mergeMappingField !== 'undefined' ? mergeMappingField : null,
+      mergeStructuredField: typeof mergeStructuredField !== 'undefined' ? mergeStructuredField : null,
+      mergeFieldAcrossRuns: typeof mergeFieldAcrossRuns !== 'undefined' ? mergeFieldAcrossRuns : null,
+      rcaMergeRowWarnings: typeof rcaMergeRowWarnings !== 'undefined' ? rcaMergeRowWarnings : null,
+      rcaAddRowWarning: typeof rcaAddRowWarning !== 'undefined' ? rcaAddRowWarning : null,
+      rcaMergeContractField: typeof rcaMergeContractField !== 'undefined' ? rcaMergeContractField : null,
+      rcaIsChimericRow: typeof rcaIsChimericRow !== 'undefined' ? rcaIsChimericRow : null,
+      rcaRecombinationBallots: typeof rcaRecombinationBallots !== 'undefined' ? rcaRecombinationBallots : null,
     };
   `, ctx);
   return ctx.__exp;
@@ -229,6 +240,28 @@ const RUNNERS = {
       // here, and that asymmetry is the only one in the table.
       case 'typed_mode': return sentinel(f.mergeTypedInteger(a[0]));
       case 'confidence': return sentinel(f.mergeConfidenceField(a[0]));
+      // Second wave. See the generator's block header for why the mutators
+      // are called on a copy and why contract_field returns {handled, target}.
+      case 'merge_mapping': return sentinel(f.mergeMappingField(a[0]));
+      case 'merge_structured': return f.mergeStructuredField(a[0]);
+      case 'merge_across': return sentinel(f.mergeFieldAcrossRuns(a[0]));
+      case 'row_warnings': {
+        const t = JSON.parse(JSON.stringify(a[0]));
+        f.rcaMergeRowWarnings(t, JSON.parse(JSON.stringify(a[1])));
+        return t;
+      }
+      case 'add_row_warning': {
+        const t = JSON.parse(JSON.stringify(a[0]));
+        f.rcaAddRowWarning(t, a[1]);
+        return t;
+      }
+      case 'contract_field': {
+        const t = JSON.parse(JSON.stringify(a[2]));
+        const handled = f.rcaMergeContractField(a[0], JSON.parse(JSON.stringify(a[1])), t);
+        return { handled: handled === true, target: t };
+      }
+      case 'chimeric': return f.rcaIsChimericRow(a[0], a[1], a[2]) === true;
+      case 'ballots': return f.rcaRecombinationBallots(a[0], a[1]);
       default: throw new Error('no aggregate op ' + p.op);
     }
   },

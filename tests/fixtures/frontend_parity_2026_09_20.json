@@ -17431,6 +17431,11222 @@
    "python": 0.3333
   },
   {
+   "group": "aggregate",
+   "id": "agmap_0",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     []
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_1",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_2",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {},
+      {}
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {}
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_3",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {
+       "a": 1
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "1"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_4",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {
+       "a": 1
+      },
+      {
+       "a": 2
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "1"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_5",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {
+       "a": 1
+      },
+      {
+       "b": 2
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "1",
+    "b": "2"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_6",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {
+       "a": 1
+      },
+      {
+       "a": null
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "1"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_7",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {
+       "a": null
+      },
+      {
+       "a": 1
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "1"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_8",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {
+       "a": {
+        "b": 1
+       }
+      },
+      {
+       "a": {
+        "b": 2
+       }
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": {
+     "b": "1"
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_9",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {
+       "a": {
+        "b": 1
+       }
+      },
+      {
+       "a": {
+        "c": 1
+       }
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": {
+     "b": "1",
+     "c": "1"
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_10",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {
+       "a": [
+        {
+         "x": 1
+        }
+       ]
+      },
+      {
+       "a": [
+        {
+         "x": 1
+        },
+        {
+         "y": 2
+        }
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": [
+     {
+      "x": 1
+     },
+     {
+      "y": 2
+     }
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_11",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {
+       "a": "x"
+      },
+      {
+       "a": "y"
+      },
+      {
+       "a": "x"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "x"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_12",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {
+       "a": true,
+       "b": true
+      },
+      {
+       "a": true,
+       "b": false
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": true,
+    "b": false
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_13",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {
+       "z": 1,
+       "a": 2
+      },
+      {
+       "a": 3,
+       "z": 4
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "2",
+    "z": "1"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_14",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {},
+      {
+       "a": 1
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "1"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_15",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {
+       "a": 1
+      },
+      "scalar"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "1"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_16",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      "scalar",
+      {
+       "a": 1
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "1"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agmap_17",
+   "payload": {
+    "op": "merge_mapping",
+    "args": [
+     [
+      {
+       "a": 1
+      },
+      [
+       {
+        "x": 1
+       }
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "1"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_18",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     []
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_19",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_20",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      null,
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_21",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "a"
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_22",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      "a",
+      "a",
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "a"
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_23",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      [],
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_24",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      [
+       {
+        "a": 1
+       }
+      ],
+      [
+       {
+        "a": 1
+       }
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "a": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_25",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      [
+       {
+        "a": 1
+       }
+      ],
+      [
+       {
+        "a": 2
+       }
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "a": 1
+    },
+    {
+     "a": 2
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_26",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      [
+       {
+        "a": 1
+       }
+      ],
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "a": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_27",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      [],
+      [
+       {
+        "a": 1
+       }
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "a": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_28",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      {},
+      {}
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {}
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_29",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      {
+       "a": 1
+      },
+      {
+       "a": 1
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "1"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_30",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      {
+       "a": 1
+      },
+      {}
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "1"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_31",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      0,
+      0,
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "0"
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_32",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      0,
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "0"
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_33",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      1,
+      "1"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "1"
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_34",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      [
+       1
+      ],
+      [
+       2
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_35",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      [
+       "a"
+      ],
+      [
+       "b"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_36",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      [
+       {
+        "a": 1
+       }
+      ],
+      [
+       "scalar"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_37",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      {
+       "a": 1
+      },
+      [
+       1
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "1"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_38",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      1,
+      {
+       "a": 1
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "a": "1"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_39",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      0.5,
+      0.7
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "0.5"
+  },
+  {
+   "group": "aggregate",
+   "id": "agacr_40",
+   "payload": {
+    "op": "merge_across",
+    "args": [
+     [
+      true,
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "1"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_41",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "name": "Late Permian (Wuchiapingian)",
+       "top_depth_m": "",
+       "base_depth_m": "",
+       "top_age_ma": "260",
+       "base_age_ma": "252",
+       "lithology": "",
+       "geometry": {
+        "version": 1,
+        "scale": "pos_0_999",
+        "calibrated": true,
+        "points": {
+         "top_pos_0_999": {
+          "pos": 0,
+          "axis": "vertical",
+          "value": 260.0,
+          "unit": "Ma"
+         }
+        }
+       }
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_42",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "name": "Late Permian (Wuchiapingian)",
+       "top_depth_m": "",
+       "base_depth_m": "",
+       "top_age_ma": "260",
+       "base_age_ma": "252",
+       "lithology": "",
+       "geometry": {
+        "version": 1,
+        "scale": "pos_0_999",
+        "calibrated": true,
+        "points": {
+         "top_pos_0_999": {
+          "pos": 0,
+          "axis": "vertical",
+          "value": 260.0,
+          "unit": "Ma"
+         }
+        }
+       }
+      },
+      {
+       "name": "Late Permian (Wuchiapingian)",
+       "top_depth_m": "",
+       "base_depth_m": "",
+       "top_age_ma": "260",
+       "base_age_ma": "252",
+       "lithology": "",
+       "geometry": {
+        "version": 1,
+        "scale": "pos_0_999",
+        "calibrated": true,
+        "points": {
+         "top_pos_0_999": {
+          "pos": 0,
+          "axis": "vertical",
+          "value": 260.0,
+          "unit": "Ma"
+         }
+        }
+       }
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_43",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "name": "Late Cretaceous – Coniacian (Con.)",
+       "top_depth_m": "",
+       "base_depth_m": "",
+       "top_age_ma": "86.3",
+       "base_age_ma": "89.8",
+       "lithology": "Varicolored shale (uncertain)",
+       "reason_codes": [
+        "low_confidence"
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_44",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "name": "Late Cretaceous – Coniacian (Con.)",
+       "top_depth_m": "",
+       "base_depth_m": "",
+       "top_age_ma": "86.3",
+       "base_age_ma": "89.8",
+       "lithology": "Varicolored shale (uncertain)",
+       "reason_codes": [
+        "low_confidence"
+       ]
+      },
+      {
+       "name": "Late Cretaceous – Coniacian (Con.)",
+       "top_depth_m": "",
+       "base_depth_m": "",
+       "top_age_ma": "86.3",
+       "base_age_ma": "89.8",
+       "lithology": "Varicolored shale (uncertain)",
+       "reason_codes": [
+        "low_confidence"
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_45",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 8
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_46",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 8
+      },
+      {
+       "a": 8
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_47",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "8"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_48",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "8"
+      },
+      {
+       "a": "8"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_49",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 8,
+       "b": 1
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_50",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 8,
+       "b": 1
+      },
+      {
+       "a": 8,
+       "b": 1
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_51",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "b": 1,
+       "a": 8
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_52",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "b": 1,
+       "a": 8
+      },
+      {
+       "b": 1,
+       "a": 8
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_53",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": true
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_54",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": true
+      },
+      {
+       "a": true
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_55",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "True"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_56",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "True"
+      },
+      {
+       "a": "True"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_57",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": false
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_58",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": false
+      },
+      {
+       "a": false
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_59",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "False"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_60",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "False"
+      },
+      {
+       "a": "False"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_61",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 1
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_62",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 1
+      },
+      {
+       "a": 1
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_63",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": true
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_64",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": true
+      },
+      {
+       "a": true
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_65",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 1.0
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_66",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 1.0
+      },
+      {
+       "a": 1.0
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_67",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "1.0"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_68",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "1.0"
+      },
+      {
+       "a": "1.0"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_69",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 0.0
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_70",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 0.0
+      },
+      {
+       "a": 0.0
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_71",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": -0.0
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_72",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": -0.0
+      },
+      {
+       "a": -0.0
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_73",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": null
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_74",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": null
+      },
+      {
+       "a": null
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_75",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "None"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_76",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "None"
+      },
+      {
+       "a": "None"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_77",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "null"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_78",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "null"
+      },
+      {
+       "a": "null"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_79",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": []
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_80",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": []
+      },
+      {
+       "a": []
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_81",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": [
+        1
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_82",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": [
+        1
+       ]
+      },
+      {
+       "a": [
+        1
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_83",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": [
+        1,
+        2
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_84",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": [
+        1,
+        2
+       ]
+      },
+      {
+       "a": [
+        1,
+        2
+       ]
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_85",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "1,2"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_86",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "1,2"
+      },
+      {
+       "a": "1,2"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_87",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "[1, 2]"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_88",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "[1, 2]"
+      },
+      {
+       "a": "[1, 2]"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_89",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": {}
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_90",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": {}
+      },
+      {
+       "a": {}
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_91",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": {
+        "b": 1
+       }
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_92",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": {
+        "b": 1
+       }
+      },
+      {
+       "a": {
+        "b": 1
+       }
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_93",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "{\"b\": 1}"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_94",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "{\"b\": 1}"
+      },
+      {
+       "a": "{\"b\": 1}"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_95",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": ""
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_96",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": ""
+      },
+      {
+       "a": ""
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_97",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": " "
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_98",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": " "
+      },
+      {
+       "a": " "
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_99",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 0
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_100",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 0
+      },
+      {
+       "a": 0
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_101",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "0"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_102",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "0"
+      },
+      {
+       "a": "0"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_103",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": ""
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_104",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": ""
+      },
+      {
+       "a": ""
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_105",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "x",
+       "b": "y"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_106",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "x",
+       "b": "y"
+      },
+      {
+       "a": "x",
+       "b": "y"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_107",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "b": "y",
+       "a": "x"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_108",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "b": "y",
+       "a": "x"
+      },
+      {
+       "b": "y",
+       "a": "x"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_109",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 1e+16
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_110",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 1e+16
+      },
+      {
+       "a": 1e+16
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_111",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 1e-07
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_112",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 1e-07
+      },
+      {
+       "a": 1e-07
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_113",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "1e+16"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_114",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "1e+16"
+      },
+      {
+       "a": "1e+16"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_115",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "1e-16"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2b_116",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": "1e-16"
+      },
+      {
+       "a": "1e-16"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_pair_8",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 8
+      },
+      {
+       "a": "8"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_pair_true",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": true
+      },
+      {
+       "a": "True"
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_pair_1",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 1
+      },
+      {
+       "a": 1.0
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_real_pair",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "name": "Late Permian (Wuchiapingian)",
+       "top_depth_m": "",
+       "base_depth_m": "",
+       "top_age_ma": "260",
+       "base_age_ma": "252",
+       "lithology": "",
+       "geometry": {
+        "version": 1,
+        "scale": "pos_0_999",
+        "calibrated": true,
+        "points": {
+         "top_pos_0_999": {
+          "pos": 0,
+          "axis": "vertical",
+          "value": 260.0,
+          "unit": "Ma"
+         }
+        }
+       }
+      },
+      {
+       "name": "Late Cretaceous – Coniacian (Con.)",
+       "top_depth_m": "",
+       "base_depth_m": "",
+       "top_age_ma": "86.3",
+       "base_age_ma": "89.8",
+       "lithology": "Varicolored shale (uncertain)",
+       "reason_codes": [
+        "low_confidence"
+       ]
+      },
+      {
+       "name": "Late Permian (Wuchiapingian)",
+       "top_depth_m": "",
+       "base_depth_m": "",
+       "top_age_ma": "260",
+       "base_age_ma": "252",
+       "lithology": "",
+       "geometry": {
+        "version": 1,
+        "scale": "pos_0_999",
+        "calibrated": true,
+        "points": {
+         "top_pos_0_999": {
+          "pos": 0,
+          "axis": "vertical",
+          "value": 260.0,
+          "unit": "Ma"
+         }
+        }
+       }
+      }
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr2_mixed",
+   "payload": {
+    "op": "merge_structured",
+    "args": [
+     [
+      {
+       "a": 1
+      },
+      "scalar",
+      null,
+      [
+       1
+      ],
+      [
+       {
+        "b": 2
+       }
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "b": 2
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_122",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     []
+    ]
+   },
+   "extra": null,
+   "python": {}
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_123",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {}
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_124",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {}
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_125",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      "one"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_126",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      [
+       "a",
+       "b"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_127",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      [
+       "b",
+       "c"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "b",
+     "c"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_128",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      "one",
+      "two"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     "two"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_129",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      [
+       "a"
+      ],
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_130",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      null,
+      "a",
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_131",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      "a",
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_132",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {}
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_133",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {}
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_134",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {}
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_135",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {}
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_136",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {},
+     [
+      [
+       []
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {}
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_137",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": ""
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_138",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": ""
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_139",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": ""
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_140",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      "one"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_141",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      [
+       "a",
+       "b"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_142",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      [
+       "b",
+       "c"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "b",
+     "c"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_143",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      "one",
+      "two"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     "two"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_144",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      [
+       "a"
+      ],
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_145",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      null,
+      "a",
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_146",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      "a",
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_147",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": ""
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_148",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": ""
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_149",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": ""
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_150",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": ""
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_151",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": ""
+     },
+     [
+      [
+       []
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": ""
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_152",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": null
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_153",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": null
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_154",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": null
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_155",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      "one"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_156",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      [
+       "a",
+       "b"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_157",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      [
+       "b",
+       "c"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "b",
+     "c"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_158",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      "one",
+      "two"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     "two"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_159",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      [
+       "a"
+      ],
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_160",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      null,
+      "a",
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_161",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      "a",
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_162",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": null
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_163",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": null
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_164",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": null
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_165",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": null
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_166",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": null
+     },
+     [
+      [
+       []
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": null
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_167",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_168",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_169",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_170",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      "one"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_171",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      [
+       "a",
+       "b"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_172",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      [
+       "b",
+       "c"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     "b",
+     "c"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_173",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      "one",
+      "two"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     "two"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_174",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      [
+       "a"
+      ],
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_175",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      null,
+      "a",
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     "a"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_176",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      "a",
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     "a"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_177",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_178",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_179",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_180",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_181",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     [
+      [
+       []
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_182",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_183",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_184",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_185",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      "one"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     "one"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_186",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      [
+       "a",
+       "b"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_187",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      [
+       "b",
+       "c"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     "c"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_188",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      "one",
+      "two"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     "one",
+     "two"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_189",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      [
+       "a"
+      ],
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_190",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      null,
+      "a",
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_191",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      "a",
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_192",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_193",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_194",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_195",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_196",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     [
+      [
+       []
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_197",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_198",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_199",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_200",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      "one"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     "one"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_201",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      [
+       "a",
+       "b"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_202",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      [
+       "b",
+       "c"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     "c"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_203",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      "one",
+      "two"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     "one",
+     "two"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_204",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      [
+       "a"
+      ],
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_205",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      null,
+      "a",
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_206",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      "a",
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_207",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_208",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_209",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_210",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_211",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     [
+      [
+       []
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_212",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a",
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_213",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a",
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_214",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a",
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_215",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      "one"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "one"
+    ],
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_216",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      [
+       "a",
+       "b"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ],
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_217",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      [
+       "b",
+       "c"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     "c"
+    ],
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_218",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      "one",
+      "two"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "one",
+     "two"
+    ],
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_219",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      [
+       "a"
+      ],
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ],
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_220",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      null,
+      "a",
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a",
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_221",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      "a",
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a",
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_222",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a",
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_223",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a",
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_224",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a",
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_225",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a",
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_226",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     [
+      [
+       []
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a",
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_227",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": 0
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_228",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": 0
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_229",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": 0
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_230",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      "one"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_231",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      [
+       "a",
+       "b"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_232",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      [
+       "b",
+       "c"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "b",
+     "c"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_233",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      "one",
+      "two"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     "two"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_234",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      [
+       "a"
+      ],
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_235",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      null,
+      "a",
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_236",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      "a",
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_237",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": 0
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_238",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": 0
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_239",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": 0
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_240",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": 0
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_241",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": 0
+     },
+     [
+      [
+       []
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": 0
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_242",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": false
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_243",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": false
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_244",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": false
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_245",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      "one"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "one"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_246",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      [
+       "a",
+       "b"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_247",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      [
+       "b",
+       "c"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "b",
+     "c"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_248",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      "one",
+      "two"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     "two"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_249",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      [
+       "a"
+      ],
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_250",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      null,
+      "a",
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_251",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      "a",
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_252",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": false
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_253",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": false
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_254",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": false
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_255",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": false
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_256",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": false
+     },
+     [
+      [
+       []
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": false
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_257",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_258",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_259",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_260",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      "one"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "one"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_261",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      [
+       "a",
+       "b"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_262",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      [
+       "b",
+       "c"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     "c"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_263",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      "one",
+      "two"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "one",
+     "two"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_264",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      [
+       "a"
+      ],
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_265",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      null,
+      "a",
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_266",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      "a",
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_267",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_268",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_269",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_270",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_271",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     [
+      [
+       []
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_272",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_273",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_274",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_275",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      "one"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "one"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_276",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      [
+       "a",
+       "b"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_277",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      [
+       "b",
+       "c"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     "c"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_278",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      "one",
+      "two"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "one",
+     "two"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_279",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      [
+       "a"
+      ],
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_280",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      null,
+      "a",
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_281",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      "a",
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_282",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_283",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_284",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_285",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_286",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     [
+      [
+       []
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_287",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_288",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_289",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_290",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      "one"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "one"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_291",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      [
+       "a",
+       "b"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_292",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      [
+       "b",
+       "c"
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     "c"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_293",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      "one",
+      "two"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "one",
+     "two"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_294",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      [
+       "a"
+      ],
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_295",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      null,
+      "a",
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_296",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      "a",
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_297",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_298",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_299",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_300",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      []
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarn_301",
+   "payload": {
+    "op": "row_warnings",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     [
+      [
+       []
+      ]
+     ]
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "a"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_302",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {},
+     "response_kind_divergent"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "response_kind_divergent"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_303",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {},
+     ""
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": ""
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_304",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {},
+     null
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": null
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_305",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {},
+     "already"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "already"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_306",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": ""
+     },
+     "response_kind_divergent"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "response_kind_divergent"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_307",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": ""
+     },
+     ""
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": ""
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_308",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": ""
+     },
+     null
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": null
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_309",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": ""
+     },
+     "already"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "already"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_310",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": null
+     },
+     "response_kind_divergent"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "response_kind_divergent"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_311",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": null
+     },
+     ""
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": ""
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_312",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": null
+     },
+     null
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": null
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_313",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": null
+     },
+     "already"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": "already"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_314",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     "response_kind_divergent"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     "response_kind_divergent"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_315",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     ""
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     ""
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_316",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     null
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     null
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_317",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": "one"
+     },
+     "already"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "one",
+     "already"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_318",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     "response_kind_divergent"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     "response_kind_divergent"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_319",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     ""
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     ""
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_320",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     null
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     null
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_321",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "b"
+      ]
+     },
+     "already"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "b",
+     "already"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_322",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     "response_kind_divergent"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "a",
+     "b",
+     "response_kind_divergent"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_323",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     ""
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "a",
+     "b",
+     ""
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_324",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     null
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "a",
+     "b",
+     null
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_325",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       "a",
+       "a",
+       "b"
+      ]
+     },
+     "already"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "a",
+     "b",
+     "already"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_326",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     "response_kind_divergent"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "response_kind_divergent"
+    ],
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_327",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     ""
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     ""
+    ],
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_328",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     null
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     null
+    ],
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_329",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": "a",
+      "species": "X"
+     },
+     "already"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "a",
+     "already"
+    ],
+    "species": "X"
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_330",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": 0
+     },
+     "response_kind_divergent"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     0,
+     "response_kind_divergent"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_331",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": 0
+     },
+     ""
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     0,
+     ""
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_332",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": 0
+     },
+     null
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     0,
+     null
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_333",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": 0
+     },
+     "already"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     0,
+     "already"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_334",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": false
+     },
+     "response_kind_divergent"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     false,
+     "response_kind_divergent"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_335",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": false
+     },
+     ""
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     false,
+     ""
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_336",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": false
+     },
+     null
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     false,
+     null
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_337",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": false
+     },
+     "already"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     false,
+     "already"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_338",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     "response_kind_divergent"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "",
+     "a",
+     "response_kind_divergent"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_339",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     ""
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "",
+     "a"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_340",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     null
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "",
+     "a",
+     null
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_341",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       "",
+       "a"
+      ]
+     },
+     "already"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     "",
+     "a",
+     "already"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_342",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     "response_kind_divergent"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     1,
+     "a",
+     "response_kind_divergent"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_343",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     ""
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     1,
+     "a",
+     ""
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_344",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     null
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     1,
+     "a",
+     null
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_345",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       1,
+       "a"
+      ]
+     },
+     "already"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     1,
+     "a",
+     "already"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_346",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     "response_kind_divergent"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     [],
+     "a",
+     "response_kind_divergent"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_347",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     ""
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     [],
+     "a",
+     ""
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_348",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     null
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     [],
+     "a",
+     null
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agwarnadd_349",
+   "payload": {
+    "op": "add_row_warning",
+    "args": [
+     {
+      "_warning": [
+       [],
+       "a"
+      ]
+     },
+     "already"
+    ]
+   },
+   "extra": null,
+   "python": {
+    "_warning": [
+     [],
+     "a",
+     "already"
+    ]
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_350",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_351",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      null
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_352",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      [
+       "low_confidence"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "reason_codes": [
+      "low_confidence"
+     ]
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_353",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      [
+       "low_confidence"
+      ],
+      [
+       "inferred"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "reason_codes": [
+      "low_confidence",
+      "inferred"
+     ]
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_354",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      [],
+      [
+       "low_confidence"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "reason_codes": [
+      "low_confidence"
+     ]
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_355",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_356",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "reason_codes": [
+      "not_drawn"
+     ]
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_357",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      "extracted",
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "reason_codes": [
+      "not_drawn"
+     ]
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_358",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      "uncertain"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "reason_codes": [
+      "uncertain"
+     ]
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_359",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      "garbage"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_360",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      "extracted",
+      "extracted",
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "reason_codes": [
+      "not_drawn"
+     ]
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_361",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      null,
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_362",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      "",
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_363",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      {
+       "version": 1,
+       "points": {
+        "p": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_364",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      {
+       "version": 1
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_365",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      {}
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_366",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      {
+       "points": {}
+      },
+      {
+       "points": {
+        "q": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_367",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "reason_codes",
+     [
+      null,
+      {
+       "points": {
+        "z": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_368",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_369",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      null
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_370",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      [
+       "low_confidence"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_371",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      [
+       "low_confidence"
+      ],
+      [
+       "inferred"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_372",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      [],
+      [
+       "low_confidence"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_373",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "response_kind": "extracted"
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_374",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "response_kind": "not_drawn"
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_375",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      "extracted",
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "response_kind": "extracted",
+     "_warning": "response_kind_divergent",
+     "response_kind_votes": [
+      "extracted",
+      "not_drawn"
+     ]
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_376",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      "uncertain"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "response_kind": "uncertain"
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_377",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      "garbage"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_378",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      "extracted",
+      "extracted",
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "response_kind": "extracted",
+     "_warning": "response_kind_divergent",
+     "response_kind_votes": [
+      "extracted",
+      "extracted",
+      "not_drawn"
+     ]
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_379",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      null,
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "response_kind": "extracted"
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_380",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      "",
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "response_kind": "extracted"
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_381",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      {
+       "version": 1,
+       "points": {
+        "p": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_382",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      {
+       "version": 1
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_383",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      {}
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_384",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      {
+       "points": {}
+      },
+      {
+       "points": {
+        "q": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_385",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "response_kind",
+     [
+      null,
+      {
+       "points": {
+        "z": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_386",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_387",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      null
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_388",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      [
+       "low_confidence"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_389",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      [
+       "low_confidence"
+      ],
+      [
+       "inferred"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_390",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      [],
+      [
+       "low_confidence"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_391",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_392",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_393",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      "extracted",
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_394",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      "uncertain"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_395",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      "garbage"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_396",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      "extracted",
+      "extracted",
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_397",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      null,
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_398",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      "",
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_399",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      {
+       "version": 1,
+       "points": {
+        "p": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "geometry": {
+      "version": 1,
+      "points": {
+       "p": 1
+      }
+     }
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_400",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      {
+       "version": 1
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_401",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      {}
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_402",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      {
+       "points": {}
+      },
+      {
+       "points": {
+        "q": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "geometry": {
+      "points": {
+       "q": 1
+      }
+     }
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_403",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "geometry",
+     [
+      null,
+      {
+       "points": {
+        "z": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": true,
+    "target": {
+     "geometry": {
+      "points": {
+       "z": 1
+      }
+     }
+    }
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_404",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_405",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      null
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_406",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      [
+       "low_confidence"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_407",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      [
+       "low_confidence"
+      ],
+      [
+       "inferred"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_408",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      [],
+      [
+       "low_confidence"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_409",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_410",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_411",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      "extracted",
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_412",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      "uncertain"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_413",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      "garbage"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_414",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      "extracted",
+      "extracted",
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_415",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      null,
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_416",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      "",
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_417",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      {
+       "version": 1,
+       "points": {
+        "p": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_418",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      {
+       "version": 1
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_419",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      {}
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_420",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      {
+       "points": {}
+      },
+      {
+       "points": {
+        "q": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_421",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "species",
+     [
+      null,
+      {
+       "points": {
+        "z": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_422",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_423",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      null
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_424",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      [
+       "low_confidence"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_425",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      [
+       "low_confidence"
+      ],
+      [
+       "inferred"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_426",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      [],
+      [
+       "low_confidence"
+      ]
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_427",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_428",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_429",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      "extracted",
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_430",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      "uncertain"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_431",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      "garbage"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_432",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      "extracted",
+      "extracted",
+      "not_drawn"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_433",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      null,
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_434",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      "",
+      "extracted"
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_435",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      {
+       "version": 1,
+       "points": {
+        "p": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_436",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      {
+       "version": 1
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_437",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      {}
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_438",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      {
+       "points": {}
+      },
+      {
+       "points": {
+        "q": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agcon_439",
+   "payload": {
+    "op": "contract_field",
+    "args": [
+     "",
+     [
+      null,
+      {
+       "points": {
+        "z": 1
+       }
+      }
+     ],
+     {}
+    ]
+   },
+   "extra": null,
+   "python": {
+    "handled": false,
+    "target": {}
+   }
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_440",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_441",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_442",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "species"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_443",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_444",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "9",
+       "range_top": "7",
+       "biozone": "Z1",
+       "section": "S1"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_445",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "9",
+       "range_top": "7",
+       "biozone": "Z1",
+       "section": "S1"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_446",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "9",
+       "range_top": "7",
+       "biozone": "Z1",
+       "section": "S1"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "species"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_447",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "9",
+       "range_top": "7",
+       "biozone": "Z1",
+       "section": "S1"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_448",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z1",
+       "section": "S1"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z1",
+       "section": "S1"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_449",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z1",
+       "section": "S1"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z1",
+       "section": "S1"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_450",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z1",
+       "section": "S1"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z1",
+       "section": "S1"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "species"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_451",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z1",
+       "section": "S1"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z1",
+       "section": "S1"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_452",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z1",
+       "section": "S1"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z2",
+       "section": "S1"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_453",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z1",
+       "section": "S1"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z2",
+       "section": "S1"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_454",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z1",
+       "section": "S1"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z2",
+       "section": "S1"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "species"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_455",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z1",
+       "section": "S1"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9",
+       "biozone": "Z2",
+       "section": "S1"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_456",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_457",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_458",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "species"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_459",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_460",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "9",
+       "range_top": "9"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_461",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "9",
+       "range_top": "9"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_462",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "9",
+       "range_top": "9"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "species"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_463",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "9",
+       "range_top": "9"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_464",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "",
+       "range_top": ""
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_465",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "",
+       "range_top": ""
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_466",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "",
+       "range_top": ""
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "species"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_467",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "",
+       "range_top": ""
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_468",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {},
+      {}
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_469",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {},
+      {}
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_470",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {},
+      {}
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "species"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_471",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {},
+      {}
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_472",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "9a",
+       "range_top": "9"
+      },
+      {
+       "range_base": "9",
+       "range_top": "9a"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_473",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "9a",
+       "range_top": "9"
+      },
+      {
+       "range_base": "9",
+       "range_top": "9a"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_474",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "9a",
+       "range_top": "9"
+      },
+      {
+       "range_base": "9",
+       "range_top": "9a"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     [
+      "species"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agchim_475",
+   "payload": {
+    "op": "chimeric",
+    "args": [
+     [
+      {
+       "range_base": "9a",
+       "range_top": "9"
+      },
+      {
+       "range_base": "9",
+       "range_top": "9a"
+      }
+     ],
+     {
+      "range_base": "9",
+      "range_top": "7",
+      "biozone": "Z1",
+      "section": "S1"
+     },
+     []
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_476",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [],
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_477",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [],
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_478",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [],
+     [
+      "species",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_479",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9"
+      }
+     ],
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "7",
+     "range_top": "9",
+     "biozone": "",
+     "section": "",
+     "votes": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_480",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9"
+      }
+     ],
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "7",
+     "range_top": "9",
+     "votes": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_481",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9"
+      }
+     ],
+     [
+      "species",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_482",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9"
+      },
+      {
+       "range_base": "8",
+       "range_top": "9"
+      }
+     ],
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "7",
+     "range_top": "9",
+     "biozone": "",
+     "section": "",
+     "votes": 2
+    },
+    {
+     "range_base": "8",
+     "range_top": "9",
+     "biozone": "",
+     "section": "",
+     "votes": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_483",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9"
+      },
+      {
+       "range_base": "8",
+       "range_top": "9"
+      }
+     ],
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "7",
+     "range_top": "9",
+     "votes": 2
+    },
+    {
+     "range_base": "8",
+     "range_top": "9",
+     "votes": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_484",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "7",
+       "range_top": "9"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9"
+      },
+      {
+       "range_base": "8",
+       "range_top": "9"
+      }
+     ],
+     [
+      "species",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_485",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "9",
+       "range_top": "7"
+      }
+     ],
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "9",
+     "range_top": "7",
+     "biozone": "",
+     "section": "",
+     "votes": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_486",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "9",
+       "range_top": "7"
+      }
+     ],
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "9",
+     "range_top": "7",
+     "votes": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_487",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "9",
+       "range_top": "7"
+      }
+     ],
+     [
+      "species",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_488",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "9a",
+       "range_top": "9"
+      },
+      {
+       "range_base": "9",
+       "range_top": "9a"
+      }
+     ],
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "9",
+     "range_top": "9a",
+     "biozone": "",
+     "section": "",
+     "votes": 1
+    },
+    {
+     "range_base": "9a",
+     "range_top": "9",
+     "biozone": "",
+     "section": "",
+     "votes": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_489",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "9a",
+       "range_top": "9"
+      },
+      {
+       "range_base": "9",
+       "range_top": "9a"
+      }
+     ],
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "9",
+     "range_top": "9a",
+     "votes": 1
+    },
+    {
+     "range_base": "9a",
+     "range_top": "9",
+     "votes": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_490",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "9a",
+       "range_top": "9"
+      },
+      {
+       "range_base": "9",
+       "range_top": "9a"
+      }
+     ],
+     [
+      "species",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_491",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {},
+      {}
+     ],
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_492",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {},
+      {}
+     ],
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_493",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {},
+      {}
+     ],
+     [
+      "species",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_494",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": " 7 ",
+       "range_top": "9"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9"
+      }
+     ],
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "7",
+     "range_top": "9",
+     "biozone": "",
+     "section": "",
+     "votes": 2
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_495",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": " 7 ",
+       "range_top": "9"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9"
+      }
+     ],
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "7",
+     "range_top": "9",
+     "votes": 2
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_496",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": " 7 ",
+       "range_top": "9"
+      },
+      {
+       "range_base": "7",
+       "range_top": "9"
+      }
+     ],
+     [
+      "species",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_497",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "B",
+       "range_top": "9"
+      },
+      {
+       "range_base": "A",
+       "range_top": "9"
+      }
+     ],
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "a",
+     "range_top": "9",
+     "biozone": "",
+     "section": "",
+     "votes": 1
+    },
+    {
+     "range_base": "b",
+     "range_top": "9",
+     "biozone": "",
+     "section": "",
+     "votes": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_498",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "B",
+       "range_top": "9"
+      },
+      {
+       "range_base": "A",
+       "range_top": "9"
+      }
+     ],
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "a",
+     "range_top": "9",
+     "votes": 1
+    },
+    {
+     "range_base": "b",
+     "range_top": "9",
+     "votes": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_499",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "B",
+       "range_top": "9"
+      },
+      {
+       "range_base": "A",
+       "range_top": "9"
+      }
+     ],
+     [
+      "species",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_500",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "bed 9",
+       "range_top": "9"
+      },
+      {
+       "range_base": "bed 9 (rp13)",
+       "range_top": "9"
+      }
+     ],
+     [
+      "range_base",
+      "range_top",
+      "biozone",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "bed 9",
+     "range_top": "9",
+     "biozone": "",
+     "section": "",
+     "votes": 1
+    },
+    {
+     "range_base": "bed 9 (rp13)",
+     "range_top": "9",
+     "biozone": "",
+     "section": "",
+     "votes": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_501",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "bed 9",
+       "range_top": "9"
+      },
+      {
+       "range_base": "bed 9 (rp13)",
+       "range_top": "9"
+      }
+     ],
+     [
+      "range_base",
+      "range_top"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": [
+    {
+     "range_base": "bed 9",
+     "range_top": "9",
+     "votes": 1
+    },
+    {
+     "range_base": "bed 9 (rp13)",
+     "range_top": "9",
+     "votes": 1
+    }
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agball_502",
+   "payload": {
+    "op": "ballots",
+    "args": [
+     [
+      {
+       "range_base": "bed 9",
+       "range_top": "9"
+      },
+      {
+       "range_base": "bed 9 (rp13)",
+       "range_top": "9"
+      }
+     ],
+     [
+      "species",
+      "section"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
    "group": "quality_coverage",
    "id": "qc_notdrawn",
    "payload": {

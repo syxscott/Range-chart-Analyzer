@@ -1320,6 +1320,16 @@ _add(
 # about a case-insensitive marker, not a transport one. Changing it would
 # alter desktop dedup with no cross-engine reason to, so it is reported rather
 # than fixed.
+#
+# SECOND WAVE -- a clean result, recorded so nobody re-derives it. The block
+# below adds the dispatchers and the mutating mergers (mergeFieldAcrossRuns,
+# mergeMappingField, mergeStructuredField, rcaMergeRowWarnings,
+# rcaAddRowWarning, rcaMergeContractField, rcaIsChimericRow,
+# rcaRecombinationBallots) over 500 more cases: 0 divergences. Those eight
+# have been through several parity rounds and are aligned; the chimera
+# detector in particular survives every key-count in the corpus, which is the
+# shape AUDIT-2026-10-01 [item 9.13] made configurable after it had been
+# hardcoded to the four range-chart field names.
 
 # Harvested from the committed real extraction payloads
 # (tests/fixtures/real_payloads/*.json, 8 files) -- the taxon-shaped strings
@@ -1484,6 +1494,184 @@ for _vs in _AGG_TYPED:
 for _vs in _AGG_CONF:
     _agg_cases.append(_agg("agconf_%d" % len(_agg_cases), "confidence", [_vs]))
 _add(*_agg_cases)
+
+
+# --- aggregate, second wave: the dispatchers and the mutating mergers --------
+# AUDIT-2026-10-02. The first block covered the eight leaves whose OUTPUT is
+# a scalar. These are the ones that dispatch, recurse, or mutate, which is
+# where the shapes get unusual rather than the values. None of them had any
+# cross-engine coverage before this.
+#
+# Real structured items, taken from the committed payloads so the shape is one
+# the product actually emits (tests/fixtures/real_payloads/
+# Bole_et_al_2020_...json intervals[0] and
+# Shimura_Yusuke_et_al_2020_...json intervals[0]):
+_AGG_STRUCT_REAL = [
+    {"name": "Late Permian (Wuchiapingian)", "top_depth_m": "",
+     "base_depth_m": "", "top_age_ma": "260", "base_age_ma": "252",
+     "lithology": "", "geometry": {
+         "version": 1, "scale": "pos_0_999", "calibrated": True,
+         "points": {"top_pos_0_999": {"pos": 0, "axis": "vertical",
+                                      "value": 260.0, "unit": "Ma"}}}},
+    {"name": "Late Cretaceous – Coniacian (Con.)", "top_depth_m": "",
+     "base_depth_m": "", "top_age_ma": "86.3", "base_age_ma": "89.8",
+     "lithology": "Varicolored shale (uncertain)",
+     "reason_codes": ["low_confidence"]},
+]
+# The P1-11 collapse the docstring claims: {"a": 8} and {"a": "8"} must share
+# a signature. The next four pairs are the shapes that could break it -- a
+# bool, a float and a string that HAPPENS to spell a number or a Python repr.
+_AGG_STRUCT_EDGE = [
+    {"a": 8}, {"a": "8"}, {"a": 8, "b": 1}, {"b": 1, "a": 8},
+    {"a": True}, {"a": "True"}, {"a": False}, {"a": "False"},
+    {"a": 1}, {"a": True}, {"a": 1.0}, {"a": "1.0"}, {"a": 0.0}, {"a": -0.0},
+    {"a": None}, {"a": "None"}, {"a": "null"},
+    {"a": []}, {"a": [1]}, {"a": [1, 2]}, {"a": "1,2"}, {"a": "[1, 2]"},
+    {"a": {}}, {"a": {"b": 1}}, {"a": '{"b": 1}'},
+    {"a": ""}, {"a": " "}, {"a": 0}, {"a": "0"}, {"a": ""},
+    {"a": "x", "b": "y"}, {"b": "y", "a": "x"},
+    {"a": 1e16}, {"a": 1e-7}, {"a": "1e+16"}, {"a": "1e-16"},
+]
+
+_AGG_MAPPING = [
+    [], [None], [{}, {}], [{"a": 1}], [{"a": 1}, {"a": 2}],
+    [{"a": 1}, {"b": 2}], [{"a": 1}, {"a": None}], [{"a": None}, {"a": 1}],
+    [{"a": {"b": 1}}, {"a": {"b": 2}}], [{"a": {"b": 1}}, {"a": {"c": 1}}],
+    [{"a": [{"x": 1}]}, {"a": [{"x": 1}, {"y": 2}]}],
+    [{"a": "x"}, {"a": "y"}, {"a": "x"}],
+    [{"a": True, "b": True}, {"a": True, "b": False}],
+    [{"z": 1, "a": 2}, {"a": 3, "z": 4}],
+    [{}, {"a": 1}],
+    [{"a": 1}, "scalar"], ["scalar", {"a": 1}],
+    [{"a": 1}, [{"x": 1}]],
+]
+
+_AGG_ACROSS = [
+    [], [None], [None, None], ["a"], ["a", "a", "b"],
+    [[], []], [[{"a": 1}], [{"a": 1}]], [[{"a": 1}], [{"a": 2}]],
+    [[{"a": 1}], []], [[], [{"a": 1}]],
+    [{}, {}], [{"a": 1}, {"a": 1}], [{"a": 1}, {}],
+    [0, 0, False], [0, False], [1, "1"],
+    [[1], [2]], [["a"], ["b"]], [[{"a": 1}], ["scalar"]],
+    [{"a": 1}, [1]], [1, {"a": 1}],
+    [0.5, 0.7], [True, 1],
+]
+
+_AGG_WARN_TARGETS = [
+    {}, {"_warning": ""}, {"_warning": None},
+    {"_warning": "one"}, {"_warning": ["a", "b"]},
+    {"_warning": ["a", "a", "b"]}, {"_warning": "a", "species": "X"},
+    {"_warning": 0}, {"_warning": False}, {"_warning": ["", "a"]},
+    {"_warning": [1, "a"]}, {"_warning": [[], "a"]},
+]
+_AGG_WARN_VALUES = [
+    [], [None], [""], ["one"], [["a", "b"]], [["b", "c"]],
+    ["one", "two"], [["a"], "b"], [None, "a", ""], ["a", "a"],
+    [0], [False], [1], [[]], [[[]]],
+]
+
+_AGG_CONTRACT_KEYS = ["reason_codes", "response_kind", "geometry", "species", ""]
+_AGG_CONTRACT_VALUES = [
+    [], [None], [["low_confidence"]], [["low_confidence"], ["inferred"]],
+    [[], ["low_confidence"]], ["extracted"], ["not_drawn"],
+    ["extracted", "not_drawn"], ["uncertain"], ["garbage"],
+    ["extracted", "extracted", "not_drawn"],
+    [None, "extracted"], ["", "extracted"],
+    [{"version": 1, "points": {"p": 1}}], [{"version": 1}], [{}],
+    [{"points": {}}, {"points": {"q": 1}}], [None, {"points": {"z": 1}}],
+]
+
+_AGG_CHIMERIC_ROWS = [
+    [],
+    [{"range_base": "9", "range_top": "7", "biozone": "Z1", "section": "S1"}],
+    [{"range_base": "7", "range_top": "9", "biozone": "Z1", "section": "S1"},
+     {"range_base": "7", "range_top": "9", "biozone": "Z1", "section": "S1"}],
+    [{"range_base": "7", "range_top": "9", "biozone": "Z1", "section": "S1"},
+     {"range_base": "7", "range_top": "9", "biozone": "Z2", "section": "S1"}],
+    [{"range_base": "7", "range_top": "9"},
+     {"range_base": "7", "range_top": "9"}],
+    [{"range_base": "9", "range_top": "9"}],
+    [{"range_base": "", "range_top": ""}],
+    [{}, {}],
+    [{"range_base": "9a", "range_top": "9"}, {"range_base": "9", "range_top": "9a"}],
+]
+_AGG_CHIMERIC_KEYS = [
+    ["range_base", "range_top", "biozone", "section"],
+    ["range_base", "range_top"],
+    ["species"],
+    [],
+]
+
+_AGG_BALLOT_ROWS = [
+    [],
+    [{"range_base": "7", "range_top": "9"}],
+    [{"range_base": "7", "range_top": "9"},
+     {"range_base": "7", "range_top": "9"},
+     {"range_base": "8", "range_top": "9"}],
+    [{"range_base": "9", "range_top": "7"}],
+    [{"range_base": "9a", "range_top": "9"}, {"range_base": "9", "range_top": "9a"}],
+    [{}, {}],
+    [{"range_base": " 7 ", "range_top": "9"}, {"range_base": "7", "range_top": "9"}],
+    [{"range_base": "B", "range_top": "9"}, {"range_base": "A", "range_top": "9"}],
+    [{"range_base": "bed 9", "range_top": "9"},
+     {"range_base": "bed 9 (rp13)", "range_top": "9"}],
+]
+_AGG_BALLOT_KEYS = [
+    ["range_base", "range_top", "biozone", "section"],
+    ["range_base", "range_top"],
+    # No `None` entry on purpose. js/aggregate.js writes
+    # `keys || RCA_RECOMBINATION_KEYS`, so a null would silently fall back to
+    # a default there and raise TypeError in Python (`for k in None`). That
+    # asymmetry is unreachable -- Python's parameter is a required positional,
+    # so every call site supplies it -- and putting it in the corpus would
+    # record a calling-convention difference as if it were a behaviour one.
+    ["species", "section"],
+]
+
+_agg2: list[dict] = []
+for _v in _AGG_MAPPING:
+    _agg2.append(_agg("agmap_%d" % len(_agg2), "merge_mapping", [_v]))
+for _v in _AGG_ACROSS:
+    _agg2.append(_agg("agacr_%d" % len(_agg2), "merge_across", [_v]))
+for _i, _v in enumerate(_AGG_STRUCT_REAL + _AGG_STRUCT_EDGE):
+    _agg2.append(_agg("agstr2_%d" % len(_agg2), "merge_structured", [[_v]]))
+    _agg2.append(_agg("agstr2b_%d" % len(_agg2), "merge_structured",
+                      [[_v, _v]]))
+_agg2.append(_agg("agstr2_pair_8", "merge_structured",
+                  [[{"a": 8}, {"a": "8"}]]))
+_agg2.append(_agg("agstr2_pair_true", "merge_structured",
+                  [[{"a": True}, {"a": "True"}]]))
+_agg2.append(_agg("agstr2_pair_1", "merge_structured",
+                  [[{"a": 1}, {"a": 1.0}]]))
+_agg2.append(_agg("agstr2_real_pair", "merge_structured",
+                  [[_AGG_STRUCT_REAL[0], _AGG_STRUCT_REAL[1],
+                    _AGG_STRUCT_REAL[0]]]))
+_agg2.append(_agg("agstr2_mixed", "merge_structured",
+                  [[{"a": 1}, "scalar", None, [1], [{"b": 2}]]]))
+for _t in _AGG_WARN_TARGETS:
+    for _v in _AGG_WARN_VALUES:
+        _agg2.append(_agg("agwarn_%d" % len(_agg2), "row_warnings",
+                          [copy.deepcopy(_t), copy.deepcopy(_v)]))
+for _r in _AGG_WARN_TARGETS:
+    for _flag in ("response_kind_divergent", "", None, "already"):
+        _agg2.append(_agg("agwarnadd_%d" % len(_agg2), "add_row_warning",
+                          [copy.deepcopy(_r), _flag]))
+for _k in _AGG_CONTRACT_KEYS:
+    for _v in _AGG_CONTRACT_VALUES:
+        _agg2.append(_agg("agcon_%d" % len(_agg2), "contract_field",
+                          [_k, copy.deepcopy(_v), {}]))
+for _g in _AGG_CHIMERIC_ROWS:
+    for _keys in _AGG_CHIMERIC_KEYS:
+        _merged = {"range_base": "9", "range_top": "7", "biozone": "Z1",
+                   "section": "S1"}
+        _agg2.append(_agg("agchim_%d" % len(_agg2), "chimeric",
+                          [copy.deepcopy(_g), copy.deepcopy(_merged),
+                           _keys]))
+for _g in _AGG_BALLOT_ROWS:
+    for _keys in _AGG_BALLOT_KEYS:
+        _agg2.append(_agg("agball_%d" % len(_agg2), "ballots",
+                          [copy.deepcopy(_g), _keys]))
+_add(*_agg2)
 
 
 # --- quality scoring + coverage ledger (js/quality.js) ------------------------
@@ -1780,7 +1968,41 @@ _AGG_PY_OPS = {
     "typed_mode": lambda a: _agg_sentinel(
         AGG._stable_typed_mode(a[0], int if a[1] == "int" else str)),
     "confidence": lambda a: _agg_sentinel(AGG._merge_confidence(a[0])),
+    # Second wave. The three mutating mergers are called on a COPY and the
+    # copy is returned, so the JSON comparison sees the mutation on both
+    # sides instead of comparing a None that means "it happened in place".
+    "merge_mapping": lambda a: _agg_sentinel(AGG._merge_mapping_field(a[0])),
+    "merge_structured": lambda a: AGG._merge_structured_field(a[0]),
+    "merge_across": lambda a: _agg_sentinel(AGG._merge_field_across_runs(a[0])),
+    "row_warnings": lambda a: _agg_mutate(AGG._merge_row_warnings, a),
+    "add_row_warning": lambda a: _agg_mutate(AGG._add_row_warning, a),
+    # _merge_contract_field returns a bool AND mutates the target, so the
+    # payload carries the "returns True" half explicitly -- otherwise a
+    # JS runner that returned only the target would silently agree with a
+    # Python runner that returned only True.
+    "contract_field": lambda a: _agg_contract_py(a),
+    "chimeric": lambda a: bool(AGG._is_chimeric_row(a[0], a[1], tuple(a[2]))),
+    # ballots takes (group, keys) -- TWO arguments, so keys is args[1].
+    # Writing args[2] here is the same arity mistake the JS runner would
+    # have made in mirror image; both read [1] and the payload carries two.
+    "ballots": lambda a: AGG._recombination_ballots(a[0], tuple(a[1])),
 }
+
+
+def _agg_mutate(fn, a):
+    """Call an in-place merger on a copy and return the mutated copy."""
+    target = copy.deepcopy(a[0])
+    if fn is AGG._add_row_warning:
+        fn(target, a[1])
+    else:
+        fn(target, copy.deepcopy(a[1]))
+    return target
+
+
+def _agg_contract_py(a) -> Any:
+    key, values, target = a[0], a[1], copy.deepcopy(a[2])
+    handled = AGG._merge_contract_field(key, values, target)
+    return {"handled": bool(handled), "target": target}
 
 
 def _agg_sentinel(value: Any) -> Any:
