@@ -345,7 +345,21 @@ const MALFORMED_CASES = JSON.parse(`[
   ["Clarkina yini", "Clarkina yini", false],
   ["Clarkina (yini)", "Clarkina", false],
   ["Patera × recta", "Patera × recta", false],
-  ["Genus sp.", "Genus", false]
+  ["Genus sp.", "Genus", false],
+  ["中华虫sp.", "中华虫", true],
+  ["中华虫 sp.", "中华虫", true],
+  ["中华虫 sp", "中华虫", true],
+  ["中华虫cf. yini", "中华虫yini", true],
+  ["中华虫aff. yini", "中华虫yini", true],
+  ["中华虫ex gr. yini", "中华虫 yini", true],
+  ["中华虫sensu lato yini", "中华虫 lato yini", true],
+  ["中华虫near yini", "中华虫 yini", true],
+  ["中华虫s.l. yini", "中华虫 yini", true],
+  ["中华虫gr. yini", "中华虫 yini", true],
+  ["Genus　sp.", "Genus", false],
+  ["中华虫cfsp. yini", "中华虫cfsp. yini", true],
+  ["中华虫nearness", "中华虫nearness", true],
+  ["中华虫cfsp", "中华虫cfsp", true]
 ]`);
 // __RCA_MALFORMED_CASES_END__
 

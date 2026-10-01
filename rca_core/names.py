@@ -355,10 +355,36 @@ def clean_name_for_lookup(species: str) -> str:
     s = _AUTHOR_TAIL_RE.sub(" ", s)
     s = _ET_AL_TAIL_RE.sub("", s)
     # drop open-nomenclature qualifier tokens (the row itself is untouched)
-    s = re.sub(r"\b(cf|aff|cf\.|aff\.)\s+", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\b(ex\s+gr\.?|gr\.?|s\.\s?l\.?|s\.\s?s\.?|sensu|near)(?![a-z])",
+    #
+    # AUDIT-2026-10-02: the three guards below are written out as explicit
+    # ASCII lookarounds rather than `\b`. Python's `\b` is Unicode-aware on str
+    # patterns, and js/app.js#rcaCleanNameForLookup's mirrors use a bare `\b`,
+    # so a CJK / Greek / Cyrillic letter sitting against a marker made the two
+    # engines clean the same species string differently -- and that string is
+    # what gets NETWORKED to GBIF (see the FE-FIX note above) and what the
+    # local malformed gate inspects. Measured on 33 inputs, 13 diverged:
+    #     "中华虫sp."        py "中华虫sp."  js "中华虫"
+    #     "中华虫cf. yini"   py keeps "cf."  js strips it
+    #     "中华虫ex gr. yini" py keeps "ex gr." js strips it
+    # i.e. the desktop kept an open-nomenclature marker the browser removed,
+    # which both forks the GBIF query and changes the taxon it resolves to.
+    #
+    # Direction is the one used by the other eight sites fixed today: a CJK
+    # glyph does not continue an ASCII identifier, so ASCII is the right notion
+    # of "adjacent identifier character" and the marker IS present. The
+    # look-alikes that the guard exists to protect are unaffected on both
+    # engines -- "中华虫cfsp. yini", "中华虫nearness" and "中华虫cfsp" all
+    # stay untouched, and an ideographic space ("Genus　sp.") is still a
+    # boundary on both.
+    _ASCII_NB = r"(?<![A-Za-z0-9_])"
+    _ASCII_NA = r"(?![A-Za-z0-9_])"
+    s = re.sub(_ASCII_NB + r"(cf|aff|cf\.|aff\.)" + _ASCII_NA + r"\s+",
+               "", s, flags=re.IGNORECASE)
+    s = re.sub(_ASCII_NB
+               + r"(ex\s+gr\.?|gr\.?|s\.\s?l\.?|s\.\s?s\.?|sensu|near)"
+               + r"(?![a-z])",
                " ", s, flags=re.IGNORECASE)
-    s = re.sub(r"(?i)\bsp\.?$", "", s.strip())
+    s = re.sub(_ASCII_NB + r"sp\.?$", "", s.strip(), flags=re.IGNORECASE)
     s = re.sub(r"\?", "", s)
     # abbreviated genus "P. asiaticus" -> the genus cannot be recovered.
     #
