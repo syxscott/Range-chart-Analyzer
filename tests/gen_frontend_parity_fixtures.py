@@ -303,10 +303,91 @@ _add(
         "sections": ["Alpha"],
         "species_ranges": ["Beta"],
     }),
+    # AUDIT-2026-10-02: the zone_type ladder's only two boundary-guarded
+    # branches. The other seven are plain substring tests and cannot diverge;
+    # `\bzonule\b` / `\bsubzone\b` are `\b` on both engines, and Python's is
+    # Unicode-aware for str patterns while ECMAScript's is not. So a
+    # non-ASCII LETTER touching the keyword makes the desktop fall through to
+    # "biozone" where the browser infers "zonule". Swept mechanically after the
+    # same family was found three more times today (aggregate's qualifier
+    # patterns, and the explicit-age guard in ics/quality/pbdb).
+    _case("range_chart", "rc_biozone_zone_type_ladder", {
+        "biozones": [
+            {"name": "N. optima Zone"},
+            {"name": "Interval zonule"},
+            {"name": "Assemblage Zone"},
+            {"name": "Acme Zone"},
+            {"name": "Lineage Zone"},
+            {"name": "Opel Zone"},
+            {"name": "Taxon-range Zone"},
+            {"name": "Subzone A"},
+            {"name": "Zonule B"},
+        ],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "5", "range_base": "2"}],
+    }),
+    # The adjacency cases: a CJK / Greek / Cyrillic letter touching the keyword,
+    # and the reverse, plus the look-alikes that must still be rejected on BOTH
+    # engines ("zozonule" / "zonules" continue an identifier, and a space or a
+    # hyphen is a boundary both engines agree on).
+    _case("range_chart", "rc_biozone_zone_type_cjk_adjacent", {
+        "biozones": [
+            {"name": "图zonule"},
+            {"name": "zonule图"},
+            {"name": "图subzone"},
+            {"name": "subzone图"},
+            {"name": "αzonule"},
+            {"name": "зона subzone"},
+        ],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "5", "range_base": "2"}],
+    }),
+    _case("range_chart", "rc_biozone_zone_type_boundaries", {
+        "biozones": [
+            {"name": "zozonule"},
+            {"name": "zonules"},
+            {"name": "subzonule"},
+            {"name": "sub-zone"},
+            {"name": "sub zone"},
+            {"name": "sub.zone"},
+            {"name": "ZONULE"},
+            {"name": "SubZone"},
+        ],
+        "species_ranges": [{"species": "A", "section": "S1",
+                            "range_top": "5", "range_base": "2"}],
+    }),
     _case("range_chart", "rc_iron_rule_species", {
         "species_ranges": [
             {"species": "Postouwia Zone", "range_top": "5", "range_base": "2"},
             {"species": "Genuine taxon", "range_top": "6", "range_base": "2"},
+        ],
+    }),
+    # AUDIT-2026-10-02: the iron rule itself. _IRON_RULE_ZONE_RE
+    # (extractor.py) and _RCA_IRON_RULE_ZONE_RE (js/minimax.js) are the same
+    # pattern with the same `\b`, so the same Unicode-vs-ASCII split applies --
+    # and this is the highest-stakes instance of the family, because the rule
+    # exists so a zone-like name is NEVER filed as a taxon: its own comment
+    # says the post-normalize pass exists "instead of silently exporting a
+    # fabricated FAD/LAD for a non-taxon". A CJK letter touching the marker is
+    # a word character to Python and not to JavaScript, so the two engines
+    # disagree on whether these are species at all.
+    _case("range_chart", "rc_iron_rule_cjk_adjacent", {
+        "species_ranges": [
+            {"species": "图zone", "range_top": "5", "range_base": "2"},
+            {"species": "zone图", "range_top": "5", "range_base": "2"},
+            {"species": "生物带zone", "range_top": "5", "range_base": "2"},
+            {"species": "αacme", "range_top": "5", "range_base": "2"},
+            {"species": "图assemblage", "range_top": "5", "range_base": "2"},
+        ],
+    }),
+    _case("range_chart", "rc_iron_rule_boundaries", {
+        "species_ranges": [
+            {"species": "zozone", "range_top": "5", "range_base": "2"},
+            {"species": "zoness", "range_top": "5", "range_base": "2"},
+            {"species": "sub-zone", "range_top": "5", "range_base": "2"},
+            {"species": "zone.5", "range_top": "5", "range_base": "2"},
+            {"species": "ZONE", "range_top": "5", "range_base": "2"},
+            {"species": "Zone 5", "range_top": "5", "range_base": "2"},
         ],
     }),
     _case("range_chart", "rc_index_order_swap", {

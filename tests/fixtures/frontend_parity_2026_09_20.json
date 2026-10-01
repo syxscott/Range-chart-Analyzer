@@ -5726,6 +5726,368 @@
   },
   {
    "group": "range_chart",
+   "id": "rc_biozone_zone_type_ladder",
+   "payload": {
+    "biozones": [
+     {
+      "name": "N. optima Zone"
+     },
+     {
+      "name": "Interval zonule"
+     },
+     {
+      "name": "Assemblage Zone"
+     },
+     {
+      "name": "Acme Zone"
+     },
+     {
+      "name": "Lineage Zone"
+     },
+     {
+      "name": "Opel Zone"
+     },
+     {
+      "name": "Taxon-range Zone"
+     },
+     {
+      "name": "Subzone A"
+     },
+     {
+      "name": "Zonule B"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "5",
+      "range_base": "2"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [
+     {
+      "name": "N. optima Zone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     },
+     {
+      "name": "Interval zonule",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "interval_zone"
+     },
+     {
+      "name": "Assemblage Zone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "assemblage_zone"
+     },
+     {
+      "name": "Acme Zone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "acme_zone"
+     },
+     {
+      "name": "Lineage Zone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "lineage_zone"
+     },
+     {
+      "name": "Opel Zone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     },
+     {
+      "name": "Taxon-range Zone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "range_zone"
+     },
+     {
+      "name": "Subzone A",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "subzone"
+     },
+     {
+      "name": "Zonule B",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "zonule"
+     }
+    ],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_biozone_zone_type_cjk_adjacent",
+   "payload": {
+    "biozones": [
+     {
+      "name": "图zonule"
+     },
+     {
+      "name": "zonule图"
+     },
+     {
+      "name": "图subzone"
+     },
+     {
+      "name": "subzone图"
+     },
+     {
+      "name": "αzonule"
+     },
+     {
+      "name": "зона subzone"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "5",
+      "range_base": "2"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [
+     {
+      "name": "图zonule",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "zonule"
+     },
+     {
+      "name": "zonule图",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "zonule"
+     },
+     {
+      "name": "图subzone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "subzone"
+     },
+     {
+      "name": "subzone图",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "subzone"
+     },
+     {
+      "name": "αzonule",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "zonule"
+     },
+     {
+      "name": "зона subzone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "subzone"
+     }
+    ],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_biozone_zone_type_boundaries",
+   "payload": {
+    "biozones": [
+     {
+      "name": "zozonule"
+     },
+     {
+      "name": "zonules"
+     },
+     {
+      "name": "subzonule"
+     },
+     {
+      "name": "sub-zone"
+     },
+     {
+      "name": "sub zone"
+     },
+     {
+      "name": "sub.zone"
+     },
+     {
+      "name": "ZONULE"
+     },
+     {
+      "name": "SubZone"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "5",
+      "range_base": "2"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [
+     {
+      "name": "zozonule",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     },
+     {
+      "name": "zonules",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     },
+     {
+      "name": "subzonule",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     },
+     {
+      "name": "sub-zone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     },
+     {
+      "name": "sub zone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     },
+     {
+      "name": "sub.zone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     },
+     {
+      "name": "ZONULE",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "zonule"
+     },
+     {
+      "name": "SubZone",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "subzone"
+     }
+    ],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
    "id": "rc_iron_rule_species",
    "payload": {
     "species_ranges": [
@@ -5781,6 +6143,308 @@
       "occurrence_mode": "unknown",
       "confidence": null,
       "note": ""
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0,
+    "_warnings": [
+     "iron_rule_zone_label"
+    ]
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_iron_rule_cjk_adjacent",
+   "payload": {
+    "species_ranges": [
+     {
+      "species": "图zone",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "zone图",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "生物带zone",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "αacme",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "图assemblage",
+      "range_top": "5",
+      "range_base": "2"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "图zone",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": "[zone-mislabel-warning]",
+      "_warning": "iron_rule_zone_label"
+     },
+     {
+      "species": "zone图",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": "[zone-mislabel-warning]",
+      "_warning": "iron_rule_zone_label"
+     },
+     {
+      "species": "生物带zone",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": "[zone-mislabel-warning]",
+      "_warning": "iron_rule_zone_label"
+     },
+     {
+      "species": "αacme",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": "[zone-mislabel-warning]",
+      "_warning": "iron_rule_zone_label"
+     },
+     {
+      "species": "图assemblage",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": "[zone-mislabel-warning]",
+      "_warning": "iron_rule_zone_label"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0,
+    "_warnings": [
+     "iron_rule_zone_label"
+    ]
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_iron_rule_boundaries",
+   "payload": {
+    "species_ranges": [
+     {
+      "species": "zozone",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "zoness",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "sub-zone",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "zone.5",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "ZONE",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "Zone 5",
+      "range_top": "5",
+      "range_base": "2"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "zozone",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     },
+     {
+      "species": "zoness",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     },
+     {
+      "species": "sub-zone",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": "[zone-mislabel-warning]",
+      "_warning": "iron_rule_zone_label"
+     },
+     {
+      "species": "zone.5",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": "[zone-mislabel-warning]",
+      "_warning": "iron_rule_zone_label"
+     },
+     {
+      "species": "ZONE",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": "[zone-mislabel-warning]",
+      "_warning": "iron_rule_zone_label"
+     },
+     {
+      "species": "Zone 5",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": "[zone-mislabel-warning]",
+      "_warning": "iron_rule_zone_label"
      }
     ],
     "biozones": [],

@@ -169,6 +169,30 @@ def _clamp_sites():
     return sorted(hits)
 
 
+def _confidence_clamped_span():
+    """(first_line, last_line) of ``_confidence_clamped``'s own body.
+
+    AUDIT-2026-10-02: this assertion used to be a hard-coded line WINDOW
+    (``1140 <= lineno <= 1180``) as a proxy for "inside _confidence_clamped".
+    The proxy is what broke -- not the invariant. Adding two explanatory
+    comment blocks ABOVE that function (the iron-rule boundary rewrite and the
+    zone_type ladder one, both in the same Unicode-vs-ASCII family) pushed the
+    clamp from 1171 to 1189 and the window failed with "the single clamp moved
+    to line 1189; it belongs inside _confidence_clamped" while it plainly did.
+
+    A line window encodes an accident of the current file layout, and any
+    edit above the function invalidates it without changing anything it was
+    meant to protect. The function's own AST span says the same thing and
+    cannot go stale that way. The decision is unchanged and still asserted:
+    the ONE clamp must live inside _confidence_clamped.
+    """
+    tree = ast.parse(open(EXTRACTOR, encoding="utf-8").read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_confidence_clamped":
+            return node.lineno, (node.end_lineno or node.lineno)
+    raise AssertionError("_confidence_clamped not found in extractor.py")
+
+
 def test_there_is_exactly_one_confidence_clamp_in_the_module():
     """Anti-recurrence guard, and it deliberately uses the same AST technique
     that found the 13.
@@ -187,9 +211,10 @@ def test_there_is_exactly_one_confidence_clamp_in_the_module():
           "drift that shipped 13 of them."
     )
     lineno, _src = sites[0]
-    assert 1140 <= lineno <= 1180, (
-        f"the single clamp moved to line {lineno}; it belongs inside "
-        "_confidence_clamped"
+    first, last = _confidence_clamped_span()
+    assert first <= lineno <= last, (
+        f"the single clamp is at line {lineno}, outside "
+        f"_confidence_clamped (lines {first}-{last})"
     )
 
 

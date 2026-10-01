@@ -516,7 +516,25 @@ _KNOWN_BIOZONE_KEYS = ("name", "section", "age", "thickness_m", "zone_type")
 # slip-through so the operator can see it instead of silently exporting a
 # fabricated FAD/LAD for a non-taxon.
 _IRON_RULE_ZONE_RE = re.compile(
-    r"\b(zone|zonule|assemblage|oppel|interval|lineage|range|acme)\b",
+    # AUDIT-2026-10-02: explicit ASCII lookarounds instead of `\b`, for the
+    # same reason as the zone_type ladder below. Python's `\b` is Unicode-aware
+    # on str patterns and js/minimax.js#_RCA_IRON_RULE_ZONE_RE's is not, so for
+    # "图zone" the browser matched and this side did not -- and this is the
+    # highest-stakes instance of that split, because the rule exists so a
+    # zone-like name is never filed as a taxon. Measured on the `range_chart`
+    # parity group: with the Unicode-aware spelling the desktop emitted NO
+    # `iron_rule_zone_label` warning and no "[zone-mislabel-warning]" note,
+    # while the browser emitted both, so a zone label was silently accepted as
+    # a species on one endpoint and flagged on the other -- i.e. the
+    # "fabricated FAD/LAD for a non-taxon" the comment above describes.
+    #
+    # A CJK glyph is not a continuation of an ASCII identifier, so ASCII is
+    # the right notion of "adjacent identifier character" here. "zozone" and
+    # "zoness" are still rejected on both engines, and a space, a hyphen and a
+    # dot are still boundaries both engines agree on (rc_iron_rule_boundaries
+    # pins that half).
+    r"(?<![A-Za-z0-9_])(zone|zonule|assemblage|oppel|interval|lineage|range|acme)"
+    r"(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
 
@@ -1819,9 +1837,24 @@ def _normalize_biozone_into(bz: dict[str, Any],
         inferred_zt = "lineage_zone"
     elif "interval" in nl:
         inferred_zt = "interval_zone"
-    elif re.search(r"\bzonule\b", nl):
+    # AUDIT-2026-10-02: the only two boundary-guarded branches of this ladder
+    # (the other seven are plain substring tests and cannot diverge). The guard
+    # is written as explicit ASCII lookarounds because Python's `\b` is
+    # Unicode-aware on str patterns and ECMAScript's is not: a CJK / Greek /
+    # Cyrillic letter touching the keyword is a word character here and not
+    # there, so js/minimax.js#rcaNormalizeBiozoneInto inferred "zonule" for
+    # "图zonule" and this side fell through to the "biozone" default -- the
+    # same figure taking a different zone_type, and so a different biozone
+    # row, on the two endpoints. Measured on the `range_chart` parity group.
+    #
+    # Direction, as with the explicit-age guard: a CJK glyph is not a
+    # continuation of an ASCII identifier, so ASCII is the right notion of
+    # "adjacent identifier character" here. "zozonule" / "zonules" are still
+    # rejected on both engines, and a space or hyphen is still a boundary both
+    # engines agree on.
+    elif re.search(r"(?<![A-Za-z0-9_])zonule(?![A-Za-z0-9_])", nl):
         inferred_zt = "zonule"
-    elif re.search(r"\bsubzone\b", nl):
+    elif re.search(r"(?<![A-Za-z0-9_])subzone(?![A-Za-z0-9_])", nl):
         inferred_zt = "subzone"
     elif "oppel" in nl:
         inferred_zt = "oppel_zone"
