@@ -2031,6 +2031,43 @@ _add(*[
 # which was an artifact of the extractor rather than a property of the code. A
 # sweep that cannot see the thing it is looking for returns "clean" forever.
 _add(
+    # AUDIT-2026-10-02: the bed-number READER inside the same file that was
+    # already fixed for full-width digits. js/quality.js carries two bed
+    # parsers: rcaParseBed (the rcaParseBedN/rcaSubbedInverted family, whose
+    # digit class was made Unicode-aware when the full-width bed bug was
+    # fixed) and _parseBedN directly above it, which still uses /-?\d+/ and is
+    # therefore ASCII-only. rca_core/quality.py's _BED_RE is r"-?\d+", which
+    # is Unicode-aware. So a reversed bed pair written with full-width digits
+    # is flagged on the desktop and silently SKIPPED in the browser -- the row
+    # scores as well-formed, which is precisely the failure this file's own
+    # comment describes for the missing subscript parser ("those rows scored
+    # 0.87/B with no warning ... and exported the impossible range").
+    # Base is the SMALLER index in a valid pair, so base 9 / top 7 is the
+    # violation.
+    _case("quality_coverage", "qc_bed_fullwidth_digits", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            {"species": "A", "section": "S1", "range_base": "Bed ９",
+             "range_top": "Bed ７"},
+        ],
+    }),
+    # The reverse control: the same pair in ASCII, and the same pair in the
+    # valid order with full-width digits. Both must already agree, or the new
+    # case would be measuring a pre-existing divergence instead of this one.
+    _case("quality_coverage", "qc_bed_ascii_reversed", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            {"species": "A", "section": "S1", "range_base": "Bed 9",
+             "range_top": "Bed 7"},
+        ],
+    }),
+    _case("quality_coverage", "qc_bed_fullwidth_valid_order", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            {"species": "A", "section": "S1", "range_base": "Bed ７",
+             "range_top": "Bed ９"},
+        ],
+    }),
     _case("quality_coverage", "qc_notdrawn", {
         "sections": [{"name": "S1"}],
         "species_ranges": [{"species": "A", "section": "S1",

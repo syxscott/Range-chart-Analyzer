@@ -167,7 +167,22 @@ function _parseBedN(value) {
   }
   const s = String(value).trim();
   if (!s) return null;
-  const m = s.match(/-?\d+/);
+  // AUDIT-2026-10-02: fold first, then match ASCII -- NOT a \p{Nd} regex.
+  // This file already carries _asciiDigits for exactly this reason (see
+  // rcaParseBed below), and rcaParseBed's own comment records why the
+  // two-part fix is needed: matching Unicode digits is only half of it,
+  // because parseInt("９") is NaN. Folding first gets both halves right and
+  // keeps the match ASCII, so nothing else about the pattern has to change.
+  //
+  // Before this, /-?\d+/ was ASCII-only while rca_core/quality.py's _BED_RE
+  // (r"-?\d+") is Unicode-aware, so a reversed bed pair written with
+  // full-width digits was FLAGGED on the desktop and silently SKIPPED here:
+  // measured, range_base="Bed ９" / range_top="Bed ７" grades B on the browser
+  // and C on the desktop, the browser reporting an impossible range as
+  // well-formed. That is the same failure this file's comment above
+  // rcaParseBed records for the missing subscript parser, arriving through a
+  // second door.
+  const m = _asciiDigits(s).match(/-?\d+/);
   return m ? parseInt(m[0], 10) : null;
 }
 

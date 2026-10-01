@@ -33035,6 +33035,139 @@
   },
   {
    "group": "quality_coverage",
+   "id": "qc_bed_fullwidth_digits",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_base": "Bed ９",
+      "range_top": "Bed ７"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "score": 0.66,
+    "grade": "C",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_confidence"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.range_top_lt_base"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.fad_lt_lad",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_bed_ascii_reversed",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_base": "Bed 9",
+      "range_top": "Bed 7"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "score": 0.66,
+    "grade": "C",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_confidence"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.range_top_lt_base"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.fad_lt_lad",
+      "params": {
+       "count": "1"
+      }
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "group": "quality_coverage",
+   "id": "qc_bed_fullwidth_valid_order",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "A",
+      "section": "S1",
+      "range_base": "Bed ７",
+      "range_top": "Bed ９"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "score": 0.88,
+    "grade": "B",
+    "issues": [
+     {
+      "severity": "info",
+      "msg_key": "quality.missing_confidence"
+     },
+     {
+      "severity": "warning",
+      "msg_key": "quality.missing_biozone",
+      "params": {
+       "count": "1"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "group": "quality_coverage",
    "id": "qc_notdrawn",
    "payload": {
     "sections": [
