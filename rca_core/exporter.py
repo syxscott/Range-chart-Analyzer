@@ -2290,6 +2290,22 @@ def _wpd_num(value: Any) -> int | float | None:
     return f
 
 
+# NOTE (AUDIT-2026-10-02): both patterns below use `\d`, which is Unicode-aware
+# on a Python str, so on their own they would ACCEPT full-width and
+# Arabic-Indic digits.  They are safe because of what sits in front of them:
+# _wpd_abscissa gates the inline-unit branch on `text.isascii()` one line
+# before calling _WPD_INLINE_UNIT_RE, and the percent branch's _wpd_num()
+# refuses a non-ASCII number.  Measured: _wpd_abscissa("１２ indiv") is
+# (None, '') and _wpd_abscissa("５０%") is (None, '%'), i.e. the same
+# unresolved-cell shape any unreadable value gets -- and tests_export_parity.js
+# already pins the bare-number path to reject "２３" on BOTH engines.
+#
+# This is written down because the obvious reading of a `\d` inside a grammar
+# the comment above calls "an ASCII number" is that it is a latent bug, and
+# the obvious "fix" -- dropping the `text.isascii()` guard as redundant --
+# would CREATE the divergence it appears to remove.  (The corresponding
+# cross-engine fix, when the JS abundance builder lands, is to make JS ASCII
+# too; js/export.js has no abundance builder yet.)
 _WPD_PERCENT_RE = re.compile(r"^([+]?\d+(?:\.\d+)?)\s*%\s*$")
 # FIX-2026-09-22 (C2, item 6): a cell may write its unit outright —
 # "12 indiv/g". Before this the percent case was the ONLY inline unit the
