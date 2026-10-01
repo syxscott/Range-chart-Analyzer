@@ -14,6 +14,48 @@
  * Run:  node tests_diff_frontend_parity.js            (summary)
  *       node tests_diff_frontend_parity.js --verbose  (full diffs)
  *       node tests_diff_frontend_parity.js rc_dict_shaped_sections   (one case)
+ *
+ * THE CLASS THAT PRODUCES MOST OF THE BUGS HERE (AUDIT-2026-10-02).
+ * Ten defects in one day came from a single shape: ONE decision, SEVERAL
+ * implementations, and a fix that landed on only one of them. Nothing about
+ * the untouched copy announces that it should have moved too, and the
+ * divergence is invisible until a case reaches it.
+ *
+ *   * \b / \d character classes -- Python's are Unicode-aware on str, JS's are
+ *     ASCII-only unless the `u` flag is used. Ten sites across ics.py,
+ *     quality.py, standards/pbdb.py, standards/ics.py, extractor.py,
+ *     names.py, eval_metrics.py, js/quality.js and js/table.js. Two of them
+ *     read a CJK letter as a word character and so SILENTLY DROPPED A SAMPLE:
+ *     the explicit-age guard lost the older endpoint of "深度260 Ma - 250 Ma"
+ *     and answered prefer="older" with the YOUNGER age, and the iron rule
+ *     stopped flagging "图zone" at all. The safe form is an explicit
+ *     (?<![A-Za-z0-9_]) / (?![A-Za-z0-9_]) pair -- NOT re.ASCII, which would
+ *     also narrow \s and trade this for its mirror image, and in JS NOT a
+ *     \p{Nd} regex without folding, because parseInt("９") is NaN.
+ *   * The explicit-age patterns were copy-pasted into four files.
+ *   * standards/darwin_core.py had the reversed-interval guard and
+ *     standards/pbdb.py never received it, so the same chart published a
+ *     suppressed age to one database and an inverted one to the other. Now
+ *     pinned by tests/test_export_consumers_agree.py, which asserts the two
+ *     writers AGREE rather than pinning either one's answer.
+ *   * js/quality.js held two bed parsers 16 lines apart and only one of them
+ *     was made Unicode-aware.
+ *   * quality.ages_inconsistent was pushed once per offending section in JS
+ *     with a running count, so two sections produced "1" and "2"; Python
+ *     counted first and emitted one.
+ *   * rcaAutoDetectKeymap was still the pre-REVIEW-2026-09-20 algorithm while
+ *     _auto_detect_schema had been rewritten, so the browser merged a
+ *     three-run phylogenetic extraction as a range chart.
+ *
+ * Two working rules came out of it. (1) When adding a case here, ask which
+ * OTHER files make the same decision and assert they agree -- a per-consumer
+ * pin records today's answer and lets the next one drift. (2) A case only
+ * falsifies a fix if the shape reaches the decision; several "clean" results
+ * here were a fixture that could not fail (a by_day pair differing in
+ * _norm(species), a cross-era pair with only one era on each side, an
+ * issues.push discovered only from a case written as a CONTROL). Always
+ * falsify against the old code, and check the recorded divergences yourself
+ * rather than trusting the count.
  */
 'use strict';
 
