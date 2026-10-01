@@ -20,6 +20,16 @@
 // else is rejected by `push()` (returns false) so a stray action can never sit
 // on the stack with no undoer and blow up on the first Ctrl+Z.
 //
+// NOT the mirror of rca_core/history.py (AUDIT-2026-10-02). Same word, entirely
+// different subject, and a scanner will assume otherwise: that module is the
+// extraction-history STORE (SQLite, thumbnails, sha256 dedup, the row cap,
+// raw-response decode, PROV-JSONLD export) and is desktop-only; this file is
+// the table EDITOR's undo/redo stack. No function name, no return shape and no
+// decision is shared, so there is nothing here to keep in parity and nothing to
+// add to the differential fixture. Checked by enumerating both surfaces after
+// the shared-name pairing sent a sweep looking for divergences that cannot
+// exist. The name collision is the only thing worth recording.
+//
 // Actions are produced by `rcaTableEdits` (js/table.js), which applies them to
 // the live model BEFORE they are pushed: the stack stores nothing but the
 // instruction, and the undoers call back into the same write primitives. That
