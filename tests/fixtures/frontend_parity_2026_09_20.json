@@ -11171,6 +11171,344 @@
   },
   {
    "group": "merge",
+   "id": "mrg_author_and_spaced_vs_bracketed",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "Pseudoschagerina sp.",
+        "section": "S1",
+        "author_year": "Smith and Jones, 1950",
+        "range_top": "9",
+        "range_base": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "Pseudoschagerina sp.",
+        "section": "S1",
+        "author_year": "Smith (and) Jones, 1950",
+        "range_top": "9",
+        "range_base": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 2,
+      "agreement": "2/2",
+      "species": "Pseudoschagerina sp.",
+      "section": "S1",
+      "author_year": "Smith (and) Jones, 1950",
+      "range_top": "9",
+      "range_base": "7",
+      "biozone": ""
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 2,
+      "agreement": "2/2"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_author_and_hyphenated",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "Pseudoschagerina sp.",
+        "section": "S1",
+        "author_year": "Smith and-Jones, 1950",
+        "range_top": "9",
+        "range_base": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "Pseudoschagerina sp.",
+        "section": "S1",
+        "author_year": "Smith & Jones, 1950",
+        "range_top": "9",
+        "range_base": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 1,
+      "agreement": "1/2",
+      "species": "Pseudoschagerina sp.",
+      "section": "S1",
+      "author_year": "Smith and-Jones, 1950",
+      "range_top": "9",
+      "range_base": "7",
+      "biozone": ""
+     },
+     {
+      "agreement_count": 1,
+      "agreement": "1/2",
+      "species": "Pseudoschagerina sp.",
+      "section": "S1",
+      "author_year": "Smith & Jones, 1950",
+      "range_top": "9",
+      "range_base": "7",
+      "biozone": ""
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 2,
+      "agreement": "2/2"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_author_year_still_splits",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "Pseudoschagerina sp.",
+        "section": "S1",
+        "author_year": "Smith and Jones, 1950",
+        "range_top": "9",
+        "range_base": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "Pseudoschagerina sp.",
+        "section": "S1",
+        "author_year": "Smith and Jones, 1960",
+        "range_top": "9",
+        "range_base": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 1,
+      "agreement": "1/2",
+      "species": "Pseudoschagerina sp.",
+      "section": "S1",
+      "author_year": "Smith and Jones, 1950",
+      "range_top": "9",
+      "range_base": "7",
+      "biozone": ""
+     },
+     {
+      "agreement_count": 1,
+      "agreement": "1/2",
+      "species": "Pseudoschagerina sp.",
+      "section": "S1",
+      "author_year": "Smith and Jones, 1960",
+      "range_top": "9",
+      "range_base": "7",
+      "biozone": ""
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 2,
+      "agreement": "2/2"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
+   "id": "mrg_qualifier_cjk_with_space",
+   "payload": {
+    "results": [
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "中华虫属",
+        "section": "S1",
+        "range_top": "9",
+        "range_base": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     },
+     {
+      "sections": [
+       {
+        "name": "S1"
+       }
+      ],
+      "species_ranges": [
+       {
+        "species": "中华虫属 sp.",
+        "section": "S1",
+        "range_top": "9",
+        "range_base": "7"
+       }
+      ],
+      "biozones": [],
+      "other_fossils": [],
+      "confidence": 0.8
+     }
+    ],
+    "total_runs": 2,
+    "mode": "range_chart"
+   },
+   "extra": null,
+   "python": {
+    "runs": 2,
+    "species_ranges": [
+     {
+      "agreement_count": 1,
+      "agreement": "1/2",
+      "species": "中华虫属",
+      "section": "S1",
+      "range_top": "9",
+      "range_base": "7",
+      "biozone": ""
+     },
+     {
+      "agreement_count": 1,
+      "agreement": "1/2",
+      "species": "中华虫属 sp.",
+      "section": "S1",
+      "range_top": "9",
+      "range_base": "7",
+      "biozone": ""
+     }
+    ],
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": "",
+      "agreement_count": 2,
+      "agreement": "2/2"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.8
+   }
+  },
+  {
+   "group": "merge",
    "id": "mrg_divergent_vote",
    "payload": {
     "results": [
@@ -12712,6 +13050,4385 @@
     "legend": {},
     "confidence": 0.7
    }
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_0",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "A.? irregularis"
+    ]
+   },
+   "extra": null,
+   "python": "a.? irregularis"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_1",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "A.? irregularis"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_2",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Bathylagus sp."
+    ]
+   },
+   "extra": null,
+   "python": "bathylagus sp."
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_3",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Bathylagus sp."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_4",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "C. robusta"
+    ]
+   },
+   "extra": null,
+   "python": "c. robusta"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_5",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "C. robusta"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_6",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "E. antarctica"
+    ]
+   },
+   "extra": null,
+   "python": "e. antarctica"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_7",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "E. antarctica"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_8",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "E. spinosum"
+    ]
+   },
+   "extra": null,
+   "python": "e. spinosum"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_9",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "E. spinosum"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_10",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "G. braueri"
+    ]
+   },
+   "extra": null,
+   "python": "g. braueri"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_11",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "G. braueri"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_12",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "G. nicholsi"
+    ]
+   },
+   "extra": null,
+   "python": "g. nicholsi"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_13",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "G. nicholsi"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_14",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "G. opisthopterus"
+    ]
+   },
+   "extra": null,
+   "python": "g. opisthopterus"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_15",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "G. opisthopterus"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_16",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "L. conica"
+    ]
+   },
+   "extra": null,
+   "python": "l. conica"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_17",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "L. conica"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_18",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "S. rad"
+    ]
+   },
+   "extra": null,
+   "python": "s. rad"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_19",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "S. rad"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_20",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Rhizaria sp."
+    ]
+   },
+   "extra": null,
+   "python": "rhizaria sp."
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_21",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Rhizaria sp."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_22",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Acantharia"
+    ]
+   },
+   "extra": null,
+   "python": "acantharia"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_23",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Acantharia"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_24",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Actinommidea"
+    ]
+   },
+   "extra": null,
+   "python": "actinommidea"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_25",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Actinommidea"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_26",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Acanthodesmoidea"
+    ]
+   },
+   "extra": null,
+   "python": "acanthodesmoidea"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_27",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Acanthodesmoidea"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_28",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Aulacanthidae"
+    ]
+   },
+   "extra": null,
+   "python": "aulacanthidae"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_29",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Aulacanthidae"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_30",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Aulosphaeridae, Sagosphaeridae"
+    ]
+   },
+   "extra": null,
+   "python": "aulosphaeridae, sagosphaeridae"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_31",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Aulosphaeridae, Sagosphaeridae"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_32",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Cercozoa (root)"
+    ]
+   },
+   "extra": null,
+   "python": "cercozoa (root)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_33",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Cercozoa (root)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_34",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Collodaria clade"
+    ]
+   },
+   "extra": null,
+   "python": "collodaria clade"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_35",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Collodaria clade"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_36",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Nassellaria clade"
+    ]
+   },
+   "extra": null,
+   "python": "nassellaria clade"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_37",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Nassellaria clade"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_38",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Radiolaria clade"
+    ]
+   },
+   "extra": null,
+   "python": "radiolaria clade"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_39",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Radiolaria clade"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_40",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Spumellaria clade"
+    ]
+   },
+   "extra": null,
+   "python": "spumellaria clade"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_41",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Spumellaria clade"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_42",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Phaeodaria clade"
+    ]
+   },
+   "extra": null,
+   "python": "phaeodaria clade"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_43",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Phaeodaria clade"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_44",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Whaingaroan"
+    ]
+   },
+   "extra": null,
+   "python": "whaingaroan"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_45",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Whaingaroan"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_46",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Cache Creek Terrane"
+    ]
+   },
+   "extra": null,
+   "python": "cache creek terrane"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_47",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Cache Creek Terrane"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_48",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Clade H"
+    ]
+   },
+   "extra": null,
+   "python": "clade h"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_49",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Clade H"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_50",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Clade K"
+    ]
+   },
+   "extra": null,
+   "python": "clade k"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_51",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Clade K"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_52",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "inner node (Rhizaria sp.+Phacodinidae+Clade K)"
+    ]
+   },
+   "extra": null,
+   "python": "inner node (rhizaria sp.+phacodinidae+clade k)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_53",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "inner node (Rhizaria sp.+Phacodinidae+Clade K)"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_54",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "inner node (Coelodendridae+Conchariidae)"
+    ]
+   },
+   "extra": null,
+   "python": "inner node (coelodendridae+conchariidae)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_55",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "inner node (Coelodendridae+Conchariidae)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_56",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "inner node (Tuscaroridae+Aulosphaeridae/Sagosphaeridae)"
+    ]
+   },
+   "extra": null,
+   "python": "inner node (tuscaroridae+aulosphaeridae/sagosphaeridae)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_57",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "inner node (Tuscaroridae+Aulosphaeridae/Sagosphaeridae)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_58",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "inner node (Hexalonchidae+Hexastylidae)"
+    ]
+   },
+   "extra": null,
+   "python": "inner node (hexalonchidae+hexastylidae)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_59",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "inner node (Hexalonchidae+Hexastylidae)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_60",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "inner node (Theopiliidae+Plagiacanthoidea+Acanthodesmoidea+Sphaerozoidae+Collophidiidae+Collospheeridae+Orosphaeridae)"
+    ]
+   },
+   "extra": null,
+   "python": "inner node (theopiliidae+plagiacanthoidea+acanthodesmoidea+sphaerozoidae+collophidiidae+collospheeridae+orosphaeridae)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_61",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "inner node (Theopiliidae+Plagiacanthoidea+Acanthodesmoidea+Sphaerozoidae+Collophidiidae+Collospheeridae+Orosphaeridae)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_62",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Late Permian (Wuchiapingian)"
+    ]
+   },
+   "extra": null,
+   "python": "late permian (wuchiapingian)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_63",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Late Permian (Wuchiapingian)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_64",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Early Cretaceous — Albian (Alb.)"
+    ]
+   },
+   "extra": null,
+   "python": "early cretaceous — albian (alb.)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_65",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Early Cretaceous — Albian (Alb.)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_66",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Ratburi Group – Um Luk Formation (uppermost Lower–Middle Permian)"
+    ]
+   },
+   "extra": null,
+   "python": "ratburi group – um luk formation (uppermost lower–middle permian)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_67",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Ratburi Group – Um Luk Formation (uppermost Lower–Middle Permian)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_68",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Kaeng Krachan Group – Khao Chao Formation (Lower Permian)"
+    ]
+   },
+   "extra": null,
+   "python": "kaeng krachan group – khao chao formation (lower permian)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_69",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Kaeng Krachan Group – Khao Chao Formation (Lower Permian)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_70",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Chert radiolarian age (Albian–Cenomanian)"
+    ]
+   },
+   "extra": null,
+   "python": "chert radiolarian age (albian–cenomanian)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_71",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Chert radiolarian age (Albian–Cenomanian)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_72",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "negative δ30Si excursion"
+    ]
+   },
+   "extra": null,
+   "python": "negative δ30si excursion"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_73",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "negative δ30Si excursion"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_74",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "positive δ30Si peak"
+    ]
+   },
+   "extra": null,
+   "python": "positive δ30si peak"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_75",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "positive δ30Si peak"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_76",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Principal 238U-206Pb age peak (Conglomerate, n=95)"
+    ]
+   },
+   "extra": null,
+   "python": "principal 238u-206pb age peak (conglomerate, n=95)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_77",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Principal 238U-206Pb age peak (Conglomerate, n=95)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_78",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "YSG and YC1σ age clusters (Santonian–Coniacian)"
+    ]
+   },
+   "extra": null,
+   "python": "ysg and yc1σ age clusters (santonian–coniacian)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_79",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "YSG and YC1σ age clusters (Santonian–Coniacian)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_80",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Varicolored shale interval (age uncertain)"
+    ]
+   },
+   "extra": null,
+   "python": "varicolored shale interval (age uncertain)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_81",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Varicolored shale interval (age uncertain)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_82",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Ko He Formation (?)"
+    ]
+   },
+   "extra": null,
+   "python": "ko he formation (?)"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_83",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Ko He Formation (?)"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_84",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "other Cercozoa"
+    ]
+   },
+   "extra": null,
+   "python": "other cercozoa"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_85",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "other Cercozoa"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_86",
+   "payload": {
+    "op": "norm",
+    "args": [
+     ""
+    ]
+   },
+   "extra": null,
+   "python": ""
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_87",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     ""
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_88",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "   "
+    ]
+   },
+   "extra": null,
+   "python": ""
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_89",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "   "
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_90",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "\t\n "
+    ]
+   },
+   "extra": null,
+   "python": ""
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_91",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "\t\n "
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_92",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Genus  sp."
+    ]
+   },
+   "extra": null,
+   "python": "genus sp."
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_93",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus  sp."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_94",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "  Genus   sp.  "
+    ]
+   },
+   "extra": null,
+   "python": "genus sp."
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_95",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "  Genus   sp.  "
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_96",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "GENUS SP."
+    ]
+   },
+   "extra": null,
+   "python": "genus sp."
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_97",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "GENUS SP."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_98",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Genus\tsp."
+    ]
+   },
+   "extra": null,
+   "python": "genus sp."
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_99",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus\tsp."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_100",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "中文 名称"
+    ]
+   },
+   "extra": null,
+   "python": "中文 名称"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_101",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "中文 名称"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_102",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "ＡＢＣ"
+    ]
+   },
+   "extra": null,
+   "python": "ａｂｃ"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_103",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "ＡＢＣ"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_104",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "Zoological  Name"
+    ]
+   },
+   "extra": null,
+   "python": "zoological name"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_105",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Zoological  Name"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_106",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "A.B"
+    ]
+   },
+   "extra": null,
+   "python": "a.b"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_107",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "A.B"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agnorm_108",
+   "payload": {
+    "op": "norm",
+    "args": [
+     "A. B.  C"
+    ]
+   },
+   "extra": null,
+   "python": "a. b. c"
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_109",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "A. B.  C"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_110",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     ""
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_111",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus cf."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "cf."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_112",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus aff."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "aff."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_113",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus sp."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_114",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus spp."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "spp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_115",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus s.l."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "s.l."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_116",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus s. l."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "s.l."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_117",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus s.str."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "s.str."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_118",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus s. str."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "s.str."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_119",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus ex gr."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "ex gr."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_120",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus ex gr"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "ex gr."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_121",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus ex groupe."
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_122",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus nom. dub."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "nom. dub"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_123",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus nom. nud."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "nom. nud"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_124",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus nom. nov."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "nom. nov"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_125",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus nom. cons."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "nom. cons"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_126",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus nom. obl."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "nom. obl"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_127",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus nom. van."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "nom. van"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_128",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus comb. nov."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "comb. nov."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_129",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus stat. nov."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "stat. nov."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_130",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus subsp."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "subsp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_131",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus var."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "var."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_132",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "A.?"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "?"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_133",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "A.?"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "?"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_134",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "A. ?"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "?"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_135",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "A.?\n"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "?"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_136",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "A. ? "
+    ]
+   },
+   "extra": null,
+   "python": [
+    "?"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_137",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus cf"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "cf."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_138",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus aff"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "aff."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_139",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus sp"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_140",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus spp"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "spp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_141",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "coffee"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_142",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "affinis"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_143",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus sp. cf. aff."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "aff.",
+    "cf.",
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_144",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus cf. aff. ex gr. s.l. ?"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "?",
+    "aff.",
+    "cf.",
+    "ex gr.",
+    "s.l."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_145",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "中华虫属sp."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_146",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "中华虫属 sp."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_147",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "和sp.和"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_148",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "和cf.和"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "cf."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_149",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "中aff.中"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "aff."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_150",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "sp.中华"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_151",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "cf.中华"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "cf."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_152",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "sp.1"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_153",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "sp.1a"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_154",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "1sp."
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_155",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "sp-"
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_156",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "sp_"
+    ]
+   },
+   "extra": null,
+   "python": []
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_157",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "A.sp."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_158",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "sp. sp."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_159",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus sp."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "sp."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_160",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus nom. dub."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "nom. dub"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_161",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "GENUS NOM. DUB."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "nom. DUB"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_162",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus NOM. Dub."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "nom. Dub"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_163",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "  Genus nom.  dub."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "nom. dub"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_164",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus nom. nov."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "nom. nov"
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_165",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "GENUS COMB. NOV."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "comb. nov."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_166",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus comb. nov."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "comb. nov."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_167",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "GENUS STAT. NOV."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "stat. nov."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agqual_168",
+   "payload": {
+    "op": "qualifiers",
+    "args": [
+     "Genus stat. nov."
+    ]
+   },
+   "extra": null,
+   "python": [
+    "stat. nov."
+   ]
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_169",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_170",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "(Smith, 1950)"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_171",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_172",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith,1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_173",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "SMITH, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_174",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "  Smith,  1950  "
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_175",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith, 1960"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1960"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_176",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith, 50"
+    ]
+   },
+   "extra": null,
+   "python": "smith 50"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_177",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith"
+    ]
+   },
+   "extra": null,
+   "python": "smith"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_178",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     ""
+    ]
+   },
+   "extra": null,
+   "python": ""
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_179",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "   "
+    ]
+   },
+   "extra": null,
+   "python": ""
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_180",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith, 1950a"
+    ]
+   },
+   "extra": null,
+   "python": "smith a|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_181",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith, 1950, 1951"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_182",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "J. Smith, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "j smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_183",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "K. Smith, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "k smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_184",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "J. Smith & K. Smith, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "j smith k smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_185",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith and Jones, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_186",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith & Jones, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_187",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith, 1950 and Jones, 1951"
+    ]
+   },
+   "extra": null,
+   "python": "smith jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_188",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith (and) Jones, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_189",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith and(Jones), 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_190",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith and-Jones, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith -jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_191",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith and/Jones, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith /jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_192",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith, and Jones, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_193",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith, 1950 and, Jones"
+    ]
+   },
+   "extra": null,
+   "python": "smith jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_194",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Sanderson, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "sanderson|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_195",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Anderson, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "anderson|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_196",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Alexander, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "alexander|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_197",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Brand, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "brand|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_198",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "andersonia, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "andersonia|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_199",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith—Jones, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_200",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith--Jones, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_201",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith----Jones, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_202",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith ex Jones, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_203",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith in Jones, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_204",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith ex Jones and Brown, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_205",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith et al., 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_206",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith et al. 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_207",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith et al, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_208",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith et. al., 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_209",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith,  and  Jones, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smith jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_210",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "(Smith, 1950) & (Jones, 1951)"
+    ]
+   },
+   "extra": null,
+   "python": "smith jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_211",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smith, 9999"
+    ]
+   },
+   "extra": null,
+   "python": "smith|9999"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_212",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "1950"
+    ]
+   },
+   "extra": null,
+   "python": "|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_213",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "δ13C, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "δ13c|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_214",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "O. Smith, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "o smith|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_215",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "中文and文"
+    ]
+   },
+   "extra": null,
+   "python": "中文 文"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_216",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "和and和"
+    ]
+   },
+   "extra": null,
+   "python": "和 和"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_217",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "Smithand和Jones, 1950"
+    ]
+   },
+   "extra": null,
+   "python": "smithand和jones|1950"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_218",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "中文et al.文"
+    ]
+   },
+   "extra": null,
+   "python": "中文 文"
+  },
+  {
+   "group": "aggregate",
+   "id": "agiczn_219",
+   "payload": {
+    "op": "iczn",
+    "args": [
+     "和et. al.和"
+    ]
+   },
+   "extra": null,
+   "python": "和 和"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_220",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     "abc"
+    ]
+   },
+   "extra": null,
+   "python": "abc"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_221",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     ""
+    ]
+   },
+   "extra": null,
+   "python": ""
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_222",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     0
+    ]
+   },
+   "extra": null,
+   "python": "0"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_223",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     1
+    ]
+   },
+   "extra": null,
+   "python": "1"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_224",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     -1
+    ]
+   },
+   "extra": null,
+   "python": "-1"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_225",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     1.0
+    ]
+   },
+   "extra": null,
+   "python": "1"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_226",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     1.5
+    ]
+   },
+   "extra": null,
+   "python": "1.5"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_227",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     true
+    ]
+   },
+   "extra": null,
+   "python": "True"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_228",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     false
+    ]
+   },
+   "extra": null,
+   "python": "False"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_229",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     null
+    ]
+   },
+   "extra": null,
+   "python": "None"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_230",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     1e+16
+    ]
+   },
+   "extra": null,
+   "python": "10000000000000000"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_231",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     1e-07
+    ]
+   },
+   "extra": null,
+   "python": "1e-07"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_232",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     3.0
+    ]
+   },
+   "extra": null,
+   "python": "3"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_233",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     "1"
+    ]
+   },
+   "extra": null,
+   "python": "1"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_234",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     "1.0"
+    ]
+   },
+   "extra": null,
+   "python": "1.0"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_235",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     "True"
+    ]
+   },
+   "extra": null,
+   "python": "True"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_236",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     "0"
+    ]
+   },
+   "extra": null,
+   "python": "0"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_237",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     [
+      1,
+      2
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "[1, 2]"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_238",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     {
+      "a": 1
+     }
+    ]
+   },
+   "extra": null,
+   "python": "{'a': 1}"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_239",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     0.1
+    ]
+   },
+   "extra": null,
+   "python": "0.1"
+  },
+  {
+   "group": "aggregate",
+   "id": "agstr_240",
+   "payload": {
+    "op": "str_merge",
+    "args": [
+     0.3333333333333333
+    ]
+   },
+   "extra": null,
+   "python": "0.3333333333333333"
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_241",
+   "payload": {
+    "op": "mode",
+    "args": [
+     []
+    ]
+   },
+   "extra": null,
+   "python": ""
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_242",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      null,
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": ""
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_243",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      "",
+      "  "
+     ]
+    ]
+   },
+   "extra": null,
+   "python": ""
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_244",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      0,
+      0,
+      12
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_245",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      0,
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_246",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      0,
+      0.0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_247",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      "A",
+      "A",
+      "B"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "A"
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_248",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      "B",
+      "A"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "A"
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_249",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      "A",
+      "B",
+      "C"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "A"
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_250",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      "B",
+      "B",
+      "A",
+      "A"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "A"
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_251",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      "b",
+      "B"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "B"
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_252",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      "B",
+      "b",
+      "C",
+      "c"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "B"
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_253",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      true,
+      true,
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_254",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      true,
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_255",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      false,
+      true
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_256",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      true,
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_257",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      1,
+      "1"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_258",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      1,
+      1.0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_259",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      1.0,
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_260",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      "0",
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "0"
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_261",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      0,
+      "0"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_262",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      null,
+      "x",
+      "x"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "x"
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_263",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      {
+       "a": 1
+      },
+      "x",
+      "x"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "x"
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_264",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      [
+       1
+      ],
+      "y",
+      "y"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "y"
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_265",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      2,
+      10,
+      2,
+      10,
+      2
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 2
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_266",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      "10",
+      "2",
+      "10",
+      "2"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "10"
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_267",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      "Zebra",
+      "apple",
+      "Apple"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "Apple"
+  },
+  {
+   "group": "aggregate",
+   "id": "agmode_268",
+   "payload": {
+    "op": "mode",
+    "args": [
+     [
+      "ä",
+      "z",
+      "Z"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "Z"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_269",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     []
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_270",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_271",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "",
+      " "
+     ]
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_272",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "a",
+      "a",
+      "b"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "a"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_273",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "b",
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "a"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_274",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      true,
+      true,
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": true
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_275",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      true,
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_276",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      false,
+      true
+     ]
+    ]
+   },
+   "extra": null,
+   "python": false
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_277",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      true,
+      "maybe"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "maybe"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_278",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      true,
+      false,
+      "maybe"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "maybe"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_279",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      0,
+      false
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "0"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_280",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      0,
+      true
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "0"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_281",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      1,
+      "1"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "1"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_282",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "1",
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "1"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_283",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      1.0,
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "1"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_284",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      1.5,
+      1.5,
+      2
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "1.5"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_285",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      null,
+      null,
+      "x"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "x"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_286",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      {
+       "a": 1
+      },
+      "x"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "x"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_287",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      [
+       1
+      ],
+      "y"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "y"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_288",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "",
+      "",
+      "z"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "z"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_289",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      0,
+      0,
+      "a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "0"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_290",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "10",
+      2,
+      "10",
+      2
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "10"
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_291",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_292",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      null
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_293",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      3,
+      3,
+      5
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 3
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_294",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      3,
+      3.0,
+      5
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 3
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_295",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      3.0,
+      3.0
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 3
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_296",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      3.5,
+      3.5
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_297",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      true,
+      true,
+      3
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 3
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_298",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      true,
+      3
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 3
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_299",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      "3",
+      3
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 3
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_300",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      3,
+      "3",
+      3.0
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 3
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_301",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      5,
+      3,
+      5,
+      3
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 3
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_302",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      7
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 7
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_303",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      7.0
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 7
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_304",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      -0.0,
+      0.0
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 0
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_305",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      1e+16,
+      1e+16
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 10000000000000000
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_306",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      3,
+      3,
+      3.0,
+      3.0,
+      4,
+      4
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 3
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_307",
+   "payload": {
+    "op": "typed_mode",
+    "args": [
+     [
+      0,
+      0,
+      0
+     ],
+     "int"
+    ]
+   },
+   "extra": null,
+   "python": 0
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_308",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     []
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_309",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      null
+     ]
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_310",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      "",
+      "0.5"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.5
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_311",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      0.5
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.5
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_312",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      0.5,
+      0.5
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.5
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_313",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      0.1,
+      0.2
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.15
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_314",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      0.01005
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.01
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_315",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      0.01015
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.0101
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_316",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      0.03125
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.0312
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_317",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      0.03125
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.0312
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_318",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      0.0625
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.0625
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_319",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      0.09375
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.0938
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_320",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      -0.5
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_321",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      1.5
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_322",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_323",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_324",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      true,
+      0.5
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.5
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_325",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      "0.5",
+      0.5
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.5
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_326",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      0.1,
+      0.2,
+      0.3,
+      0.4
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.25
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_327",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      0.3333333333333333,
+      0.3333333333333333
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.3333
+  },
+  {
+   "group": "aggregate",
+   "id": "agconf_328",
+   "payload": {
+    "op": "confidence",
+    "args": [
+     [
+      0.33333333
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0.3333
   },
   {
    "group": "quality_coverage",

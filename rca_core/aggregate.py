@@ -30,26 +30,86 @@ from .reason_codes import merge_reason_codes, merge_response_kinds
 # Long-pattern forms must appear before shorter sub-patterns (e.g. ex gr.
 # before gr., s.str. before s. — the ordering only matters for the labels
 # this list produces, not for correctness of the match).
+#
+# AUDIT-2026-10-02: every pattern below goes through ``_ascii_b`` rather than
+# using ``\b`` directly. Python's ``\b`` is Unicode-aware on str — a CJK
+# character counts as a word character — while JavaScript's ``\b`` is defined
+# on ``[A-Za-z0-9_]`` and nothing else, so a CJK character counts as
+# NON-word and manufactures a boundary Python does not see. Measured at the
+# leaf over a 136-string corpus: 16 strings disagree, all of them CJK
+# adjacent, e.g. "中华虫属sp." -> python 0 qualifiers, js 1 ("sp.").
+#
+# HONEST SCOPE: this is a LATENT divergence. No reachable effect was found in
+# the current call graph, and the reason is structural rather than lucky.
+# All three call sites pair the qualifier with ``_norm()`` of the SAME string:
+#   * _merge_primary_list: the key is ``(id_norm, quals)`` and ``id_norm``
+#     already holds ``_norm(species)``; ``_norm`` deliberately does NOT strip
+#     open-nomenclature markers (see its own docstring), so two species that
+#     differ in their marker differ in ``id_norm`` too and the qualifier
+#     component is redundant. Verified: of 429 corpus pairs sharing an
+#     ``_norm`` value, only 7 have differing qualifiers, and all 7 differ only
+#     because the "nom." label splices a captured group in with the input's
+#     case (both engines do this identically, so it is not a cross-engine
+#     divergence either -- measured, and left alone).
+#   * the species-spelling restoration block: it counts originals by
+#     ``_norm`` equality, so the originals it compares differ only in case
+#     and whitespace, which cannot move a boundary.
+#   * merge_named_lists: same shape as the first one.
+#
+# The fix is worth landing anyway -- it removes a divergence class rather
+# than an instance, and any refactor that consumes the qualifier WITHOUT
+# pairing it with ``_norm`` would silently reintroduce a species-level split.
+# But it is not a fix for anything a user could have observed, and the
+# end-to-end merge cases cannot falsify it (an attempt is recorded in
+# tests/gen_frontend_parity_fixtures.py under mrg_qualifier_cjk_with_space).
+
+
+def _ascii_b(pattern: str) -> str:
+    """Rewrite a leading and/or trailing ``\\b`` to an ASCII-only boundary.
+
+    Equivalent to JavaScript's ``\\b`` for every input, because JavaScript
+    defines a word character as exactly ``[A-Za-z0-9_]``.
+
+    Raises on a mid-pattern ``\\b`` instead of quietly leaving it
+    Unicode-aware: that residue would be a silent cross-engine divergence
+    again, and it is not a shape any pattern in this module currently has.
+    """
+    if pattern.startswith(r"\b"):
+        pattern = r"(?<![A-Za-z0-9_])" + pattern[2:]
+    if pattern.endswith(r"\b"):
+        pattern = pattern[:-2] + r"(?![A-Za-z0-9_])"
+    if r"\b" in pattern:
+        raise ValueError(
+            "mid-pattern \\b would stay Unicode-aware and diverge from "
+            "js/aggregate.js: %r" % (pattern,)
+        )
+    return pattern
+
+
+def _qpat(pattern: str, name: str):
+    return (re.compile(_ascii_b(pattern), re.IGNORECASE), name)
+
+
 _QUALIFIER_PATTERNS = [
-    (re.compile(r"\bex\s+gr(?:oup)?\.?\b", re.IGNORECASE), "ex gr."),
-    (re.compile(r"\bs\.?\s*l\.?\b", re.IGNORECASE), "s.l."),
-    (re.compile(r"\bs\.?\s*str\.?\b", re.IGNORECASE), "s.str."),
-    (re.compile(r"\bsp\.?\b", re.IGNORECASE), "sp."),
-    (re.compile(r"\bspp\.?\b", re.IGNORECASE), "spp."),
+    _qpat(r"\bex\s+gr(?:oup)?\.?\b", "ex gr."),
+    _qpat(r"\bs\.?\s*l\.?\b", "s.l."),
+    _qpat(r"\bs\.?\s*str\.?\b", "s.str."),
+    _qpat(r"\bsp\.?\b", "sp."),
+    _qpat(r"\bspp\.?\b", "spp."),
     # REVIEW-2026-09-20: cf./aff. required TRAILING WHITESPACE (`\s+`), so the
     # very common trailing-suffix forms "Genus cf." / "Genus aff." — nothing
     # after the marker — never matched and the specimen was deduped together
     # with the identified "Genus". `\b` after the optional dot matches at an
     # end of string as well, and still rejects look-alikes ("coffee",
     # "affinis") because the dot is optional on both sides of the boundary.
-    (re.compile(r"\bcf\.?\b", re.IGNORECASE), "cf."),
-    (re.compile(r"\baff\.?\b", re.IGNORECASE), "aff."),
+    _qpat(r"\bcf\.?\b", "cf."),
+    _qpat(r"\baff\.?\b", "aff."),
     (re.compile(r"\?\s*$"), "?"),
-    (re.compile(r"\bnom\.?\s+(dub|nud|nov|cons|obl|rej|van)\b", re.IGNORECASE), "nom. \\1"),
-    (re.compile(r"\bcomb\.?\s+nov\.?\b", re.IGNORECASE), "comb. nov."),
-    (re.compile(r"\bstat\.?\s+nov\.?\b", re.IGNORECASE), "stat. nov."),
-    (re.compile(r"\bsubsp\.?\b", re.IGNORECASE), "subsp."),
-    (re.compile(r"\bvar\.?\b", re.IGNORECASE), "var."),
+    _qpat(r"\bnom\.?\s+(dub|nud|nov|cons|obl|rej|van)\b", "nom. \\1"),
+    _qpat(r"\bcomb\.?\s+nov\.?\b", "comb. nov."),
+    _qpat(r"\bstat\.?\s+nov\.?\b", "stat. nov."),
+    _qpat(r"\bsubsp\.?\b", "subsp."),
+    _qpat(r"\bvar\.?\b", "var."),
 ]
 
 
@@ -118,9 +178,30 @@ def _norm_iczn_author(s):
     author = re.sub(r"\s+in\s+\S+(\s+\S+)*", "", author)
     # Strip ICZN-style punctuation: commas, parentheses, ampersands,
     # multiple spaces, "et", "al.", "&".
-    author = author.replace("&", " ").replace(" and ", " ")
+    #
+    # AUDIT-2026-10-02: the conjunction used to be removed as the LITERAL
+    # ``" and "``, which only ever matches the one spelling with exactly one
+    # space on each side. The JS mirror has always used ``/\band\b/``, so every
+    # other way of writing the same conjunction -- "(and)", "and(", "and-",
+    # "and/" -- kept the word in Python's key and dropped it in the browser's.
+    #
+    # This is not a string-comparison curiosity: the return value is spliced
+    # into the species dedup key (this function's result is appended to
+    # ``id_norm`` a few lines below), so the two engines disagreed about
+    # whether two runs described the same taxon. Measured end to end
+    # (tests_diff_frontend_parity.js mrg_author_and_spaced_vs_bracketed), two
+    # runs differing only in that bracket produced on the desktop
+    #     .species_ranges: length py=2 js=1
+    #     .species_ranges[0].agreement: py="1/2" js="2/2"
+    # -- a duplicate species row in the merged chart AND an agreement score
+    # that reported a disagreement the user never had. The browser was right:
+    # "and" is a separator in every one of those spellings, and the surname
+    # look-alikes the word-boundary form is there to protect ("Sanderson",
+    # "Alexander", "Anderson", "andersonia") all still pass untouched.
+    author = re.sub(_ascii_b(r"\band\b"), " ", author)
+    author = author.replace("&", " ")
     author = re.sub(r"[(),.;:'`\"]", " ", author)
-    author = re.sub(r"\bet\.?\s+al\.?\b", "", author)  # "et al."
+    author = re.sub(_ascii_b(r"\bet\.?\s+al\.?\b"), "", author)  # "et al."
     author = re.sub(r"\s+", " ", author).strip()
     return f"{author}|{year}" if year else author
 

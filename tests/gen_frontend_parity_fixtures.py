@@ -53,6 +53,7 @@ import rca_core.reason_codes as RC  # noqa: E402
 from rca_core.editable import apply_edits, capture_edits  # noqa: E402
 from rca_core.extractor import axis_domains_from, pos_to_axis_value  # noqa: E402
 from rca_core.aggregate import SCHEMA_BY_MODE, merge_results  # noqa: E402
+import rca_core.aggregate as AGG  # noqa: E402
 from rca_core.quality import score_range_chart  # noqa: E402
 
 FIXTURE_PATH = ROOT / "tests" / "fixtures" / "frontend_parity_2026_09_20.json"
@@ -61,7 +62,8 @@ GROUPS = (
     "range_chart", "columnar_section", "abundance_diagram",
     "zonation_chart", "phylogenetic_tree", "chart_classification",
     "to_newick", "safe_json_loads", "age_bound",
-    "reason_codes", "merge", "quality_coverage", "editable", "axis",
+    "reason_codes", "merge", "aggregate", "quality_coverage",
+    "editable", "axis",
 )
 
 
@@ -1033,6 +1035,68 @@ def _abrun(row: dict) -> dict:
 
 
 _add(
+    # AUDIT-2026-10-02: two runs spelling the SAME authorship differently.
+    # The leaf-level `aggregate` group found the mechanism (the "and" case in
+    # the iczn_ cases); these two are the end-to-end proof that it is
+    # REACHABLE, because _norm_iczn_author feeds the species dedup key
+    # (aggregate.py:878) and the key decides whether the rows are one species
+    # or two. Before the fix the desktop produced two rows here and the
+    # browser one -- i.e. a merged range chart could carry a duplicate taxon
+    # that the same merge collapses on the other endpoint.
+    _mg("mrg_author_and_spaced_vs_bracketed", [
+        _mrun({"species": "Pseudoschagerina sp.", "section": "S1",
+               "author_year": "Smith and Jones, 1950",
+               "range_top": "9", "range_base": "7"}),
+        _mrun({"species": "Pseudoschagerina sp.", "section": "S1",
+               "author_year": "Smith (and) Jones, 1950",
+               "range_top": "9", "range_base": "7"}),
+    ]),
+    # The hyphenated spelling. It passed before the fix AND after, for a
+    # reason that is worth stating: the two spellings produce DIFFERENT keys
+    # on both engines ("smith and-jones" vs "smith -jones" before, two rows
+    # either way), so the row count agrees and the end-to-end comparison sees
+    # nothing. The string-level difference is pinned by agiczn_166 instead.
+    # Note that neither engine strips the hyphen, and that is correct: "x-y"
+    # is a compound surname under ICZN Art. 51.2, not a separator.
+    _mg("mrg_author_and_hyphenated", [
+        _mrun({"species": "Pseudoschagerina sp.", "section": "S1",
+               "author_year": "Smith and-Jones, 1950",
+               "range_top": "9", "range_base": "7"}),
+        _mrun({"species": "Pseudoschagerina sp.", "section": "S1",
+               "author_year": "Smith & Jones, 1950",
+               "range_top": "9", "range_base": "7"}),
+    ]),
+    # Same surname, different year must stay TWO species -- the property the
+    # author suffix exists to protect, and the reason the "and" fix above
+    # cannot be "just strip more punctuation".
+    _mg("mrg_author_year_still_splits", [
+        _mrun({"species": "Pseudoschagerina sp.", "section": "S1",
+               "author_year": "Smith and Jones, 1950",
+               "range_top": "9", "range_base": "7"}),
+        _mrun({"species": "Pseudoschagerina sp.", "section": "S1",
+               "author_year": "Smith and Jones, 1960",
+               "range_top": "9", "range_base": "7"}),
+    ]),
+    # AUDIT-2026-10-02: a CONTROL, not a bug guard, and the reason is worth
+    # recording. The obvious way to expose the CJK "\b" divergence end to end
+    # is two runs writing "中华虫属" and "中华虫属sp." and expecting two rows.
+    # That case CANNOT fail: the dedup key is (id_norm, quals) and id_norm
+    # already contains _norm(species) of the same string, and _norm
+    # deliberately keeps the marker, so the two rows separate on id_norm
+    # before the qualifier is ever consulted. It was written, watched pass
+    # against the unfixed code, and deleted rather than left in place with a
+    # misleading name.
+    #
+    # What is left is the spaced control below: the ordinary path, which
+    # worked before and must keep working. If the ASCII-boundary rewrite ever
+    # breaks THIS, the rewrite is wrong -- and unlike the deleted case it can
+    # actually fail.
+    _mg("mrg_qualifier_cjk_with_space", [
+        _mrun({"species": "中华虫属", "section": "S1",
+               "range_top": "9", "range_base": "7"}),
+        _mrun({"species": "中华虫属 sp.", "section": "S1",
+               "range_top": "9", "range_base": "7"}),
+    ]),
     _mg("mrg_divergent_vote", [
         _mrun({"species": "A", "section": "S1", "range_top": "9",
                "range_base": "7", "response_kind": "extracted",
@@ -1199,6 +1263,227 @@ _add(
          "root_ids": ["n1"], "metadata": {}, "legend": {}, "confidence": 0.7},
     ], mode="phylogenetic_tree"),
 )
+
+
+# --- aggregate leaf functions (rca_core/aggregate.py vs js/aggregate.js) ------
+# AUDIT-2026-10-02. The `merge` group above drives rcaMergeResults end to end,
+# which is the only aggregate coverage the differential harness had. Everything
+# rcaMergeResults CALLS was untested across engines: _norm / _norm_iczn_author
+# / _extract_qualifiers / _str_for_merge / _mode / _merge_scalar_field /
+# _stable_typed_mode / _merge_confidence. Those are the leaves where the
+# decisions live (what counts as the same species, what counts as a missing
+# value, how a tie breaks), and a divergence there silently changes which rows
+# the two engines consider the same taxon.
+#
+# Payload shape mirrors `reason_codes`: {"op", "args"}. The op names are SHORT
+# ALIASES on purpose -- the two implementations name these functions
+# differently (rcaNormIcbnAuthor, and the "Icbn" is a typo that is in the
+# product, not a test artifact), so a shared spelling would have to paper over
+# it. The alias table lives in the runner on BOTH sides and must stay in step.
+#
+# The `_NO_MERGE` / `NO_MERGE` sentinels are normalized to null on BOTH sides
+# inside the runners -- a bare object() and a Symbol are not expressible in
+# JSON, and normalizing on one side only is what produced 751 phantom
+# divergences once already.
+#
+# Result of the first run: 9 divergences in two families, and the two families
+# had OPPOSITE culprits, which is the reason this group was worth building.
+#
+#   1. _norm_iczn_author removed the conjunction as the LITERAL " and ", which
+#      matches only that exact spelling; js/aggregate.js has always used
+#      /\band\b/. Python was wrong. REACHABLE and fixed: the return value is
+#      spliced into the species dedup key (aggregate.py:878), so two runs
+#      spelling one authorship "Smith and Jones, 1950" and
+#      "Smith (and) Jones, 1950" produced on the desktop
+#          .species_ranges: length py=2 js=1
+#          .species_ranges[0].agreement: py="1/2" js="2/2"
+#      -- a duplicate species in the merged chart AND an agreement score
+#      reporting a disagreement the user never had. Pinned end to end by
+#      mrg_author_and_spaced_vs_bracketed.
+#
+#   2. \b in the qualifier patterns and in "and"/"et al." is Unicode-aware on
+#      Python str and ASCII-only in JavaScript. JS was wrong on the leaf, but
+#      NO reachable effect exists: all three _extract_qualifiers call sites
+#      pair the qualifier with _norm() of the same string, and _norm keeps the
+#      markers, so the qualifier is a redundant key component. Fixed anyway
+#      (it removes a class, not an instance) and pinned at the leaf. The
+#      obvious end-to-end case CANNOT fail and was deleted rather than left
+#      behind under a name that implied otherwise -- see
+#      mrg_qualifier_cjk_with_space.
+#
+# Also measured, NOT a cross-engine divergence, and left alone: the "nom."
+# label splices a captured group in with the input's CASE, so
+# "Genus nom. dub." and "GENUS NOM. DUB." produce different qualifier sets
+# ("nom. dub" vs "nom. DUB") and therefore separate in the dedup key even
+# though their _norm values are equal. Both engines do this identically (the
+# uppercase corpus rows all match), so it is an engine-internal inconsistency
+# about a case-insensitive marker, not a transport one. Changing it would
+# alter desktop dedup with no cross-engine reason to, so it is reported rather
+# than fixed.
+
+# Harvested from the committed real extraction payloads
+# (tests/fixtures/real_payloads/*.json, 8 files) -- the taxon-shaped strings
+# among their name/species/label/form/genus fields. Real output beats a
+# hand-written corpus, so these are the primary inputs; the hand-written rows
+# below are only the edge shapes real payloads happened not to contain.
+_AGG_REAL = [
+    "A.? irregularis", "Bathylagus sp.", "C. robusta", "E. antarctica",
+    "E. spinosum", "G. braueri", "G. nicholsi", "G. opisthopterus",
+    "L. conica", "S. rad", "Rhizaria sp.", "Acantharia", "Actinommidea",
+    "Acanthodesmoidea", "Aulacanthidae", "Aulosphaeridae, Sagosphaeridae",
+    "Cercozoa (root)", "Collodaria clade", "Nassellaria clade",
+    "Radiolaria clade", "Spumellaria clade", "Phaeodaria clade",
+    "Whaingaroan", "Cache Creek Terrane", "Clade H", "Clade K",
+    "inner node (Rhizaria sp.+Phacodinidae+Clade K)",
+    "inner node (Coelodendridae+Conchariidae)",
+    "inner node (Tuscaroridae+Aulosphaeridae/Sagosphaeridae)",
+    "inner node (Hexalonchidae+Hexastylidae)",
+    "inner node (Theopiliidae+Plagiacanthoidea+Acanthodesmoidea+Sphaerozoidae"
+    "+Collophidiidae+Collospheeridae+Orosphaeridae)",
+    "Late Permian (Wuchiapingian)", "Early Cretaceous — Albian (Alb.)",
+    "Ratburi Group – Um Luk Formation (uppermost Lower–Middle Permian)",
+    "Kaeng Krachan Group – Khao Chao Formation (Lower Permian)",
+    "Chert radiolarian age (Albian–Cenomanian)",
+    "negative δ30Si excursion", "positive δ30Si peak",
+    "Principal 238U-206Pb age peak (Conglomerate, n=95)",
+    "YSG and YC1σ age clusters (Santonian–Coniacian)",
+    "Varicolored shale interval (age uncertain)",
+    "Ko He Formation (?)", "other Cercozoa",
+]
+
+# The real payloads carry no taxonomic authorship at all (no "Smith, 1950"),
+# so this matrix is HAND-WRITTEN and is the one part of the group that is.
+# It is laid out along the axes the implementation actually branches on:
+# comma / no comma, parens, em-dash vs double-dash, "ex" / "in", "&" / "and",
+# "et al.", and the boundary shapes of the word "and".
+_AGG_ICZN = [
+    "Smith, 1950", "(Smith, 1950)", "Smith 1950", "Smith,1950",
+    "SMITH, 1950", "  Smith,  1950  ", "Smith, 1960", "Smith, 50",
+    "Smith", "", "   ", "Smith, 1950a", "Smith, 1950, 1951",
+    "J. Smith, 1950", "K. Smith, 1950", "J. Smith & K. Smith, 1950",
+    "Smith and Jones, 1950", "Smith & Jones, 1950",
+    "Smith, 1950 and Jones, 1951",
+    # The boundary shapes of "and": Python uses replace(" and ", " ") while the
+    # JS mirror uses /\band\b/g. Every one of these has a word boundary
+    # around "and" but NOT a space on both sides.
+    "Smith (and) Jones, 1950", "Smith and(Jones), 1950",
+    "Smith and-Jones, 1950", "Smith and/Jones, 1950",
+    "Smith, and Jones, 1950", "Smith, 1950 and, Jones",
+    "Sanderson, 1950", "Anderson, 1950", "Alexander, 1950",
+    "Brand, 1950", "andersonia, 1950",
+    "Smith—Jones, 1950", "Smith--Jones, 1950", "Smith----Jones, 1950",
+    "Smith ex Jones, 1950", "Smith in Jones, 1950",
+    "Smith ex Jones and Brown, 1950", "Smith et al., 1950",
+    "Smith et al. 1950", "Smith et al, 1950", "Smith et. al., 1950",
+    "Smith,  and  Jones, 1950",
+    "(Smith, 1950) & (Jones, 1951)", "Smith, 9999", "1950",
+    "δ13C, 1950", "O. Smith, 1950",
+    # The \b family again, on the "and" pattern specifically.
+    "中文and文", "和and和", "Smithand和Jones, 1950",
+    "中文et al.文", "和et. al.和",
+]
+
+_AGG_NORM_EDGE = [
+    "", "   ", "\t\n ", "Genus  sp.", "  Genus   sp.  ",
+    "GENUS SP.", "Genus\tsp.", "中文 名称", "ＡＢＣ",
+    "Zoological  Name", "A.B", "A. B.  C",
+]
+
+_AGG_QUAL_EDGE = [
+    "", "Genus cf.", "Genus aff.", "Genus sp.", "Genus spp.",
+    "Genus s.l.", "Genus s. l.", "Genus s.str.", "Genus s. str.",
+    "Genus ex gr.", "Genus ex gr", "Genus ex groupe.",
+    "Genus nom. dub.", "Genus nom. nud.", "Genus nom. nov.",
+    "Genus nom. cons.", "Genus nom. obl.", "Genus nom. van.",
+    "Genus comb. nov.", "Genus stat. nov.", "Genus subsp.",
+    "Genus var.", "A.?", "A.?", "A. ?", "A.?\n", "A. ? ",
+    "Genus cf", "Genus aff", "Genus sp", "Genus spp",
+    "coffee", "affinis", "Genus sp. cf. aff.",
+    "Genus cf. aff. ex gr. s.l. ?",
+    # AUDIT-2026-10-02: the \b family. Python's \b is Unicode-aware on str
+    # (a CJK character counts as a word character); JS's is ASCII-only, so a
+    # CJK character counts as NON-word and manufactures a boundary. A Chinese
+    # author writing a taxon with no space before the marker -- "中华虫属sp." --
+    # is an ordinary thing to produce, not a contrived one.
+    "中华虫属sp.", "中华虫属 sp.", "和sp.和", "和cf.和", "中aff.中",
+    "sp.中华", "cf.中华", "sp.1", "sp.1a", "1sp.", "sp-", "sp_",
+    "A.sp.", "sp. sp.", "Genus sp.",
+    # AUDIT-2026-10-02: the label for the nom./comb. nov. family is built by
+    # splicing a CAPTURED group into a template, so it can carry the input's
+    # case. These pin whether the two engines agree about that.
+    "Genus nom. dub.", "GENUS NOM. DUB.", "Genus NOM. Dub.",
+    "  Genus nom.  dub.", "Genus nom. nov.", "GENUS COMB. NOV.",
+    "Genus comb. nov.", "GENUS STAT. NOV.", "Genus stat. nov.",
+]
+
+_AGG_STRMERGE = [
+    "abc", "", 0, 1, -1, 1.0, 1.5, True, False, None,
+    1e16, 1e-7, 3.0, "1", "1.0", "True", "0",
+    [1, 2], {"a": 1}, 0.1, 1 / 3,
+]
+
+_AGG_MODE = [
+    [], [None, None], ["", "  "], [0, 0, 12], [0, 0], [0, 0.0],
+    ["A", "A", "B"], ["B", "A"], ["A", "B", "C"], ["B", "B", "A", "A"],
+    ["b", "B"], ["B", "b", "C", "c"], [True, True, False],
+    [True, False], [False, True], [True, 1], [1, "1"], [1, 1.0],
+    [1.0, 1], ["0", 0], [0, "0"], [None, "x", "x"],
+    [{"a": 1}, "x", "x"], [[1], "y", "y"],
+    [2, 10, 2, 10, 2], ["10", "2", "10", "2"],
+    ["Zebra", "apple", "Apple"], ["ä", "z", "Z"],
+]
+
+_AGG_SCALAR = [
+    [], [None], ["", " "], ["a", "a", "b"], ["b", "a"],
+    [True, True, False], [True, False], [False, True],
+    [True, "maybe"], [True, False, "maybe"], [0, False], [0, True],
+    [1, "1"], ["1", 1], [1.0, 1], [1.5, 1.5, 2],
+    [None, None, "x"], [{"a": 1}, "x"], [[1], "y"],
+    ["", "", "z"], [0, 0, "a"], ["10", 2, "10", 2],
+]
+
+_AGG_TYPED = [
+    [], [None], [3, 3, 5], [3, 3.0, 5], [3.0, 3.0], [3.5, 3.5],
+    [True, True, 3], [True, 3], ["3", 3], [3, "3", 3.0],
+    [5, 3, 5, 3], [7], [7.0], [-0.0, 0.0], [1e16, 1e16],
+    [3, 3, 3.0, 3.0, 4, 4], [0, 0, 0],
+]
+
+_AGG_CONF = [
+    [], [None], ["", "0.5"], [0.5], [0.5, 0.5], [0.1, 0.2],
+    [0.01005], [0.01015], [0.03125], [1 / 32], [2 / 32], [3 / 32],
+    [-0.5], [1.5], [0], [1], [True, 0.5], ["0.5", 0.5],
+    [0.1, 0.2, 0.3, 0.4], [1 / 3, 1 / 3], [0.33333333],
+]
+
+
+def _agg(cid: str, op: str, args: list) -> dict:
+    return _case("aggregate", cid, {"op": op, "args": args})
+
+
+_agg_cases: list[dict] = []
+for _s in _AGG_REAL + _AGG_NORM_EDGE:
+    _agg_cases.append(_agg("agnorm_%d" % len(_agg_cases), "norm", [_s]))
+    _agg_cases.append(_agg("agqual_%d" % len(_agg_cases), "qualifiers", [_s]))
+for _s in _AGG_QUAL_EDGE:
+    _agg_cases.append(_agg("agqual_%d" % len(_agg_cases), "qualifiers", [_s]))
+for _s in _AGG_ICZN:
+    _agg_cases.append(_agg("agiczn_%d" % len(_agg_cases), "iczn", [_s]))
+for _v in _AGG_STRMERGE:
+    _agg_cases.append(_agg("agstr_%d" % len(_agg_cases), "str_merge", [_v]))
+for _vs in _AGG_MODE:
+    _agg_cases.append(_agg("agmode_%d" % len(_agg_cases), "mode", [_vs]))
+for _vs in _AGG_SCALAR:
+    _agg_cases.append(_agg("agscal_%d" % len(_agg_cases), "merge_scalar", [_vs]))
+for _vs in _AGG_TYPED:
+    # The type argument is a PYTHON-only parameter; the JS mirror
+    # (mergeTypedInteger) has exactly one. Both runners read args[1] and both
+    # must arrive at the same values, so the type is carried in the payload
+    # rather than hard-coded on one side.
+    _agg_cases.append(_agg("agtyped_%d" % len(_agg_cases), "typed_mode", [_vs, "int"]))
+for _vs in _AGG_CONF:
+    _agg_cases.append(_agg("agconf_%d" % len(_agg_cases), "confidence", [_vs]))
+_add(*_agg_cases)
 
 
 # --- quality scoring + coverage ledger (js/quality.js) ------------------------
@@ -1480,6 +1765,38 @@ def _merge_python(payload: dict) -> Any:
                          schema=SCHEMA_BY_MODE[mode])
 
 
+# Alias table for the `aggregate` group. Kept as an explicit mapping rather than
+# getattr()/string dispatch: the two engines name these differently on purpose
+# (rcaNormIcbnAuthor), and a getattr would happily resolve a typo to nothing.
+# The JS runner carries the same table with the JS names; the two must stay in
+# step or the group silently stops comparing anything.
+_AGG_PY_OPS = {
+    "norm": lambda a: AGG._norm(a[0]),
+    "iczn": lambda a: AGG._norm_iczn_author(a[0]),
+    "qualifiers": lambda a: sorted(AGG._extract_qualifiers(a[0])),
+    "str_merge": lambda a: AGG._str_for_merge(a[0]),
+    "mode": lambda a: AGG._mode(a[0]),
+    "merge_scalar": lambda a: _agg_sentinel(AGG._merge_scalar_field(a[0])),
+    "typed_mode": lambda a: _agg_sentinel(
+        AGG._stable_typed_mode(a[0], int if a[1] == "int" else str)),
+    "confidence": lambda a: _agg_sentinel(AGG._merge_confidence(a[0])),
+}
+
+
+def _agg_sentinel(value: Any) -> Any:
+    """``_NO_MERGE`` -> None. The JS runner maps its NO_MERGE Symbol to null in
+    the same place; doing it on one side only is what turned a real finding
+    into a few hundred phantom rows once already."""
+    return None if value is AGG._NO_MERGE else value
+
+
+def _aggregate_python(payload: dict) -> Any:
+    op = payload["op"]
+    if op not in _AGG_PY_OPS:
+        raise KeyError(op)
+    return _AGG_PY_OPS[op](list(payload.get("args") or []))
+
+
 _PY_RUNNERS = {
     "range_chart": normalize_result,
     "columnar_section": normalize_columnar_result,
@@ -1503,6 +1820,8 @@ def compute_python_case(case: dict) -> Any:
         return _reason_codes_python(copy.deepcopy(payload))
     if group == "merge":
         return _merge_python(copy.deepcopy(payload))
+    if group == "aggregate":
+        return _aggregate_python(copy.deepcopy(payload))
     if group == "quality_coverage":
         return score_range_chart(copy.deepcopy(payload))
     if group == "editable":

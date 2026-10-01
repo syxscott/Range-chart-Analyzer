@@ -120,6 +120,20 @@ function buildContext() {
       rcaAxisDomainsFrom: typeof rcaAxisDomainsFrom !== 'undefined' ? rcaAxisDomainsFrom : null,
       rcaPosToAxisValue: typeof rcaPosToAxisValue !== 'undefined' ? rcaPosToAxisValue : null,
       RCA_EDIT_LIST_KEYS: typeof RCA_EDIT_LIST_KEYS !== 'undefined' ? RCA_EDIT_LIST_KEYS : null,
+      // AUDIT-2026-10-02: the aggregate LEAF functions, for the aggregate
+      // group. mergeResults was reachable before (the merge group) but nothing
+      // it calls was, and the decisions live in the leaves: what counts as the
+      // same species, what counts as missing, how a tie breaks. NO_MERGE is a
+      // Symbol, so it has to be handed out too for the sentinel mapping.
+      NO_MERGE: typeof NO_MERGE !== 'undefined' ? NO_MERGE : null,
+      rcaAggNorm: typeof rcaAggNorm !== 'undefined' ? rcaAggNorm : null,
+      rcaNormIcbnAuthor: typeof rcaNormIcbnAuthor !== 'undefined' ? rcaNormIcbnAuthor : null,
+      rcaExtractQualifiers: typeof rcaExtractQualifiers !== 'undefined' ? rcaExtractQualifiers : null,
+      rcaStrForMerge: typeof rcaStrForMerge !== 'undefined' ? rcaStrForMerge : null,
+      rcaAggMode: typeof rcaAggMode !== 'undefined' ? rcaAggMode : null,
+      mergeScalarField: typeof mergeScalarField !== 'undefined' ? mergeScalarField : null,
+      mergeTypedInteger: typeof mergeTypedInteger !== 'undefined' ? mergeTypedInteger : null,
+      mergeConfidenceField: typeof mergeConfidenceField !== 'undefined' ? mergeConfidenceField : null,
     };
   `, ctx);
   return ctx.__exp;
@@ -179,6 +193,45 @@ const RUNNERS = {
     c.payload.total_runs === null ? undefined : c.payload.total_runs,
     f.keymaps[c.payload.mode || 'range_chart']),
   quality_coverage: (f, c) => f.scoreRangeChart(c.payload),
+  // AUDIT-2026-10-02: the aggregate LEAF functions. The merge group above
+  // drives rcaMergeResults end to end, but every function it CALLS was
+  // untested across engines -- and a divergence in _norm_iczn_author or
+  // _extract_qualifiers silently changes which rows the desktop and the
+  // browser consider the same species, which is not visible until two runs
+  // get merged.
+  //
+  // The alias table is the mirror of _AGG_PY_OPS in
+  // tests/gen_frontend_parity_fixtures.py; the two must stay in step or the
+  // group stops comparing anything. Op names are aliases because the two
+  // implementations spell these differently (rcaNormIcbnAuthor -- "Icbn" is
+  // a typo that is in the product).
+  //
+  // Two normalisations, both applied on the PYTHON side identically:
+  //   * qualifiers: Python returns a frozenset, JS an array -> both sorted,
+  //     so the comparison is set equality rather than insertion order.
+  //   * the NO_MERGE sentinel -> null on both sides. A bare object() and a
+  //     Symbol are not expressible in JSON, and normalising on one side only
+  //     is what produced 751 phantom rows once already.
+  aggregate: (f, c) => {
+    const p = c.payload;
+    const a = p.args || [];
+    const sentinel = (v) => (v === f.NO_MERGE ? null : v);
+    switch (p.op) {
+      case 'norm': return f.rcaAggNorm(a[0]);
+      case 'iczn': return f.rcaNormIcbnAuthor(a[0]);
+      case 'qualifiers': return f.rcaExtractQualifiers(a[0]).slice().sort();
+      case 'str_merge': return f.rcaStrForMerge(a[0]);
+      case 'mode': return f.rcaAggMode(a[0]);
+      case 'merge_scalar': return sentinel(f.mergeScalarField(a[0]));
+      // mergeTypedInteger takes ONE argument; the Python
+      // _stable_typed_mode takes (values, expected_type). args[1] carries the
+      // type so both runners read the same payload -- it is simply unused
+      // here, and that asymmetry is the only one in the table.
+      case 'typed_mode': return sentinel(f.mergeTypedInteger(a[0]));
+      case 'confidence': return sentinel(f.mergeConfidenceField(a[0]));
+      default: throw new Error('no aggregate op ' + p.op);
+    }
+  },
   // AUDIT-2026-10-01: the axis-calibration chain. The normalisation pass only
   // HOISTS `axis_calibration` verbatim, so the fit is not in that path -- these
   // four functions are, and they are what turn the model's 0-999 position into
@@ -400,6 +453,35 @@ const EXPECTED_DIVERGENCES = {
   // now reached from the python_error branch as well as the value-diff branch:
   // a legitimate raise-here / return-there divergence used to have nowhere to
   // be recorded and would have failed the build forever.
+  //
+  // AUDIT-2026-10-02: four leaf divergences in _str_for_merge / rcaStrForMerge,
+  // found by the new `aggregate` group. ALL FOUR ARE LATENT -- none has a
+  // reachable effect in the current call graph, and each is recorded with its
+  // reason rather than waved through, so the next reader can tell a decision
+  // from an oversight.
+  //
+  //   * None / [1, 2] / {"a": 1}: BOTH callers filter those types before the
+  //     stringifier runs -- rcaAggMode skips `typeof v === 'object'` and
+  //     _mode skips isinstance(v, (dict, list, set, tuple)); mergeScalarField
+  //     accepts only string|number and _merge_scalar_field only
+  //     (str, int, float). So no language repr can reach the vote pool today.
+  //     They stay pinned because these are the dangerous shapes: String([1]) is
+  //     "1", indistinguishable from the code for 1, and the filters are the
+  //     only thing standing between that and a merged field.
+  //   * 1e-7: the float-repr residual js/aggregate.js already documents
+  //     ("str(1e-7) == 1e-07" vs "1e-7"). Not observable, because the pool KEY
+  //     differs but the REPRESENTATIVE is the original value, so both engines
+  //     still return 1e-7; a divergence would need two distinct values that
+  //     collide on one engine and not the other, and non-integral floats have
+  //     unique reprs on both sides. The JS comment calls this "not fixable in
+  //     JS", which is now STALE -- rcaPyFloatStr exists and does render
+  //     Python's exponent form -- but routing through it was not done, because
+  //     there is no observable defect and the pool is not a user-visible
+  //     string.
+  agstr_229: 'LATENT: _str_for_merge(None) is "None" vs rcaStrForMerge(null) "null"; both callers filter null out before the stringifier runs, so no repr can reach the vote pool',
+  agstr_231: 'LATENT, already documented in js/aggregate.js: Python renders 1e-7 exponent-style ("1e-07"), String() gives "1e-7". The pool key differs but the representative is the original value, so both engines return 1e-7 and nothing user-visible moves',
+  agstr_237: 'LATENT: String([1, 2]) is "1,2" and is indistinguishable from a real value, while Python str() is "[1, 2]". Unreachable today because _mode/rcaAggMode skip containers first. Pinned as a trap, not a live defect',
+  agstr_238: 'LATENT: same container filter, opposite direction -- a Python dict repr leaking into a scientific field. The mirror of agstr_237',
 };
 
 function main() {
