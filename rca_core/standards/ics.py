@@ -229,21 +229,60 @@ def ics_parse_age_range(text: str) -> list[str]:
     return ordered
 
 
+# AUDIT-2026-10-02: `\w`, `\d` and the trailing `\b` are written out as
+# explicit ASCII classes, and this is the WHOLE fix. js/quality.js's mirror
+# cannot use a lookbehind (it is a parse-time SyntaxError on the Safari /
+# WebView versions UI-REVIEW-2026-09-22 had to survive), so it spells the same
+# guard as `(?:^|[^\w.])\d+...`. The two forms are equivalent -- GIVEN THE SAME
+# NOTION OF `\w` -- and they were not the same: Python's `\w` and `\d` are
+# Unicode-aware on str patterns, JavaScript's are `[A-Za-z0-9_]` and `[0-9]`
+# unless the `u` flag is used. Measured on the `age_bound` parity group, the
+# divergence runs in BOTH directions and the LOOSE one was unrecorded:
+#
+#   "图260 Ma" / "深度260 Ma" / "図260 Ma" / "年龄260 Ma"
+#       python: no match at all  -> ics_resolve_age_bound returns (None, None)
+#       js:     match            -> {"name": "Capitanian", "ma": 260}
+#   "深度260 Ma - 250 Ma", prefer="older"
+#       python: ma=250   <-- the 260 endpoint was LOST, not just unreadable
+#       js:     ma=260
+#
+# That second shape is the serious one: a CJK glyph is a `\w` for Python, so
+# the guard refuses the older endpoint and the single value that survives is
+# the YOUNGER one -- `prefer="older"` returns the younger age, inverting the
+# sense of a column that feeds FAD/LAD in the DwC and PBDB exports. And a
+# caption like "图260 Ma" is not a contrived input for a product whose primary
+# language is Chinese; it is what a CJK figure label looks like.
+#
+# The fix direction is not a coin toss. The guard exists to stop "Madison 3"
+# being read as an age (js/quality.js's own comment), i.e. to reject digits
+# that continue an ASCII identifier -- "a260", "_260". A CJK glyph does not do
+# that, so the ASCII notion of "word character" is the correct one and Python
+# was the side that was wrong.
+#
+# Deliberately NOT `re.ASCII` on the pattern: that flag would also narrow
+# `\s` to [ \t\n\r\f\v], and an ideographic or non-breaking space between the
+# number and the unit is ordinary in CJK typesetting ("260　Ma"), so it would
+# trade this divergence for the mirror image of it. `\s` stays Unicode; the
+# residual is that Python's Unicode `\s` also contains \x1c-\x1f and \x85,
+# which JS's does not -- not reachable in a figure caption.
 _EXPLICIT_MA_PATTERN = re.compile(
-    r"(?<![\w.])([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
-    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b",
+    r"(?<![A-Za-z0-9_.])([+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\s*"
+    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
 
 # REVIEW-2026-07-31: also match single-unit ranges like "259.51-254.14 Ma"
 # or "255 to 250 Ma" so a bound written as an interval resolves to BOTH
 # ends (callers pick the older end for FAD/base, the younger for LAD/top).
+# Same ASCII rewrites as above; `\bto\b` keeps the shorthand because both
+# engines agree on it there -- a space (ASCII or CJK) is a non-word character
+# on both sides, so the boundary exists in both.
 _EXPLICIT_MA_RANGE_PATTERN = re.compile(
-    r"(?<![\w.])"
-    r"([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
+    r"(?<![A-Za-z0-9_.])"
+    r"([+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\s*"
     r"(?:[-–—]|\bto\b)\s*"
-    r"([+]?(?:\d+(?:\.\d*)?|\.\d+))\s*"
-    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)\b",
+    r"([+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\s*"
+    r"(?:Ma|Myr|Mya|m\.\s*y\.?|million\s+years?(?:\s+ago)?)(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
 

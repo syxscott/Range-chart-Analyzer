@@ -869,6 +869,34 @@ _AGE_INPUTS = [
     ("Wuchiapingian", [""]),
     ("Wuchiapingian", ["older", "younger"]),
     ("Wuchiapingian", "younger"),
+    # AUDIT-2026-10-02: the age regex is `(?:^|[^\w.])\d+...`. Python's `\w`
+    # and `\d` are UNICODE-aware for str patterns, so BOTH halves of that
+    # guard disagree with JavaScript's ASCII-only ones, and they disagree in
+    # OPPOSITE directions:
+    #   too strict on JS -- full-width / Arabic-Indic digits match Python's
+    #     `\d` and not JS's (already recorded as ag_34 / ag_35);
+    #   too LOOSE on JS -- and this direction was not recorded anywhere -- a
+    #     CJK character immediately before the digits is a `\w` for Python, so
+    #     the `[^\w.]` prefix guard REFUSES to match and the desktop cannot
+    #     read the age at all, while JS sees a non-word character and matches.
+    # "图260 Ma" is not a contrived caption for this product's primary
+    # language; it is what a Chinese or Japanese figure label looks like.
+    ("图260 Ma", "older"),
+    ("深度260 Ma", "younger"),
+    ("図260 Ma", "older"),
+    ("年龄260 Ma", "older"),
+    ("深度260 Ma - 250 Ma", "older"),
+    ("图２６０ Ma", "older"),
+    # ...while the same guard must still REJECT a genuine word character, on
+    # both engines. "_" is a `\w` in ASCII and in Python; "a" likewise.
+    ("a260 Ma", "older"),
+    ("_260 Ma", "older"),
+    ("_260 Ma", "younger"),
+    # Punctuation that is NOT a word character and NOT ".", so the prefix
+    # guard admits it on both engines -- the case the guard was written for.
+    ("．260 Ma", "older"),
+    ("（260 Ma）", "older"),
+    ("2,260 Ma", "older"),
 ]
 for _i, (_text, _prefer) in enumerate(_AGE_INPUTS):
     _add(_case("age_bound", "ag_%02d" % (_i + 1), _text, _prefer))

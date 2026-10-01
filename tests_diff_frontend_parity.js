@@ -461,11 +461,20 @@ function diff(a, b, trail, out) {
 //
 //    The other two survivors were re-measured the same way and ARE still
 //    diverged, so they stay: rc_dict_shaped_sections (row ORDER only) and
-//    ag_34 / ag_35 (Unicode-vs-ASCII digits).
+//    ag_34 / ag_35 (Unicode-vs-ASCII digits) -- see the removal note below.
 const EXPECTED_DIVERGENCES = {
   rc_dict_shaped_sections: 'JS enumerates integer-like object keys first (ECMAScript ordinary-object order); row ORDER only',
-  ag_34: 'Python \\d/float() accept Unicode decimal digits, JS \\d is [0-9] only; Arabic-Indic digit age label resolves in rca_core and not in the browser',
-  ag_35: 'Same Unicode-vs-ASCII digit split, full-width digits: resolves in rca_core/standards/ics.py, unresolvable in js/quality.js',
+  // AUDIT-2026-10-02: ag_34 (Arabic-Indic digits) and ag_35 (full-width
+  // digits) were RECORDED here as documented divergences -- Python's \d is
+  // Unicode-aware and ECMAScript's is [0-9], so "٢٦٠ Ma" / "２６０ Ma"
+  // resolved in rca_core and not in the browser. They are gone, and not
+  // because they were re-described: the same commit that aligned the
+  // CJK-prefix guard also wrote \d out as an explicit [0-9] in
+  // rca_core/standards/ics.py, so those two labels now fail to match on BOTH
+  // engines. Per the note at the top of this table, a stale entry that starts
+  // agreeing again is exactly what this file exists to prevent -- it would
+  // send the next reader hunting for a bug that no longer exists -- so they
+  // are removed rather than left behind.
   // AUDIT-2026-09-30: rc_root_confidence_nan, rc_row_confidence_nan and
   // cc_root_confidence_nan were REMOVED from this table. They are ordinary
   // matches now: rca_core.extractor._confidence_clamped is the single gate for

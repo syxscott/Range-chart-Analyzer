@@ -9234,20 +9234,14 @@
    "id": "ag_34",
    "payload": "26٠ Ma",
    "extra": "older",
-   "python": {
-    "name": "Capitanian",
-    "ma": 260.0
-   }
+   "python": null
   },
   {
    "group": "age_bound",
    "id": "ag_35",
    "payload": "２６０ Ma",
    "extra": "older",
-   "python": {
-    "name": "Capitanian",
-    "ma": 260.0
-   }
+   "python": null
   },
   {
    "group": "age_bound",
@@ -9361,6 +9355,114 @@
    "python": {
     "name": "Wuchiapingian",
     "ma": 254.14
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_49",
+   "payload": "图260 Ma",
+   "extra": "older",
+   "python": {
+    "name": "Capitanian",
+    "ma": 260.0
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_50",
+   "payload": "深度260 Ma",
+   "extra": "younger",
+   "python": {
+    "name": "Capitanian",
+    "ma": 260.0
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_51",
+   "payload": "図260 Ma",
+   "extra": "older",
+   "python": {
+    "name": "Capitanian",
+    "ma": 260.0
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_52",
+   "payload": "年龄260 Ma",
+   "extra": "older",
+   "python": {
+    "name": "Capitanian",
+    "ma": 260.0
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_53",
+   "payload": "深度260 Ma - 250 Ma",
+   "extra": "older",
+   "python": {
+    "name": "Capitanian",
+    "ma": 260.0
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_54",
+   "payload": "图２６０ Ma",
+   "extra": "older",
+   "python": null
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_55",
+   "payload": "a260 Ma",
+   "extra": "older",
+   "python": null
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_56",
+   "payload": "_260 Ma",
+   "extra": "older",
+   "python": null
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_57",
+   "payload": "_260 Ma",
+   "extra": "younger",
+   "python": null
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_58",
+   "payload": "．260 Ma",
+   "extra": "older",
+   "python": {
+    "name": "Capitanian",
+    "ma": 260.0
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_59",
+   "payload": "（260 Ma）",
+   "extra": "older",
+   "python": {
+    "name": "Capitanian",
+    "ma": 260.0
+   }
+  },
+  {
+   "group": "age_bound",
+   "id": "ag_60",
+   "payload": "2,260 Ma",
+   "extra": "older",
+   "python": {
+    "name": "Capitanian",
+    "ma": 260.0
    }
   },
   {
