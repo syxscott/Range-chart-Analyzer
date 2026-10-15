@@ -160,10 +160,28 @@ def test_report_schema_version_and_degenerate_input():
 # ---------------------------------------------------------------------------
 
 def test_capabilities_cover_all_wired_modes():
-    expected = {"range_chart", "columnar_section", "abundance_diagram",
-                "phylogenetic_tree", "zonation_chart",
-                "chemical_stratigraphy", "paleomap", "scatter_plot"}
-    assert expected == set(CAPABILITIES)
+    """Every mode the merge layer can run must be described in CAPABILITIES -
+    that is what UIs read to tell a user what a mode does. The name list used
+    to be written out by hand here, which is exactly the duplication
+    rca_core/modes.py exists to remove (2026-10-15), so assert the RELATIONSHIP.
+
+    generic_table is deliberately NOT merge-wired: it is the last-resort
+    fallback for an unrecognised genre, it has no MergeSchema, and the registry
+    declares ``merge_wired=False`` for it (aggregate.py raises at import if the
+    two sides ever disagree). Its absence from WIRED_MODES is a decision, not
+    an oversight - hence the explicit assertion below rather than silence.
+    """
+    from rca_core.aggregate import WIRED_MODES
+    from rca_core.modes import MODE_NAMES
+
+    missing = sorted(set(WIRED_MODES) - set(CAPABILITIES))
+    assert not missing, ("merge-wired modes with no capability entry: %s"
+                         % missing)
+    assert set(CAPABILITIES) == set(MODE_NAMES), (
+        "CAPABILITIES must cover the registry exactly; drifted by %s"
+        % sorted(set(CAPABILITIES) ^ set(MODE_NAMES)))
+    assert "generic_table" not in WIRED_MODES, (
+        "generic_table gained a merge schema without the registry saying so")
 
 
 def test_maturity_levels_are_from_the_registry_vocabulary():

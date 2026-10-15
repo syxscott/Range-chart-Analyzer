@@ -121,7 +121,7 @@ D:\GIthub\Range-chart Analyzer\
 |------|------|------|
 | **CORS**：MiniMax 可能不返回 `Access-Control-Allow-Origin` 头，浏览器直连被拦 | **高** | 内置"代理地址"开关 + 提供 ~20 行 Worker 代理与部署文档；错误信息明确引导 |
 | API Key 暴露在浏览器 | 中 | 明确 UI 提示；key 仅存 localStorage/sessionStorage，绝不上传任何服务器；适用"用户用自己 key"场景 |
-| `max_tokens:4000` 截断（种属很多的大图） | 中 | 检测 `stop_reason` 并提示；可选允许用户调高 max_tokens |
+| `max_tokens` 截断（种属很多的大图） | 中 | 已修：默认上限 4000 → 16000（`rca_core/extractor.py` + `js/config.js`，由 `tests/test_token_bounds_parity.py` 锁住两侧一致）。实测一张 22×18 的矩阵图需要 4417–5428 输出 token，4000 会**静默截掉整行**——原缓解措施只有"检测 `stop_reason` 并提示"，实测不足以让使用者察觉结果不完整 |
 | MiniMax JSON 带围栏/尾部杂质 | 中 | 已移植 `_safeJsonLoads` 容错，与 Python 版行为一致 |
 | 超大扫描图请求体过大 / base64 膨胀 33% | 低 | 客户端 canvas 缩放压缩（如长边限制 2000px） |
 | Excel 打开 CSV 中文乱码 | 低 | 导出加 UTF-8 BOM |

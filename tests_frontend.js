@@ -2886,8 +2886,18 @@ function test_auto_classify() {
   const mmSrc = require('fs').readFileSync(path.join(__dirname, 'js/minimax.js'), 'utf8');
   check('cls-minimax-classify-direct', mmSrc.indexOf('rcaNormalizeChartClassification(safeJsonLoads(clsText))') !== -1);
   check('cls-minimax-conf-threshold', mmSrc.indexOf("cls.confidence >= 0.5") !== -1);
+  // The server's mode gate is DERIVED from rca_core/modes.py since
+  // 2026-10-15 — `_SUPPORTED_MODES = frozenset(_REGISTRY_SERVER_MODES) |
+  // {"auto"}` — so grepping server.py for the literal "'auto'," was checking
+  // source spelling, not behaviour, and went red on the refactor. What
+  // actually matters is that 'auto' is still accepted and still resolves to a
+  // mode the gate allows. Importing server.py from node is not an option (it
+  // binds a socket), so assert on the derivation instead: the registry import
+  // is present and 'auto' is added explicitly rather than inherited.
+  const serverSrc = require('fs').readFileSync(path.join(__dirname, 'server.py'), 'utf8');
   check('cls-server-auto-whitelisted',
-        require('fs').readFileSync(path.join(__dirname, 'server.py'), 'utf8').indexOf("'auto',") !== -1);
+        /from rca_core\.modes import SERVER_MODE_NAMES/.test(serverSrc)
+        && /\{\s*["']auto["']\s*\}/.test(serverSrc));
 }
 test_auto_classify();
 

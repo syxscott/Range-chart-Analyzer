@@ -97,6 +97,12 @@ _CONTENT_KEYS: tuple[str, ...] = (
     # UI-REVIEW-2026-09-07: zonation / correlation chart content keys so
     # _is_pure_extraction_miss also covers that mode.
     "zones", "correlations", "zonations",
+    # 2026-10-15: occurrence_matrix / generic_table content keys. `occurrences`
+    # is the sparse taxon x locality long table; `rows` is the structural
+    # fallback's grid rows. Both belong here so a result that carries the key
+    # but produced nothing counts as a pure extraction miss instead of grading
+    # as a confident empty range chart.
+    "occurrences", "rows",
 )
 
 # Columnar-mode marker keys — presence of any of these shifts the active
@@ -112,7 +118,7 @@ def _detect_mode(data: dict[str, Any]) -> str:
     """Identify which extraction mode the data belongs to.
 
     Returns one of: ``"columnar"``, ``"abundance"``, ``"zonation"``,
-    ``"range_chart"``.
+    ``"occurrence_matrix"``, ``"range_chart"``.
     Columnar wins ties because cross_beds / lithology_legend are unique
     markers that can't appear in range-chart output.
 
@@ -139,6 +145,14 @@ def _detect_mode(data: dict[str, Any]) -> str:
             return "columnar"
         if isinstance(v, str) and v.strip():
             return "columnar"
+    # occurrence_matrix (2026-10-15). `occurrences` is unique to this mode and
+    # `columns` is the confirming marker: no other payload has a locality
+    # header list. Checked BEFORE the abundance branch because the step-0
+    # baseline shape carried abundance-style rows too, and grading a locality
+    # matrix as a down-core abundance diagram would score it against fields
+    # (level, depth, abundance_unit) it does not have.
+    if "occurrences" in data or ("columns" in data and "rows" in data):
+        return "occurrence_matrix"
     # Abundance mode: abundances present, species_ranges absent.
     if "abundances" in data and "species_ranges" not in data:
         return "abundance"
@@ -149,6 +163,13 @@ def _detect_mode(data: dict[str, Any]) -> str:
     if "correlations" in data or ("zones" in data and "zonations" in data):
         if "species_ranges" not in data and "abundances" not in data:
             return "zonation"
+    # occurrence_matrix is handled ABOVE the abundance branch, not here. A
+    # second copy sat at this position, after zonation, which made it
+    # unreachable: anything reaching here had already been tested against
+    # `occurrences` upstream. Dead code in a detector is worse than no code,
+    # because the next reader edits the reachable copy and leaves the dead one
+    # to drift — and that dead copy's position is exactly where js/quality.js
+    # wrongly placed its branch, which is how the two engines came to disagree.
     return "range_chart"
 
 
@@ -300,6 +321,62 @@ def _resolve_age_ma(value: Any, prefer: str = "older") -> Optional[float]:
     return ma
 
 
+def _stage_endpoints_inverted(base_raw: Any, top_raw: Any) -> bool:
+    """True when the two bounds resolve to ICS stages and the BASE is YOUNGER
+    than the TOP -- i.e. the range runs backwards in time.
+
+    FIX-2026-10-01 (REVIEW). The FAD<LAD check compares numeric Ma:
+
+        base_ma = _resolve_age_ma(base, prefer="older")
+        top_ma  = _resolve_age_ma(top,  prefer="younger")
+        inverted = base_ma < top_ma
+
+    That is sound for any pair whose two bounds differ, but for two ADJACENT
+    stages the two numbers are the SAME boundary:
+
+        Induan       base(older)   = 251.902   (Triassic)
+        Changhsingian top(younger) = 251.902   (Permian)
+        base_ma < top_ma  ->  251.902 < 251.902  ->  False
+
+    so every inverted adjacent-stage range scored clean -- 102 of the 98-stage
+    table's pairs, including every P-T / T-J / J-K / K-Pg neighbour, and the
+    bed-string and numeric-Ma paths DID flag the same inversion. The user was
+    told a backwards range was trustworthy.
+
+    The boundary value is the wrong thing to compare here: the ORDER of two
+    named stages does not depend on it at all. ``ics_age_compare`` is already
+    imported in this module and answers exactly that question (-1 = stage1 is
+    older). It is used strictly ADDITIVELY -- the numeric test still runs
+    first, so this can only ever add violations, never remove one. That
+    matters for the numeric path: base="259 Ma" / top="260 Ma" resolves both
+    to the SAME stage (compare -> 0, no violation) while the Ma test still
+    catches the 1 Ma inversion. A 1 Ma inversion and an adjacent-stage
+    inversion are different failures and both are now caught.
+
+    Returns False whenever anything is unresolvable, so an unknown label is
+    still skipped rather than penalised (unchanged fail-safe behaviour).
+    """
+    if not _HAS_ICS or ics_resolve_age_bound is None or ics_age_compare is None:
+        return False
+    if base_raw is None or top_raw is None:
+        return False
+    try:
+        base_stage, _b_ma = ics_resolve_age_bound(str(base_raw).strip(), prefer="older")
+        top_stage, _t_ma = ics_resolve_age_bound(str(top_raw).strip(), prefer="younger")
+    except (ValueError, TypeError, KeyError):
+        return False
+    if not base_stage or not top_stage:
+        return False
+    try:
+        cmp_result = ics_age_compare(base_stage, top_stage)
+    except (ValueError, TypeError, KeyError):
+        return False
+    # +1 == base is YOUNGER than top == the range runs backwards.
+    #  0 == same stage (zero-thickness, allowed elsewhere) and -1 == correct
+    # order, so neither is reported.
+    return cmp_result is not None and cmp_result > 0
+
+
 def _section_names(data: dict[str, Any]) -> set[str]:
     """Collect all section.name / id values in the result (mode-aware)."""
     names: set[str] = set()
@@ -332,6 +409,11 @@ def _score_completeness(data: dict[str, Any]) -> tuple[float, list[dict[str, str
         primary = None  # columnar has no single "primary" — no single penalty
     elif mode == "zonation":
         primary = "zones" if "zones" in data else None
+    elif mode == "occurrence_matrix":
+        # 2026-10-15. `occurrences` is sparse by contract, so a short list is
+        # NOT evidence of failure - grading by row count would punish exactly
+        # the matrix the mode is designed for. Presence is the check.
+        primary = "occurrences" if "occurrences" in data else None
     else:  # range_chart
         primary = "species_ranges" if "species_ranges" in data else None
 
@@ -356,6 +438,11 @@ def _score_completeness(data: dict[str, Any]) -> tuple[float, list[dict[str, str
         relevant_keys = ("abundances", "sections")
     elif mode == "zonation":
         relevant_keys = ("zones", "correlations", "zonations")
+    elif mode == "occurrence_matrix":
+        # 2026-10-15. `columns` counts as signal even when `occurrences` is
+        # empty: a matrix whose localities were read but whose cells were not
+        # is a partial answer worth reporting, not a chart with no signal.
+        relevant_keys = ("occurrences", "columns", "legend", "strat_rows")
     else:
         relevant_keys = ("sections", "biozones", "other_fossils")
 
@@ -513,7 +600,7 @@ def _score_accuracy(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]:
             base_ma = _resolve_age_ma(base_raw, prefer="older")
             if top_ma is not None and base_ma is not None:
                 fad_lad_total += 1
-                if base_ma < top_ma:
+                if base_ma < top_ma or _stage_endpoints_inverted(base_raw, top_raw):
                     fad_lad_violations += 1
                     issues.append({"severity": "warning",
                                    "msg_key": "quality.range_top_lt_base"})
@@ -733,10 +820,21 @@ def _score_consistency(data: dict[str, Any]) -> tuple[float, list[dict[str, str]
         # Each dropped row degrades consistency by 0.1, floor 0.
         score -= min(0.5, 0.1 * len(chimera_warnings))
         for w in chimera_warnings[:5]:
+            # FIX-2026-10-01: `w.get` assumed every entry is a dict. A
+            # free-form string entry raised AttributeError, which the
+            # per-dimension `except` turned into dimension_score = 0.0 plus a
+            # single `quality.scoring_failed` -- so ONE malformed field cost
+            # the whole 0.20 weight AND every other consistency finding on the
+            # same result (FAD/LAD, missing biozone, Steno's Law), while the
+            # chimera message the operator needed was replaced by a generic
+            # "scoring failed". Same shape-drift class the sibling `_warning`
+            # field already gets via `_warning_flags`. A dict is rendered
+            # exactly as before; anything else is shown as itself.
+            row_desc = w.get("row", {}) if isinstance(w, dict) else w
             issues.append({
                 "severity": "warning",
                 "msg_key": "quality.chimera_dropped",
-                "params": {"row": str(w.get("row", {}))[:200]},
+                "params": {"row": str(row_desc)[:200]},
             })
 
     species = data.get("species_ranges") or []
@@ -1152,6 +1250,12 @@ def _score_structure(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]
         null_check_keys = ("sections", "abundances", "confidence")
     elif mode == "zonation":
         null_check_keys = ("zones", "correlations", "zonations", "confidence")
+    elif mode == "occurrence_matrix":
+        # 2026-10-15. `occurrences` is nullable BY DESIGN (a matrix with no
+        # readable cell is a legitimate partial answer, and the mode's own
+        # warnings report it), so only `columns` and `confidence` are held to
+        # the no-null contract here.
+        null_check_keys = ("columns", "confidence")
     else:
         null_check_keys = ("sections", "biozones", "other_fossils",
                            "confidence")
@@ -1166,6 +1270,53 @@ def _score_structure(data: dict[str, Any]) -> tuple[float, list[dict[str, str]]]
     elif nulls <= 1:
         passed += 0.5
         issues.append({"severity": "info", "msg_key": "quality.null_fields"})
+
+    # FIX-2026-10-01: the confidence-coherence check the module docstring has
+    # always claimed ("structure (0.10) - array lengths, _extras ratio,
+    # confidence coherence") did not exist. `quality.confidence_mismatch` was
+    # registered and translated in all three locales in BOTH engines
+    # (rca_core/i18n.py, js/i18n.js) while nothing emitted it, so a result
+    # whose overall confidence contradicted every one of its own rows scored
+    # identically to a self-consistent one -- byte-identical issue lists in the
+    # audit's repro. Implementing it rather than deleting the keys: the copy
+    # already exists, and "the model is sure of nothing but claims 99% per
+    # row" is a real signal.
+    #
+    # Deliberately conservative so it cannot become a new false-positive
+    # source: it needs at least two numeric row confidences, and fires only on
+    # a near-contradiction (gap > 0.5). A coherent result (top 0.95 vs rows
+    # 0.99) is unaffected, and a result with no row confidences is skipped
+    # entirely rather than scored.
+    top_conf = data.get("confidence")
+    try:
+        top_num = float(top_conf)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        top_num = None
+    if top_num is not None and top_num == top_num:  # not NaN
+        row_confs: list[float] = []
+        for list_key in ("species_ranges", "abundances", "zones", "samples"):
+            rows = data.get(list_key)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    rc = float(row.get("confidence"))  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    continue
+                if rc == rc:  # not NaN
+                    row_confs.append(rc)
+            if row_confs:
+                break
+        if len(row_confs) >= 2:
+            checks += 1
+            mean_row = sum(row_confs) / len(row_confs)
+            if abs(top_num - mean_row) > 0.5:
+                issues.append({"severity": "info",
+                               "msg_key": "quality.confidence_mismatch"})
+            else:
+                passed += 1
 
     if checks == 0:
         return 1.0, issues
@@ -1194,8 +1345,18 @@ def _abundance_percentage_buckets(data: dict[str, Any]) -> tuple[dict[str, float
       separators, ellipsis) degenerated into "no buckets → no violations →
       full marks". Counting them lets the caller say the check was not
       evaluable instead of pretending it passed.
+
+    FIX-2026-10-01: buckets are keyed by ``(site, level)``, not ``level``.
+    A multi-core pollen/palynology diagram is an explicitly supported shape
+    (the ABUNDANCE prompt carries a ``sites`` array and a per-row ``site``),
+    and two cores routinely share a level label ("120 cm" in both). Keying on
+    the level alone merged two independent cores into one imaginary level, so
+    a perfectly correct diagram -- 40+60 in Core A, 25+75 in Core B, each
+    exactly 100% -- was reported as ``sample='120 cm' sum='200.0'``: a
+    fabricated measurement about a level that does not exist. Sites without a
+    name keep the bare level as the key, so single-core output is unchanged.
     """
-    violations: dict[str, float] = {}
+    violations: dict[tuple[str, str], float] = {}
     skipped = {"no_level": 0, "unparsable": 0}
     for entry in data.get("samples") or data.get("abundances") or []:
         if not isinstance(entry, dict):
@@ -1213,14 +1374,30 @@ def _abundance_percentage_buckets(data: dict[str, Any]) -> tuple[dict[str, float
         except (TypeError, ValueError):
             skipped["unparsable"] += 1
             continue
-        violations[level] = violations.get(level, 0.0) + pct
+        # The site is part of the sample's identity: "120 cm" in Core A and
+        # "120 cm" in Core B are two different samples, not one of 200%.
+        site = str(entry.get("site") or "").strip()
+        key = (site, level)
+        violations[key] = violations.get(key, 0.0) + pct
     return violations, skipped
 
 
-def _abundance_sum_violations(level_sums: dict[str, float]) -> list[dict[str, Any]]:
+def _abundance_label(key: Any) -> str:
+    """Render a bucket key for the ``sample`` issue parameter.
+
+    Accepts both shapes on purpose: the internal buckets are keyed by
+    ``(site, level)`` tuples, while callers (and
+    ``tests/test_quality_sumto100_parity.py``) may pass a bare level string.
+    """
+    if isinstance(key, tuple):
+        site, level = (list(key) + ["", ""])[:2]
+        return f"{site} / {level}" if site else str(level)
+    return str(key)
+
+def _abundance_sum_violations(level_sums: dict[Any, float]) -> list[dict[str, Any]]:
     """Levels whose percentages miss 100 ± 5."""
     return [
-        {"sample": level, "sum": total}
+        {"sample": _abundance_label(level), "sum": total}
         for level, total in level_sums.items()
         if not (95 <= total <= 105)
     ]

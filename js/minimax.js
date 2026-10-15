@@ -1617,6 +1617,15 @@ const RCA_MODE_ROOT_KEYS = {
   scatter_plot:       ['metadata', 'groups', 'points', 'outliers', 'statistics', 'confidence',
                        'axis_calibration'],
   zonation_chart:     ['zonations', 'zones', 'correlations', 'confidence'],
+  // NEW (2026-10-15): taxon x LOCALITY occurrence matrices and the
+  // last-resort generic table. Both are backend-only today (see
+  // RCA_BROWSER_UNSUPPORTED_MODES) but their root-key lists are still needed:
+  // an empty list means "never flag", so a mode missing here would let an
+  // unusable payload pass the guard silently. Mirrors the root_keys_inline
+  // tuples in rca_core/modes.py.
+  occurrence_matrix:  ['columns', 'legend', 'occurrences', 'strat_rows',
+                       'confidence'],
+  generic_table:      ['columns', 'rows', 'legend', 'notes', 'confidence'],
 };
 
 // Mirror of the "truncated rescue" guard inside normalize_result (and the
@@ -2303,8 +2312,21 @@ function rcaNormalizeColumnarResult(parsed) {
       samples: normSamples(sec.samples),
       coordinates_text: asStr(sec.coordinates_text),
       thickness_m: asStr(sec.thickness_m),
-      confidence_by_section: rcaConfidenceClamped(
-        'confidence_by_section' in sec ? sec.confidence_by_section : 0.0),
+      // FIX-2026-10-01: mirror of rca_core/extractor.py. An ABSENT
+      // confidence_by_section used to be written as 0.0, byte-identical to a
+      // model that explicitly reported 0.0, so "never said" and "said zero"
+      // were indistinguishable in every export. Absent / null / '' now stays
+      // null ("not stated"). An UNPARSABLE value ("high") also stays null:
+      // rcaConfidenceClamped() would fold it to 0.0, which is the same
+      // fabrication in a second disguise -- Python's float() raises there and
+      // leaves the field empty.
+      confidence_by_section: (() => {
+        const rawCbs = sec.confidence_by_section;
+        if (rawCbs === undefined || rawCbs === null || rawCbs === '') return null;
+        const nCbs = rcaPyFloatOrNull(rawCbs);
+        if (nCbs === null || Number.isNaN(nCbs)) return null;
+        return Math.max(0.0, Math.min(1.0, nCbs));
+      })(),
     };
     rcaCarryExtras(sec, SECTION_KNOWN, row);
     sections.push(row);
@@ -2539,6 +2561,30 @@ function rcaNormalizePhylogeneticTreeResult(parsed) {
     n.id = candidate;
     // Python APPENDS without dedup: two repaired nodes mean two flags.
     phyloWarnings.push('node_missing_id_synthesised');
+  }
+
+  // FIX-2026-10-01: mirror of rca_core/extractor.py's duplicate-id repair. A
+  // model reuses one id for two different leaves whenever the figure prints no
+  // node numbers, and every id-keyed structure here keeps ONE entry per id, so
+  // the second node's name was emitted for both and the first was dropped
+  // entirely: three nodes in, "((Beta,Beta));" out. The table still held all
+  // three rows, so nothing looked wrong upstream, and the Newick export and
+  // the RF-distance metric both read this. Same treatment as the missing-id
+  // case above -- keep every taxon, uniquify the later id, flag the repair.
+  const seenIds = new Set();
+  for (const n of nodesIn) {
+    const nid = rcaPyStr(rcaPyOr(n.id, '')).trim();
+    if (!nid) continue;
+    if (!seenIds.has(nid)) { seenIds.add(nid); continue; }
+    let candidate = '';
+    for (;;) {
+      anon += 1;
+      candidate = '_dup' + anon;
+      if (!seenIds.has(candidate)) break;
+    }
+    seenIds.add(candidate);
+    n.id = candidate;
+    phyloWarnings.push('node_duplicate_id_disambiguated');
   }
 
   const idToNode = {};
@@ -2800,11 +2846,27 @@ function rcaToNewick(tree) {
   const rootList = Array.isArray(rootIds) ? rootIds.map(rcaPyStr) : [];
 
   const nodesDict = {};
+  // FIX-2026-10-01: defense in depth for a duplicate id reaching here from a
+  // path that bypasses the normalizer's disambiguation (a hand-edited history
+  // record, a re-imported payload). Keeping the LAST row silently is what
+  // produced "((Beta,Beta));" -- one taxon lost, one duplicated, no warning --
+  // so the collision is now reported with the same convention as the
+  // unreachable-node warning below, and the FIRST row is kept, matching the
+  // Python twin.
+  const dupIds = [];
   for (const n of nodeList) {
     if (n && typeof n === 'object' && !Array.isArray(n)) {
       const nid = rcaPyStr(rcaPyOr(n.id, ''));
-      if (nid) nodesDict[nid] = n;
+      if (nid) {
+        if (Object.prototype.hasOwnProperty.call(nodesDict, nid)) { dupIds.push(nid); continue; }
+        nodesDict[nid] = n;
+      }
     }
+  }
+  if (dupIds.length) {
+    const uniqDup = Array.from(new Set(dupIds));
+    console.warn('to_newick: duplicate node id(s) ' + uniqDup.slice(0, 10).map((d) => JSON.stringify(d)).join(', ')
+      + ' (' + dupIds.length + ' row(s)); only the first of each is emitted');
   }
 
   const idToChildren = {};
@@ -2868,10 +2930,21 @@ function rcaToNewick(tree) {
  * extractor's "normalizer refused the payload / unknown mode" answer
  * (rca_core/extractor.py, and the fallback the eight extract modes share).
  *
- * NOTE: `err.badRequest`, `err.serverBusy`, `err.imageInvalidBase64` and
- * `err.mode` are emitted by Python but have no entry in js/i18n.js yet, so
- * those four currently render as the bare key. Kept in the whitelist because
- * dropping them would be a worse lie; the translations belong to i18n.js.
+ * FIX-2026-10-01: this note was half-stale and has been corrected. It claimed
+ * four keys render as the bare key; only two were ever untranslated, and
+ * `err.badRequest` / `err.serverBusy` have since been translated in all three
+ * locales. Of the two that remained:
+ *   * `err.imageInvalidBase64` was the one real gap -- server.py emits it
+ *     (including for a `data:` URL prefix or a truncated upload) and the
+ *     browser rendered "[?err.imageInvalidBase64]". It is now translated in
+ *     all three locales in BOTH js/i18n.js and rca_core/i18n.py, which was
+ *     missing it too.
+ *   * `err.mode` was whitelisted but dead when this note was written;
+ *     rca_core/extractor.py deliberately answers `err.extract` instead. It is
+ *     LIVE again as of the same fix round: the browser transport now emits it
+ *     to say "this chart mode needs the backend server" (see
+ *     RCA_BROWSER_UNSUPPORTED_MODES), and it is translated in all three
+ *     locales so it is not a raw key.
  */
 const RCA_KNOWN_ERROR_KEYS = new Set([
   // Emitted by server.py / rca_core (mirrors the Python "err.*" corpus).
@@ -3383,9 +3456,17 @@ async function rcaCallBackend(opts, base64) {
 // raise-to-0.0 rule, rcaPyOr the `... or 0.0` prefix.
 function rcaNormalizeChartClassification(parsed) {
   // Verbatim KNOWN_CHART_TYPES.
+  //
+  // NEW (2026-10-15): occurrence_matrix is in the list because the caption
+  // heuristic and the vision classifier may both name it (rca_core/modes.py
+  // registers it as a real mode with keywords), so the browser must accept the
+  // name. generic_table is deliberately NOT here, exactly as in Python: it is
+  // the fallback for an unrecognised genre, never something a classifier may
+  // return, so admitting it would let a classification name a mode the
+  // classifier was never asked about.
   const KNOWN = ['range_chart', 'columnar_section', 'abundance_diagram',
                  'phylogenetic_tree', 'zonation_chart', 'chemical_stratigraphy',
-                 'paleomap', 'scatter_plot'];
+                 'paleomap', 'scatter_plot', 'occurrence_matrix'];
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { chart_type: 'unknown', reason: '', confidence: 0.0 };
   }
@@ -3402,6 +3483,36 @@ function rcaNormalizeChartClassification(parsed) {
       0.0)),
   };
 }
+
+// FIX-2026-10-01: the three chart modes with a system prompt in js/prompt.js
+// but no normalizer on this side. The Python backend has all three
+// (rca_core/extractor.py), so they are a BACKEND-only capability; the browser
+// transport refuses them rather than silently normalising them as range
+// charts. See the guard in extractRangeChart for the full reasoning.
+//
+// NEW (2026-10-15): two more entries, for the same reason and with the same
+// consequence, mirrored from rca_core/modes.py's browser_supported=False:
+//
+//   occurrence_matrix - taxon x LOCALITY matrices. This is the WORST case of
+//     the five: the mode has no continuous axis at all, so falling through to
+//     the range-chart prompt AND rcaNormalizeResult does not merely drop rows,
+//     it drops the entire payload shape (columns / legend / occurrences /
+//     strat_rows) and returns an empty range chart with ok:true.
+//   generic_table - the fallback for an unrecognised genre. A caller can ASK
+//     for it explicitly (the backend accepts it), but the browser has no
+//     normalizer for it either, so it belongs in this list too even though it
+//     is absent from KNOWN above.
+//
+// Both flip to usable the moment rcaNormalizeOccurrenceResult /
+// rcaNormalizeGenericTable land here; the branch below already refuses them
+// loudly and costs no API call.
+const RCA_BROWSER_UNSUPPORTED_MODES = {
+  chemical_stratigraphy: true,
+  paleomap: true,
+  scatter_plot: true,
+  occurrence_matrix: true,
+  generic_table: true,
+};
 
 async function extractRangeChart(opts) {
   // UI-REVIEW-2026-09-07: "auto" may be re-assigned from the vision
@@ -3422,6 +3533,49 @@ async function extractRangeChart(opts) {
   const { base64 } = rcaSplitDataUrl(dataUrl);
   if (!base64) {
     return { ok: false, errorKey: 'err.imageRead' };
+  }
+
+  // FIX-2026-10-01: refuse the three assistant chart modes on the BROWSER
+  // transport, explicitly, instead of letting them fall through to the
+  // range-chart prompt AND the range-chart normalizer.
+  //
+  // They were unreachable until now in a much worse way. The vision classifier
+  // and the caption heuristic both return `chemical_stratigraphy`,
+  // `paleomap` and `scatter_plot` (no LLM call needed for the caption route),
+  // app.js forwards those mode names verbatim, and this function had no branch
+  // for any of them -- so the model was asked for a RADIOLARIAN RANGE CHART
+  // while looking at a scatter plot, and its correctly-shaped answer was then
+  // fed to rcaNormalizeResult, which keeps only sections / species_ranges /
+  // biozones / other_fossils. Every key the assistant modes produce was
+  // dropped: a correct scatter payload came back `points: undefined,
+  // species_ranges: []` -- an empty "range chart" from a figure that had real
+  // data in it, with ok:true and no warning. The three matching system
+  // prompts in js/prompt.js were referenced ZERO times here (dead code); the
+  // normalizers for those modes were never written on this side at all.
+  //
+  // The Python backend handles all eight modes (rca_core/extractor.py has
+  // normalize_chemical_stratigraphy_result / _paleomap / _scatter_plot), and
+  // app.js routes `auto` to the backend on any http/https origin, so the
+  // server path never hit this. It bites when the page is opened from `file:`
+  // or the user picks the "direct" connection mode.
+  //
+  // Why refuse rather than write the three JS normalizers now: each is a
+  // several-hundred-line mirror whose whole value is byte-parity with the
+  // Python twin, and shipping three of them untested would trade a loud,
+  // honest error for a fresh class of silent divergence. The refusal keeps the
+  // failure mode explicit and costs no API call. The modes become usable on
+  // this transport when their mirrors land, with their prompts already in
+  // place -- the branch below picks the prompt up the moment a normalizer for
+  // it exists.
+  if (RCA_BROWSER_UNSUPPORTED_MODES[mode]) {
+    return {
+      ok: false,
+      errorKey: 'err.mode',
+      warning: 'chart mode "' + mode + '" is only available through the backend '
+        + 'server (js/minimax.js has no normalizer for it). Switch the '
+        + 'connection mode in settings, or run the server, to extract this '
+        + 'figure type.',
+    };
   }
 
   // Backend mode: when served by the Python server (http/https origin),

@@ -125,7 +125,6 @@
                                 <output class="range-value" for="max-tokens" id="max-tokens-out">4000</output>
                             </div>
                             <input type="range" id="max-tokens" min="500" max="32000" step="500" aria-describedby="max-tokens-hint">
-                            <output for="max-tokens" id="max-tokens-out">4000</output>
                         </div>
                         <p class="field-hint" id="max-tokens-hint" data-i18n="settings.maxTokens.hint">种属很多的大图可调高，避免结果被截断。</p>
                     </div>
@@ -137,7 +136,6 @@
                                 <output class="range-value" for="max-edge" id="max-edge-out">4000</output>
                             </div>
                             <input type="range" id="max-edge" min="0" max="8000" step="500" aria-describedby="max-edge-hint">
-                            <output for="max-edge" id="max-edge-out">4000</output>
                         </div>
                         <p class="field-hint" id="max-edge-hint" data-i18n="settings.maxEdge.hint">压缩上传前的长边上限。默认 4000，越大越清晰、越利于识读密排小字；0=不压缩。</p>
                     </div>
@@ -164,7 +162,6 @@
                                 <output class="range-value" for="runs" id="runs-out">1</output>
                             </div>
                             <input type="range" id="runs" min="1" max="5" step="1" aria-describedby="runs-hint">
-                            <output for="runs" id="runs-out">1</output>
                         </div>
                         <p class="field-hint" id="runs-hint" data-i18n="settings.runs.hint">同一张图运行多次并合并结果，可减少偶发 OCR 误读。每次为一次 API 调用。</p>
                     </div>
@@ -243,6 +240,7 @@
                             <option value="abundance_diagram" data-i18n="upload.chartMode.abundanceDiagram">丰度/孢粉图</option>
                             <option value="phylogenetic_tree" data-i18n="upload.chartMode.phylogeneticTree">系统发育树</option>
                         <option value="zonation_chart" data-i18n="upload.chartMode.zonationChart">生物带对比图</option>
+                            <option value="occurrence_matrix" data-i18n="upload.chartMode.occurrenceMatrix">出现矩阵</option>
                         </select>
                         <p class="field-hint" data-i18n="upload.chartMode.hint">「自动」按文件名/图注启发式判定；也可手动指定。</p>
                     </div>

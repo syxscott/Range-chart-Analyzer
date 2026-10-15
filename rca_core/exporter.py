@@ -923,6 +923,13 @@ def get_configs_for_result(data: dict[str, Any] | None) -> list[dict[str, Any]]:
         return []
     if _looks_zonation_chart(data):
         return _zonation_chart_tables(data)
+    # occurrence_matrix (2026-10-15). Placed above _looks_abundance because a
+    # partially-migrated matrix answer (the step-0 baseline shape) carries
+    # `abundances`-like rows AND `columns`; the column list is the
+    # authoritative signal that this is a locality matrix, not a down-core
+    # abundance diagram.
+    if _looks_occurrence_matrix(data):
+        return _occurrence_matrix_tables(data)
     if _looks_abundance(data):
         return _abundance_diagram_tables(data)
     # I7 fix: also detect columnar shape even when sections is empty
@@ -957,6 +964,90 @@ def get_configs_for_result(data: dict[str, Any] | None) -> list[dict[str, Any]]:
         claimed = {c["id"] for c in specific}
         return specific + _generic_tables(data, claimed)
     return _generic_tables(data, set())
+
+
+def _looks_occurrence_matrix(data: dict[str, Any] | None) -> bool:
+    """A taxon x locality matrix carries a populated ``occurrences`` list.
+
+    The discriminator is ``occurrences``, NOT ``columns``. This looked like a
+    harmless choice until a cross-mode collision test caught what it costs:
+    ``normalize_generic_table_result`` ALSO emits ``columns``, so keying on it
+    classified every generic_table result as an occurrence matrix. The exporter
+    then returned THIS mode's three table configs, which do not include
+    ``rows`` — so the generic table's entire data set vanished from the export
+    while remaining visible in the browser (js/table.js falls through to its
+    own generic renderer). Data present on screen, absent from CSV/XLSX, and
+    `export_supported=True` in the registry asserting the opposite.
+
+    ``occurrences`` is genuinely unique: no other normalizer in the app emits
+    that key. An occurrence_matrix whose cells were not read falls through to
+    `_generic_tables`, which renders its ``columns`` and ``legend`` anyway —
+    degraded but not lost, which is the correct trade.
+    """
+    if not isinstance(data, dict):
+        return False
+    occ = data.get("occurrences")
+    return bool(isinstance(occ, list) and occ
+                and isinstance(occ[0], dict))
+
+
+def _occurrence_matrix_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Occurrence-matrix table configs.
+
+    Three sheets, in the order a systematic section reads them:
+
+    * ``columns`` - the locality / borehole header list, with its printed
+      order preserved as a visible ``index`` column. Column order is data.
+    * ``occurrences`` - the sparse long table the user actually asked for:
+      one row per FILLED cell, taxon x locality x class. This is the sheet
+      that gets cited, so its identity key is (taxon, site) - the pair that
+      must stay unique - and ``row_kind`` rides along so a stratigraphic
+      comparison band can be filtered out without re-reading the figure.
+    * ``legend`` - the code -> class mapping READ FROM THE FIGURE, never
+      assumed, because the same letter means different classes across papers.
+    """
+    multi = bool(data) and int(data.get("runs", 1) or 1) > 1
+
+    occ_cols = ["col.taxon", "col.authority", "col.site", "col.code",
+                "col.class"]
+    occ_data = ["taxon", "authority", "site", "code", "class"]
+    occ_row = lambda r: [
+        r.get("taxon", ""),
+        r.get("authority", ""),
+        r.get("site", ""),
+        r.get("code", ""),
+        r.get("class", ""),
+    ]
+
+    return [
+        {
+            "id": "columns",
+            "title_key": "sec.columns",
+            "cols": ["col.index", "col.label", "col.kind"],
+            "data_keys": ["index", "label", "kind"],
+            "identity_keys": ["index"],
+            "row": lambda c: [
+                c.get("index", ""), c.get("label", ""), c.get("kind", ""),
+            ],
+        },
+        {
+            "id": "occurrences",
+            "title_key": "sec.occurrences",
+            "cols": occ_cols + (["col.agreement"] if multi else []),
+            "data_keys": occ_data + (["agreement"] if multi else []),
+            "identity_keys": ["taxon", "site"],
+            "row": (lambda r: occ_row(r) + [r.get("agreement", "")])
+                   if multi else occ_row,
+        },
+        {
+            "id": "legend",
+            "title_key": "sec.legend",
+            "cols": ["col.code", "col.class"],
+            "data_keys": ["code", "class"],
+            "identity_keys": ["code"],
+            "row": lambda e: [e.get("code", ""), e.get("class", "")],
+        },
+    ]
 
 
 def _abundance_diagram_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -1108,7 +1199,8 @@ def get_config(table_id: str) -> dict[str, Any] | None:
     # data-shape-matched configs (e.g. editing a cross_beds row while the
     # result has no sections to detect columnar shape).
     for fn in (_range_chart_tables, _columnar_section_tables, _abundance_diagram_tables,
-               _phylogenetic_tree_tables, _zonation_chart_tables):
+               _phylogenetic_tree_tables, _zonation_chart_tables,
+               _occurrence_matrix_tables):
         for c in fn(None):
             if c["id"] == table_id:
                 return c

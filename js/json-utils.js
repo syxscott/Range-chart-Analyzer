@@ -366,6 +366,18 @@ function _rankIsZero(r) { return r[0] === 0 && r[1] === 0; }
 // restated contract ("<binomial>"), so a fenced EXAMPLE and an unfenced payload
 // built from the same schema compare by their contents instead of tying.
 // (0, 0) when nothing parses, which never beats a real block.
+//
+// FIX-2026-10-01: the rank tuple is (-placeholders, score) — placeholders
+// FIRST, score as the tiebreak. It used to be (score, -placeholders), which
+// disagreed with _chooseFenceBlock below, where the placeholder count is the
+// primary sort key. On that mismatch a restated contract could never be
+// evicted however many placeholders it carried: five root keys score 500 and a
+// real two-key payload scores 200, and 7 placeholders cannot overturn a
+// 300-point deficit. Measured end to end with the SAME real payload, only the
+// delivery differing: fenced in a second block -> recovered; unfenced in prose
+// -> "<section name>" / "<binomial>", which then flowed through the normalizer
+// into the rendered table AND the downloaded CSV. Mirrors
+// rca_core/json_utils.py:_best_payload_rank, which now applies the same order.
 function rcaBestPayloadRank(text) {
   let best = null;
   for (const cand of extractAllBalancedJsonObjects(String(text == null ? '' : text))) {
@@ -377,7 +389,7 @@ function rcaBestPayloadRank(text) {
       // still a payload candidate, not prose.
       score += 100;
     }
-    const rank = [score, -rcaFencePlaceholderCount(cand)];
+    const rank = [-rcaFencePlaceholderCount(cand), score];
     if (best === null || _rankGreaterThan(rank, best)) best = rank;
   }
   return best === null ? [0, 0] : best;
@@ -643,15 +655,38 @@ function safeJsonLoads(text) {
     let bestScore = -Infinity;
     let bestLen = -1;
     let bestIdx = -1;
+    // Infinity, not -1: placeholder counts are >= 0, so a -1 seed would make
+    // the first candidate unable to win any clause and leave best === null.
+    let bestPh = Infinity;
     for (let idx = 0; idx < topLevel.length; idx++) {
       const candidate = topLevel[idx];
       try {
         const p = JSON.parse(candidate);
         if (p && typeof p === 'object' && !Array.isArray(p)) {
           const sc = _payloadScore(p);
-          if (sc > bestScore ||
-              (sc === bestScore && candidate.length > bestLen) ||
-              (sc === bestScore && candidate.length === bestLen && idx > bestIdx)) {
+          // FIX-2026-10-01: schema-placeholder count is the PRIMARY signal here,
+          // then payload score, then the existing length/index tiebreaks. It
+          // used to be absent from this stage entirely, and this stage is the
+          // one that actually returns the candidate -- so fixing
+          // rcaBestPayloadRank alone changed only WHICH TEXT arrived here, not
+          // what was picked out of it. Measured with the same reply: a
+          // restated contract in a fence (5 root keys, 7 "<placeholder>"
+          // tokens) plus the real payload in the surrounding prose left the
+          // placeholders as the extracted result, and they then flowed through
+          // the normalizer into the rendered table AND the downloaded CSV.
+          //
+          // A restated contract scores HIGHER on key density precisely because
+          // it lists every root key, which is why the density signal alone can
+          // never evict it. Put "fewest placeholders" first and all three
+          // ranking paths in this file agree: _chooseFenceBlock, the
+          // rcaBestPayloadRank used for the block-vs-prose decision, and this
+          // candidate selection.
+          const ph = rcaFencePlaceholderCount(candidate);
+          if (ph < bestPh ||
+              (ph === bestPh && sc > bestScore) ||
+              (ph === bestPh && sc === bestScore && candidate.length > bestLen) ||
+              (ph === bestPh && sc === bestScore && candidate.length === bestLen && idx > bestIdx)) {
+            bestPh = ph;
             bestScore = sc;
             best = p;
             bestLen = candidate.length;

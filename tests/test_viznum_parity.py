@@ -51,17 +51,31 @@ VIZ_JS = os.path.join(PROJECT_ROOT, "js", "viz.js")
 _JS_DRIVER = r"""
 const fs = require('fs'), vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-const i = src.indexOf('function rcaVizNum(');
-if (i < 0) { process.stderr.write('rcaVizNum not found\n'); process.exit(3); }
-const j = src.indexOf('{', i);
-let depth = 0, end = j;
-for (let k = j; k < src.length; k++) {
-  if (src[k] === '{') depth++;
-  else if (src[k] === '}') { depth--; if (depth === 0) { end = k + 1; break; } }
+// Extract a top-level function by name, with balanced-brace matching.
+function sliceFn(name) {
+  const i = src.indexOf('function ' + name + '(');
+  if (i < 0) { process.stderr.write(name + ' not found\n'); process.exit(3); }
+  const j = src.indexOf('{', i);
+  let depth = 0, end = j;
+  for (let k = j; k < src.length; k++) {
+    if (src[k] === '{') depth++;
+    else if (src[k] === '}') { depth--; if (depth === 0) { end = k + 1; break; } }
+  }
+  return { start: i, text: src.slice(i, end) };
 }
+const vizNum = sliceFn('rcaVizNum');
+// FIX-2026-10-01: rcaVizNum now delegates the number grammar to
+// rcaVizNormalizeNumberRun (a comma followed by three digits is a THOUSANDS
+// separator, not a decimal point -- the blind `.replace(/,/g, '.')` read
+// "1,000" as 1.0 and collapsed a whole stratigraphic axis onto Bed 1). A
+// single-function slice therefore left that helper UNDEFINED in this sandbox
+// and every case threw. Pull each dependency in alongside it, so the parity
+// this file exists to protect is still measured on the shipped code.
+const norm = sliceFn('rcaVizNormalizeNumberRun');
 const ctx = { console };
 vm.createContext(ctx);
-new vm.Script(src.slice(i, end) + '\nglobalThis.__n = rcaVizNum;').runInContext(ctx);
+new vm.Script(norm.text + '\n' + vizNum.text + '\nglobalThis.__n = rcaVizNum;')
+  .runInContext(ctx);
 // "NaN"/"Infinity" spell the non-finite numbers a JSON payload cannot carry.
 const SPECIAL = { __NAN__: NaN, __INF__: Infinity, __NINF__: -Infinity };
 const out = process.argv.slice(3).map((a) => {
@@ -108,6 +122,17 @@ def test_both_engines_accept_a_unit_suffixed_age(text, expected):
     (".5", 0.5), ("5.", 5.0), ("1_000", 1000.0), ("1_000 Ma", 1000.0),
     ("260", 260.0), ("260,5", 260.5), ("  260  ", 260.0),
     ("-260", -260.0), ("+260", 260.0),
+    # FIX-2026-10-01: a comma is only a DECIMAL separator when it is not a
+    # thousands separator. The old code was a blind `.replace(",", ".")` on both
+    # sides, so "1,000" read as 1.0 -- a `range_top_idx` of "1,000" plotted Bed
+    # 1000 as Bed 1, truncated the axis domain, drew that one row across the
+    # whole chart and squeezed the real rows into the first 0.9 % of it, with
+    # the tooltip reporting the reversed pair "Bed 900 -> Bed 1". A comma (or
+    # space/underscore) followed by EXACTLY three digits is a group separator;
+    # any comma left over is a European decimal point, which is why the replace
+    # existed at all.
+    ("1,000", 1000.0), ("1,000,000", 1000000.0), ("1 000", 1000.0),
+    ("1,5", 1.5), ("12,5", 12.5), ("1,50", 1.5),
 ])
 def test_both_engines_agree_on_numeric_forms(text, expected):
     assert _to_float_opt(text) == expected
@@ -119,6 +144,10 @@ def test_both_engines_agree_on_numeric_forms(text, expected):
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("text", [
     "", "  ", "Bed 9", "120 cm", "4.2-6.8", "abc", "Ma", "x260",
+    # FIX-2026-10-01: Number() accepts base-prefixed literals that Python's
+    # float() rejects, so "0x10" plotted as bed 16 in the browser while the
+    # desktop refused it (and the sibling rcaVizBedValue refused it too).
+    "0x10", "0X10", "-0x10", "0b101", "0o17",
 ])
 def test_both_engines_refuse_non_numbers(text):
     assert _to_float_opt(text) is None

@@ -40,6 +40,14 @@ intended is a content decision, not a mirror bug. What is pinned is the current
 state exactly -- each variant asserted verbatim, so any edit on either side is
 visible in a review instead of drifting silently. The live two are reported for
 that decision.
+
+NEW (2026-10-15): the two modes added alongside rca_core/modes.py are listed as
+IDENTICAL because js/prompt.js's copies are GENERATED from these two python
+constants (single-quoted, line-per-element arrays, escaped with json.dumps)
+rather than hand-transcribed -- which is the defect this file exists to catch.
+CHART_CLASSIFY_SYSTEM_PROMPT is in the same boat: the Python side gained an
+``occurrence_matrix`` entry and js/prompt.js was regenerated from it, so the
+pair is still byte-identical.
 """
 import importlib.util
 import sys
@@ -65,6 +73,8 @@ IDENTICAL = (
     "ABUNDANCE_DIAGRAM_SYSTEM_PROMPT",
     "CHART_CLASSIFY_SYSTEM_PROMPT",
     "CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT",
+    "OCCURRENCE_MATRIX_SYSTEM_PROMPT",
+    "GENERIC_TABLE_SYSTEM_PROMPT",
     "PHYLOGENETIC_TREE_SYSTEM_PROMPT",
     "RANGE_CHART_SYSTEM_PROMPT",
     "SCATTER_PLOT_SYSTEM_PROMPT",

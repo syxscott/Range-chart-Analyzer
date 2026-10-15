@@ -60,10 +60,14 @@
   // REVIEW-2026-09-20 (#105 mirror): the tables, the STEM list, the bounded
   // zone-correlation phrase regex AND the branch order below are a verbatim
   // mirror of rca_core/chart_mode.py (_ZON/_AB/_COL/_PHYLO/_RANGE/_CHEM/
-  // _PALEO/_SCAT + _STEMS + _ZON_PHRASE_RES + auto_detect_chart_mode_ex).
+  // _PALEO/_SCAT/_OCC + _STEMS + _ZON_PHRASE_RES + auto_detect_chart_mode_ex).
   // Order: zon → ab → col → phylo → (only when the caption does NOT name a
-  // range chart) paleo → scat → chem → explicit range chart → unmatched
-  // default. Pinned keyword-by-keyword by tests/test_chart_mode_parity.py,
+  // range chart) paleo → scat → chem → occ → explicit range chart → unmatched
+  // default. occurrence_matrix is LAST among the keyword branches on purpose:
+  // its keywords are the least specific in the whole table ("localit" /
+  // "wellbore" name a data-column kind, not a chart genre), so a paleomap
+  // caption that says "fossil localities" must keep reaching paleomap.
+  // Pinned keyword-by-keyword by tests/test_chart_mode_parity.py,
   // so a one-sided edit fails loudly on both engines.
   //
   // Shared helpers (both auto-detect variants below declare their own keyword
@@ -72,9 +76,13 @@
   //   asciiWordStart    — STEM keyword (leading \b only, so 'phylogen'
   //                       matches "phylogenetic" and 'zonation' "zonations")
   //   cjk keys          — plain substring (CJK/Cyrillic have no boundary)
+  // NEW (2026-10-15): the occurrence_matrix stems. The localit one is
+  // load-bearing: without a LEADING boundary it would match the word
+  // "localit" and never "localities", which is what the caption prints.
   const RCA_CHART_MODE_STEMS = ['phylogen', 'molecular phylogen', 'palyno',
     'zonation', 'range chart', 'isotop', 'chemostrat', 'paleomap', 'palaeomap',
-    'paleogeograph', 'palaeogeograph', 'paleocontinent', 'palaeocontinent'];
+    'paleogeograph', 'palaeogeograph', 'paleocontinent', 'palaeocontinent',
+    'localit', 'wellbore', 'borehol'];
 
   // \bcorrelation of … zone(s) — the split spelling ("Correlation of Triassic
   // radiolarian ZONES and subzones") no keyword tuple can express. The clause
@@ -132,6 +140,11 @@
     const paleoKeysCjk = ['古地理', '古海洋', '古大陆', '板块重建', 'палеогеограф', 'палеокарт', 'палеоконтинент'];
     const scatKeysAscii = ['scatter plot', 'scatterplot', 'scatter diagram', 'biplot', 'crossplot', 'cross plot'];
     const scatKeysCjk = ['散点', '散布図', 'точечная диаграмма', 'рассеяни', 'рассеиван'];
+    // NEW (2026-10-15): taxon x LOCALITY occurrence matrices. 'localit',
+    // 'wellbore' and 'borehol' are STEMS (RCA_CHART_MODE_STEMS) so they match
+    // "localities" / "boreholes" rather than only the bare word.
+    const occKeysAscii = ['localit', 'borehole', 'boreholes', 'wellbore', 'well log', 'well no', 'occurrence matrix', 'occurrence chart', 'abundance matrix', 'distribution matrix', 'a/r/c', 'frequency class', 'abundance class', 'range of occurrences'];
+    const occKeysCjk = ['产地', '地点', '钻孔', '井', '出现矩阵', '分布矩阵', '丰度矩阵'];
     // Does the caption name a range chart itself? UI-REVIEW-2026-09-07
     // (E2E fig_23) + REVIEW-2026-09-20 #105 item 1: a mixed
     // "Columnar section with radiolarian range chart. Zonation of …" caption
@@ -166,6 +179,14 @@
       }
       if (rcaChartModeHit(blob, chemKeysAscii, chemKeysCjk)) {
         return { mode: 'chemical_stratigraphy', matched: true };
+      }
+      // occurrence_matrix is LAST on purpose: its keywords are the least
+      // specific in the table ("localit" / "wellbore" name a data-column kind,
+      // not a chart genre), so a palaeomap caption that says "fossil
+      // localities" must keep reaching paleomap above. Mirrors the position
+      // of the branch in rca_core/chart_mode.py.
+      if (rcaChartModeHit(blob, occKeysAscii, occKeysCjk)) {
+        return { mode: 'occurrence_matrix', matched: true };
       }
     }
     if (saysRangeChart) {
@@ -215,6 +236,10 @@
     const paleoKeysCjk = ['古地理', '古海洋', '古大陆', '板块重建', 'палеогеограф', 'палеокарт', 'палеоконтинент'];
     const scatKeysAscii = ['scatter plot', 'scatterplot', 'scatter diagram', 'biplot', 'crossplot', 'cross plot'];
     const scatKeysCjk = ['散点', '散布図', 'точечная диаграмма', 'рассеяни', 'рассеиван'];
+    // NEW (2026-10-15): occurrence_matrix tables + branch, kept byte-identical
+    // to the detailed variant above (the two copies must not drift).
+    const occKeysAscii = ['localit', 'borehole', 'boreholes', 'wellbore', 'well log', 'well no', 'occurrence matrix', 'occurrence chart', 'abundance matrix', 'distribution matrix', 'a/r/c', 'frequency class', 'abundance class', 'range of occurrences'];
+    const occKeysCjk = ['产地', '地点', '钻孔', '井', '出现矩阵', '分布矩阵', '丰度矩阵'];
     const saysRangeChart = rcaChartModeHit(blob, rangeKeysAscii, rangeKeysCjk);
     if (rcaChartModeHit(blob, zonKeysAscii, zonKeysCjk, zonPhraseRes)) {
       return saysRangeChart ? 'range_chart' : 'zonation_chart';
@@ -226,6 +251,8 @@
       if (rcaChartModeHit(blob, paleoKeysAscii, paleoKeysCjk)) return 'paleomap';
       if (rcaChartModeHit(blob, scatKeysAscii, scatKeysCjk)) return 'scatter_plot';
       if (rcaChartModeHit(blob, chemKeysAscii, chemKeysCjk)) return 'chemical_stratigraphy';
+      // occurrence_matrix LAST - see the detailed variant for why.
+      if (rcaChartModeHit(blob, occKeysAscii, occKeysCjk)) return 'occurrence_matrix';
     }
     return 'range_chart';
   }
@@ -240,9 +267,13 @@
   function rcaResolveChartMode() {
     const sel = $('chart-mode');
     const choice = sel ? sel.value : 'auto';
+    // occurrence_matrix (2026-10-15) is selectable here; generic_table is NOT,
+    // because it is never a user choice - it is what everything else falls
+    // back to when no genre matches, so offering it in the picker would make a
+    // guess look like a decision.
     if (choice === 'range_chart' || choice === 'columnar_section'
         || choice === 'abundance_diagram' || choice === 'phylogenetic_tree'
-        || choice === 'zonation_chart') {
+        || choice === 'zonation_chart' || choice === 'occurrence_matrix') {
       return choice;
     }
     const detected = rcaAutoDetectChartModeDetailed();

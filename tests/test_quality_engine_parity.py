@@ -225,6 +225,13 @@ def test_both_detectors_return_the_same_mode_vocabulary():
         {"cross_beds": ["a"]}, {"correlations": []},
         {"zones": [], "zonations": []}, {"species_ranges": []},
         {"correlations": [], "species_ranges": []},
+        # 2026-10-15: occurrence_matrix. Without a probe here the Python side
+        # of this comparison cannot DISCOVER the mode, so the assertion
+        # degenerates into "JS has nothing Python has" and a one-sided
+        # addition to js/quality.js alone would still fail — but the mirror
+        # case, a Python-only branch, would pass silently. Probing both ways
+        # is what makes this test symmetric.
+        {"occurrences": []}, {"columns": [], "rows": []},
     ):
         py_modes.add(py_detect(probe))
     js_modes = _js_detector_modes()

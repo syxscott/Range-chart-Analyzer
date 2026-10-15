@@ -248,6 +248,12 @@ _AUTHOR_PARTICLES = {
     "d", "l", "de", "du", "des", "di", "da", "del", "della", "der", "den",
     "el", "la", "le", "les", "van", "von", "ten", "ter", "bin", "ibn",
 }
+# FIX-2026-10-01: a one-letter capital, optionally dotted, directly after the
+# genus is an ABBREVIATED SUBGENUS ("Inoceramus I. obliquus"), never an
+# epithet. Two letters are allowed because ICZN permits two-letter
+# abbreviations, but a bare capital with no dot and one or two letters only;
+# anything longer is a name, not an abbreviation.
+_ABBREV_SUBGENUS_RE = re.compile(r"[A-Z][A-Z]?\.?")
 _EMPTY_NAME_PARTS = {
     "genus_name": "", "genus_reso": "",
     "subgenus_name": "", "subgenus_reso": "",
@@ -509,6 +515,28 @@ def _split_taxon_name(name: Any) -> dict[str, str]:
             # binomial is an authority whose year the plate did not print.
             # Calling it a subspecies fabricates a trinomial nobody stated,
             # so it is dropped (``taxon_name`` still carries it).
+            rank = ""
+        # FIX-2026-10-01: an ABBREVIATED genus standing in for a subgenus.
+        # "Inoceramus I. obliquus" (and "Inoceramus cf. I. obliquus") is the
+        # standard way this is printed on Cretaceous plates, and this module's
+        # own comment calls abbreviated genera normal for radiolarians. The
+        # token "I." has letters, so the bare-number guard above let it
+        # through as the SPECIES epithet; the next token is lowercase, so the
+        # capitalised-leftover guard did not fire either -- and the real
+        # epithet was promoted to a SUBSPECIES. The upload row became
+        # species="I." + subspecies="obliquus", a different taxon in PBDB
+        # (searching "Inoceramus obliquus" misses every occurrence), with no
+        # curation note. The parenthesised form is parsed correctly
+        # ("Inoceramus (I.) obliquus" -> genus/species), so it is only the
+        # unparenthesised branch that was wrong.
+        #
+        # A one-letter (optionally dotted) capital token directly after the
+        # genus is an abbreviated subgenus, never an epithet, so it fills
+        # neither rank; the following lowercase word is then the species
+        # epithet. This is the same "drop it, keep taxon_name" treatment the
+        # two guards above use.
+        if (rank in ("species", "subspecies") and not expect_subspecies
+                and genus and _ABBREV_SUBGENUS_RE.fullmatch(tok)):
             rank = ""
         if rank:
             if rank == "genus":
@@ -800,9 +828,25 @@ def _resolve_pbdb_bounds(row):
     # published interval must not run backwards), not a presentational
     # preference, so it belongs in both writers rather than being a
     # darwin_core-local choice.
+    #
+    # FIX-2026-10-01: the guard nulled only the NUMBERS and left
+    # e_stage / l_stage to be published as they came, which is the same
+    # interval in a different unit -- so `early_interval` / `late_interval`
+    # still described a range running backwards in time, and that row also
+    # published `early_interval_reso='series'` beside
+    # `late_interval_reso='stage'`, i.e. the row knew its two ends were
+    # different ranks and ordered them anyway. Worse, once the numbers were
+    # gone the builder fell back to the SECTION-level ages, so the row read
+    # "labels say Triassic, numbers say the whole Permian" -- a
+    # self-contradicting interval that PBDB validators reject, with nothing
+    # pointing at the offending row. Both writers now withhold the whole
+    # interval; see darwin_core._resolve_age_bounds for why the occurrence
+    # path cannot simply reorder the way the section path does.
     if e_ma is not None and l_ma is not None and e_ma < l_ma:
         e_ma = None
         l_ma = None
+        e_stage = None
+        l_stage = None
     return e_stage, l_stage, e_ma, l_ma
 
 

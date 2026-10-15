@@ -225,8 +225,23 @@ def test_to_xlsx_smoke():
 # server whitelist
 # ---------------------------------------------------------------------------
 
-def test_server_source_whitelists_zonation_chart():
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with open(os.path.join(root, "server.py"), encoding="utf-8") as f:
-        src = f.read()
-    assert "'zonation_chart'" in src
+def test_server_accepts_zonation_chart():
+    """zonation_chart is advertised by the capability registry, so the server
+    must not reject it with 400.
+
+    Was ``assert "'zonation_chart'" in server.py_source``. server.py derives
+    its gate from rca_core/modes.py now (2026-10-15), so the literal is gone
+    by construction; assert the value the gate is actually built from.
+    """
+    import server
+    from rca_core.capabilities import CAPABILITIES
+    from rca_core.modes import SERVER_MODE_NAMES
+
+    # the layer that advertises the mode ...
+    assert "zonation_chart" in CAPABILITIES
+    # ... must be accepted by the gate, and the gate must BE the registry.
+    assert server._REGISTRY_SERVER_MODES is SERVER_MODE_NAMES
+    assert "zonation_chart" in server._REGISTRY_SERVER_MODES
+    # ... including on the auto path, where a resolved mode is re-checked.
+    assert server._constrain_resolved_mode(
+        "zonation_chart", "text") == ("zonation_chart", "text")

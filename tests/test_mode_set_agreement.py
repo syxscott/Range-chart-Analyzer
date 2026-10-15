@@ -28,6 +28,11 @@ rediscover them:
     runs. The assistant modes (chemical_stratigraphy, paleomap, scatter_plot)
     have no merge consensus schema, and paleomap/chemical/scatter results are
     shape-classified by exporter._TABLELESS_MODES instead.
+  * generic_table is declared and prompted but is deliberately absent from the
+    chart-type LIST (NOT_CLASSIFIABLE below): it is the fallback for an
+    unrecognised genre, never something a classifier may name. It is also the
+    one mode a caller may ask for explicitly and get, so it must NOT be removed
+    from the registry.
 """
 import re
 import sys
@@ -40,6 +45,7 @@ sys.path.insert(0, str(REPO))
 
 import rca_core.aggregate as AGG  # noqa: E402
 import rca_core.capabilities as CAP  # noqa: E402
+import rca_core.extractor as EXT  # noqa: E402
 import rca_core.prompt as PR  # noqa: E402
 
 REGISTRY = set(CAP.CAPABILITIES)
@@ -56,6 +62,16 @@ TASK_ONLY = {"chart_classify"}
 # their RESULTS by shape instead, so their absence from SCHEMA_BY_MODE is
 # deliberate rather than a gap.
 NO_MERGE_SCHEMA = {"chemical_stratigraphy", "paleomap", "scatter_plot"}
+
+# Declared modes a CLASSIFIER may never name, by design (2026-10-15).
+# ``generic_table`` is the fallback for an unrecognised chart genre: it is what
+# the app does when nothing else matches, so admitting it to the chart-type
+# list would let a vision classifier return a mode nobody asked it about --
+# rca_core/extractor.py:KNOWN_CHART_TYPES excludes it for exactly that reason,
+# and js/minimax.js's KNOWN mirrors that. It is still a real declared mode (it
+# has tables, a prompt and a normalizer), which is why it is named here instead
+# of being dropped from the registry.
+NOT_CLASSIFIABLE = {"generic_table"}
 
 
 def _known_chart_types() -> set:
@@ -92,10 +108,25 @@ class TestTheSetsAgree:
             "and maturity shown as 'assistant'.")
 
     def test_the_browser_can_classify_every_declared_mode(self):
-        missing = sorted(REGISTRY - KNOWN)
+        missing = sorted(REGISTRY - NOT_CLASSIFIABLE - KNOWN)
         assert not missing, (
             f"capabilities.py declares {missing} but the browser's chart-type list "
             "does not, so those modes can never be selected")
+
+    def test_the_browser_list_is_the_python_classifier_list(self):
+        """js/minimax.js's KNOWN must be rca_core/extractor.KNOWN_CHART_TYPES.
+
+        The two implementations decide whether a classifier's answer is a
+        legal chart_type, so a one-sided addition lets the browser believe a
+        classification Python would have degraded to 'unknown'.
+        """
+        assert KNOWN == set(EXT.KNOWN_CHART_TYPES), (
+            f"js KNOWN != python KNOWN_CHART_TYPES: "
+            f"only-js={sorted(KNOWN - set(EXT.KNOWN_CHART_TYPES))} "
+            f"only-py={sorted(set(EXT.KNOWN_CHART_TYPES) - KNOWN)}")
+        assert NOT_CLASSIFIABLE & KNOWN == set(), (
+            f"{sorted(NOT_CLASSIFIABLE & KNOWN)} must stay out of the chart-type "
+            "list on both engines: a classifier may not name the fallback")
 
     def test_prompt_versions_cover_every_declared_mode(self):
         # chart_classify is the one prompt with no mode of its own.

@@ -58,3 +58,15 @@ rca_e2e_api.env
 # is defense in depth so a hard-killed run can never dirty the tree.
 assets/_fe_p_perf_*.css
 assets/_fe_f_*.css
+
+# PyInstaller build output. The onefile exes are ~308 MB EACH and are published
+# as Release ASSETS, never as repository content: committing them would put
+# 617 MB of binaries into git history, where a size bump becomes a full copy
+# and the file can never be replaced in place. `build/` is the work tree and is
+# another ~630 MB of intermediates on every run.
+dist/
+build/
+*.spec.bak
+
+# --junitxml reports written by release-time verification runs.
+_*_*.xml

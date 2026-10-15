@@ -266,6 +266,15 @@ TRANSLATIONS["zh"] = {
     "err.badMode": "不支持的图表模式。请在设置中选择已支持的模式。",
     "err.http": "API 返回错误",
     "err.bodyTooLarge": "请求体过大（超过服务器限制）。请缩小图片或降低分辨率后重试。",
+    # FIX-2026-10-01: server.py emits BOTH of these and this registry had
+    # neither, so Translator.t() returned the bare key and the user saw a
+    # raw "err.imageTooLarge" / "err.imageInvalidBase64" with no explanation.
+    # err.imageInvalidBase64 is the more reachable of the two: it is what
+    # _validate_image_b64 returns for a `data:image/png;base64,` prefix or a
+    # truncated upload, i.e. an ordinary client mistake. The English strings
+    # are kept identical to js/i18n.js so the two engines render one message.
+    "err.imageTooLarge": "图片过大（超过服务器限制）。请降低「图像分辨率上限」后重试。",
+    "err.imageInvalidBase64": "上传的图片数据不是有效的 base64（可能带了 data: 前缀或传输不完整）。请重新选择图片后重试。",
     "err.parse": "无法解析模型返回的内容。",
     "err.empty": "模型返回为空。",
     "err.truncated": "结果可能被截断（达到 max_tokens）。可调高最大输出 Token 后重试。",
@@ -746,6 +755,8 @@ TRANSLATIONS["en"] = {
     "err.badMode": "Unsupported chart mode. Choose one of the modes supported by this build.",
     "err.http": "The API returned an error",
     "err.bodyTooLarge": "Request body too large (exceeds server limit). Try a smaller image or lower resolution.",
+    "err.imageTooLarge": "Image is too large (exceeds the server limit). Lower \"Max image resolution\" in settings and retry.",
+    "err.imageInvalidBase64": "The uploaded image data is not valid base64 (it may carry a data: prefix or have arrived incomplete). Re-select the image and retry.",
     "err.parse": "Could not parse the model response.",
     "err.empty": "The model returned an empty response.",
     "err.truncated": "Result may be truncated (hit max_tokens). Increase max output tokens and retry.",
@@ -1227,6 +1238,8 @@ TRANSLATIONS["ja"] = {
     "err.badMode": "サポートされていないチャートモードです。このビルドで対応しているモードから選択してください。",
     "err.http": "API がエラーを返しました",
     "err.bodyTooLarge": "リクエスト本文が大きすぎます（サーバー上限超過）。画像を縮小するか解像度を落として再試行してください。",
+    "err.imageTooLarge": "画像が大きすぎます（サーバー上限超過）。設定の「画像解像度の上限」を下げて再試行してください。",
+    "err.imageInvalidBase64": "アップロードされた画像データが有効な base64 ではありません（data: プレフィックスが付いているか、転送が不完全な可能性があります）。画像を選び直して再試行してください。",
     "err.parse": "モデルの応答を解析できませんでした。",
     "err.empty": "モデルの応答が空でした。",
     "err.truncated": "結果が途切れている可能性があります（max_tokens 到達）。最大出力トークンを上げて再試行してください。",

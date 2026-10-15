@@ -11,6 +11,8 @@ Then open http://127.0.0.1:8000/
 
 from __future__ import annotations
 
+from rca_core.modes import SERVER_MODE_NAMES as _REGISTRY_SERVER_MODES
+
 import argparse
 import base64
 import collections
@@ -265,6 +267,16 @@ def _validate_provider_fields(provider_raw: dict) -> str:
     ``.items()`` call in _stable_extra_headers. Both escaped do_POST, so the
     socket closed with no response at all. Returns an error message, or ""
     when the fields are usable.
+
+    FIX-2026-10-01: ``id`` and ``name`` were still unchecked, and the impact
+    is worse than a dropped connection. The extraction answers 200 ok:true to
+    the user and the AUDIT ROW IS NEVER WRITTEN: _write_history_record binds
+    ``provider.id`` straight into the INSERT, sqlite3 raises "Error binding
+    parameter 5 - probably unsupported type" for a list/dict, and the blanket
+    ``except Exception`` at the call site swallows it. For a tool whose stated
+    purpose includes a re-parseable audit trail the record IS the product, and
+    the user was told the extraction succeeded. Measured: rows before 6,
+    after 6 (lost) with ``id: [1, 2]``; after 7 with string id/name.
     """
     endpoint = provider_raw.get("endpoint")
     if endpoint is not None and not isinstance(endpoint, str):
@@ -275,6 +287,14 @@ def _validate_provider_fields(provider_raw: dict) -> str:
     model = provider_raw.get("model")
     if model is not None and not isinstance(model, str):
         return "field 'provider.model' must be a string"
+    # FIX-2026-10-01: these two are written to the history row's NOT NULL
+    # text columns, so a non-string here is a lost audit record rather than a
+    # 400-worthy mistake -- but silently losing it is the one outcome the
+    # caller cannot detect, so reject it at the door instead.
+    for field in ("id", "name"):
+        value = provider_raw.get(field)
+        if value is not None and not isinstance(value, str):
+            return f"field 'provider.{field}' must be a string"
     for field in ("extra_headers", "extra_body"):
         value = provider_raw.get(field)
         if value is not None and not isinstance(value, dict):
@@ -1238,7 +1258,21 @@ class Handler(BaseHTTPRequestHandler):
     # chunks are discarded, never retained); the thread is, so the deadline is
     # what caps the cost - and it only ever applies to a connection we are
     # already tearing down, never to a kept-alive one.
-    _BODY_DRAIN_BYTES = 4 * 1024 * 1024
+    #
+    # FIX-2026-10-01: the byte cap must be >= _BIG_BODY_BYTES (5 MiB). A body
+    # only consumes a big-body slot ABOVE 5 MiB, so with a 4 MiB cap EVERY
+    # big-body request was over it: finish() skipped the drain and closed with
+    # the body unread, and the OS turned that into an RST which discarded the
+    # structured error the handler had just written. The client saw a transport
+    # error instead of 413 / 503 / 429 / 403. Measured against a live server:
+    # the identical request returned a proper 413 with 0 body bytes in flight
+    # and `ConnectionAbortedError (WinError 10053)` with 1 MiB in flight. The
+    # `err.serverBusy` 503 was structurally undeliverable for the same reason -
+    # it can only fire once the big-body semaphore is full, i.e. only for
+    # bodies above 5 MiB. The cost is bounded by _BODY_DRAIN_TIMEOUT_SEC, not
+    # by this number, so 21 MiB (just over the 20 MiB MAX_BODY_BYTES limit) is
+    # still at most 0.5 s per rejection.
+    _BODY_DRAIN_BYTES = 21 * 1024 * 1024
     _BODY_DRAIN_TIMEOUT_SEC = 0.5
 
     def _read_body_with_deadline(self, length: int):
@@ -1355,6 +1389,22 @@ class Handler(BaseHTTPRequestHandler):
                                   + self._REQUEST_HEAD_DEADLINE_SEC)
         try:
             super().handle_one_request()
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            # FIX-2026-10-01: a client that RESETS rather than cleanly closes
+            # is a normal event, not a server fault. The stdlib's
+            # BaseHTTPRequestHandler.handle_one_request catches only
+            # TimeoutError, so ConnectionResetError escaped to
+            # socketserver.BaseServer.handle_error and printed a 15-line
+            # traceback per occurrence. The comment at the bottom of this file
+            # already claimed "handle_one_request swallows the same classes",
+            # which was not true. The app triggers it itself: js/minimax.js
+            # passes `signal: controller.signal` to fetch and js/app.js aborts
+            # the in-flight request when the user picks a new file, so Cancel /
+            # new-file / closing the tab all produced one traceback each. That
+            # fills the console with noise for a routine user action and hides
+            # the failures this file goes to some length to log. Nothing is
+            # lost and no response is corrupted -- the peer is already gone.
+            self.close_connection = True
         finally:
             # Belt and braces: if a handler raised out of the stdlib (or the
             # request line timed out), no later read on this connection may be
@@ -1846,7 +1896,27 @@ class Handler(BaseHTTPRequestHandler):
                 # Generate a new session token if none (or an unusable one).
                 session_token = secrets.token_urlsafe(32)
             csrf_token = _generate_csrf_token()
-            _set_csrf_for_session(session_token, csrf_token)
+            # FIX-2026-10-01: minting was not IDEMPOTENT. A client-supplied,
+            # well-formed X-Session-Token is reused verbatim as the store key
+            # (by design, so a reload keeps its session), and
+            # _set_csrf_for_session then OVERWROTE that session's CSRF token.
+            # So a second GET with the same session token invalidated the token
+            # the client was still holding: the following POST answered 403
+            # err.forbidden "Invalid or expired CSRF token." for a token that
+            # had been valid when it was obtained, and the client cannot repair
+            # it silently (see the store's own comment on token reuse). The
+            # shipped web UI happens not to trip it -- js/minimax.js serialises
+            # token acquisition through rcaQueueBackendTask and a second tab
+            # starts with an empty in-memory token -- so this is latent rather
+            # than live, but any second caller (another tab, a retry, a script)
+            # hits it. Re-minting for a session that already has a live token
+            # is the wrong contract: return the token that session holds.
+            existing = _get_csrf_for_session(session_token)
+            if existing:
+                csrf_token = existing
+            else:
+                csrf_token = _generate_csrf_token()
+                _set_csrf_for_session(session_token, csrf_token)
             # FE-FIX-2026-09-22 (server finding 1): the minted pair is
             # per-session secret material on a cacheable GET — harden it with
             # ``Cache-Control: no-store`` so no intermediary may retain it.
@@ -2395,20 +2465,11 @@ class Handler(BaseHTTPRequestHandler):
         # the WRONG prompt + normalize + merge schema with ok=True — a P0
         # data-integrity failure. Reject unknown / not-yet-wired modes
         # with a clear 400 instead.
-        _SUPPORTED_MODES = frozenset({
-            'range_chart',
-            'columnar_section',
-            'abundance_diagram',
-            'phylogenetic_tree',
-            # UI-REVIEW-2026-09-05: radiolarian biozonation / correlation
-            # charts — wired through the full stack (MergeSchema, quality,
-            # exporter tables, GUI + web entry points).
-            'zonation_chart',
-            # UI-REVIEW-2026-09-07: "auto" resolves server-side — caption
-            # keyword heuristic first, vision classification as fallback —
-            # before the runs loop dispatches to the concrete mode.
-            'auto',
-        })
+# DERIVED from rca_core/modes.py (2026-10-15) - the HTTP gate for an
+        # explicitly requested mode. "auto" stays here rather than in the
+        # registry because it is a request-level alias that resolves server-side
+        # to a concrete mode, not a mode the classifier can return.
+        _SUPPORTED_MODES = frozenset(_REGISTRY_SERVER_MODES) | {"auto"}
         _requested_mode = (req.get('mode') or 'range_chart').strip()
         if _requested_mode not in _SUPPORTED_MODES:
             self._send_json(400, {
@@ -2674,6 +2735,21 @@ class Handler(BaseHTTPRequestHandler):
                 # cached payload under reserved keys and are stripped here.
                 cached_truncated = cache_hit.pop("_cache_truncated", None)
                 cached_warning = cache_hit.pop("_cache_warning", "") or ""
+                # FIX-2026-10-01 (prior finding B6, still live): this only ever
+                # SET the key, so a `_auto_mode` cached by an earlier
+                # `mode: "auto"` request survived onto a LATER request that
+                # named the mode explicitly. Measured: request 1 with
+                # `mode: "auto"` -> 200, `_auto_mode = {mode:
+                # zonation_chart, source: "text"}`; request 2, byte-identical
+                # except `"mode": "zonation_chart"` -> 200, `cached: true`,
+                # and the SAME `_auto_mode`. So a user who picked the mode by
+                # hand was told the server chose it -- in the response AND in
+                # the audit report, which is the artifact the mode decision is
+                # supposed to be evidenced by. Pop first so the key reflects
+                # THIS request's mode decision and nothing else. The multi-run
+                # path is unaffected: its cache write stores the pre-merge
+                # per-slot data, which never carries the key.
+                cache_hit.pop("_auto_mode", None)
                 if mode_source:
                     cache_hit["_auto_mode"] = {"mode": mode, "source": mode_source}
                 cache_hit["report"] = build_extraction_report(

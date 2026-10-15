@@ -7,6 +7,12 @@ names.
 
 from __future__ import annotations
 
+# The single source of truth for which chart modes exist and what
+# each one's prompt version / capability / routing flags are.
+# modes.py imports nothing from its siblings, so this is acyclic.
+from .modes import PROMPT_VERSIONS as _MODES_PROMPT_VERSIONS
+from . import modes as _modes
+
 from typing import Sequence, Tuple
 
 # BORROW-2026-09-20 (A): the two contract clauses below are GENERATED from the
@@ -48,24 +54,17 @@ from .reason_codes import (
 # versions" note below was stale - js/prompt.js mirrors these versions
 # (range_chart v5 / abundance_diagram v4 / chemical_stratigraphy v2 /
 # scatter_plot v2) and the parity is pinned by tests/test_prompt_fixes.py.
-PROMPT_VERSION = {
-    "range_chart": "v5",
-    "columnar_section": "v3",
-    "abundance_diagram": "v4",
-    "abundance": "v4",  # legacy alias — the canonical key is above
-    "phylogenetic_tree": "v2",  # v1->v2: the tree degradation clause was
-    # replaced (AUDIT-2026-10-01 item 31).  A cached v1 answer can carry the
-    # out-of-schema node keys the old clause invited, so it must not be served
-    # under the new prompt.  Mirrored in js/prompt.js in the same commit.
-    # NEW chart types
-    "chemical_stratigraphy": "v2",
-    "paleomap": "v2",
-    "scatter_plot": "v2",
-    "zonation_chart": "v1",
-    # UI-REVIEW-2026-09-07: vision-based chart-type classification for the
-    # upgraded "auto" mode (text heuristic first, vision fallback).
-    "chart_classify": "v1",
-}
+# DERIVED from rca_core/modes.py (2026-10-15), which is now the single
+# declaration of every mode. This used to be a hand-maintained dict literal
+# here PLUS a second hand-maintained copy in js/prompt.js: a new mode that
+# updated one but not the other got a stale cache key silently. The registry
+# derives both, and tests/test_mode_registry.py asserts they agree.
+#
+# modes.PROMPT_VERSIONS holds every ModeSpec's prompt_version, plus
+# `chart_classify` (the vision classifier's own prompt - keyed here because it
+# is cached like a mode, but it is not a chart type) and the legacy `abundance`
+# alias kept so old cache entries still resolve.
+PROMPT_VERSION: dict[str, str] = dict(_MODES_PROMPT_VERSIONS)
 
 
 def prompt_version_for_mode(mode: str) -> str:
@@ -1120,6 +1119,253 @@ ZONATION_CHART_SYSTEM_PROMPT = "\n".join([
 # ---------------------------------------------------------------------------
 # VISION CHART-TYPE CLASSIFIER (UI-REVIEW-2026-09-07).
 #
+# ---------------------------------------------------------------------------
+# OCCURRENCE_MATRIX (2026-10-15) — taxon x LOCALITY matrices.
+#
+# The one existing mode whose geometry is genuinely orthogonal: range_chart,
+# columnar_section and abundance_diagram all put the taxa on ONE axis and read
+# a position along the OTHER. Here the taxa are the rows and the localities
+# are the COLUMNS, printed as rotated headers, and each cell holds an ordinal
+# class letter. There is no continuous axis, so this prompt deliberately
+# carries no pos_0_999 clause and no axis_calibration block.
+#
+# Calibration from the step-0 baseline run (real image, real model): asked to
+# read this figure as an abundance_diagram, the model ALREADY produced the
+# right long table — correct taxon names, all 16 localities, A/R letters
+# preserved with unit "relative" — but put the localities in `level`, put the
+# figure's own header text in `site`, emitted rows for BLANK cells, and lost
+# characters on rotated headers ("87 B1-4C" -> "87 BI 4C",
+# "CAASP-84-20/15" -> "CAA-SP-84-"). Every rule below targets one of those
+# four observed failures, which is why they are phrased as prohibitions
+# rather than as a description of the ideal answer.
+# ---------------------------------------------------------------------------
+OCCURRENCE_MATRIX_SYSTEM_PROMPT = "\n".join([
+    "You are an expert paleontologist reading an OCCURRENCE / ABUNDANCE MATRIX "
+    "from a micropaleontology / paleontology paper: rows are taxa, the COLUMNS "
+    "are localities or boreholes, and each cell carries a presence/abundance "
+    "symbol or a short ordinal class code (for example A / R / C, or a "
+    "number, or a filled / open dot).",
+    "",
+    "The chart text may be in Chinese, English, Japanese, or Russian. Read "
+    "whichever language is present. Keep the naming authority (\"De Wever\") "
+    "in the SEPARATE `authority` field, and preserve locality / well labels "
+    "exactly as printed.",
+    "",
+    # TRANSCRIBE TAXA, DO NOT CORRECT THEM.
+    #
+    # The first version of this prompt said "ALWAYS return scientific taxon
+    # names as their standard Latin names". On the real verification figure
+    # that instruction was actively harmful: it licenses the model to REPLACE
+    # what it read with the name it believes is correct, and on small italic
+    # serif type in a scanned table the model's belief was wrong 16 times out
+    # of 17. Every Caprinodoe became Capnodoce, every Capmuchosphaera became
+    # Capnuchosphaera, Archaeocantocircus became Archaeoacanthocircus. The
+    # output looked clean and was unusable for the one thing the figure is
+    # cited for.
+    #
+    # The correct instruction is the opposite one: the figure is the
+    # authority. If a printed name is misspelled in the original, transcribe
+    # the misspelling - a catalogue of what the paper actually says is a
+    # different (and achievable) task from a list of what it should have said.
+    "TRANSCRIBE THE TAXON NAME EXACTLY AS PRINTED, LETTER BY LETTER. Copy "
+    "the row label verbatim into `taxon`. Do NOT 'correct' it, do NOT "
+    "re-spell it, and do NOT substitute a name you believe is the standard "
+    "or the accepted spelling. These row labels are small italic serif type "
+    "in a scanned table and individual letters are genuinely ambiguous - a "
+    "missing or doubled consonant in the middle of a genus is the normal "
+    "failure, not an exception. Read each genus twice before you commit to "
+    "it, and if you still cannot settle a letter, transcribe your best "
+    "reading and set that row's `response_kind` to \"uncertain\" rather than "
+    "silently emitting a plausible-looking different name.",
+    "",
+    "Extract every piece of information visible in the matrix as strict JSON "
+    "with these fields:",
+    "",
+    "{",
+    "  \"columns\": [",
+    "    {",
+    "      \"index\": 0 (int, the column's 0-based position counted from the "
+    "LEFT, in printed order; matrix column order is data — never sort, "
+    "dedupe or reorder them),",
+    "      \"label\": \"87 B1-4C\" (string, the locality / borehole / well "
+    "label exactly as printed, untranslated),",
+    "      \"kind\": \"locality\" (string, \"locality\" for a well / borehole / "
+    "outcrop / section identifier),",
+    "    }",
+    "  ],",
+    "  \"legend\": [",
+    "    {\"code\": \"A\", \"class\": \"abundant\"} (the class legend exactly as "
+    "the figure defines it, one entry per distinct symbol / letter used)",
+    "  ],",
+    "  \"occurrences\": [",
+    "    {",
+    "      \"taxon\": \"Caprinodoe angipes\" (string, the row's taxon, Latin "
+    "name only — no authority, no parentheses),",
+    "      \"authority\": \"De Wever\" (string, the naming authority when the "
+    "row prints one, else empty),",
+    "      \"row_kind\": \"taxon\" (string, REQUIRED: \"taxon\" for a real "
+    "taxon row; \"strat_correlation\" for a NON-taxon band such as a "
+    "\"conodont level\" / zone-comparison strip printed above or below the "
+    "taxa),",
+    "      \"site\": \"87 B1-4C\" (string, MUST exactly equal one of the "
+    "`columns[].label` values — this is the column this record belongs to),",
+    "      \"col_index\": 0 (int, MUST be the `index` of that same column, "
+    "redundant with `site` on purpose so a mismatch is detectable),",
+    "      \"code\": \"R\" (string, the symbol / letter / number printed in the "
+    "cell, exactly as printed; empty only when the cell holds a class that "
+    "has no letter),",
+    "      \"class\": \"rare\" (string, the class the figure's legend assigns "
+    "to that symbol; empty when the figure ships no legend),",
+    "      \"response_kind\": \"extracted\" (string, REQUIRED: one of "
+    "\"extracted\", \"not_drawn\", \"uncertain\" — see the ANSWER EVERY "
+    "REQUESTED CELL rule below),",
+    "      \"reason_codes\": [] (array of strings, optional; lowercase slugs "
+    "from the closed list in the REASON CODES rule),",
+    "    }",
+    "  ],",
+    "  \"strat_rows\": [] (array, OPTIONAL: any non-taxon comparison band, as "
+    "{\"label\": \"Conodont level (see text)\", \"values\": [\"1\", \"1/2a\", "
+    "\"2a\"]} in the same left-to-right column order)",
+    "  \"confidence\": 0.0-1.0 reflecting your certainty in the extraction "
+    "overall",
+    "}",
+    "",
+    "Rules:",
+    "- ONE FILLED CELL = ONE ROW. Emit an `occurrences` entry for every cell "
+    "that carries something. This is the whole shape of the answer: a long "
+    "list of taxon x locality records, not a grid.",
+    # The rule that fixes the single worst observed failure.
+    "- NEVER EMIT A ROW FOR A BLANK CELL. An empty cell means the taxon is "
+    "ABSENT at that locality. Absence is recoverable — it is every cell you "
+    "did NOT emit — so an empty row is pure noise that inflates the record "
+    "count and hides the real data. If a cell is blank, emit nothing for it. "
+    "This holds even when the cell looks like it should be filled, and even "
+    "when the same taxon is present in most neighbouring columns.",
+    # The rule that fixes the observed taxon/site transposition.
+    "- THE ROTATED HEADERS ARE LOCALITIES, NOT TAXA. These figures print the "
+    "column headers rotated 90° along the top edge. Transcribe each rotated "
+    "header as one `columns[].label`. The ROW labels down the left edge are "
+    "the taxa. Getting these two swapped is the single most damaging error "
+    "this mode can make: a swapped figure still looks like a complete, "
+    "well-formed table.",
+    # The rule that fixes the observed header truncation.
+    "- TRANSCRIBE COLUMN LABELS CHARACTER BY CHARACTER. These headers are "
+    "short alphanumeric codes (well / sample identifiers like \"87 B1-4C\", "
+    "\"CAASP-84-20/15\"). Do NOT re-space them, do NOT insert or remove "
+    "hyphens or slashes, and do NOT truncate them. \"B1\" is a digit one, "
+    "not a capital I; keep the slash in \"CAASP-84-20/15\". If a header is "
+    "genuinely unreadable, leave that `label` as your best partial reading "
+    "and set the `uncertain` response_kind on the rows that depend on it — "
+    "never silently shorten it to something that looks tidy.",
+    # The rule that fixes the A/R/C alphabet trap.
+    "- READ THE LEGEND FROM THE FIGURE. Never assume what a letter means. "
+    "Read the class each symbol denotes from the figure's own legend and "
+    "record it in `legend` and in each row's `class`. Do NOT sort the codes "
+    "and do NOT assume any ordering of them: in the common A/R/C convention "
+    "the alphabetical order of the letters coincides with their abundance "
+    "order, so any code that sorts codes will be silently right on that "
+    "figure and silently wrong on the next one that uses a different "
+    "convention (A/C/R, or A meaning absent, or bare numbers). If the figure "
+    "ships no legend, leave `class` empty and keep the raw `code`.",
+    "- A STRATIGRAPHIC COMPARISON BAND IS NOT A TAXON. A strip such as "
+    "\"Conodont level (see text)\", a zone strip, or a numerical bed-scale "
+    "row is not a genus. Give those rows `row_kind: \"strat_correlation\"` and "
+    "put their cell values in `strat_rows`, never in `occurrences` as a taxon.",
+    "- Preserve every locality label exactly as printed, including any "
+    "prefix, hyphen, slash or parenthesised suffix.",
+    "- Only extract what you can READ from the figure. Do not invent data "
+    "that is not present, and do not complete a row from what its neighbours "
+    "suggest.",
+    "- If the figure is NOT a taxon x locality matrix, return `columns`, "
+    "`legend`, `occurrences` and `strat_rows` all empty and confidence 0.0.",
+    "- RETURN JSON only, no markdown fences, no commentary.",
+    # NOTE: `_contract_clauses` is deliberately NOT used here.
+    #
+    # The standard coverage contract says "still emit the row with its value
+    # fields left empty and response_kind: not_drawn; NEVER delete the row
+    # instead". That is correct for the modes whose polarity is DENSE - it is
+    # what makes an absent range-chart endpoint auditable. occurrence_matrix
+    # is SPARSE: absence is recoverable as the cell that was never emitted,
+    # so the same clause told the model to do the exact opposite of the rule
+    # above it, on the same page. The model was reading two contradictory
+    # instructions and one of them had to lose. This occurrence-specific
+    # clause states the same honesty requirement without contradicting the
+    # sparsity contract.
+    "- ANSWER EVERY CELL YOU CAN ACTUALLY SEE. Set `response_kind` on every "
+    "row: \"extracted\" = a symbol is drawn in that cell and you read it; "
+    "\"uncertain\" = something is drawn but you cannot settle it. A cell "
+    "with a symbol you could not decipher is NOT \"extracted\" with an "
+    "invented letter - say \"uncertain\" and give your best reading. Being "
+    "honest about a hard cell beats a clean-looking wrong name, because a "
+    "wrong genus name is indistinguishable from a right one downstream.",
+    "- REASON CODES (optional, alongside `response_kind`). `reason_codes` is "
+    "a JSON array of lowercase slugs copied VERBATIM from this closed list: "
+    "not_drawn, obscured, no_label, unreadable, out_of_scope, "
+    "unknown_column, column_index_conflict. Empty when nothing applies.",
+    _degradation_clause(),
+])
+
+
+# ---------------------------------------------------------------------------
+# GENERIC_TABLE (2026-10-15) — the honest fallback for an unrecognised genre.
+#
+# This exists because every previous "unknown chart" path ended in
+# rcaNormalizeResult / RANGE_CHART_SCHEMA, which produced a confident-looking
+# range chart carrying invented pos_0_999 values. Fabricated data that looks
+# correct is worse than a refusal, because it survives a skim-read of the
+# output. The contract here is deliberately modest: describe the grid that is
+# actually visible, or say plainly that the figure is not a readable table.
+# ---------------------------------------------------------------------------
+GENERIC_TABLE_SYSTEM_PROMPT = "\n".join([
+    "You are reading a scientific figure whose specific chart genre is not "
+    "known in advance. Your job is NOT to interpret it as any particular kind "
+    "of chart. Your job is to report the STRUCTURE you can actually see, and "
+    "to refuse clearly when you cannot.",
+    "",
+    "The chart text may be in Chinese, English, Japanese, or Russian. Read "
+    "whichever language is present.",
+    "",
+    "Return strict JSON:",
+    "",
+    "{",
+    "  \"columns\": [",
+    "    {\"index\": 0, \"label\": \"<the column header, exactly as printed>\"}",
+    "  ],",
+    "  \"rows\": [",
+    "    {\"index\": 0, \"label\": \"<the row label, exactly as printed>\", "
+    "\"cells\": [\"<the text/symbol in each column, in column order; empty "
+    "string for a blank cell>\"]}",
+    "  ],",
+    "  \"legend\": [{\"code\": \"<symbol>\", \"class\": \"<what the figure says "
+    "it means>\"}],",
+    "  \"notes\": \"\" (string, one short line naming what KIND of figure you "
+    "believe this is, and anything that blocked a full read)",
+    "  \"confidence\": 0.0-1.0",
+    "}",
+    "",
+    "Rules:",
+    "- REPORT STRUCTURE, NOT INTERPRETATION. Transcribe the labels and the "
+    "cell contents. Do NOT assign ages, depths, bed numbers, taxon ranges or "
+    "any other domain meaning to them: you do not know this genre, and a "
+    "plausible invented value is the worst possible output here.",
+    "- COPY LABELS EXACTLY. Do not translate, expand, abbreviate or "
+    "re-space a printed label. Record what is printed.",
+    "- KEEP BLANK CELLS BLANK. A blank cell is an empty string in `cells` — "
+    "it is a fact about the figure, not something to fill in.",
+    "- DO NOT GUESS THE GENRE. If you cannot tell what kind of chart this "
+    "is, that is the correct answer: leave `rows` and `columns` empty, put "
+    "your reason in `notes`, and set confidence low. An honest \"I cannot "
+    "read this figure's structure\" is a useful result. A fabricated table "
+    "is not.",
+    "- If the figure is not tabular at all (a photograph, a map with no "
+    "cells, a photograph of a specimen, a plot with no discrete grid), leave "
+    "`columns` and `rows` empty and say so in `notes`.",
+    "- Return JSON only, no markdown fences, no commentary.",
+    _degradation_clause(),
+])
+
+
+# ---------------------------------------------------------------------------
 # Powers the upgraded "auto" mode: when the caption / filename heuristic
 # cannot name the chart type, the image itself is classified with this
 # cheap prompt (small max_tokens) before the mode-specific extraction
@@ -1151,6 +1397,16 @@ CHART_CLASSIFY_SYSTEM_PROMPT = "\n".join([
     "locality markers on a projected map.",
     "- scatter_plot: x-y scatter / biplot — discrete points, optional "
     "regression lines, confidence ellipses.",
+    # 2026-10-15. Added as a DISTINCT option rather than folded into
+    # range_chart, because the two are geometrically orthogonal: here the taxa
+    # are the ROWS and the localities / boreholes are the COLUMNS, with an
+    # ordinal symbol in each cell. Folding it into range_chart is the failure
+    # this mode was built to stop — the classifier would pick range_chart, and
+    # the answer would be a range chart with invented positions.
+    "- occurrence_matrix: occurrence / abundance matrix — taxa as ROWS and "
+    "localities or boreholes as COLUMNS (headers often rotated 90° along the "
+    "top edge), each cell holding an ordinal symbol or class letter such as "
+    "A / R / C, a number, or a filled / open dot. NO depth or age axis.",
     "- unknown: none of the above — including photomicrographs / SEM / "
     "STEM / thin-section image plates that show specimen photos but no "
     "readable data chart.",

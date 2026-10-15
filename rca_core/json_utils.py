@@ -390,14 +390,33 @@ def _fence_placeholder_count(block: str) -> int:
 
 
 def _best_payload_rank(text: str) -> tuple[int, int]:
-    """``(payload_score, -placeholder_count)`` of the best object in ``text``.
+    """``(-placeholder_count, payload_score)`` of the best object in ``text``.
 
-    REVIEW-2026-09-20 #102: the same two signals the multi-fence rule uses —
-    payload-key density first, then the angle-bracket placeholders that mark a
-    restated contract ("<binomial>", "<section name>") — so a fenced EXAMPLE and
-    an unfenced payload built from the same schema compare by their contents
-    instead of tying. ``(0, 0)`` when nothing parses, which never beats a
-    real block.
+    REVIEW-2026-09-20 #102 introduced the two signals — payload-key density and
+    the angle-bracket placeholders that mark a restated contract ("<binomial>",
+    "<section name>") — so a fenced EXAMPLE and a real payload built from the
+    same schema compare by their contents instead of tying. ``(0, 0)`` when
+    nothing parses, which never beats a real block.
+
+    FIX-2026-10-01: the ORDER of the two signals was wrong on this path, and the
+    multi-fence rule (``_choose_fence_block``) ranked them the other way round —
+    placeholders FIRST. With payload_score primary here, a restated contract
+    could never be evicted however many placeholders it carried: five root keys
+    score 500 while a real two-key payload scores 200, and 7 placeholder tokens
+    cannot overturn a 300-point deficit. Measured end to end, same real payload,
+    only the delivery differing::
+
+        payload in a 2nd fenced block  -> data recovered
+        payload UNFENCED in prose     -> "<section name>" / "<binomial>"
+
+    and those placeholder tokens then flowed through the normalizer into the
+    rendered table AND the downloaded CSV as if they were scientific data.
+
+    So placeholders are now the primary signal on both paths, with payload score
+    as the tiebreak, and the two ranking rules finally agree. Both engines apply
+    the identical rule. Nothing else about the comparison changed: a prose
+    object with no placeholders still loses to a real fenced payload on score,
+    which is what the ``(0, 0)`` guard and the score tiebreak already handled.
     """
     best: tuple[int, int] | None = None
     for cand in extract_all_balanced_json_objects(text):
@@ -409,7 +428,7 @@ def _best_payload_rank(text: str) -> tuple[int, int]:
             # A root-keyed object whose schema-ish keys cancelled the payload
             # keys is still a payload candidate, not prose.
             score += 100
-        rank = (score, -_fence_placeholder_count(cand))
+        rank = (-_fence_placeholder_count(cand), score)
         if best is None or rank > best:
             best = rank
     return best if best is not None else (0, 0)
@@ -793,16 +812,33 @@ def safe_json_loads(text: str) -> dict[str, Any]:
             # LIKELIHOOD only. The previous score baked string length in via
             # `_payload_score(p) * 10 + len(src)`, so a long schema/example
             # string could outscore a small real payload and the parser would
-            # discard the real data. Length is now a TIEBREAKER ONLY: sort by
-            # (payload_score, length, index) descending and pick the top.
+            # discard the real data. Length is now a TIEBREAKER ONLY.
+            #
+            # FIX-2026-10-01: schema-placeholder count is the PRIMARY signal
+            # here (fewest wins), then payload score, then the existing
+            # length/index tiebreaks. It was absent from this stage entirely,
+            # and this stage is the one that actually RETURNS the candidate --
+            # so fixing _best_payload_rank alone changed only which text arrived
+            # here, not what was picked out of it. Measured with one reply: a
+            # restated contract in a fence (5 root keys, 7 "<placeholder>"
+            # tokens) plus the real payload in the surrounding prose left the
+            # PLACEHOLDERS as the extracted result, which then flowed through the
+            # normalizer into the rendered table and the downloaded CSV.
+            #
+            # Key density alone can never evict a restated contract, because
+            # listing every root key is exactly what makes it score high. With
+            # "fewest placeholders" first, all three ranking paths in this layer
+            # agree: _choose_fence_block, _best_payload_rank (block vs prose),
+            # and this candidate selection. Mirrors js/json-utils.js Level 4.
             scored = []
             for idx, (p, src) in enumerate(parsed_objects):
-                scored.append((_payload_score(p), len(src), idx, p))
-            # Highest payload score wins; ties broken by longer source, then
-            # by later occurrence in the text (the real payload usually
+                scored.append((-_fence_placeholder_count(src),
+                               _payload_score(p), len(src), idx, p))
+            # Fewest placeholders wins; then highest payload score; then longer
+            # source; then later occurrence in the text (the real payload usually
             # follows any schema/example prose).
-            scored.sort(key=lambda t: (t[0], t[1], t[2]), reverse=True)
-            return _promote_wrapper(scored[0][3])
+            scored.sort(key=lambda t: (t[0], t[1], t[2], t[3]), reverse=True)
+            return _promote_wrapper(scored[0][4])
 
     # Level 5: balanced-bracket array extraction → wrapped.
     candidate = extract_balanced_json_array(s)

@@ -96,12 +96,29 @@ except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as _exc: 
 #   Jiangshanian == Stage 9 (491.0 – 494.2 Ma)
 # The table itself is official data and stays untouched; what must not depend
 # on JSON key order is which of the two names a lookup returns.
-_INFORMAL_STAGE_RE = re.compile(r"^\s*(?:unnumbered|unnamed|stage)\s+[\dxvi]+\s*$",
+#
+# FIX-2026-10-01: "Series 2" joins that class for the same reason. It is an
+# unratified ICS placeholder covering 521.0 – 506.5 Ma, which is exactly
+# Stage 3 (521.0 – 514.5) plus Stage 4 (514.5 – 506.5), so all 14.5 Myr of the
+# middle Cambrian answered "Series 2" -- and it won deterministically, because
+# this pattern only recognised "stage N" and so treated a placeholder as a
+# ratified name. That name reached `early_interval` /
+# `latestAgeOrHighestStage` in the PBDB and Darwin Core writers, i.e. an
+# unratified placeholder in the fields GBIF indexes by stage.
+#
+# The fix is deliberately the NARROW one -- recognise the placeholder, do not
+# filter on `rank`. A rank-based "prefer stage rows" pass was tried first and
+# it was too broad: it changed which name an age resolves to whenever the two
+# ICS transports disagree about the table's contents (js/ics_table.js is a
+# 109-row superset of the 98-row ics_2024.json), which broke two invariant
+# tests that pin that agreement. This keeps every previously-agreed answer
+# identical and changes only the case that was actually wrong.
+_INFORMAL_STAGE_RE = re.compile(r"^\s*(?:unnumbered|unnamed|stage|series)\s+[\dxvi]+\s*$",
                                 re.IGNORECASE)
 
 
 def _is_informal_stage_name(name: str) -> bool:
-    """True for "Stage 5" / "Unnamed stage 3" style placeholder names."""
+    """True for "Stage 5" / "Series 2" / "Unnamed stage 3" placeholder names."""
     return bool(_INFORMAL_STAGE_RE.match(str(name or "")))
 
 
@@ -140,6 +157,17 @@ def ics_stage_from_age(ma: float) -> Optional[str]:
     Within each of those three groups the RATIFIED name wins over the
     informal "Stage N" synonym covering the same interval
     (REVIEW-2026-09-20; see ``_INFORMAL_STAGE_RE``).
+
+    FIX-2026-10-01: within each match group a Stage-rank row now beats a
+    series row. ``ics_2024.json`` stores stages and series in ONE table, and the
+    unratified placeholder "Series 2" (521.0 -> 506.5 Ma) exactly covers Stage 3
+    (521.0 -> 514.5) plus Stage 4 (514.5 -> 506.5), so all 14.5 Myr of the
+    middle Cambrian answered "Series 2" -- deterministically, because
+    ``_prefer_formal`` could not help: the only candidates covering that span
+    are "Series 2", "Stage 3" and "Stage 4", and ICS 2024 has ratified no name
+    for them, so ALL of them are informal and the tie fell to dict order. The
+    wrong RANK is the defect, and the name reached ``early_interval`` /
+    ``latestAgeOrHighestStage`` in the PBDB and Darwin Core writers.
     """
     interior: list[str] = []
     base_match: list[str] = []
@@ -154,15 +182,26 @@ def ics_stage_from_age(ma: float) -> Optional[str]:
             base_match.append(name)
         elif abs(top - ma) <= 1e-9:
             top_match.append(name)
-    # REVIEW-2026-09-20: `break` on the first interior hit made the duplicate
-    # Cambrian rows order-dependent — 505 Ma resolved to whichever of
-    # "Stage 5" / "Wuliuan" json.loads happened to insert first, so the same
-    # age exported different stage names across table rebuilds.
+
+    def _best(group: list[str]) -> Optional[str]:
+        # A Stage-rank row wins a tie inside the group; _prefer_formal then
+        # applies the ratified-over-placeholder rule as before.
+        stages_first = [n for n in group
+                        if str(ICS_2024[n].get("rank", "")).strip().lower() == "stage"]
+        return _prefer_formal(stages_first) if stages_first else _prefer_formal(group)
+
+    # Group precedence is UNCHANGED (interior, then an exact base, then an exact
+    # top), because it encodes the ICS boundary rule that a boundary belongs to
+    # the younger unit -- pinned by
+    # tests/test_ics_transport_table_parity.py at 443.1 Ma, where 443.1 is both
+    # Hirnantian's top and Llandovery's base. Ranking Stage rows across groups
+    # instead of within one would override that convention and is why this fix
+    # is deliberately scoped to a single group.
     if interior:
-        return _prefer_formal(interior)
+        return _best(interior)
     if base_match:
-        return _prefer_formal(base_match)
-    return _prefer_formal(top_match)
+        return _best(base_match)
+    return _best(top_match)
 
 
 def ics_age_compare(stage1: str, stage2: str) -> Optional[int]:
@@ -334,6 +373,28 @@ _CN_STAGE_ALIASES: dict[str, str] = {
     "拉丁阶": "Ladinian", "安尼阶": "Anisian", "奥伦尼克阶": "Olenekian",
     "印度阶": "Induan",
 }
+
+# FIX-2026-10-01: register the Chinese aliases as stage PATTERNS too (this
+# list is extended after _CN_STAGE_ALIASES is defined, further down the file).
+# They were only consulted by ics_resolve_age_bound's own step 2, so
+# ics_parse_age_range -- and with it ics_age_range_bounds, which is what the
+# section/collection export path uses -- could not see a Chinese age_range at
+# all. A Chinese plate whose section reads "吴家坪阶-长兴阶" resolved to
+# (None, None), the collection row exported with empty max_ma/min_ma, and the
+# interval names then fell back to ics_resolve_age_bound(..., "older"), which
+# takes the FIRST matching alias in dict order -- so early_interval AND
+# late_interval both came out Wuchiapingian and the section was published as a
+# ZERO-LENGTH interval, i.e. as asserting the section existed at exactly one
+# instant. The same text in English gave Wuchiapingian -> Changhsingian /
+# 259.51 / 251.902. Registering the same table ics_resolve_age_bound already
+# uses makes the two paths agree by construction. No \b anchors: CJK has no
+# word boundaries, so \b would never match. Aliases whose target is not in the
+# table are skipped rather than producing a name no caller can look up.
+_STAGE_PATTERNS += [
+    (stage, re.compile(re.escape(alias)))
+    for alias, stage in _CN_STAGE_ALIASES.items()
+    if stage in ICS_2024
+]
 
 # Series/epoch labels -> (canonical interval name, [stage names oldest first]).
 # Bounds are computed from the table itself, so they stay consistent with
@@ -596,14 +657,28 @@ def ics_resolve_age_bound(
         return ics_stage_from_age(ma), ma
 
     # 2. Chinese stage-name alias.
-    for alias, stage in _CN_STAGE_ALIASES.items():
-        if alias in text:
-            info = ICS_2024.get(stage)
-            if info:
-                # REVIEW-2026-09-20: same bound rule as the stage branch in
-                # step 3 — the alias resolves to that very stage, so it must
-                # not keep the old midpoint behaviour.
-                return stage, _stage_bound(info, want_older)
+    #
+    # FIX-2026-10-01: this branch returned the FIRST alias found in dict
+    # order, so a Chinese RANGE collapsed onto one stage -- "吴家坪阶-长兴阶"
+    # answered Wuchiapingian for BOTH prefer="older" and prefer="younger",
+    # while the identical English text correctly gave Wuchiapingian then
+    # Changhsingian. That is a zero-length interval for a section that spans
+    # 7.6 Myr, and the LAD was a whole stage off (254.14 vs 251.902).
+    # Now that the aliases are registered in _STAGE_PATTERNS, ics_parse_age_range
+    # sees them, so step 3 resolves the range with the same max-of-bases /
+    # min-of-tops rule the English path uses. This branch therefore only claims
+    # a text that names exactly ONE stage; anything with two or more falls
+    # through to step 3 instead of short-circuiting on the first hit.
+    _cn_hits = [(alias, stage) for alias, stage in _CN_STAGE_ALIASES.items()
+                if alias in text]
+    if len(_cn_hits) == 1:
+        alias, stage = _cn_hits[0]
+        info = ICS_2024.get(stage)
+        if info:
+            # REVIEW-2026-09-20: same bound rule as the stage branch in
+            # step 3 — the alias resolves to that very stage, so it must
+            # not keep the old midpoint behaviour.
+            return stage, _stage_bound(info, want_older)
 
     # 3. ICS stage name(s) -> order-independent range bounds.
     # REVIEW-2026-09-10: stages now resolve BEFORE series, so both this

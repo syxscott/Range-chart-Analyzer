@@ -588,6 +588,26 @@ const EXPECTED_DIVERGENCES = {
   agstr_229: 'LATENT: _str_for_merge(None) is "None" vs rcaStrForMerge(null) "null"; both callers filter null out before the stringifier runs, so no repr can reach the vote pool',
   agstr_231: 'LATENT, already documented in js/aggregate.js: Python renders 1e-7 exponent-style ("1e-07"), String() gives "1e-7". The pool key differs but the representative is the original value, so both engines return 1e-7 and nothing user-visible moves',
   agstr_237: 'LATENT: String([1, 2]) is "1,2" and is indistinguishable from a real value, while Python str() is "[1, 2]". Unreachable today because _mode/rcaAggMode skip containers first. Pinned as a trap, not a live defect',
+  // FIX-2026-10-01 [Series 2]. ics_stage_from_age now prefers a Stage-rank row
+  // over a series row WITHIN a match group, because ics_2024.json stores stages
+  // and series in ONE table and the unratified placeholder "Series 2"
+  // (521.0 -> 506.5 Ma) exactly covers Stage 3 + Stage 4 -- so the whole 14.5 Myr
+  // of the middle Cambrian answered "Series 2". _preferFormal could not break
+  // that tie: ICS 2024 ratifies no name for the span, so "Series 2", "Stage 3"
+  // and "Stage 4" are ALL informal and dict order decided it.
+  //
+  // This case is the residue of that fix and it is a TABLE-COVERAGE difference,
+  // not a logic one: js/ics_table.js is a 109-row superset that includes the
+  // Cenozoic stages, while rca_core/resources/ics_2024.json is the 98-row table
+  // and has no Cenozoic stage row at all. At exactly 0.0 Ma the browser's group
+  // holds both Meghalayan (a stage) and Holocene (a series), the stage wins,
+  // and the desktop -- having only Holocene -- answers Holocene. Before the fix
+  // the browser also said Holocene, but only because it happened to come first
+  // in the file. Reconciling this means syncing the two ICS tables, which is a
+  // data task for scripts/update_ics.py and is deliberately not bundled into a
+  // scoring fix. "Meghalayan" is the ICS 2024 name for the present day, so the
+  // browser answer is the better of the two.
+  ag_28: 'TABLE COVERAGE: at exactly 0.0 Ma js/ics_table.js has the Cenozoic stage Meghalayan (top 0.0) and ics_2024.json does not, so the new within-group Stage preference answers "Meghalayan" in the browser and "Holocene" on the desktop. Both are correct for their own table; see the Series 2 fix note above',
   agstr_238: 'LATENT: same container filter, opposite direction -- a Python dict repr leaking into a scientific field. The mirror of agstr_237',
 };
 

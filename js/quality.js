@@ -60,6 +60,9 @@ const _CONTENT_KEYS = [
   'other_fossils', 'cross_beds', 'lithology_legend',
   'fossil_legend', 'age_units',
   'zones', 'correlations', 'zonations',
+  // 2026-10-15: occurrence_matrix / generic_table content keys. Mirrors the
+  // Python tuple — see rca_core/quality.py:_CONTENT_KEYS.
+  'occurrences', 'rows',
 ];
 
 // Columnar-mode marker keys — unique to columnar-section extraction.
@@ -123,6 +126,19 @@ function _detectMode(data) {
     if (Array.isArray(v) && v.length > 0) return 'columnar';
     if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 0) return 'columnar';
     if (typeof v === 'string' && v.trim()) return 'columnar';
+  }
+  // occurrence_matrix (2026-10-15): taxa x LOCALITY. This branch MUST sit
+  // before the abundance branch below. A partially-migrated matrix answer
+  // carries abundance-style rows too (that is literally what the step-0
+  // baseline returned), and scoring it as a down-core abundance diagram would
+  // judge it on fields — level, depth, abundance_unit — that it does not have.
+  //
+  // It used to sit AFTER, with a comment claiming it came first. The comment
+  // is what let the divergence survive review: rca_core/quality.py checks
+  // `occurrences` before `abundances`, so the two engines graded the same
+  // payload differently. Keep these two files in step.
+  if ('occurrences' in data || ('columns' in data && 'rows' in data)) {
+    return 'occurrence_matrix';
   }
   if ('abundances' in data && !('species_ranges' in data)) return 'abundance';
   // Zonation mode (UI-REVIEW-2026-09-05): correlations is the unique marker
@@ -372,7 +388,17 @@ function _wordBoundaryRe(needle, flags) {
 // inserts the rows in a different order). Mirrors ics.py:_INFORMAL_STAGE_RE /
 // _prefer_formal: within each of the three match groups the RATIFIED name
 // wins over the informal "Stage N" synonym covering the same interval.
-const _INFORMAL_STAGE_RE = /^\s*(?:unnumbered|unnamed|stage)\s+[\dxvi]+\s*$/i;
+// FIX-2026-10-01: "Series 2" joins "Stage N" as an unratified ICS
+// placeholder. It covers 521.0 - 506.5 Ma, exactly Stage 3 plus Stage 4, so
+// all 14.5 Myr of the middle Cambrian answered "Series 2" -- deterministically,
+// because the pattern only recognised "stage N" and so read a placeholder as a
+// ratified name. That name reached early_interval / latestAgeOrHighestStage in
+// the PBDB and Darwin Core exports. The narrow fix (recognise the placeholder)
+// mirrors rca_core/standards/ics.py; a rank-based "prefer stage rows" filter was
+// tried first and changed too much, because the two ICS transports disagree
+// about the table's contents (js/ics_table.js is a 109-row superset of the
+// 98-row ics_2024.json) and the invariant tests pin that agreement.
+const _INFORMAL_STAGE_RE = /^\s*(?:unnumbered|unnamed|stage|series)\s+[\dxvi]+\s*$/i;
 
 function _isInformalStageName(name) {
   return _INFORMAL_STAGE_RE.test(String(name === null || name === undefined ? '' : name));
@@ -397,6 +423,24 @@ function _preferFormal(names) {
 // Python's if/elif means one row can only be in ONE of the two boundary
 // groups; the same is reproduced below.
 // Returns null when no stage matches (same as the Python None).
+// FIX-2026-10-01: the non-Stage (series) rows of the bundled ICS table.
+// js/ics_table.js cannot carry a `rank` field per row -- tests/test_ics_invariants.py
+// ::test_js_table_matches_json matches the row shape
+// `"name": {top_ma: X, base_ma: Y, era: "Z"}` exactly, so an added key would
+// silently empty its parsed table -- so the ranks are declared here instead.
+// These are the same six rows rca_core/resources/ics_2024.json marks
+// `rank: "Series"`. Silurian and Holocene are RATIFIED ICS series names and
+// are listed because the fix is about RANK, not about ratification.
+//
+// Why it matters: "Series 2" (521.0 -> 506.5 Ma) is an unratified placeholder
+// covering exactly Stage 3 + Stage 4, so the whole 14.5 Myr of the middle
+// Cambrian answered "Series 2". _preferFormal could not break the tie because
+// ICS 2024 ratifies no name for that span -- "Series 2", "Stage 3" and "Stage 4"
+// are ALL informal, so the winner was decided by dict order.
+const _RCA_ICS_SERIES_ROWS = new Set([
+  'Holocene', 'Llandovery', 'Ludlow', 'Pridoli', 'Series 2', 'Wenlock',
+]);
+
 function _icsStageFromAge(stages, ma) {
   const interior = [];
   const baseMatch = [];
@@ -409,9 +453,17 @@ function _icsStageFromAge(stages, ma) {
     if (Math.abs(base - ma) <= 1e-9) baseMatch.push(name);
     else if (Math.abs(top - ma) <= 1e-9) topMatch.push(name);
   }
-  if (interior.length) return _preferFormal(interior);
-  if (baseMatch.length) return _preferFormal(baseMatch);
-  if (topMatch.length) return _preferFormal(topMatch);
+  // A Stage row wins a tie WITHIN a group; the group precedence below is
+  // unchanged because it encodes the ICS rule that a boundary belongs to the
+  // younger unit (pinned by tests/test_ics_transport_table_parity.py at
+  // 443.1 Ma, where that value is both Hirnantian's top and Llandovery's base).
+  const best = (group) => {
+    const stageRows = group.filter((n) => !_RCA_ICS_SERIES_ROWS.has(n));
+    return _preferFormal(stageRows.length ? stageRows : group);
+  };
+  if (interior.length) return best(interior);
+  if (baseMatch.length) return best(baseMatch);
+  if (topMatch.length) return best(topMatch);
   return null;
 }
 
@@ -503,6 +555,54 @@ function _seriesBoundsFor(stages, ent) {
   const last = stages[ent.stages[ent.stages.length - 1]];
   if (!first || !last) return [null, null];
   return [(first.base_ma || 0), (last.top_ma || 0)];
+}
+
+// True when the two bounds resolve to ICS stages and the BASE is YOUNGER than
+// the TOP -- i.e. the range runs backwards in time.
+//
+// FIX-2026-10-01 (REVIEW). The FAD<LAD check compares numeric Ma only:
+//
+//     baseR.ma < topR.ma
+//
+// which is sound for any pair whose two bounds differ, but for two ADJACENT
+// stages the two numbers are the SAME boundary:
+//
+//     Induan        base(older)   = 251.902  (Triassic)
+//     Changhsingian top(younger) = 251.902  (Permian)
+//     251.902 < 251.902  ->  false
+//
+// so every inverted adjacent-stage range scored clean -- 102 of the 98-stage
+// table's pairs, including every P-T / T-J / J-K / K-Pg neighbour, while the
+// bed-string and numeric-Ma paths DID flag the same inversion. The user was
+// told a backwards range was trustworthy.
+//
+// The boundary value is the wrong thing to compare: the ORDER of two named
+// stages does not depend on it. This mirrors
+// rca_core/quality.py:_stage_endpoints_inverted and uses the same
+// midpoint oracle as ics_age_compare, so both engines order a pair the same
+// way. Applied strictly ADDITIVELY (the Ma test still runs first), so it can
+// only add violations: base="259 Ma" / top="260 Ma" resolves both to the SAME
+// stage (no violation here) while the Ma test still catches the 1 Ma
+// inversion. Both failure modes are now caught on both engines.
+//
+// Returns false whenever anything is unresolvable, so an unknown label is
+// still skipped rather than penalised.
+function _stageEndpointsInverted(baseRaw, topRaw) {
+  if (baseRaw === null || baseRaw === undefined) return false;
+  if (topRaw === null || topRaw === undefined) return false;
+  const stages = (typeof globalThis !== 'undefined' && globalThis.RCA_ICS_TABLE)
+    ? globalThis.RCA_ICS_TABLE : null;
+  if (!stages) return false;
+  const baseR = _resolveAgeBound(baseRaw, 'older');
+  const topR = _resolveAgeBound(topRaw, 'younger');
+  if (!baseR || !topR || !baseR.name || !topR.name) return false;
+  const s1 = stages[baseR.name];
+  const s2 = stages[topR.name];
+  if (!s1 || !s2) return false;
+  const mid1 = ((s1.base_ma || 0) + (s1.top_ma || 0)) / 2;
+  const mid2 = ((s2.base_ma || 0) + (s2.top_ma || 0)) / 2;
+  if (mid1 < mid2) return true;  // base is YOUNGER -> inverted
+  return false;                   // base older (correct) or same stage
 }
 
 // Resolve a bound label to {name, ma} or null. Mirrors the FULL decision tree
@@ -660,6 +760,11 @@ function scoreCompleteness(data) {
     primary = null;
   } else if (mode === 'zonation') {
     primary = ('zones' in data) ? 'zones' : null;
+  } else if (mode === 'occurrence_matrix') {
+    // 2026-10-15. `occurrences` is SPARSE by contract, so a short list is not
+    // evidence of failure — grading by row count would punish exactly the
+    // matrix this mode is designed for. Presence is the check.
+    primary = ('occurrences' in data) ? 'occurrences' : null;
   } else {
     primary = ('species_ranges' in data) ? 'species_ranges' : null;
   }
@@ -682,6 +787,11 @@ function scoreCompleteness(data) {
     relevant = ['abundances', 'sections'];
   } else if (mode === 'zonation') {
     relevant = ['zones', 'correlations', 'zonations'];
+  } else if (mode === 'occurrence_matrix') {
+    // 2026-10-15. `columns` counts as signal even when `occurrences` is empty:
+    // a matrix whose localities were read but whose cells were not is a
+    // partial answer worth reporting, not a chart with no signal.
+    relevant = ['occurrences', 'columns', 'legend', 'strat_rows'];
   } else {
     relevant = ['sections', 'biozones', 'other_fossils'];
   }
@@ -817,7 +927,7 @@ function scoreAccuracy(data) {
       const baseR = _resolveAgeBound(baseRaw, 'older');
       if (topR && baseR && topR.ma !== null && baseR.ma !== null) {
         fadLadTotal += 1;
-        if (baseR.ma < topR.ma) {
+        if (baseR.ma < topR.ma || _stageEndpointsInverted(baseRaw, topRaw)) {
           fadLadViolations += 1;
           issues.push({severity: 'warning', msg_key: 'quality.range_top_lt_base'});
         }
@@ -1036,27 +1146,73 @@ function scoreAccuracy(data) {
   // rca_core/quality.py:_score_abundance_sum). For each (sample) level,
   // the sum of all %-unit abundances should equal 100±5. Violations
   // deduct 0.05 each, capped at 0.3.
-  const abSamples = (data && Array.isArray(data.abundances)) ? data.abundances : [];
+  //
+  // FIX-2026-10-01: this block had drifted from its Python twin on four
+  // counts, all of which changed the number the operator reads. The reporting
+  // side had been diffed three times (2026-09-30 rounding / deduction
+  // placement, 2026-10-01 toFixed); the BUCKETING side never was. It is
+  // rewritten here to mirror rca_core/quality.py:_abundance_percentage_buckets
+  // line for line:
+  //   1. `data.samples` was IGNORED. Python reads
+  //      `data.get("samples") or data.get("abundances")`, and `samples` is a
+  //      real first-class key here (rca_core/editable.py _LIST_KEYS,
+  //      js/table.js, extractor.py sections[i]["samples"]). A diagram under
+  //      `samples` therefore had the rule silently SKIPPED and was graded
+  //      HIGHER than the desktop (measured 0.95 vs 0.93) -- a real violation
+  //      reading as clean.
+  //   2. `level` was NOT stripped. `level` is an LLM free-text field, so one
+  //      level spelled "L1" and "L1 " became two buckets: a diagram summing
+  //      to exactly 105 (in spec) was reported as a violation of "L1 " with
+  //      sum 5.0, a number that is not the sum of anything.
+  //   3. `Number()` stood in for Python's `float()`. Number(null) and
+  //      Number('') are 0, so unparseable cells were summed as a REAL 0 and
+  //      the browser printed a fabricated "0.0%"; Number('1_0') is NaN so a
+  //      row Python counted was dropped entirely (browser sum systematically
+  //      LOW); Number('0x10') is 16, inventing a percentage.
+  //   4. there was no "not evaluable" note, so a rule that never ran was
+  //      indistinguishable from a rule that passed -- the exact distinction
+  //      Python documents as "'no violations' is not the same as 'checked'".
+  //      In combination with (3) that withheld the very note which would have
+  //      exposed the fabrication.
+  const abSamples = (data && Array.isArray(data.samples) && data.samples.length)
+    ? data.samples
+    : (data && Array.isArray(data.abundances) ? data.abundances : []);
   let sumViolCount = 0;
   let sumDeduct = 0;
   if (abSamples.length > 0) {
-    const levelSums = {};
-    const levelIds = {};
+    // Keyed by (site, level): "120 cm" in Core A and "120 cm" in Core B are
+    // two samples, not one of 200%. A multi-core diagram is explicitly
+    // supported (the ABUNDANCE prompt carries a `sites` array + per-row
+    // `site`). An unnamed site keeps the bare level, so single-core output is
+    // byte-identical to before.
+    const levelSums = new Map();
+    const levelLabels = new Map();
+    let skippedNoLevel = 0;
+    let skippedUnparsable = 0;
     for (const e of abSamples) {
       if (!e || typeof e !== 'object') continue;
       const unit = String(e.abundance_unit || '').trim().toLowerCase();
       if (unit !== '%') continue;
-      const p = Number(e.abundance);
-      if (!Number.isFinite(p)) continue;
-      const lvl = String(e.level || '');
-      if (!lvl) continue;
-      levelSums[lvl] = (levelSums[lvl] || 0) + p;
-      if (!levelIds[lvl]) levelIds[lvl] = lvl;
+      const lvl = String(e.level || '').trim();
+      if (!lvl) { skippedNoLevel += 1; continue; }
+      const p = _pyFloatOrNull(e.abundance);
+      if (p === null || !Number.isFinite(p)) { skippedUnparsable += 1; continue; }
+      const site = String(e.site || '').trim();
+      // The site is part of the sample's identity: "120 cm" in Core A and
+      // "120 cm" in Core B are two different samples, not one of 200%. The key
+      // is a JSON pair rather than a joined string, so a site/level containing
+      // the separator cannot collide with a different split; the label is kept
+      // alongside the sum rather than recovered from the key (an earlier
+      // attempt did `key.slice(1)` to drop a sentinel, which ate a real
+      // character as soon as a site WAS present: "S1 L1" -> "1 L1").
+      const key = JSON.stringify([site, lvl]);
+      const label = site ? site + ' / ' + lvl : lvl;
+      if (!levelSums.has(key)) levelLabels.set(key, label);
+      levelSums.set(key, (levelSums.get(key) || 0) + p);
     }
     const violations = [];
-    for (const lvl of Object.keys(levelSums)) {
-      const s = levelSums[lvl];
-      if (s < 95 || s > 105) violations.push({sample: levelIds[lvl], sum: s});
+    for (const [key, s] of levelSums) {
+      if (s < 95 || s > 105) violations.push({sample: levelLabels.get(key) || key, sum: s});
     }
     if (violations.length > 0) {
       // AUDIT-2026-09-30: the deduction is taken from the DIMENSION SCORE,
@@ -1098,6 +1254,13 @@ function scoreAccuracy(data) {
         severity: 'info', msg_key: 'quality.abundance_sum_violation_count',
         params: {count: String(violations.length)}
       });
+    } else if (skippedNoLevel || skippedUnparsable) {
+      // Mirror of rca_core/quality.py:754-764. "no violations" is not the
+      // same as "checked": percentage rows without a level, or whose value was
+      // not a number, cannot be summed, and the diagram must not score as if
+      // the rule held on them. Info only, no deduction -- the sparse-diagram
+      // penalty is a prompt-level concern.
+      issues.push({severity: 'info', msg_key: 'quality.null_fields'});
     }
   }
 
@@ -1353,6 +1516,41 @@ function scoreConsistency(data) {
   return [score, issues];
 }
 
+// Local mirror of Python's `float(x) -> number | null`.
+//
+// FIX-2026-10-01: the confidence-coherence check below originally called the
+// global `rcaPyFloatOrNull` from minimax.js. That is a hidden load-order
+// dependency: quality.js is loaded and scored by harnesses and embedders that
+// do not pull minimax.js in (verified — loading ics_table + reason-codes +
+// quality alone threw `ReferenceError: rcaPyFloatOrNull is not defined` from
+// inside score()), turning a scoring call into a crash. Kept local so this
+// module stays independently loadable.
+//
+// Semantics deliberately match rcaPyFloatOrNull (minimax.js) for every shape a
+// confidence can take, including Python's digit-group underscores. This is
+// deliberately NOT `Number()`: Number(null) and Number('') are 0, and
+// Number('0x10') is 16, so the JS abundance block reported a fabricated
+// "0.0%" sum for unparseable cells.
+const _RCA_QUALITY_PYFLOAT_RE = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+const _RCA_QUALITY_PYFLOAT_UNDERSCORE_RE = /^[+-]?(\d(_?\d)*)?(\.(\d(_?\d)*)?)?([eE][+-]?\d(_?\d)*)?$/;
+function _pyFloatOrNull(value) {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'boolean') return value ? 1 : 0;  // float(True) == 1.0
+  if (typeof value !== 'string') return null;            // null/list/dict -> TypeError
+  let s = value.trim();
+  if (!s) return null;
+  const low = s.toLowerCase();
+  if (low === 'inf' || low === '+inf' || low === 'infinity' || low === '+infinity') return Infinity;
+  if (low === '-inf' || low === '-infinity') return -Infinity;
+  if (low === 'nan' || low === '+nan' || low === '-nan') return NaN;
+  if (s.indexOf('_') !== -1) {
+    if (!_RCA_QUALITY_PYFLOAT_UNDERSCORE_RE.test(s)) return null;
+    s = s.replace(/_/g, '');
+  }
+  if (!_RCA_QUALITY_PYFLOAT_RE.test(s)) return null;
+  return Number(s);
+}
+
 /**
  * structure: _extras ratio, no unexpected nulls.  Mode-aware.
  */
@@ -1394,6 +1592,14 @@ function scoreStructure(data) {
     // scoreCompleteness, has had its zonation branch all along, which is why
     // the detection half of the 2026-09-05 fix looked complete.
     nullCheckKeys = ['zones', 'correlations', 'zonations', 'confidence'];
+  } else if (mode === 'occurrence_matrix') {
+    // 2026-10-15. Same class of omission as the zonation branch above, and it
+    // is the reason the branch is being added to BOTH _detectMode consumers
+    // rather than just the detector: `occurrences` is nullable BY DESIGN (a
+    // matrix with no readable cell is a legitimate partial answer that the
+    // mode's own warnings report), so only `columns` and `confidence` belong
+    // to the no-null contract.
+    nullCheckKeys = ['columns', 'confidence'];
   } else {
     nullCheckKeys = ['sections', 'biozones', 'other_fossils', 'confidence'];
   }
@@ -1411,6 +1617,44 @@ function scoreStructure(data) {
   } else if (nulls <= 1) {
     passed += 0.5;
     issues.push({severity: 'info', msg_key: 'quality.null_fields'});
+  }
+
+  // FIX-2026-10-01: mirror of rca_core/quality.py _score_structure. The
+  // confidence-coherence check the module docstring claims did not exist on
+  // either engine: 'quality.confidence_mismatch' was registered and
+  // translated in all three locales (js/i18n.js 301/646/980) while nothing
+  // emitted it, so a result whose overall confidence contradicted every one
+  // of its own rows scored identically to a self-consistent one.
+  //
+  // Conservative by construction so it cannot become a new false-positive
+  // source: needs at least two numeric row confidences and fires only on a
+  // near-contradiction (gap > 0.5). A coherent result (top 0.95 vs rows 0.99)
+  // is unaffected; a result with no row confidences is skipped, not scored.
+  // NOTE: this uses Python float() semantics (_pyFloatOrNull), NOT Number(), so a null/''/
+  // 'n/a' cell counts as "no confidence" instead of collapsing to 0 the way
+  // the abundance block did.
+  const topNum = _pyFloatOrNull(data ? data.confidence : null);
+  if (topNum !== null) {
+    let rowConfs = [];
+    for (const listKey of ['species_ranges', 'abundances', 'zones', 'samples']) {
+      const rows = data ? data[listKey] : null;
+      if (!Array.isArray(rows)) continue;
+      for (const row of rows) {
+        if (!row || typeof row !== 'object') continue;
+        const rc = _pyFloatOrNull(row.confidence);
+        if (rc !== null) rowConfs.push(rc);
+      }
+      if (rowConfs.length) break;
+    }
+    if (rowConfs.length >= 2) {
+      checks += 1;
+      const mean = rowConfs.reduce((a, b) => a + b, 0) / rowConfs.length;
+      if (Math.abs(topNum - mean) > 0.5) {
+        issues.push({severity: 'info', msg_key: 'quality.confidence_mismatch'});
+      } else {
+        passed += 1;
+      }
+    }
   }
 
   if (checks === 0) return [1.0, issues];

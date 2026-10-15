@@ -267,12 +267,28 @@ def _resolve_age_bounds(row: dict) -> tuple[str, str, Optional[float], Optional[
     e_stage, e_ma = ics_resolve_age_bound(base, prefer="older") if ics_resolve_age_bound else (None, None)
     l_stage, l_ma = ics_resolve_age_bound(top, prefer="younger") if ics_resolve_age_bound else (None, None)
     # A complete numeric pair must respect geological direction: the FAD/base
-    # is older (larger Ma) than the LAD/top. Keep independently resolved stage
-    # labels, but suppress invalid numeric ages so exporters cannot publish a
-    # reversed temporal range.
+    # is older (larger Ma) than the LAD/top. When it does not, the whole
+    # interval is withheld.
+    #
+    # FIX-2026-10-01: the guard used to null only the NUMBERS and keep the
+    # stage labels ("Keep independently resolved stage labels, but suppress
+    # invalid numeric ages"). The two are the same interval in two units, so
+    # that published a backwards range anyway: `early_interval` /
+    # `latestAgeOrHighestStage` went to GBIF as an ORDERED pair with the
+    # younger stage in the "earliest" slot, which is exactly what the guard
+    # exists to prevent. It is also worse than a blank, because DwC-A's
+    # fad_ma/lad_ma are project-namespace IRIs while the stage names are the
+    # fields GBIF and iDigBio actually index -- so the numbers vanished and
+    # only the wrong names survived. Withholding both is the conservative
+    # reading: the model gave two endpoints whose order contradicts itself,
+    # and unlike the section path (which has the full SET of stages and can
+    # reorder by ICS bounds, see pbdb._stage_endpoint_names) there is no way
+    # here to tell which endpoint the model meant.
     if e_ma is not None and l_ma is not None and e_ma < l_ma:
         e_ma = None
         l_ma = None
+        e_stage = None
+        l_stage = None
     return (e_stage or "", l_stage or "", e_ma, l_ma)
 
 

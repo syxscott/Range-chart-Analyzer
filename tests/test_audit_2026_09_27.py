@@ -1498,10 +1498,12 @@ class TestP2ReadmeMaturityTableMatchesTheRegistry:
     Measured 2026-09-28: all eight modes AGREE today (range_chart /
     columnar_section stable; abundance_diagram / phylogenetic_tree /
     zonation_chart candidate; chemical_stratigraphy / paleomap /
-    scatter_plot assistant). This test does not catch a live bug; it closes
-    the gap that let a future one through. It also settles the "is
-    capabilities.py dead?" question: it is not dead, it is an unverified
-    duplicate, and the repair is a guard rather than a deletion.
+    scatter_plot assistant). Ten now (2026-10-15): occurrence_matrix and
+    generic_table join, both assistant - the table is HAND-written prose, so
+    the registry can only be kept honest by this check. This test does not
+    catch a live bug; it closes the gap that let a future one through. It also
+    settles the "is capabilities.py dead?" question: it is not dead, it is an
+    unverified duplicate, and the repair is a guard rather than a deletion.
     """
 
     LEVEL_WORD = {"stable": "稳定", "candidate": "候选", "assistant": "辅助"}

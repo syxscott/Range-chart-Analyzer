@@ -5637,7 +5637,7 @@
       }
      },
      {
-      "name": "0",
+      "name": "",
       "age_range": "Y",
       "formations": [],
       "formation_thickness_m": "",
@@ -5650,7 +5650,11 @@
     "species_ranges": [],
     "biozones": [],
     "other_fossils": [],
-    "confidence": 0.0
+    "confidence": 0.0,
+    "_warnings": [
+     "dict_shaped_array",
+     "identifier_not_recovered_from_index"
+    ]
    }
   },
   {
@@ -7063,7 +7067,7 @@
       "samples": [],
       "coordinates_text": "",
       "thickness_m": "",
-      "confidence_by_section": 0.0,
+      "confidence_by_section": null,
       "_extras": {
        "lithology": [
         1,
@@ -7158,7 +7162,7 @@
       ],
       "coordinates_text": "",
       "thickness_m": "",
-      "confidence_by_section": 0.0
+      "confidence_by_section": null
      }
     ],
     "fossil_legend": [],
@@ -7227,7 +7231,7 @@
       "samples": [],
       "coordinates_text": "",
       "thickness_m": "",
-      "confidence_by_section": 0.0
+      "confidence_by_section": null
      }
     ],
     "fossil_legend": [],
@@ -7280,7 +7284,7 @@
       "samples": [],
       "coordinates_text": "",
       "thickness_m": "",
-      "confidence_by_section": 0.0,
+      "confidence_by_section": null,
       "_extras": {
        "cross_beds": []
       }
@@ -7400,7 +7404,7 @@
       "samples": [],
       "coordinates_text": "",
       "thickness_m": "",
-      "confidence_by_section": 0.0
+      "confidence_by_section": null
      }
     ],
     "fossil_legend": [
@@ -7480,7 +7484,7 @@
       "samples": [],
       "coordinates_text": "",
       "thickness_m": "",
-      "confidence_by_section": 0.0
+      "confidence_by_section": null
      }
     ],
     "fossil_legend": [],
@@ -7512,7 +7516,7 @@
       "samples": [],
       "coordinates_text": "",
       "thickness_m": "",
-      "confidence_by_section": 0.0
+      "confidence_by_section": null
      }
     ],
     "fossil_legend": [],
@@ -34389,7 +34393,7 @@
       "severity": "warning",
       "msg_key": "quality.abundance_sum_violation",
       "params": {
-       "sample": "L1",
+       "sample": "S1 / L1",
        "sum": "2.2"
       }
      },
@@ -35430,7 +35434,7 @@
       "severity": "warning",
       "msg_key": "quality.abundance_sum_violation",
       "params": {
-       "sample": "L1",
+       "sample": "S1 / L1",
        "sum": "3.0"
       }
      },

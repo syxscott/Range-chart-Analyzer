@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from rca_core import extractor as E
 from rca_core.extractor import (
+    DEFAULT_MAX_TOKENS,
     ExtractResult,
     clamp_max_edge,
     clamp_max_tokens,
@@ -32,8 +33,18 @@ class TestClampMaxTokens(unittest.TestCase):
         self.assertEqual(clamp_max_tokens(1_000_000), 32000)
 
     def test_default_on_non_numeric(self):
-        self.assertEqual(clamp_max_tokens(None), 4000)
-        self.assertEqual(clamp_max_tokens("abc"), 4000)
+        # The fallback must be DEFAULT_MAX_TOKENS, not a literal. These two
+        # asserted 4000 while extractor.py said 4000 -- and when the default
+        # moved to 16000 they would have kept passing against a stale copy if
+        # anyone had edited only one side.
+        self.assertEqual(clamp_max_tokens(None), DEFAULT_MAX_TOKENS)
+        self.assertEqual(clamp_max_tokens("abc"), DEFAULT_MAX_TOKENS)
+
+    def test_default_fits_a_dense_occurrence_matrix(self):
+        # Measured, not guessed: a 22-taxon x 18-locality matrix needs
+        # 4417-5428 output tokens (rca_core extract_occurrence_matrix against a
+        # real figure). A default below that range silently drops rows.
+        self.assertGreaterEqual(DEFAULT_MAX_TOKENS, 6000)
 
     def test_valid_value_unchanged(self):
         self.assertEqual(clamp_max_tokens(8192), 8192)

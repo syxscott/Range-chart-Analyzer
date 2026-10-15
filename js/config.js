@@ -11,7 +11,11 @@
 const RCA_CONFIG = {
   defaultEndpoint: 'https://api.minimaxi.com/anthropic',
   defaultModel: 'MiniMax-M3',
-  defaultMaxTokens: 4000,
+  // REVIEW-2026-10-15 (measured): 4000 silently truncated ordinary figures.
+  // A 22-taxon x 18-locality occurrence matrix needs 4400-5400 output tokens
+  // as one JSON record per filled cell; at 4000 the last rows were simply cut
+  // off. Must stay equal to DEFAULT_MAX_TOKENS in rca_core/extractor.py.
+  defaultMaxTokens: 16000,
   // M5: explicit bounds for max_tokens clamp — defends against typos.
   minMaxTokens: 1,
   maxMaxTokens: 32000,

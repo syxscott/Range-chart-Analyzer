@@ -175,13 +175,36 @@ def test_extract_explicit_mode_has_no_auto_stamp(monkeypatch):
 # server whitelist
 # ---------------------------------------------------------------------------
 
-def test_server_source_whitelists_auto():
-    import os
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with open(os.path.join(root, "server.py"), encoding="utf-8") as f:
-        src = f.read()
-    assert "'auto'" in src
-    assert "resolve_auto_mode" in src
+def test_server_accepts_auto_and_never_resolves_to_a_rejected_mode():
+    """``mode: "auto"`` must be accepted by the server's 400 gate.
+
+    This used to grep server.py for the literal ``'auto'``. server.py derives
+    the gate now (2026-10-15): ``_SUPPORTED_MODES = frozenset(
+    _REGISTRY_SERVER_MODES) | {"auto"}``, built from the module-level
+    ``from rca_core.modes import SERVER_MODE_NAMES as _REGISTRY_SERVER_MODES``.
+    The literal spelling is gone BY CONSTRUCTION, so the assertion moves to the
+    value - which is the stronger form anyway, because it also catches a
+    registry mode that auto could resolve to while the gate would 400 it (the
+    REVIEW-2026-09-10 "auto is a way around the whitelist" bug).
+    """
+    import server
+    from rca_core.modes import MODES, SERVER_MODE_NAMES
+
+    # The gate is the registry's own object, not a copy of it.
+    assert server._REGISTRY_SERVER_MODES is SERVER_MODE_NAMES
+    # "auto" is a request-level alias, never a ModeSpec: it is what resolves to
+    # a concrete mode, so it must not itself be one.
+    assert "auto" not in SERVER_MODE_NAMES
+    # ... and the resolver the alias routes through is really wired in.
+    assert server.resolve_auto_mode is resolve_auto_mode
+
+    # Every mode the auto pipeline can return must survive the server's own
+    # constrainer and land on a mode the gate accepts.
+    for name in MODES:
+        mode, _source = server._constrain_resolved_mode(name, "vision")
+        assert mode in SERVER_MODE_NAMES, (
+            "auto resolved %r to %r, which the server rejects with 400"
+            % (name, mode))
 
 
 def test_mixed_caption_range_chart_wins_over_zonation():

@@ -12,6 +12,8 @@ auto-detect between range-chart and columnar-section using the row shape
 
 from __future__ import annotations
 
+from .modes import WIRED_MODE_NAMES as _REGISTRY_WIRED_MODES
+
 import copy
 import math
 import re
@@ -691,12 +693,37 @@ ZONATION_CHART_SCHEMA = MergeSchema(
 )
 
 
+OCCURRENCE_MATRIX_SCHEMA = MergeSchema(
+    primary_list_key="occurrences",
+    # (taxon, site) is the identity of one record: the same taxon at the same
+    # locality must collapse to ONE row across runs, with `agreement` counting
+    # how many runs reported it. site is part of the key on purpose - the same
+    # genus at two different boreholes is two observations, not one.
+    primary_id_keys=["taxon", "site"],
+    primary_str_mode_fields=[
+        # `code` is deliberately NOT in the str-mode set: runs that disagree
+        # about whether a cell is R or C must still merge to one row and expose
+        # the disagreement, rather than becoming two rows that each look certain.
+        "authority", "class", "row_kind",
+    ],
+    sort_keys=[("agreement_count", "desc"), ("taxon", "asc"), ("site", "asc")],
+    # `columns` / `legend` / `strat_rows` are figure-level lists, not per-run
+    # row lists: the localities and the class legend are the same in every run
+    # of the same figure, so they de-duplicate trivially and are carried through
+    # by _merge_named_lists rather than being dropped or keymap-merged (which
+    # would invent conflicts between runs about a header nobody re-read).
+    list_keys=["legend", "columns", "strat_rows"],
+    confidence_field="confidence",
+)
+
+
 SCHEMA_BY_MODE = {
     "range_chart": RANGE_CHART_SCHEMA,
     "columnar_section": COLUMNAR_SECTION_SCHEMA,
     "abundance_diagram": ABUNDANCE_DIAGRAM_SCHEMA,
     "phylogenetic_tree": PHYLOGENETIC_TREE_SCHEMA,
     "zonation_chart": ZONATION_CHART_SCHEMA,
+    "occurrence_matrix": OCCURRENCE_MATRIX_SCHEMA,
 }
 
 # REVIEW-2026-09-10: modes that are wired through the FULL stack (prompt +
@@ -709,7 +736,18 @@ SCHEMA_BY_MODE = {
 # returning ok=True. server.py already rejects them when explicitly
 # requested; this constant exists so the "auto" path can apply the same rule
 # after vision classification resolves a mode the caller never named.
+# DERIVED, then CHECKED against rca_core/modes.py. The schema objects above
+# have to stay literal - they are real MergeSchema values, not data - so the
+# mapping is still written out. What is no longer taken on trust is WHICH modes
+# belong in it: the registry says so, and a mode added to one side but not the
+# other now fails loudly at import instead of silently merging with the
+# range-chart schema.
 WIRED_MODES = frozenset(SCHEMA_BY_MODE)
+
+if WIRED_MODES - _REGISTRY_WIRED_MODES:
+    raise ImportError(
+        "aggregate.SCHEMA_BY_MODE declares modes the registry does not: %r"
+        % sorted(WIRED_MODES - _REGISTRY_WIRED_MODES))
 
 
 def _looks_abundance(data: Optional[dict]) -> bool:
@@ -757,6 +795,24 @@ def _looks_phylogenetic(data: Optional[dict]) -> bool:
     return isinstance(first, dict) and "id" in first and "parent" in first
 
 
+def _looks_occurrence_matrix(data: Optional[dict]) -> bool:
+    """A taxon x locality matrix carries a populated ``occurrences`` list.
+
+    This branch was added with the mode (2026-10-15) after a test caught the
+    consequence of forgetting it: merge_results with schema=None fell through
+    to RANGE_CHART_SCHEMA, whose primary_list_key is ``species_ranges`` - a key
+    this payload does not have. The merge then produced NOTHING for the real
+    rows and returned a single deep copy of the first run, so two different
+    localities of the same genus silently collapsed into one record. A missing
+    auto-detect branch is not a degradation here, it is data loss.
+    """
+    if not data:
+        return False
+    occ = data.get("occurrences")
+    return bool(isinstance(occ, list) and occ
+                and isinstance(occ[0], dict))
+
+
 def _auto_detect_schema(results):
     """Pick the schema that matches the majority of inputs.
 
@@ -788,6 +844,7 @@ def _auto_detect_schema(results):
     counts = [
         (PHYLOGENETIC_TREE_SCHEMA, sum(1 for r in results if _looks_phylogenetic(r))),
         (COLUMNAR_SECTION_SCHEMA, sum(1 for r in results if _looks_columnar(r))),
+        (OCCURRENCE_MATRIX_SCHEMA, sum(1 for r in results if _looks_occurrence_matrix(r))),
         (ABUNDANCE_DIAGRAM_SCHEMA, sum(1 for r in results if _looks_abundance(r))),
     ]
     # Declared preference order, filtered to shapes that were seen at all.

@@ -177,15 +177,42 @@ function rcaVizNormalizePos(raw) {
 }
 
 /**
+ * Normalise a numeric run: digit-group separators out, European decimal comma
+ * in. Mirrors rca_core/extractor.py:_to_float_opt line for line.
+ *
+ * FIX-2026-10-01. The old code was a blind `.replace(/,/g, '.')`, which cannot
+ * tell a decimal comma from a thousands separator, so "1,000" became "1.000"
+ * and Number() read it as 1. A single `range_top_idx` carrying "1,000" then
+ * plotted Bed 1000 as Bed 1: the axis domain came out [1,900] instead of
+ * [1,1000], that row was drawn spanning the ENTIRE axis, the three genuine
+ * rows were crushed into the first 0.9 % of it, and the hover tooltip reported
+ * the reversed pair "Bed 900 -> Bed 1". No path flagged it -- the row stayed
+ * countably placed. rca_core's twin had the identical blind replace and the
+ * same answer, so both engines are fixed by the same rule.
+ *
+ * The rule is the standard one: a comma / underscore / space followed by
+ * EXACTLY three digits, not itself followed by a digit, is a group separator;
+ * any comma left over is a European decimal point (which is why the original
+ * replace existed). "1,5" -> 1.5 and "12,5" -> 12.5 are unchanged.
+ * Accepted ambiguity, documented on the Python side too: "3,141" reads as 3141,
+ * not as a European decimal with three places.
+ */
+function rcaVizNormalizeNumberRun(text) {
+  var t = String(text).replace(/([,_  ])(\d{3})(?!\d)/g, '$2');
+  return t.replace(/,/g, '.');
+}
+
+/**
  * Mirror of rca_core/extractor.py:_to_float_opt — best-effort float for a
  * scientific value, non-numeric text -> null. Comma decimal separator is
- * accepted because the models emit European decimal commas.
+ * accepted because the models emit European decimal commas, and a thousands
+ * separator is now told apart from it (see rcaVizNormalizeNumberRun).
  */
 function rcaVizNum(raw) {
   if (raw === null || raw === undefined || typeof raw === 'boolean') return null;
   if (typeof raw === 'number') return isFinite(raw) ? raw : null;
   if (typeof raw !== 'string') return null;
-  var text = raw.trim().replace(/,/g, '.');
+  var text = rcaVizNormalizeNumberRun(raw.trim());
   if (!text) return null;
   // AUDIT-2026-09-30: Number() FIRST. The hand-rolled regexes below rejected
   // "1.2e2", "1e5", ".5" and "5." which rca_core's _to_float_opt accepted, and
@@ -196,6 +223,15 @@ function rcaVizNum(raw) {
   // Number() is not enough on its own -- it rejects the unit suffix -- so the
   // suffix form is still matched explicitly, now with Python's number grammar
   // underneath it so both sides accept the same set.
+  //
+  // FIX-2026-10-01: it is also WIDER than Python's float() in the other
+  // direction. Number('0x10') is 16, Number('0b101') is 5, Number('0o17') is
+  // 15 -- none of which float() accepts, so a model that wrote a hex bed index
+  // plotted bed 16 in the browser while rca_core's _to_float_opt returned None
+  // and the sibling rcaVizBedValue also refused it. Refuse the base-prefixed
+  // literals explicitly; the decimal/exponent forms Number() was adopted FOR
+  // ("1.2e2", "1e5", ".5", "5.") are untouched.
+  if (/^[+-]?0[xXbBoO]/.test(text)) return null;
   var n = Number(text);
   if (isFinite(n)) return n;
   var m = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:_\d+)*)\s*(?:ma|m\.a\.|megaa)?$/i.exec(text);
@@ -250,10 +286,24 @@ function rcaVizMaValue(value) {
   // '-' before matching (the audit's "or normalise" option — extending the
   // regex alone would still leave Number('−5') === NaN).
   text = text.replace(/\u2212/g, '-');
-  var m = /([+-]?\d+(?:\.\d+)?)\s*(?:Ma|m\.a\.|Ma\s*\()/i.exec(text);
-  if (m) return Number(m[1]);
-  m = /([+-]?\d+(?:\.\d+)?)\s*百万年/.exec(text);
-  return m ? Number(m[1]) : null;
+  // FIX-2026-10-01: the old pattern was UNANCHORED and its number class had no
+  // room for a group separator, so it stepped over whatever it could not match
+  // and reported the remainder: "1,5 Ma" -> 5 (it skipped the decimal comma and
+  // read the integer part after it), and "1 000 Ma" / "1_000 Ma" / "1,000 Ma"
+  // -> 0, because the scan restarted at the LAST digit group. That 0 then
+  // became maLo for the whole chart: the domain came out [0, 10] instead of
+  // [1.5, 10], every correctly-parsed row was dragged to the far left, and the
+  // tooltip printed a range running the wrong way. It also contradicted this
+  // file's own stated contract on rcaVizNum -- "comma decimal separator is
+  // accepted" -- which rcaVizNum honoured and this function did not.
+  //
+  // Capture the maximal numeric run FIRST (digits plus any separator), require
+  // the age unit to follow it, then hand the run to the ONE shared grammar in
+  // rcaVizNormalizeNumberRun, so both readers agree by construction and
+  // "1,5 Ma" reads 1.5 instead of 5.
+  var m = /([+-]?[0-9][0-9\s,_]*?(?:[.,][0-9]+)?)\s*(?:Ma\b|m\.a\.|Ma\s*\(|百万年)/i.exec(text);
+  if (m) return rcaVizNum(rcaVizNormalizeNumberRun(m[1]));
+  return null;
 }
 
 var RcaVizStageIndex = null; // memoised {keys: [...longest first], lookup: {}}
@@ -2131,6 +2181,19 @@ function rcaVizRelink(result) {
   S.pinned = null;
   S.hover = null;
   S.kb = null;
+  // FIX-2026-10-01: clear the in-flight locate-flash as well. Every other piece
+  // of per-row state is reset above, and `flash` was the one omission, so a
+  // flash started by rcaVizLocateTo survived the relink. S.layout has just been
+  // recomputed, so `flash.row_index` now addresses a DIFFERENT row: clicking
+  // "locate" on CHARLIE and then inserting a row above it left BRAVO
+  // highlighted while the table's locate action had targeted CHARLIE (and a
+  // deletion instead made the highlight vanish mid-animation, because
+  // rcaVizDrawHover then finds no bar). The in-flight requestAnimationFrame
+  // loop also kept repainting, since its token check only compares flashSeq.
+  // Bumping flashSeq is what cancels that loop -- the same two lines
+  // rcaVizRender and rcaVizClear already use, so the three paths stay in step.
+  S.flash = null;
+  S.flashSeq += 1;
   // AUDIT-2026-09-27 (item 7): relink recomputed the layout and repainted, but
   // never rewrote the text alternative — only rcaVizRender does. After an
   // added or deleted row, #viz-summary (role="status") kept announcing the

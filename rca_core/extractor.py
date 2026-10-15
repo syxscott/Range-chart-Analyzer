@@ -11,6 +11,8 @@ translate. Mirrors the JS ``extractRangeChart`` contract.
 
 from __future__ import annotations
 
+from .modes import MODES as _MODE_SPECS
+
 import base64
 import io
 import json
@@ -73,7 +75,15 @@ from .reason_codes import (
 
 DEFAULT_ENDPOINT = "https://api.minimaxi.com/anthropic"
 DEFAULT_MODEL = "MiniMax-M3"
-DEFAULT_MAX_TOKENS = 4000
+# REVIEW-2026-10-15 (measured): 4000 silently truncated ordinary figures.
+# A 22-taxon x 18-locality occurrence matrix -- an entirely routine input for
+# this tool -- needs 4400-5400 output tokens as one JSON record per filled cell.
+# At 4000 the model was cut off mid-answer: it returned 52 of the 93 filled
+# cells and never emitted the last row at all, while `stop_reason ==
+# "max_tokens"` only surfaced as a warning string the operator may never read.
+# max_tokens is a CEILING, not a reservation, so a higher default costs nothing
+# unless the answer is actually that long.
+DEFAULT_MAX_TOKENS = 16000
 # M5: explicit min/max bounds for clamp_max_tokens — defends against
 # user typing absurd values (negative, millions) in the GUI / API.
 MIN_MAX_TOKENS = 1
@@ -673,6 +683,39 @@ def _row_from_string(item: str, kind: str) -> dict[str, Any] | None:
     return None
 
 
+def _single_record_from_dict(raw: Any, kind: str | None) -> dict | None:
+    """Return *raw* as ONE record, or None if it is a wrapper-keyed mapping.
+
+    FIX-2026-10-01 (HIGH). A dict-shaped named array has two distinct shapes
+    and the old code only understood one:
+
+        (a) a wrapper-keyed mapping  {"Pingdingshan": {...}, "Gaoyuzhuang": {...}}
+        (b) a SINGLE record returned where the schema asked for an array
+            {"species": "Clarkina yini", "range_base": "Bed 1", ...}
+
+    Both arrive as a ``dict``, so the recovery loop for (a) ran on (b), every
+    value was a scalar, every one hit ``if not isinstance(inner, dict): continue``,
+    and the ENTIRE table came back empty -- with ``ok=True``, the model's
+    declared confidence preserved, no warning, no retry, and one billed API
+    call. Measured across all eight modes: sections, species_ranges, sites,
+    zones, data_points and points all emptied; ``chemical_stratigraphy``
+    additionally FABRICATED an empty row when one value happened to be a dict.
+
+    Discriminator: in shape (b) the kind's primary identifier is a KEY of
+    ``raw``; in shape (a) it is not. A value that is itself a dict means we are
+    looking at shape (a) even when the wrapper key happens to equal the
+    identifier name, so that case is excluded too.
+    """
+    if not isinstance(raw, dict) or not kind or not raw:
+        return None
+    id_key = _PRIMARY_ID_KEYS.get(kind)
+    if not id_key or id_key not in raw:
+        return None
+    if isinstance(raw.get(id_key), dict):
+        return None  # wrapper-keyed mapping that happens to use the id name
+    return dict(raw)
+
+
 def _iter_rows(raw: Any, kind: str, warnings: list[str] | None = None):
     """Yield dict rows from a list- or dict-shaped named array.
 
@@ -696,13 +739,33 @@ def _iter_rows(raw: Any, kind: str, warnings: list[str] | None = None):
         # had to be injected - the previous code only flagged the injection,
         # so the shape change went unreported.
         _flag("dict_shaped_array")
+        # FIX-2026-10-01: a single record returned where an array was asked
+        # for. Without this the loop below treated the record's own field
+        # values as wrapper entries, every one was a scalar, and the table
+        # came back empty. See _single_record_from_dict.
+        single = _single_record_from_dict(raw, kind)
+        if single is not None:
+            yield single
+            return
         for wrapper_key, inner in raw.items():
             if not isinstance(inner, dict):
                 continue
             row = dict(inner)
             id_key = _PRIMARY_ID_KEYS.get(kind)
-            if id_key and id_key not in row:
+            # FIX-2026-10-01: do not invent an identifier from a bare index.
+            # A dict-shaped `correlations` keyed by position ({"0": {...},
+            # "1": {...}}) is the common emission, and "0"/"1" is not a
+            # biozone name -- injecting it produced a FABRICATED `from_zone`
+            # that exported to JSON/CSV/XLSX and was indistinguishable from a
+            # real zone on the plate. The same shape reached `species`
+            # (finding A3) and was only half-fixed: "key absent" is the right
+            # test, but an index is not a name either. Leave the field empty
+            # (the model honestly said it could not read it) and flag the
+            # repair so the operator knows a row lost its identifier.
+            if id_key and id_key not in row and not str(wrapper_key).strip().isdigit():
                 row[id_key] = str(wrapper_key)
+            elif id_key and id_key not in row:
+                _flag("identifier_not_recovered_from_index")
             yield row
     elif isinstance(raw, list):
         for item in raw:
@@ -738,6 +801,24 @@ def _dict_rows(raw: Any, kind: str | None = None, warnings: list[str] | None = N
             warnings.append(tag)
 
     if isinstance(raw, dict):
+        # An empty dict is not a record and not a mapping: it carried no
+        # records before this branch existed and must still carry none. (The
+        # "no dict values" rule below would otherwise turn ``{}`` into one
+        # blank row -- found by the edge-case sweep, not by the suites.)
+        if not raw:
+            return
+        # FIX-2026-10-01: a single record returned where an array was asked for
+        # has no dict values at all ({"sample_id": "S1", "depth_m": 1.0}), so
+        # the loop below yielded nothing and the table came back empty with no
+        # warning. A wrapper-keyed mapping necessarily has dict values (each
+        # one is a record), so "no dict values" is a kind-INDEPENDENT
+        # discriminator between the two shapes and needs no per-kind key map.
+        # The record is still a shape repair, so it is flagged the same way.
+        has_dict_value = any(isinstance(v, dict) for v in raw.values())
+        if not has_dict_value:
+            _flag("dict_shaped_array")
+            yield dict(raw)
+            return
         for value in raw.values():
             if isinstance(value, dict):
                 yield value
@@ -851,10 +932,28 @@ def _stringify_scalar(value: Any) -> str:
     fossil_marker), i.e. a fabricated-looking value. Containers are handled
     by the callers (lifted or carried into ``_extras``); here they collapse
     to an empty string rather than leaking a repr.
+
+    FIX-2026-10-01: a LIST of scalars is joined rather than emptied. The
+    empty-string branch assumed every container would be lifted or rescued by
+    ``_carry_extras``, but that only rescues UNKNOWN keys -- and these are
+    KNOWN ones (``fossils`` in _KNOWN_PALEOMAP_SITE_KEYS, ``fossil_marker``
+    in _KNOWN_SAMPLE_KEYS, ``characteristic_fauna``), so the whole value
+    vanished. ``{"fossils": ["radiolaria", "algae"]}`` exported as an empty
+    cell, which reads as the affirmative claim "this site records no fossil
+    assemblage" -- a worse outcome than dropping the row, because it is a
+    false statement about the figure rather than a gap. A comma-joined list
+    keeps the information and stays a single scalar cell. A dict still
+    returns "" (no faithful scalar rendering, and nested records are lifted by
+    the callers).
     """
     if value is None:
         return ""
-    if isinstance(value, (dict, list, tuple, set)):
+    if isinstance(value, (list, tuple, set)):
+        parts = [str(v).strip() for v in value
+                 if v is not None and not isinstance(v, (dict, list, tuple, set))
+                 and str(v).strip()]
+        return ", ".join(parts)
+    if isinstance(value, dict):
         return ""
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -1010,21 +1109,23 @@ def _payload_mismatch(data: dict[str, Any], result_truncated: bool) -> str:
 def _mode_root_keys(mode_key: str) -> tuple[str, ...]:
     """The documented root keys of a mode, resolved lazily.
 
-    The ``_KNOWN_*_ROOT_KEYS`` tuples are declared next to their normalizer -
-    i.e. after this helper - so the lookup goes through ``globals()`` instead
-    of an import-time dict (REVIEW-2026-09-20 #7).
+    Two shapes come from rca_core/modes.py:
+
+    * ``root_keys_attr`` - the name of a ``_KNOWN_*_ROOT_KEYS`` tuple declared
+      NEXT TO ITS NORMALIZER, i.e. after this helper, so the lookup goes
+      through ``globals()`` instead of an import-time dict
+      (REVIEW-2026-09-20 #7).
+    * ``root_keys_inline`` - modes whose key list is a short literal with no
+      constant worth naming (phylogenetic_tree, and the two modes added
+      2026-10-15).
     """
+    spec = _MODE_SPECS.get(mode_key)
+    if spec is not None and spec.root_keys_inline:
+        return tuple(spec.root_keys_inline)
     names = {
-        "range_chart": "_KNOWN_RANGE_CHART_KEYS",
-        "columnar_section": "_KNOWN_COLUMNAR_ROOT_KEYS",
-        "abundance_diagram": "_KNOWN_ABUNDANCE_ROOT_KEYS",
-        "chemical_stratigraphy": "_KNOWN_CHEMICAL_STRAT_ROOT_KEYS",
-        "paleomap": "_KNOWN_PALEOMAP_ROOT_KEYS",
-        "scatter_plot": "_KNOWN_SCATTER_PLOT_ROOT_KEYS",
-        "zonation_chart": "_KNOWN_ZONATION_ROOT_KEYS",
+        s.name: s.root_keys_attr
+        for s in _MODE_SPECS.values() if s.root_keys_attr
     }
-    if mode_key == "phylogenetic_tree":
-        return ("metadata", "nodes", "root_ids", "legend", "confidence")
     return tuple(globals().get(names.get(mode_key) or "", ()) or ())
 
 
@@ -1359,7 +1460,22 @@ def _to_float_opt(value: Any) -> float | None:
         return f if math.isfinite(f) else None
     if not isinstance(value, str):
         return None
-    text = value.strip().replace(",", ".")
+    # FIX-2026-10-01: a comma is only a DECIMAL separator when it is not a
+    # thousands separator. The old line was a blind `.replace(",", ".")`, so
+    # "1,000" became "1.000" and float() read it as 1.0 -- measured on both
+    # engines (`_to_float_opt("1,000")` -> 1.0, and js/viz.js#rcaVizNum gave the
+    # same 1). Since a range_base/range_top_idx carrying "1,000" then plotted
+    # Bed 1000 as Bed 1, one row spanned the entire stratigraphic axis and the
+    # domain was truncated, with no warning anywhere. The rule is the standard
+    # one: a comma/underscore/space followed by EXACTLY three digits (and not
+    # another digit) is a group separator; any comma left over is a European
+    # decimal point, which is why the replace was there in the first place.
+    # "1,5" -> 1.5 and "12,5" -> 12.5 are unchanged.
+    # Ambiguity accepted and documented: "3,141" is read as 3141 (a group), not
+    # as a European decimal with three places. Both engines apply the identical
+    # rule, so they stay in parity.
+    text = re.sub(r"([,_  ])(\d{3})(?!\d)", r"\2", value.strip())
+    text = text.replace(",", ".")
     if not text:
         return None
     try:
@@ -1957,6 +2073,31 @@ def normalize_result(parsed):
     # under _extras.wrapper_key for traceability.
     def _coerce_list_or_dict(raw, kind):
         if isinstance(raw, dict):
+            # FIX-2026-10-01: flag the shape change here too. This is the only
+            # mode that does not route through _iter_rows, so it was the only
+            # one that silently repaired a dict-shaped array: the rows came
+            # back (name recovered from the wrapper key) and _warnings stayed
+            # None, while abundance / zonation / columnar all reported
+            # `dict_shaped_array` for the identical shape. The operator could
+            # not tell the result had been shape-repaired -- the only trace was
+            # _extras.wrapper_key, which CSV/XLSX export does not read.
+            if "dict_shaped_array" not in root_warnings:
+                root_warnings.append("dict_shaped_array")
+            # FIX-2026-10-01: a single record returned where an array was asked
+            # for used to empty the whole table silently (ok=True, confidence
+            # preserved, no warning, one billed call). See
+            # _single_record_from_dict.
+            single = _single_record_from_dict(raw, kind)
+            if single is not None:
+                inner2 = single
+                inner2.pop("_extras", None)
+                if kind == "sections":
+                    _normalize_section_into(inner2, out["sections"])
+                elif kind == "species_ranges":
+                    _normalize_species_into(inner2, out["species_ranges"], axes=axes)
+                elif kind == "biozones":
+                    _normalize_biozone_into(inner2, out["biozones"])
+                return
             for wrapper_key, inner in raw.items():
                 if not isinstance(inner, dict):
                     continue
@@ -1975,9 +2116,18 @@ def normalize_result(parsed):
                 # fabricated a taxon name (e.g. ``{"unclear": {"species": ""}}``
                 # became species "unclear", ``{"0": {...}}`` became "0").
                 if kind in ("sections", "biozones") and "name" not in inner2:
-                    inner2["name"] = wrapper_key
+                    if not str(wrapper_key).strip().isdigit():
+                        inner2["name"] = wrapper_key
+                    else:
+                        # FIX-2026-10-01: a bare index is not a section or
+                        # biozone name. Injecting "0" fabricates an identifier
+                        # that exports as if it were printed on the plate.
+                        root_warnings.append("identifier_not_recovered_from_index")
                 elif kind == "species_ranges" and "species" not in inner2:
-                    inner2["species"] = wrapper_key
+                    if not str(wrapper_key).strip().isdigit():
+                        inner2["species"] = wrapper_key
+                    else:
+                        root_warnings.append("identifier_not_recovered_from_index")
                 # Drop any pre-existing _extras before re-running the
                 # normalizer so we don't end up with a nested ``_extras``
                 # field. The normalizer will rebuild it cleanly with
@@ -2569,10 +2719,24 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
     # the identifier - coerce it and say so, exactly as range_chart does.
     _columnar_warnings: list[str] = []
     for sec in _dict_rows(parsed.get("sections"), "sections", _columnar_warnings):
-        try:
-            conf_v = float(sec.get("confidence_by_section", 0.0))
-        except (TypeError, ValueError):
-            conf_v = 0.0
+        # FIX-2026-10-01: an ABSENT confidence_by_section used to be written as
+        # 0.0, byte-identical to a model that explicitly reported 0.0 -- so
+        # "the model never said" and "the model said zero" were
+        # indistinguishable in every export, and the operator would judge the
+        # whole batch as a failed recognition. This module is careful about
+        # that distinction elsewhere (the root confidence has a None-aware
+        # fallback; row-level _normalize_confidence returns None), so this one
+        # coercion was the odd one out. Absent / null / unparsable now stays
+        # None ("not stated"); a real number is still clamped to 0..1.
+        _raw_cbs = sec.get("confidence_by_section")
+        conf_v: float | None
+        if _raw_cbs is None or _raw_cbs == "":
+            conf_v = None
+        else:
+            try:
+                conf_v = float(_raw_cbs)
+            except (TypeError, ValueError):
+                conf_v = None
         row = {
             "id": s(sec.get("id")),
             "group": s(sec.get("group")),
@@ -2581,7 +2745,8 @@ def normalize_columnar_result(parsed: dict[str, Any]) -> dict[str, Any]:
             "samples": norm_samples(sec.get("samples")),
             "coordinates_text": s(sec.get("coordinates_text")),
             "thickness_m": s(sec.get("thickness_m")),
-            "confidence_by_section": _confidence_clamped(conf_v),
+            "confidence_by_section": (_confidence_clamped(conf_v)
+                                      if conf_v is not None else None),
         }
         _carry_extras(sec, _KNOWN_COLUMNAR_SECTION_KEYS, row)
         sections.append(row)
@@ -3026,6 +3191,36 @@ def _normalize_phylogenetic_tree_into(raw: dict[str, Any]) -> dict[str, Any]:
         n["id"] = candidate
         phylo_warnings.append("node_missing_id_synthesised")
 
+    # FIX-2026-10-01: a DUPLICATE id. The model reuses one id for two
+    # different leaves quite often (it invents "n1"/"1" when the figure prints
+    # no node numbers), and every id-keyed structure in this module keeps ONE
+    # entry per id. to_newick therefore emitted the second node's name for both
+    # and dropped the first entirely: three nodes in, "((Beta,Beta));" out --
+    # one taxon silently gone, one duplicated. The table still held all three
+    # rows, so nothing looked wrong upstream, and to_newick feeds BOTH the
+    # Newick export (rca_core/exporter.py to_newick_file) and the RF-distance
+    # metric (rca_core/eval_metrics.py), so the published tree and the score
+    # were both wrong. Same treatment as the missing-id case above: keep every
+    # taxon, give the later one a unique id, and flag the repair.
+    _seen_ids: set[str] = set()
+    for n in nodes_in:
+        if not isinstance(n, dict):
+            continue
+        nid = str(n.get("id") or "").strip()
+        if not nid:
+            continue
+        if nid not in _seen_ids:
+            _seen_ids.add(nid)
+            continue
+        while True:
+            _anon += 1
+            candidate = f"_dup{_anon}"
+            if candidate not in _seen_ids:
+                break
+        _seen_ids.add(candidate)
+        n["id"] = candidate
+        phylo_warnings.append("node_duplicate_id_disambiguated")
+
     # Build id→node lookup and compute children counts (reverse check for is_leaf).
     id_to_node: dict[str, dict[str, Any]] = {}
     children_count: dict[str, int] = {}
@@ -3287,11 +3482,31 @@ def to_newick(tree: dict[str, Any]) -> str:
 
     # Build id→dict lookup and parent→children map.
     nodes_dict: dict[str, dict[str, Any]] = {}
+    # FIX-2026-10-01: defense in depth for a duplicate id reaching here from
+    # a path that bypasses the normalizer's disambiguation (a hand-edited
+    # history record, a re-imported JSON payload). Silently keeping the LAST
+    # row is what produced "((Beta,Beta));" -- one taxon lost, one duplicated,
+    # no warning -- so the collision is now reported with the same convention
+    # as the unreachable-node warning below. The first row is kept, which is
+    # the one the id-keyed lookup already resolved to.
+    _dup_ids: list[str] = []
     for n in nodes:
         if isinstance(n, dict):
             nid = str(n.get("id") or "")
             if nid:
+                if nid in nodes_dict:
+                    _dup_ids.append(nid)
+                    continue
                 nodes_dict[nid] = n
+    if _dup_ids:
+        import warnings as _warnings_mod
+        _warnings_mod.warn(
+            "to_newick: duplicate node id(s) "
+            + ", ".join(repr(d) for d in sorted(set(_dup_ids))[:10])
+            + f" ({len(_dup_ids)} row(s)); only the first of each is emitted",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     id_to_children: dict[str, list[str]] = {rid: [] for rid in root_ids}
     for n in nodes:
@@ -3577,15 +3792,56 @@ def normalize_chemical_stratigraphy_result(parsed: dict[str, Any]) -> dict[str, 
     # Normalize intervals
     # REVIEW-2026-09-20 #4: same dict-shaped recovery as events.
     for iv in _dict_rows(parsed.get("intervals"), "intervals", _chem_warnings):
+        _iv_top_depth = s(iv.get("top_depth_m"))
+        _iv_base_depth = s(iv.get("base_depth_m"))
+        _iv_top_age = s(iv.get("top_age_ma"))
+        _iv_base_age = s(iv.get("base_age_ma"))
+        # FIX-2026-10-01: chemical-stratigraphy intervals had NO order check at
+        # all, while columnar's lithology_blocks / age_units swap an inverted
+        # pair and flag it and range_chart's species indices do the same. Two
+        # independent impossibilities were therefore accepted silently and
+        # exported:
+        #   * depth pair inverted  (top DEEPER than base, "older above younger")
+        #   * age pair inverted    (base YOUNGER than top -- a layer whose top
+        #     is older than its base, which cannot exist)
+        # A duration computed downstream from an inverted age pair comes out
+        # negative. Swap and flag, exactly like the columnar path, so the
+        # operator sees the repair instead of inheriting a reversed interval.
+        _iv_warnings: list[str] = []
+
+        def _num_or_none(v):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        _td = _num_or_none(_iv_top_depth)
+        _bd = _num_or_none(_iv_base_depth)
+        if _td is not None and _bd is not None and _td > _bd:
+            _iv_top_depth, _iv_base_depth = _iv_base_depth, _iv_top_depth
+            _iv_warnings.append("interval_depth_order_swap")
+        _ta = _num_or_none(_iv_top_age)
+        _ba = _num_or_none(_iv_base_age)
+        # Geologic convention: base is the OLDER end, so its Ma is the LARGER
+        # one. base < top means the base is younger -> inverted.
+        if _ta is not None and _ba is not None and _ba < _ta:
+            _iv_top_age, _iv_base_age = _iv_base_age, _iv_top_age
+            _iv_warnings.append("interval_age_order_swap")
         row = {
             "name": s(iv.get("name")),
-            "top_depth_m": s(iv.get("top_depth_m")),
-            "base_depth_m": s(iv.get("base_depth_m")),
-            "top_age_ma": s(iv.get("top_age_ma")),
-            "base_age_ma": s(iv.get("base_age_ma")),
+            "top_depth_m": _iv_top_depth,
+            "base_depth_m": _iv_base_depth,
+            "top_age_ma": _iv_top_age,
+            "base_age_ma": _iv_base_age,
             "characteristic_values": s(iv.get("characteristic_values")),
             "lithology": s(iv.get("lithology")),
         }
+        if _iv_warnings:
+            row["_warning"] = (_iv_warnings[0] if len(_iv_warnings) == 1
+                               else _iv_warnings)
+            for _w in _iv_warnings:
+                if _w not in _chem_warnings:
+                    _chem_warnings.append(_w)
         _carry_extras(iv,
                       _KNOWN_CHEMICAL_STRAT_INTERVAL_KEYS
                       + _CONTRACT_SOURCE_KEYS
@@ -4548,6 +4804,216 @@ def extract_zonation_chart(
 _MODE_DISPATCH["zonation_chart"] = extract_zonation_chart
 
 
+# ---------------------------------------------------------------------------
+# OCCURRENCE_MATRIX + GENERIC_TABLE (2026-10-15).
+#
+# Both are thin wrappers over the same call contract as the other seven modes;
+# what distinguishes them is the normalizer each one hands the parsed JSON to,
+# and the two normalizers deliberately differ in polarity. See
+# normalize_occurrence_matrix_result (sparse: a blank cell means absent, so the
+# row is dropped) against normalize_generic_table_result (positional: a blank
+# cell is only knowable by keeping its slot).
+#
+# generic_table is registered in _MODE_DISPATCH so a caller can ASK for it
+# explicitly. It is deliberately absent from KNOWN_CHART_TYPES, so the vision
+# classifier can never name it and it can never quietly become a default.
+# ---------------------------------------------------------------------------
+def extract_occurrence_matrix(
+    *,
+    api_key: str,
+    image_b64: str,
+    media_type: str,
+    caption: str = "",
+    chart_lang: str = "auto",
+    base_url: str = DEFAULT_ENDPOINT,
+    model: str = DEFAULT_MODEL,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    provider: LlmProvider | None = None,
+    progress_callback=None,
+) -> ExtractResult:
+    """Taxon x locality occurrence-matrix extraction.
+
+    Same contract as extract_range_chart. Unlike every other mode, the taxa are
+    the rows and the localities are the COLUMNS, so there is no continuous axis
+    to calibrate and no ``pos_0_999`` to read.
+    """
+    from .prompt import OCCURRENCE_MATRIX_SYSTEM_PROMPT
+
+    if not image_b64:
+        return ExtractResult(ok=False, error_key="err.imageRead")
+    max_tokens = clamp_max_tokens(max_tokens)
+    timeout_sec = clamp_timeout_sec(timeout_sec)
+    image_sha256 = compute_image_sha256_from_b64(image_b64)
+    p = provider or LlmProvider(
+        name="Legacy Anthropic-compatible",
+        api_format=ApiFormat.ANTHROPIC,
+        endpoint=base_url,
+        api_key=api_key,
+        model=model,
+    )
+    lang_hint = CHART_LANG_HINT.get(chart_lang, "")
+    user_prompt = (
+        "Caption:\n"
+        + (caption.strip() if caption and caption.strip() else "(no caption)")
+        + "\n\n"
+        + lang_hint
+        + "Extract the taxon x locality occurrence matrix as the strict "
+        "JSON contract: one row per FILLED cell."
+    )
+    t0 = time.perf_counter()
+    try:
+        raw_text, truncated, status, err_body, usage = _call_llm(
+            provider=p,
+            system_prompt=OCCURRENCE_MATRIX_SYSTEM_PROMPT,
+            image_b64=image_b64,
+            media_type=media_type,
+            user_text=user_prompt,
+            max_tokens=max_tokens,
+            timeout_sec=timeout_sec,
+            capture_error_body=True,
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw="", latency_ms=latency_ms,
+            warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+            image_sha256=image_sha256,
+        )
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    warning = ("Result may be truncated (model hit max_tokens). "
+               "Try raising the max_tokens setting and re-running.")
+    if raw_text is None:
+        return _error_from_status(status, err_body, latency_ms,
+                                  image_sha256=image_sha256)
+    try:
+        parsed = safe_json_loads(raw_text)
+    except ValueError:
+        return ExtractResult(
+            ok=False, error_key="err.parse", raw=raw_text,
+            truncated=truncated, latency_ms=latency_ms,
+            usage=usage or {},
+            warning=warning if truncated else "",
+            image_sha256=image_sha256,
+        )
+    try:
+        data = normalize_occurrence_matrix_result(parsed)
+    except Exception as exc:
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw=raw_text, truncated=truncated, usage=usage or {},
+            latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+            image_sha256=image_sha256,
+        )
+    return _ok_result(
+        p=p, mode_key="occurrence_matrix", data=data, raw_text=raw_text,
+        truncated=truncated, usage=usage, latency_ms=latency_ms,
+        image_sha256=image_sha256, max_tokens=max_tokens, parsed=parsed)
+
+
+_MODE_DISPATCH["occurrence_matrix"] = extract_occurrence_matrix
+
+
+def extract_generic_table(
+    *,
+    api_key: str,
+    image_b64: str,
+    media_type: str,
+    caption: str = "",
+    chart_lang: str = "auto",
+    base_url: str = DEFAULT_ENDPOINT,
+    model: str = DEFAULT_MODEL,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    provider: LlmProvider | None = None,
+    progress_callback=None,
+) -> ExtractResult:
+    """Structural extraction for a figure whose genre is NOT known.
+
+    The refusal path, not a best-guess path: the prompt tells the model to
+    report the grid it can see and to decline plainly when it cannot, and this
+    function passes that answer through instead of re-interpreting it.
+    """
+    from .prompt import GENERIC_TABLE_SYSTEM_PROMPT
+
+    if not image_b64:
+        return ExtractResult(ok=False, error_key="err.imageRead")
+    max_tokens = clamp_max_tokens(max_tokens)
+    timeout_sec = clamp_timeout_sec(timeout_sec)
+    image_sha256 = compute_image_sha256_from_b64(image_b64)
+    p = provider or LlmProvider(
+        name="Legacy Anthropic-compatible",
+        api_format=ApiFormat.ANTHROPIC,
+        endpoint=base_url,
+        api_key=api_key,
+        model=model,
+    )
+    lang_hint = CHART_LANG_HINT.get(chart_lang, "")
+    user_prompt = (
+        "Caption:\n"
+        + (caption.strip() if caption and caption.strip() else "(no caption)")
+        + "\n\n"
+        + lang_hint
+        + "Describe the STRUCTURE of this figure. Do not interpret it as any "
+        "particular chart genre, and decline plainly if you cannot read it."
+    )
+    t0 = time.perf_counter()
+    try:
+        raw_text, truncated, status, err_body, usage = _call_llm(
+            provider=p,
+            system_prompt=GENERIC_TABLE_SYSTEM_PROMPT,
+            image_b64=image_b64,
+            media_type=media_type,
+            user_text=user_prompt,
+            max_tokens=max_tokens,
+            timeout_sec=timeout_sec,
+            capture_error_body=True,
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw="", latency_ms=latency_ms,
+            warning=f"call_llm_api failed: {type(exc).__name__}: {exc}",
+            image_sha256=image_sha256,
+        )
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    warning = ("Result may be truncated (model hit max_tokens). "
+               "Try raising the max_tokens setting and re-running.")
+    if raw_text is None:
+        return _error_from_status(status, err_body, latency_ms,
+                                  image_sha256=image_sha256)
+    try:
+        parsed = safe_json_loads(raw_text)
+    except ValueError:
+        return ExtractResult(
+            ok=False, error_key="err.parse", raw=raw_text,
+            truncated=truncated, latency_ms=latency_ms,
+            usage=usage or {},
+            warning=warning if truncated else "",
+            image_sha256=image_sha256,
+        )
+    try:
+        data = normalize_generic_table_result(parsed)
+    except Exception as exc:
+        return ExtractResult(
+            ok=False, error_key="err.extract",
+            raw=raw_text, truncated=truncated, usage=usage or {},
+            latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+            image_sha256=image_sha256,
+        )
+    return _ok_result(
+        p=p, mode_key="generic_table", data=data, raw_text=raw_text,
+        truncated=truncated, usage=usage, latency_ms=latency_ms,
+        image_sha256=image_sha256, max_tokens=max_tokens, parsed=parsed)
+
+
+_MODE_DISPATCH["generic_table"] = extract_generic_table
+
+
 
 # ---------------------------------------------------------------------------
 # VISION CHART-TYPE CLASSIFIER + AUTO MODE (UI-REVIEW-2026-09-07).
@@ -4560,13 +5026,372 @@ _MODE_DISPATCH["zonation_chart"] = extract_zonation_chart
 #   3. range_chart as the final fallback.
 # ---------------------------------------------------------------------------
 
-KNOWN_CHART_TYPES = frozenset({
-    "range_chart", "columnar_section", "abundance_diagram",
-    "phylogenetic_tree", "zonation_chart", "chemical_stratigraphy",
-    "paleomap", "scatter_plot",
-})
+# DERIVED from rca_core/modes.py (2026-10-15). `generic_table` is deliberately
+# EXCLUDED: it is the fallback for an unrecognised genre, never something the
+# vision classifier may name, so admitting it here would let the classifier
+# return a mode that has no extraction path.
+KNOWN_CHART_TYPES = frozenset(
+    name for name in _MODE_SPECS if name != "generic_table")
 
 _CLASSIFY_MIN_CONFIDENCE = 0.5
+
+
+def normalize_occurrence_matrix_result(
+        parsed: dict[str, Any]) -> dict[str, Any]:
+    """Coerce the parsed taxon x LOCALITY matrix into the strict result shape.
+
+    Shape: ``columns`` (the localities, left to right), ``legend``, and a SPARSE
+    ``occurrences`` long table - one row per FILLED cell.
+
+    SPARSITY IS THE CONTRACT. The step-0 baseline run (a real occurrence matrix
+    through the real model, asked to answer as an abundance_diagram) came back
+    with 63 rows where roughly 60 were real: the model emitted a row for every
+    blank cell too, with an empty ``abundance``. Those rows are not neutral -
+    each one claims "this taxon occurs at this locality", which is exactly the
+    assertion a systematic section gets cited for, and it inflates the record
+    count until the real occurrences are indistinguishable from padding. A
+    blank cell here means ABSENT, and absence is already recoverable: it is
+    every cell that was NOT emitted. So blank rows are DROPPED here rather than
+    passed downstream.
+
+    The second thing this fixes, from the same baseline run: the rotated
+    column headers came back as taxa and the row labels as localities, which
+    produces a complete, well-formed, entirely wrong table. The header list is
+    therefore authoritative - a row whose ``site`` matches no column label is
+    kept but marked ``uncertain`` with ``unknown_column``, instead of being
+    silently accepted into a mis-transposed table.
+
+    ``row_kind`` keeps a stratigraphic comparison band ("Conodont level (see
+    text)") out of the taxon rows: it is real data about the figure, but it is
+    not a genus, and letting it into ``occurrences`` would pollute every
+    taxon-level statistic computed from this table.
+    """
+    if not isinstance(parsed, dict):
+        return {"columns": [], "legend": [], "occurrences": [],
+                "strat_rows": [], "confidence": 0.0}
+
+    # H3-fix parity: a top-level array arrives wrapped as {"_array_root": [...]}.
+    if "_array_root" in parsed and isinstance(parsed["_array_root"], list):
+        for item in parsed["_array_root"]:
+            if not isinstance(item, dict):
+                continue
+            if "label" in item and "index" in item and "cells" not in item:
+                parsed.setdefault("columns", []).append(item)
+            elif "taxon" in item or "site" in item:
+                parsed.setdefault("occurrences", []).append(item)
+            else:
+                parsed.setdefault("_unclassified", []).append(item)
+
+    def s(v: Any) -> str:
+        return _stringify_scalar(v)
+
+    warnings: list[str] = []
+    out: dict[str, Any] = {
+        "columns": [],
+        "legend": [],
+        "occurrences": [],
+        "strat_rows": [],
+        "confidence": 0.0,
+    }
+
+    # --- columns: the authoritative locality list -------------------------
+    labels: list[str] = []
+    for i, col in enumerate(parsed.get("columns") or []):
+        if not isinstance(col, dict):
+            continue
+        label = s(col.get("label") or col.get("name") or "").strip()
+        if not label:
+            # A column with no header cannot be cited, and a row pointing at it
+            # would have no verifiable identity. Keep the position, drop the
+            # name, and say so.
+            warnings.append(f"column {i} has no readable header; dropped")
+            continue
+        raw_index = col.get("index")
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            index = i
+        labels.append(label)
+        out["columns"].append({
+            "index": index,
+            "label": label,
+            "kind": s(col.get("kind") or "locality").strip() or "locality",
+        })
+
+    label_set = set(labels)
+    # Case/space-insensitive fallback: the same locality can be transcribed with
+    # different spacing by different rows of one answer.
+    norm_labels = {re.sub(r"\s+", " ", lb).casefold(): lb for lb in labels}
+
+    # --- legend: code -> class, read from the figure, never assumed --------
+    legend_by_code: dict[str, str] = {}
+    for entry in parsed.get("legend") or []:
+        if not isinstance(entry, dict):
+            continue
+        code = s(entry.get("code") or "").strip()
+        klass = s(entry.get("class") or entry.get("meaning") or "").strip()
+        if not code:
+            continue
+        out["legend"].append({"code": code, "class": klass})
+        if klass:
+            legend_by_code[code.casefold()] = klass
+
+    # --- occurrences: the sparse long table ------------------------------
+    def first_text(*vals: Any) -> str:
+        """First value that is actually present, as text.
+
+        NOT ``a or b or c``. A bare ``or`` chain treats the integer 0 as
+        absent, so a row carrying the PRINTED value 0 — which is a reading,
+        not a blank — short-circuits to the next field and then reads as an
+        empty cell: the row is dropped and a false "dropped N row(s) for
+        blank cells" warning is emitted. Only None and "" count as absent
+        here; False and 0 are real readings and must survive.
+        """
+        for v in vals:
+            if v is None:
+                continue
+            t = _stringify_scalar(v).strip()
+            if t:
+                return t
+        return ""
+
+    dropped_blank = 0
+    for raw_row in parsed.get("occurrences") or []:
+        if not isinstance(raw_row, dict):
+            continue
+        code = first_text(raw_row.get("code"), raw_row.get("symbol"),
+                          raw_row.get("value"))
+        klass = first_text(raw_row.get("class"),
+                           raw_row.get("abundance_class"))
+        # Narrow recovery of the baseline shape: asked as an abundance diagram
+        # the model puts the class letter in `abundance`. Accept it here so a
+        # partially-migrated answer is still usable, but ONLY when there is no
+        # dedicated `code`.
+        if not code:
+            code = first_text(raw_row.get("abundance"))
+
+        # THE SPARSITY CONTRACT. No code and no class == a blank cell.
+        if not code and not klass:
+            dropped_blank += 1
+            continue
+
+        taxon = first_text(raw_row.get("taxon"))
+        if not taxon:
+            warnings.append("occurrence row with no taxon label; dropped")
+            continue
+
+        row_kind = first_text(raw_row.get("row_kind")) or "taxon"
+
+        site = s(raw_row.get("site") or raw_row.get("locality")
+                 or raw_row.get("column") or "").strip()
+        if not klass and code:
+            klass = legend_by_code.get(code.casefold(), "")
+
+        row: dict[str, Any] = {
+            "taxon": taxon,
+            "authority": s(raw_row.get("authority") or "").strip(),
+            "row_kind": row_kind,
+            "site": site,
+            "col_index": raw_row.get("col_index"),
+            "code": code,
+            "class": klass,
+        }
+
+        # --- column identity must be verifiable --------------------------
+        col_index = row["col_index"]
+        try:
+            col_index = int(col_index)
+        except (TypeError, ValueError):
+            col_index = None
+
+        resolved = None
+        if site:
+            resolved = site if site in label_set else norm_labels.get(
+                re.sub(r"\s+", " ", site).casefold())
+            if resolved:
+                # Use the column's own spelling, so downstream grouping by
+                # `site` cannot split one locality across two spellings.
+                site = resolved
+
+        known_index = {c["index"] for c in out["columns"]}
+        if site and resolved is None:
+            # A site that names no column is the transposition failure mode.
+            # Keep the row (the taxon may still be readable) but flag it.
+            row["site"] = site
+            row["col_index"] = col_index
+            extra = attach_row_contract(raw_row, row)
+            row["response_kind"] = "uncertain"
+            row["reason_codes"] = sorted(
+                set(list(row.get("reason_codes") or [])) | {"unknown_column"})
+            _carry_extras(raw_row, _CONTRACT_SOURCE_KEYS + tuple(extra), row)
+            warnings.append(
+                f"occurrence row for {taxon!r} names site {site!r}, which is "
+                f"not one of the {len(labels)} column headers")
+        else:
+            # `site` is the authoritative identity, so `col_index` is
+            # reconciled to it - not merely range-checked. A row carrying
+            # site="B" with col_index=0 (which IS a valid index, just the
+            # wrong one) used to pass through untouched and into the export,
+            # leaving a row whose two identity fields contradict each other
+            # with no warning and no reason code. A contradictory pair means
+            # one of the two was misread, which is precisely what
+            # response_kind="uncertain" is for.
+            site_index = next(
+                (c["index"] for c in out["columns"] if c["label"] == site),
+                None)
+            if col_index is not None and site_index is not None \
+                    and col_index != site_index:
+                row["site"] = site
+                row["col_index"] = col_index
+                extra = attach_row_contract(raw_row, row)
+                row["response_kind"] = "uncertain"
+                row["reason_codes"] = sorted(
+                    set(list(row.get("reason_codes") or []))
+                    | {"column_index_conflict"})
+                _carry_extras(raw_row, _CONTRACT_SOURCE_KEYS + tuple(extra),
+                              row)
+                warnings.append(
+                    f"occurrence row for {taxon!r} claims col_index={col_index} "
+                    f"but site {site!r} is column {site_index}; kept both and "
+                    f"flagged uncertain")
+            else:
+                if col_index is None or col_index not in known_index:
+                    col_index = site_index if site_index is not None \
+                        else col_index
+                row["site"] = site
+                row["col_index"] = col_index
+                extra = attach_row_contract(raw_row, row)
+                _carry_extras(raw_row, _CONTRACT_SOURCE_KEYS + tuple(extra),
+                              row)
+
+        out["occurrences"].append(row)
+
+    # --- strat_rows: the non-taxon comparison band -----------------------
+    for band in parsed.get("strat_rows") or []:
+        if not isinstance(band, dict):
+            continue
+        values = band.get("values")
+        if not isinstance(values, list):
+            values = []
+        out["strat_rows"].append({
+            "label": s(band.get("label") or "").strip(),
+            "values": [s(v) for v in values],
+        })
+
+    if dropped_blank:
+        # Loud, not silent: the count of rows this answer padding produced is
+        # the single most useful thing to know when judging its quality.
+        warnings.append(
+            f"dropped {dropped_blank} row(s) for blank cells; this mode is "
+            f"sparse by contract (one row per FILLED cell)")
+
+    conf = parsed.get("confidence")
+    try:
+        out["confidence"] = _confidence_clamped(float(conf))
+    except (TypeError, ValueError):
+        out["confidence"] = 0.0
+
+    _carry_extras(parsed, ("columns", "legend", "occurrences", "strat_rows",
+                           "confidence"), out)
+    if warnings:
+        out["warnings"] = warnings
+    return out
+
+
+def normalize_generic_table_result(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Last-resort structural extraction for an unrecognised chart genre.
+
+    This is the DEFAULT for a figure the heuristic and the vision classifier
+    could not name. What it deliberately does NOT do is the thing every prior
+    unknown-chart path did: fall through to ``normalize_result`` and hand back a
+    range chart with invented ``pos_0_999`` values. A fabricated range chart
+    survives a skim-read of the output - it has the right keys, plausible
+    numbers, and an ``ok=True`` result - so it can be cited without anyone
+    noticing it was invented. Refusing is the correct behaviour, and it is what
+    the prompt asks the model to do when it cannot read the structure.
+
+    Note the polarity is the OPPOSITE of occurrence_matrix: there a blank cell
+    means "absent" and the row is dropped, because absence is recoverable from
+    the rows that were NOT emitted. Here the row set is already unknown, so a
+    blank cell is only knowable by keeping it - ``cells`` is positional and
+    must carry an empty string in that slot rather than shortening the list.
+    """
+    if not isinstance(parsed, dict):
+        return {"columns": [], "rows": [], "legend": [], "notes": "",
+                "confidence": 0.0}
+
+    if "_array_root" in parsed and isinstance(parsed["_array_root"], list):
+        for item in parsed["_array_root"]:
+            if isinstance(item, dict) and "cells" in item:
+                parsed.setdefault("rows", []).append(item)
+            elif isinstance(item, dict):
+                parsed.setdefault("rows", []).append(item)
+
+    def s(v: Any) -> str:
+        return _stringify_scalar(v)
+
+    out: dict[str, Any] = {
+        "columns": [],
+        "rows": [],
+        "legend": [],
+        "notes": s(parsed.get("notes") or "").strip(),
+        "confidence": 0.0,
+    }
+
+    for i, col in enumerate(parsed.get("columns") or []):
+        if not isinstance(col, dict):
+            continue
+        label = s(col.get("label") or col.get("name") or "").strip()
+        if not label:
+            continue
+        try:
+            index = int(col.get("index"))
+        except (TypeError, ValueError):
+            index = i
+        out["columns"].append({"index": index, "label": label})
+
+    width = len(out["columns"])
+    for i, row in enumerate(parsed.get("rows") or []):
+        if not isinstance(row, dict):
+            continue
+        cells_in = row.get("cells")
+        if not isinstance(cells_in, list):
+            cells_in = []
+        # Positional contract: pad to the column count so the row's cells[i]
+        # always addresses column i. A short list would silently shift every
+        # later cell one place left.
+        cells = [s(c) for c in cells_in][:width]
+        cells.extend([""] * (width - len(cells)))
+        try:
+            index = int(row.get("index"))
+        except (TypeError, ValueError):
+            index = i
+        out["rows"].append({
+            "index": index,
+            "label": s(row.get("label") or "").strip(),
+            "cells": cells,
+        })
+
+    for entry in parsed.get("legend") or []:
+        if not isinstance(entry, dict):
+            continue
+        code = s(entry.get("code") or "").strip()
+        if not code:
+            continue
+        out["legend"].append({
+            "code": code,
+            "class": s(entry.get("class") or entry.get("meaning") or "").strip(),
+        })
+
+    conf = parsed.get("confidence")
+    try:
+        out["confidence"] = _confidence_clamped(float(conf))
+    except (TypeError, ValueError):
+        out["confidence"] = 0.0
+
+    _carry_extras(parsed, ("columns", "rows", "legend", "notes",
+                           "confidence"), out)
+    return out
 
 
 def normalize_chart_classification(parsed: dict[str, Any]) -> dict[str, Any]:
@@ -4924,8 +5749,16 @@ def extract(
     if fn is None:
         # REVIEW-2026-09-20 #13: "err.http" meant an HTTP failure; an unknown
         # mode is a caller/config error. "err.extract" is the closest key the
-        # i18n catalogue already ships (a dedicated "err.mode" would render
-        # untranslated) - the detail stays in ``raw``.
+        # i18n catalogue already ships - the detail stays in ``raw``.
+        #
+        # FIX-2026-10-01: the original reason here ("a dedicated err.mode would
+        # render untranslated") is no longer true -- err.mode now exists in all
+        # three locales on BOTH engines. It is still the wrong key to answer
+        # here, but for a different reason: it means "this chart mode is a
+        # backend-only capability", which is what the BROWSER transport uses it
+        # for (js/minimax.js refuses scatter_plot / paleomap /
+        # chemical_stratigraphy with it). An unknown mode on the server side is
+        # a caller bug, not a capability limit, so err.extract stays correct.
         return ExtractResult(
             ok=False, error_key="err.extract",
             raw=f"unknown mode: {mode!r} (expected one of: "

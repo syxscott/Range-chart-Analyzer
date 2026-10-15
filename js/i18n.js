@@ -121,6 +121,7 @@ const RCA_I18N = {
     // had no branch at all), so ambiguous answers were silent.
     'names.ambiguous': '学名 {name} 在参考数据库中存在多个同等强度的匹配，需人工消歧',
     'upload.chartMode.zonationChart': '生物带对比图',
+    'upload.chartMode.occurrenceMatrix': '出现矩阵',
     'sec.continents': '大陸',
     'sec.oceansSeas': '海洋と海',
     'sec.tectonicFeatures': 'テクトニック要素',
@@ -285,6 +286,17 @@ const RCA_I18N = {
     'err.rateLimit': '请求过于频繁（429）。请稍后再试或降低运行次数。',
     'err.bodyTooLarge': '请求体过大（> 服务器限制）。请压缩图片或降低分辨率后重试。',
     'err.imageTooLarge': '图片过大（> 服务器限制）。请降低「图像分辨率上限」后重试。',
+    // FIX-2026-10-01: server.py emits this for an image_b64 that is not valid
+    // base64 (including the very common `data:image/png;base64,` prefix), and
+    // js/minimax.js whitelists it, so the browser looked it up and found
+    // nothing -- the user saw the sentinel "[?err.imageInvalidBase64]" instead
+    // of an explanation. Present in all three locales now.
+    'err.imageInvalidBase64': '上传的图片数据不是有效的 base64（可能带了 data: 前缀或传输不完整）。请重新选择图片后重试。',
+    // FIX-2026-10-01: this key was whitelisted but DEAD until the browser
+    // transport started emitting it, to say "this chart mode needs the backend
+    // server". A whitelist entry with no translation is a raw key waiting to
+    // happen, so it is translated in all three locales.
+    'err.mode': '该图表类型只能在后端服务下提取。请在设置中把连接方式改为「后端」，或先启动服务再试。',
     'err.badContentType': '请求 Content-Type 不被接受，请使用 application/json 重试。',
     'results.partialFailure': '{pf} 次（共 {total} 次）运行失败 — 仅 {succeeded}/{total} 次成功。可在设置中调低「运行次数」或换用更稳定的端点。',
     'footer.clientSide': '100% 客户端运行',
@@ -470,6 +482,7 @@ RCA_I18N.en = {
     // FIX-2026-09-22 (item 4): see the zh entry.
     'names.ambiguous': 'Name {name} has several equal-strength matches in the reference database (manual disambiguation needed)',
     'upload.chartMode.zonationChart': 'Zonation chart',
+    'upload.chartMode.occurrenceMatrix': 'Occurrence matrix',
     'sec.continents': 'Continents',
     'sec.oceansSeas': 'Oceans & seas',
     'sec.tectonicFeatures': 'Tectonic features',
@@ -630,6 +643,10 @@ RCA_I18N.en = {
   'err.rateLimit': 'Too many requests (429). Please retry later or reduce the runs count.',
   'err.bodyTooLarge': 'Request body is too large (exceeds the server limit). Compress the image or lower the resolution and retry.',
   'err.imageTooLarge': 'Image is too large (exceeds the server limit). Lower "Max image resolution" in settings and retry.',
+  // FIX-2026-10-01: see the zh note. server.py emits this, so the browser
+  // needs a real string rather than the "[?key]" sentinel.
+  'err.imageInvalidBase64': 'The uploaded image data is not valid base64 (it may carry a data: prefix or have arrived incomplete). Re-select the image and retry.',
+  'err.mode': 'This chart type can only be extracted through the backend server. Switch the connection mode to "backend" in settings, or start the server, and retry.',
   'err.badContentType': 'Content-Type not accepted. Retry with application/json.',
   'results.partialFailure': '{pf} of {total} runs failed — only {succeeded}/{total} succeeded. Reduce the runs count in settings or try a more stable endpoint.',
   'footer.clientSide': '100% client-side',
@@ -804,6 +821,7 @@ RCA_I18N.ja = {
     // FIX-2026-09-22 (item 4): 中国語版の項を参照。
     'names.ambiguous': '学名 {name} に対して同等の一致が複数あります（人手による解消が必要）',
     'upload.chartMode.zonationChart': '化石帯対比図',
+    'upload.chartMode.occurrenceMatrix': '出現マトリクス',
     'sec.continents': '大陆',
     'sec.oceansSeas': '海洋与海',
     'sec.tectonicFeatures': '构造要素',
@@ -964,6 +982,8 @@ RCA_I18N.ja = {
   'err.rateLimit': 'リクエスト過多です（429）。しばらくしてから再試行するか、実行回数を減らしてください。',
   'err.bodyTooLarge': 'リクエストボディが大きすぎます（サーバー上限超過）。画像を圧縮するか解像度を下げて再試行してください。',
   'err.imageTooLarge': '画像が大きすぎます（サーバー上限超過）。設定の「画像解像度の上限」を下げて再試行してください。',
+  'err.imageInvalidBase64': 'アップロードされた画像データが有効な base64 ではありません（data: プレフィックスが付いているか、転送が不完全な可能性があります）。画像を選び直して再試行してください。',
+  'err.mode': 'このチャート種別はバックエンドサーバー経由でのみ抽出できます。設定の接続方法を「バックエンド」に変更するか、サーバーを起動してから再試行してください。',
   'err.badContentType': 'Content-Type が受け付けられません。application/json で再試行してください。',
   'results.partialFailure': '{total} 回中 {pf} 回が失敗しました — {succeeded}/{total} 回のみ成功です。設定で実行回数を減らすか、より安定したエンドポイントをお試しください。',
   'footer.clientSide': '100% クライアントサイド',

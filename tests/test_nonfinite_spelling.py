@@ -152,9 +152,26 @@ def test_no_js_function_is_defined_twice():
 
 
 def test_ordinary_scalars_are_untouched():
+    # FIX-2026-10-01: a list of SCALARS is now comma-joined instead of being
+    # emptied. The old behaviour returned "" for every container, which was
+    # only safe while every container was either lifted or rescued by
+    # _carry_extras -- and _carry_extras only rescues UNKNOWN keys, so a KNOWN
+    # list-valued field (fossils in _KNOWN_PALEOMAP_SITE_KEYS, fossil_marker in
+    # _KNOWN_SAMPLE_KEYS, characteristic_fauna) lost its whole value and
+    # exported as an empty cell, which reads as the affirmative claim "this
+    # site records no fossil assemblage". A DICT still returns "" (no faithful
+    # scalar rendering), so the original assertion keeps holding for it and for
+    # the empty list.
     for v in (1.0, 0.5, 260.0, -7.25, 1e21, "x", "", None, True, False,
-              [], {}, [1], {"a": 1}):
+              [], {}, {"a": 1}):
         assert _stringify_scalar(v) in (str(v), "", "true", "false", repr(v)), v
+    # A list of scalars is joined; nested containers inside it are dropped, and
+    # a dict inside a list still contributes nothing (no repr leak).
+    assert _stringify_scalar([1]) == "1"
+    assert _stringify_scalar(["radiolaria", "algae"]) == "radiolaria, algae"
+    assert _stringify_scalar(["J", "T"]) == "J, T"
+    assert _stringify_scalar([1, None, "  ", "x"]) == "1, x"
+    assert _stringify_scalar([{"a": 1}]) == ""
     rows = _js("1", "0.5", "260", "x", "true")
     assert [r["stringify"] for r in rows] == [
         "1", "0.5", "260", "x", "true"], rows

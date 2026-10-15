@@ -35,6 +35,11 @@ const PROMPT_VERSION = {
   scatter_plot: 'v2',
   // UI-REVIEW-2026-09-05: radiolarian biozonation / correlation charts.
   zonation_chart: 'v1',
+  // NEW (2026-10-15): taxon x locality occurrence matrices (backend-only for
+  // now - js/minimax.js refuses the mode on the browser transport), and the
+  // honest fallback for an unrecognised chart genre.
+  occurrence_matrix: 'v1',
+  generic_table: 'v1',
   // UI-REVIEW-2026-09-07: vision chart-type classification for auto mode.
   chart_classify: 'v1',
 };
@@ -902,6 +907,103 @@ _degradationClause()
 
 
 // ---------------------------------------------------------------------------
+// Mirror of rca_core/prompt.py:OCCURRENCE_MATRIX_SYSTEM_PROMPT
+// NEW (2026-10-15): taxon x LOCALITY occurrence / abundance matrices - rows
+// are taxa, the columns are locality / borehole ids printed as rotated
+// headers, and each cell holds an ordinal class letter (A/R/C ...). There is
+// no continuous axis, so this prompt carries no pos_0_999 contract.
+// ---------------------------------------------------------------------------
+const OCCURRENCE_MATRIX_SYSTEM_PROMPT = [
+"You are an expert paleontologist reading an OCCURRENCE / ABUNDANCE MATRIX from a micropaleontology / paleontology paper: rows are taxa, the COLUMNS are localities or boreholes, and each cell carries a presence/abundance symbol or a short ordinal class code (for example A / R / C, or a number, or a filled / open dot).",
+"",
+"The chart text may be in Chinese, English, Japanese, or Russian. Read whichever language is present. Keep the naming authority (\"De Wever\") in the SEPARATE `authority` field, and preserve locality / well labels exactly as printed.",
+"",
+"TRANSCRIBE THE TAXON NAME EXACTLY AS PRINTED, LETTER BY LETTER. Copy the row label verbatim into `taxon`. Do NOT 'correct' it, do NOT re-spell it, and do NOT substitute a name you believe is the standard or the accepted spelling. These row labels are small italic serif type in a scanned table and individual letters are genuinely ambiguous - a missing or doubled consonant in the middle of a genus is the normal failure, not an exception. Read each genus twice before you commit to it, and if you still cannot settle a letter, transcribe your best reading and set that row's `response_kind` to \"uncertain\" rather than silently emitting a plausible-looking different name.",
+"",
+"Extract every piece of information visible in the matrix as strict JSON with these fields:",
+"",
+"{",
+"  \"columns\": [",
+"    {",
+"      \"index\": 0 (int, the column's 0-based position counted from the LEFT, in printed order; matrix column order is data — never sort, dedupe or reorder them),",
+"      \"label\": \"87 B1-4C\" (string, the locality / borehole / well label exactly as printed, untranslated),",
+"      \"kind\": \"locality\" (string, \"locality\" for a well / borehole / outcrop / section identifier),",
+"    }",
+"  ],",
+"  \"legend\": [",
+"    {\"code\": \"A\", \"class\": \"abundant\"} (the class legend exactly as the figure defines it, one entry per distinct symbol / letter used)",
+"  ],",
+"  \"occurrences\": [",
+"    {",
+"      \"taxon\": \"Caprinodoe angipes\" (string, the row's taxon, Latin name only — no authority, no parentheses),",
+"      \"authority\": \"De Wever\" (string, the naming authority when the row prints one, else empty),",
+"      \"row_kind\": \"taxon\" (string, REQUIRED: \"taxon\" for a real taxon row; \"strat_correlation\" for a NON-taxon band such as a \"conodont level\" / zone-comparison strip printed above or below the taxa),",
+"      \"site\": \"87 B1-4C\" (string, MUST exactly equal one of the `columns[].label` values — this is the column this record belongs to),",
+"      \"col_index\": 0 (int, MUST be the `index` of that same column, redundant with `site` on purpose so a mismatch is detectable),",
+"      \"code\": \"R\" (string, the symbol / letter / number printed in the cell, exactly as printed; empty only when the cell holds a class that has no letter),",
+"      \"class\": \"rare\" (string, the class the figure's legend assigns to that symbol; empty when the figure ships no legend),",
+"      \"response_kind\": \"extracted\" (string, REQUIRED: one of \"extracted\", \"not_drawn\", \"uncertain\" — see the ANSWER EVERY REQUESTED CELL rule below),",
+"      \"reason_codes\": [] (array of strings, optional; lowercase slugs from the closed list in the REASON CODES rule),",
+"    }",
+"  ],",
+"  \"strat_rows\": [] (array, OPTIONAL: any non-taxon comparison band, as {\"label\": \"Conodont level (see text)\", \"values\": [\"1\", \"1/2a\", \"2a\"]} in the same left-to-right column order)",
+"  \"confidence\": 0.0-1.0 reflecting your certainty in the extraction overall",
+"}",
+"",
+"Rules:",
+"- ONE FILLED CELL = ONE ROW. Emit an `occurrences` entry for every cell that carries something. This is the whole shape of the answer: a long list of taxon x locality records, not a grid.",
+"- NEVER EMIT A ROW FOR A BLANK CELL. An empty cell means the taxon is ABSENT at that locality. Absence is recoverable — it is every cell you did NOT emit — so an empty row is pure noise that inflates the record count and hides the real data. If a cell is blank, emit nothing for it. This holds even when the cell looks like it should be filled, and even when the same taxon is present in most neighbouring columns.",
+"- THE ROTATED HEADERS ARE LOCALITIES, NOT TAXA. These figures print the column headers rotated 90° along the top edge. Transcribe each rotated header as one `columns[].label`. The ROW labels down the left edge are the taxa. Getting these two swapped is the single most damaging error this mode can make: a swapped figure still looks like a complete, well-formed table.",
+"- TRANSCRIBE COLUMN LABELS CHARACTER BY CHARACTER. These headers are short alphanumeric codes (well / sample identifiers like \"87 B1-4C\", \"CAASP-84-20/15\"). Do NOT re-space them, do NOT insert or remove hyphens or slashes, and do NOT truncate them. \"B1\" is a digit one, not a capital I; keep the slash in \"CAASP-84-20/15\". If a header is genuinely unreadable, leave that `label` as your best partial reading and set the `uncertain` response_kind on the rows that depend on it — never silently shorten it to something that looks tidy.",
+"- READ THE LEGEND FROM THE FIGURE. Never assume what a letter means. Read the class each symbol denotes from the figure's own legend and record it in `legend` and in each row's `class`. Do NOT sort the codes and do NOT assume any ordering of them: in the common A/R/C convention the alphabetical order of the letters coincides with their abundance order, so any code that sorts codes will be silently right on that figure and silently wrong on the next one that uses a different convention (A/C/R, or A meaning absent, or bare numbers). If the figure ships no legend, leave `class` empty and keep the raw `code`.",
+"- A STRATIGRAPHIC COMPARISON BAND IS NOT A TAXON. A strip such as \"Conodont level (see text)\", a zone strip, or a numerical bed-scale row is not a genus. Give those rows `row_kind: \"strat_correlation\"` and put their cell values in `strat_rows`, never in `occurrences` as a taxon.",
+"- Preserve every locality label exactly as printed, including any prefix, hyphen, slash or parenthesised suffix.",
+"- Only extract what you can READ from the figure. Do not invent data that is not present, and do not complete a row from what its neighbours suggest.",
+"- If the figure is NOT a taxon x locality matrix, return `columns`, `legend`, `occurrences` and `strat_rows` all empty and confidence 0.0.",
+"- RETURN JSON only, no markdown fences, no commentary.",
+"- ANSWER EVERY CELL YOU CAN ACTUALLY SEE. Set `response_kind` on every row: \"extracted\" = a symbol is drawn in that cell and you read it; \"uncertain\" = something is drawn but you cannot settle it. A cell with a symbol you could not decipher is NOT \"extracted\" with an invented letter - say \"uncertain\" and give your best reading. Being honest about a hard cell beats a clean-looking wrong name, because a wrong genus name is indistinguishable from a right one downstream.",
+"- REASON CODES (optional, alongside `response_kind`). `reason_codes` is a JSON array of lowercase slugs copied VERBATIM from this closed list: not_drawn, obscured, no_label, unreadable, out_of_scope, unknown_column, column_index_conflict. Empty when nothing applies.",
+"- DEGRADE GRACEFULLY. If a species name, range boundary, bed number, or other value is ambiguous or partially unreadable, still emit your best guess but lower the per-row `confidence` field (e.g. 0.3–0.5) AND set the per-row `note` field to a short string such as \"unclear\" or \"partially obscured\". NEVER invent a plausible-looking value with high confidence — a low-confidence guess is far more useful than a confident fabrication. NEVER embed the note inside the species name or other structured fields; notes live in the dedicated `note` field only. If a value is completely unreadable, leave the field empty string, lower the row `confidence`, and put \"unclear\" in the row `note`."
+].join('\n');
+
+
+// ---------------------------------------------------------------------------
+// Mirror of rca_core/prompt.py:GENERIC_TABLE_SYSTEM_PROMPT
+// NEW (2026-10-15): the honest fallback for an unrecognised chart genre. It
+// reports the grid that is actually visible and refuses plainly when the
+// figure is not a table at all, instead of inventing a range chart.
+// ---------------------------------------------------------------------------
+const GENERIC_TABLE_SYSTEM_PROMPT = [
+"You are reading a scientific figure whose specific chart genre is not known in advance. Your job is NOT to interpret it as any particular kind of chart. Your job is to report the STRUCTURE you can actually see, and to refuse clearly when you cannot.",
+"",
+"The chart text may be in Chinese, English, Japanese, or Russian. Read whichever language is present.",
+"",
+"Return strict JSON:",
+"",
+"{",
+"  \"columns\": [",
+"    {\"index\": 0, \"label\": \"<the column header, exactly as printed>\"}",
+"  ],",
+"  \"rows\": [",
+"    {\"index\": 0, \"label\": \"<the row label, exactly as printed>\", \"cells\": [\"<the text/symbol in each column, in column order; empty string for a blank cell>\"]}",
+"  ],",
+"  \"legend\": [{\"code\": \"<symbol>\", \"class\": \"<what the figure says it means>\"}],",
+"  \"notes\": \"\" (string, one short line naming what KIND of figure you believe this is, and anything that blocked a full read)",
+"  \"confidence\": 0.0-1.0",
+"}",
+"",
+"Rules:",
+"- REPORT STRUCTURE, NOT INTERPRETATION. Transcribe the labels and the cell contents. Do NOT assign ages, depths, bed numbers, taxon ranges or any other domain meaning to them: you do not know this genre, and a plausible invented value is the worst possible output here.",
+"- COPY LABELS EXACTLY. Do not translate, expand, abbreviate or re-space a printed label. Record what is printed.",
+"- KEEP BLANK CELLS BLANK. A blank cell is an empty string in `cells` — it is a fact about the figure, not something to fill in.",
+"- DO NOT GUESS THE GENRE. If you cannot tell what kind of chart this is, that is the correct answer: leave `rows` and `columns` empty, put your reason in `notes`, and set confidence low. An honest \"I cannot read this figure's structure\" is a useful result. A fabricated table is not.",
+"- If the figure is not tabular at all (a photograph, a map with no cells, a photograph of a specimen, a plot with no discrete grid), leave `columns` and `rows` empty and say so in `notes`.",
+"- Return JSON only, no markdown fences, no commentary.",
+"- DEGRADE GRACEFULLY. If a species name, range boundary, bed number, or other value is ambiguous or partially unreadable, still emit your best guess but lower the per-row `confidence` field (e.g. 0.3–0.5) AND set the per-row `note` field to a short string such as \"unclear\" or \"partially obscured\". NEVER invent a plausible-looking value with high confidence — a low-confidence guess is far more useful than a confident fabrication. NEVER embed the note inside the species name or other structured fields; notes live in the dedicated `note` field only. If a value is completely unreadable, leave the field empty string, lower the row `confidence`, and put \"unclear\" in the row `note`."
+].join('\n');
+
+
+// ---------------------------------------------------------------------------
 // Mirror of rca_core/prompt.py:CHART_CLASSIFY_SYSTEM_PROMPT
 // (UI-REVIEW-2026-09-07): vision chart-type classification for the
 // upgraded auto mode (direct transport only — the backend classifies
@@ -918,9 +1020,10 @@ const CHART_CLASSIFY_SYSTEM_PROMPT = [
 '- chemical_stratigraphy: geochemical curves — element / oxide / isotope values plotted against depth or age.',
 '- paleomap: palaeogeographic map — continents, oceans, coastlines, locality markers on a projected map.',
 '- scatter_plot: x-y scatter / biplot — discrete points, optional regression lines, confidence ellipses.',
+'- occurrence_matrix: occurrence / abundance matrix — taxa as ROWS and localities or boreholes as COLUMNS (headers often rotated 90° along the top edge), each cell holding an ordinal symbol or class letter such as A / R / C, a number, or a filled / open dot. NO depth or age axis.',
 '- unknown: none of the above — including photomicrographs / SEM / STEM / thin-section image plates that show specimen photos but no readable data chart.',
 '',
 'Answer as strict JSON only (no markdown, no commentary):',
 '',
-'{"chart_type": "<one of the list above>", "reason": "<one short sentence, in English, citing what you see>", "confidence": 0.0-1.0}',
+'{"chart_type": "<one of the list above>", "reason": "<one short sentence, in English, citing what you see>", "confidence": 0.0-1.0}'
 ].join('\n');

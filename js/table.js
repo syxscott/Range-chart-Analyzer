@@ -2023,7 +2023,14 @@ function rcaLooksLikeAgeText(value) {
 
 // quality.js:_INFORMAL_STAGE_RE — "unnumbered stage I" & co. are legal values
 // the ICS table cannot answer for.
-const RCA_INFORMAL_STAGE_RE = /^\s*(?:unnumbered|unnamed|stage)\s+[\dxvi]+\s*$/i;
+//
+// FIX-2026-10-01: "series N" joins the informal spellings, mirroring
+// rca_core/standards/ics.py and js/quality.js. "Series 2" is an unratified
+// placeholder, so a cell holding it is no more answerable than "Stage 4".
+// tests_edit_history.js::valid-stage-informal-regex-shared requires this
+// literal to stay byte-identical to quality.js's, so the two must change
+// together.
+const RCA_INFORMAL_STAGE_RE = /^\s*(?:unnumbered|unnamed|stage|series)\s+[\dxvi]+\s*$/i;
 
 // Resolve a stage / period label against the bundled ICS tables. Reuses what
 // js/ics_table.js already ships instead of growing a second gazetteer:

@@ -63,25 +63,35 @@ import re
 # zone-specific spellings below keep the intended hits ("Zone correlation
 # of the radiolarians", "Correlation chart of the.sections",
 # "Correlation of zones") on the same cost-free path.
-_ZON_ASCII = ("zonation", "biozonation", "zone correlation",
-              "correlation chart", "correlation of zones")
-_ZON_CJK = ("生物带", "化石带", "带状对比", "对比图")
+# --- Keyword tables DERIVED from rca_core/modes.py (2026-10-15) -------------
+#
+# These were hand-written here AND mirrored again in js/app.js - which has two
+# copy-pasted autodetect functions, so a keyword edited in one copy and not the
+# other silently re-routed a whole genre into a different extraction pipeline.
+# rca_core/modes.py holds the single copy; the names below are kept so the
+# detection cascade further down stays reviewable as a cascade.
+from .modes import MODES as _MODE_SPECS
+
+
+def _kw(mode: str, attr: str):
+    return getattr(_MODE_SPECS[mode], attr)
+
+
+_ZON_ASCII = _kw("zonation_chart", "keywords_ascii")
+_ZON_CJK = _kw("zonation_chart", "keywords_cjk")
 # REVIEW-2026-09-20 #105: real zone-correlation captions separate the two
 # halves of the phrase ("Correlation of Triassic radiolarian ZONES and
 # subzones"), which no keyword tuple can express. One bounded regex keeps
 # those hits while still refusing the lithostratigraphic "Correlation of the
 # measured sections" — the sentence clause stops at the first full stop.
-_ZON_PHRASE_RES = (
-    re.compile(r"\bcorrelation of\b[^.\n]{0,80}?\bzones?\b"),
-)
+_ZON_PHRASE_RES = _kw("zonation_chart", "keywords_phrase_res")
 
-_AB_ASCII = ("pollen", "abundance", "percentage diagram", "palyno")
-_AB_CJK = ("孢粉", "花粉", "丰度", "百分比")
-_COL_ASCII = ("column", "columns", "columnar", "col_section", "col_sections")
-_COL_CJK = ("柱状", "柱状図", "柱状图")
-_PHYLO_ASCII = ("phylogen", "phylogram", "cladogram", "dendrogram",
-                "molecular phylogen")
-_PHYLO_CJK = ("系统发育", "进化树", "系统树", "分子系统")
+_AB_ASCII = _kw("abundance_diagram", "keywords_ascii")
+_AB_CJK = _kw("abundance_diagram", "keywords_cjk")
+_COL_ASCII = _kw("columnar_section", "keywords_ascii")
+_COL_CJK = _kw("columnar_section", "keywords_cjk")
+_PHYLO_ASCII = _kw("phylogenetic_tree", "keywords_ascii")
+_PHYLO_CJK = _kw("phylogenetic_tree", "keywords_cjk")
 
 # Explicit RANGE-CHART wording (延限表 / 延限図 / range chart). Used for the
 # two decisions the caption is allowed to settle on its own: the mixed
@@ -90,11 +100,11 @@ _PHYLO_CJK = ("系统发育", "进化树", "系统树", "分子系统")
 # Deliberately narrow: the bare word "range" ("depth range", "age range") is
 # NOT an indicator, and no generic synonym ("stratigraphic range") is either,
 # so this table cannot change what the four established branches return.
-_RANGE_ASCII = ("range chart", "range-chart")
+_RANGE_ASCII = _kw("range_chart", "keywords_ascii")
 # Non-ASCII terms are plain substrings — 延限 already covers 延限表 / 延限図 /
 # 延限图, and the Russian renderings are the two phrases used for a species
 # range chart in biostratigraphic literature.
-_RANGE_CJK = ("延限", "карта совмещения", "график совмещения")
+_RANGE_CJK = _kw("range_chart", "keywords_cjk")
 
 # --- REVIEW-2026-09-20 #105 (item 3): conservative tables for the three
 # modes that previously had none. "Conservative" = only words that name this
@@ -102,22 +112,17 @@ _RANGE_CJK = ("延限", "карта совмещения", "график сов�
 # vision classifier — a false positive silently extracts the wrong schema.
 #
 # Chemical stratigraphy: isotope / element curves against depth or age.
-_CHEM_ASCII = ("isotop", "chemostrat", "chemical stratigraphy",
-               "chemical stratigraphic")
-_CHEM_CJK = ("同位素", "化学地层", "化学地層", "地球化学",
-             "изотоп", "геохим")
+_CHEM_ASCII = _kw("chemical_stratigraphy", "keywords_ascii")
+_CHEM_CJK = _kw("chemical_stratigraphy", "keywords_cjk")
 
 # Paleogeographic maps: continents / coastlines / localities on a projection.
-_PALEO_ASCII = ("paleomap", "palaeomap", "paleogeograph", "palaeogeograph",
-                "paleocontinent", "palaeocontinent")
-_PALEO_CJK = ("古地理", "古海洋", "古大陆", "板块重建",
-              "палеогеограф", "палеокарт", "палеоконтинент")
+_PALEO_ASCII = _kw("paleomap", "keywords_ascii")
+_PALEO_CJK = _kw("paleomap", "keywords_cjk")
 
 # Scatter / biplot: discrete x-y point clouds (the one chart-type wording
 # that no other mode claims).
-_SCAT_ASCII = ("scatter plot", "scatterplot", "scatter diagram", "biplot",
-               "crossplot", "cross plot")
-_SCAT_CJK = ("散点", "散布図", "точечная диаграмма", "рассеяни", "рассеиван")
+_SCAT_ASCII = _kw("scatter_plot", "keywords_ascii")
+_SCAT_CJK = _kw("scatter_plot", "keywords_cjk")
 
 # Keywords that are word STEMS, not whole words: they must also match
 # inflected / compound continuations, so only a LEADING word boundary is
@@ -128,10 +133,19 @@ _SCAT_CJK = ("散点", "散布図", "точечная диаграмма", "ра
 # stemMatch), so \bzonation\b on this side silently missed the plural
 # "Zonations of ..." that the web frontend classified correctly. "range
 # chart" likewise has to cover "range charts".
-_STEMS = ("phylogen", "molecular phylogen", "palyno", "zonation",
-          "range chart", "isotop", "chemostrat", "paleomap", "palaeomap",
-          "paleogeograph", "palaeogeograph", "paleocontinent",
-          "palaeocontinent")
+# The stems that predate the registry. Kept verbatim rather than derived
+# from the per-mode keyword tuples on purpose: promoting a whole-word
+# keyword to a stem changes which captions match, so it must be a
+# reviewed per-mode decision (ModeSpec.keywords_stems) and never a side
+# effect of adding a word to a keyword table.
+_LEGACY_STEMS = frozenset((
+    "phylogen", "molecular phylogen", "palyno", "zonation",
+    "range chart", "isotop", "chemostrat", "paleomap", "palaeomap",
+    "paleogeograph", "palaeogeograph", "paleocontinent",
+    "palaeocontinent",
+))
+_STEMS = _LEGACY_STEMS | frozenset(
+    k for spec in _MODE_SPECS.values() for k in spec.keywords_stems)
 
 
 def _match_kw(text: str, needle: str) -> bool:
@@ -229,6 +243,17 @@ def auto_detect_chart_mode_ex(text: str) -> tuple[str, bool]:
             return "scatter_plot", True
         if _hit(t, _CHEM_ASCII, _CHEM_CJK):
             return "chemical_stratigraphy", True
+        # occurrence_matrix (2026-10-15) is LAST on purpose. Its keywords are
+        # the least specific in the whole table - "localit" / "wellbore" name a
+        # data-column kind, not a chart genre - and a palaeomap caption that
+        # says "fossil localities" must keep reaching paleomap above. Placing
+        # it before those three would let one generic word hijack a genre that
+        # has a dedicated prompt. Ungated by `says_range_chart` for the same
+        # reason zonation is: an explicit "range chart" caption still wins, and
+        # that check is already made once at the top of the function.
+        if _hit(t, _kw("occurrence_matrix", "keywords_ascii"),
+                _kw("occurrence_matrix", "keywords_cjk")):
+            return "occurrence_matrix", True
     # REVIEW-2026-09-20 #105: the docstring's contract, right before the
     # "nothing matched" default — an explicit range chart caption is a POSITIVE
     # hit, not a guess, so the caller must not send the image to the

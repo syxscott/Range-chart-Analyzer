@@ -36,67 +36,21 @@ from __future__ import annotations
 
 from typing import Any
 
+from .modes import MODES as _MODE_SPECS
+
 __all__ = ["CAPABILITIES", "maturity_for", "export_supported_for"]
 
+# DERIVED from rca_core/modes.py (2026-10-15). This used to be a hand-written
+# dict, so a mode could exist in extractor.py and never be declared here - the
+# UI then treated it as "unregistered mode" and disabled its table tab. The
+# registry is the single declaration; this view is a projection of it.
 CAPABILITIES: dict[str, dict[str, Any]] = {
-    "range_chart": {
-        "maturity": "stable",
-        "export_supported": True,
-        "notes": "Core mode; E2E-tested on literature range charts "
-                 "(species x sample matrices with abundance and plates).",
-    },
-    "columnar_section": {
-        "maturity": "stable",
-        "export_supported": True,
-        "notes": "Lithologic columns with formation / thickness / legend.",
-    },
-    "abundance_diagram": {
-        "maturity": "candidate",
-        "export_supported": True,
-        "notes": "Down-core curves and profiles work well; pie charts, "
-                 "heatmaps and distribution maps degrade to empty output "
-                 "by design.",
-    },
-    "phylogenetic_tree": {
-        "maturity": "candidate",
-        "export_supported": True,
-        "notes": "Newick output with parent/id structure.",
-    },
-    "zonation_chart": {
-        "maturity": "candidate",
-        "export_supported": True,
-        "notes": "Biozonation / correlation charts (radiolarian "
-                 "biochronology); E2E recovered 32 zones + cross-framework "
-                 "correlations from a Triassic zonation figure.",
-    },
-    "chemical_stratigraphy": {
-        "maturity": "assistant",
-        "export_supported": False,
-        "notes": "Geochemical curves / age-distribution summaries; broad "
-                 "genre, expect partial yields.",
-    },
-    "paleomap": {
-        "maturity": "assistant",
-        # AUDIT-2026-09-27 [item 4.2]: promoted to export_supported. The
-        # tables were always in the extractor output — measured over 66
-        # recorded real responses, 7 palaeomap results carried 24 tables
-        # (9 continents, 16 fossil sites with coordinates, tectonic features,
-        # biogeographic realms) — but this flag was False, so UIs disabled the
-        # table tab and the data was reachable only by exporting JSON. There is
-        # now a `_paleomap_tables` branch in exporter.py and a matching
-        # `rcaPaleomapConfigs` in js/table.js.
-        "export_supported": True,
-        "notes": "Palaeogeographic maps and locality figures; six tables "
-                 "(continents, oceans/seas, tectonic features, biogeographic "
-                 "realms, palaeolatitude indicators, fossil sites). "
-                 "Present-day geological maps are honestly refused by the "
-                 "model.",
-    },
-    "scatter_plot": {
-        "maturity": "assistant",
-        "export_supported": False,
-        "notes": "Scatter / biplot extraction; morphospace plots vary.",
-    },
+    name: {
+        "maturity": spec.maturity,
+        "export_supported": spec.export_supported,
+        "notes": spec.notes,
+    }
+    for name, spec in _MODE_SPECS.items()
 }
 
 _MATURITIES = {"stable", "candidate", "assistant"}
