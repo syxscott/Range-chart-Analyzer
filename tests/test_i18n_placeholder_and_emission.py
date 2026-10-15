@@ -60,6 +60,17 @@ PLACEHOLDER = re.compile(r"\{(\w+)\}")
 KEY_RE = re.compile(r"\b([a-z][a-zA-Z0-9_]*(?:\.[a-z][a-zA-Z0-9_]*)+)\b")
 JS_CALL = re.compile(r"(?<![\w.])t\(\s*'([a-z][\w.]*)'\s*(?:,|\))")
 JS_FIELD = re.compile(r"msg_?[Kk]ey\s*:\s*'([a-z][\w.]*)'")
+# A table config's title is an emit site too, and it was the one JS emit site
+# with no coverage: js/table.js carries 26 `titleKey:` literals and the two
+# patterns above match none of them (`msg_?[Kk]ey` needs a `msg` prefix). So a
+# table could be added with a title that exists in no catalog, and the browser
+# would render the raw key with nothing failing.
+#
+# Found the gap by mutation, not by reading: dropping `sec.stratRows` from
+# js/i18n.js left the whole suite green while js/table.js still handed the key
+# to the renderer. Every one of the 26 resolves in all three languages today,
+# so adding the pattern turns a hole into a guard rather than a new red.
+JS_TITLEKEY = re.compile(r"title_?[Kk]ey\s*:\s*'([a-z][\w.]*)'")
 SKIP_TOP = {"__pycache__", "node_modules", "outputs", "proxy", "references",
             ".git", ".pytest_cache", ".ruff_cache", "app", "assets", "css",
             "docs", ".claude", ".idea", ".superpowers", ".workbuddy"}
@@ -202,7 +213,7 @@ def _js_emit_sites():
         rel = path.relative_to(REPO).as_posix()
         text = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.S)
         text = re.sub(r"(?m)^\s*//.*$", "", text)
-        for rx in (JS_CALL, JS_FIELD):
+        for rx in (JS_CALL, JS_FIELD, JS_TITLEKEY):
             for m in rx.finditer(text):
                 found.setdefault(m.group(1), set()).add(rel)
     return found

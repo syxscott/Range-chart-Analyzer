@@ -734,12 +734,19 @@ def test_h4_mode_tie_break_deterministic():
 
 def test_m5_clamp_max_tokens():
     """Bug M5 regression: max_tokens is clamped server-side."""
-    from rca_core.extractor import clamp_max_tokens
-    check("m5-clamp-min", clamp_max_tokens(-1) == 1)
-    check("m5-clamp-max", clamp_max_tokens(99_999_999) == 32000)
-    check("m5-clamp-default", clamp_max_tokens(None) == 4000)
+    from rca_core.extractor import (
+        DEFAULT_MAX_TOKENS, MAX_MAX_TOKENS, MIN_MAX_TOKENS, clamp_max_tokens)
+    check("m5-clamp-min", clamp_max_tokens(-1) == MIN_MAX_TOKENS)
+    check("m5-clamp-max", clamp_max_tokens(99_999_999) == MAX_MAX_TOKENS)
+    # AUDIT-2026-10-15: these two were `== 4000`, from when 4000 WAS the
+    # default. DEFAULT_MAX_TOKENS moved to 16000 (a 22 x 18 occurrence matrix
+    # needs 4400-5400 output tokens) and these literals were not moved with
+    # it, so they had been asserting a value the code stopped returning.
+    # Stated against the constants instead: the property under test is "an
+    # unusable value falls back to the default", which survives the next bump.
+    check("m5-clamp-default", clamp_max_tokens(None) == DEFAULT_MAX_TOKENS)
     check("m5-clamp-mid", clamp_max_tokens(2048) == 2048)
-    check("m5-clamp-str", clamp_max_tokens("oops") == 4000)
+    check("m5-clamp-str", clamp_max_tokens("oops") == DEFAULT_MAX_TOKENS)
 
 
 def test_m6_quarantine_on_corrupt():

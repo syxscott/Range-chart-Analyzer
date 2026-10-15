@@ -2144,9 +2144,16 @@ class TestP1MultiRunRequestMetaResolvesItsPromptVersion:
             "update this test -- two bindings is how the confusion started")
 
     def test_the_imported_function_is_the_one_the_parser_uses(self):
-        from rca_core.prompt import prompt_version_for_mode
-        assert prompt_version_for_mode("range_chart") == "v5"
-        assert prompt_version_for_mode("abundance_diagram") == "v4"
+        from rca_core.prompt import PROMPT_VERSION, prompt_version_for_mode
+        # AUDIT-2026-10-15: these were pinned to "v5" / "v4" and broke on the
+        # legitimate prompt bump. The property this class is about is that the
+        # IMPORTED function is the one server.py calls and that it resolves a
+        # mode to that mode's DECLARED version -- so state it against the table.
+        # The "no_such_mode" fallback stays literal: it is the documented
+        # unresolved-mode stamp, and nothing about this change should move it.
+        assert prompt_version_for_mode("range_chart") == PROMPT_VERSION["range_chart"]
+        assert (prompt_version_for_mode("abundance_diagram")
+                == PROMPT_VERSION["abundance_diagram"])
         assert prompt_version_for_mode("no_such_mode") == "v3"# ---------------------------------------------------------------------------
 # AUDIT-2026-09-29: the provider connection test discarded the upstream's own
 # error message, and the fix had to survive a bytes/str mismatch.

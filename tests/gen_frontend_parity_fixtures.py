@@ -390,6 +390,88 @@ _add(
             {"species": "Zone 5", "range_top": "5", "range_base": "2"},
         ],
     }),
+    # AUDIT-2026-10-15: the wrapped-header guards and the biozone-uniformity
+    # warnings. These landed in rca_core/extractor.py first and js/minimax.js
+    # was not updated, and the differential suite could not see it -- none of
+    # the cases above feed a bare `<epithet> <Authority>` row, so "0 diverged"
+    # was silence, not parity. Measured on the same payload through both
+    # engines: the desktop returned ONE species_range row and warned, the
+    # browser returned TWO and warned about nothing.
+    #
+    # The four shapes below are the ones that actually separate the two
+    # implementations, so each is a case the fixture could not have failed
+    # before:
+    _case("range_chart", "rc_wrapped_header_repaired", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            # A bare genus: provably incomplete, so the bare epithet after it
+            # can only be its species. The pair is JOINED.
+            {"species": "Reophax", "range_top": "5", "range_base": "2"},
+            {"species": "robustus Nishimura", "range_top": "5", "range_base": "2"},
+        ],
+    }),
+    _case("range_chart", "rc_wrapped_header_dropped", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            # NOT a bare genus (two epithets), so the pairing is not forced and
+            # the fragment is DROPPED with its text kept under _extras.
+            {"species": "Phormocyrtis striata praequista Nishimura",
+             "range_top": "5", "range_base": "2"},
+            {"species": "demissa Foreman", "range_top": "5", "range_base": "2"},
+        ],
+    }),
+    _case("range_chart", "rc_wrapped_header_iron_rule_tail", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            {"species": "Postouwia Zone", "range_top": "5", "range_base": "2"},
+            # The iron rule rejected the row above, so it is not a genus and
+            # must not swallow this fragment -- and this fragment must survive.
+            {"species": "demissa Foreman", "range_top": "5", "range_base": "2"},
+        ],
+    }),
+    _case("range_chart", "rc_biozone_uniform_across_figure", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            {"species": "Alpha one", "biozone": "Zone A, Zone B",
+             "range_top": "5", "range_base": "2"},
+            {"species": "Beta two", "biozone": "Zone A, Zone B",
+             "range_top": "5", "range_base": "2"},
+            {"species": "Gamma three", "biozone": "Zone A, Zone B",
+             "range_top": "5", "range_base": "2"},
+        ],
+        # The stamped value is the WHOLE zone list joined, which is the sharper
+        # form: every row is asserted to belong to every zone on the plate.
+        "biozones": [{"name": "Zone A"}, {"name": "Zone B"}],
+    }),
+    # Two shapes the cases above could NOT have caught, found by mutation: a
+    # clause that no case exercises is not a covered clause.
+    # (a) The ASCII-initial rule. Widen it from [a-z] to Unicode-lowercase and
+    #     this is the only case that notices: a Greek epithet reads as a
+    #     fragment under the widened rule and is dropped, and under the real one
+    #     it is not a fragment and survives.
+    _case("range_chart", "rc_wrapped_header_non_ascii_epithet", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            {"species": "Phormocyrtis striata praequista Nishimura",
+             "range_top": "5", "range_base": "2"},
+            {"species": "ακμε Smith", "range_top": "5", "range_base": "2"},
+        ],
+    }),
+    # (b) The whole-figure join. Uniform value "Zone A" over TWO declared zones
+    #     is NOT the joined list, so only biozone_uniform_across_figure fires.
+    #     Drop the join requirement and the sharper warning fires wrongly.
+    _case("range_chart", "rc_biozone_uniform_not_the_whole_figure", {
+        "sections": [{"name": "S1"}],
+        "species_ranges": [
+            {"species": "Alpha one", "biozone": "Zone A",
+             "range_top": "5", "range_base": "2"},
+            {"species": "Beta two", "biozone": "Zone A",
+             "range_top": "5", "range_base": "2"},
+            {"species": "Gamma three", "biozone": "Zone A",
+             "range_top": "5", "range_base": "2"},
+        ],
+        "biozones": [{"name": "Zone A"}, {"name": "Zone B"}],
+    }),
     _case("range_chart", "rc_index_order_swap", {
         "species_ranges": [
             {"species": "A", "range_top_idx": 2, "range_base_idx": 9},

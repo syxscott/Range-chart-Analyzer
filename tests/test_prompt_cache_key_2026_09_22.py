@@ -53,7 +53,13 @@ def test_lenient_fallback_is_unchanged_for_display_consumers():
     # Extraction/history stamping keeps the documented lenient behaviour;
     # only cache keys are held to the strict helper.
     assert prompt_version_for_mode("auto") == "v3"
-    assert prompt_version_for_mode("range_chart") == "v5"
+    # AUDIT-2026-10-15: this used to pin `== "v5"`, which made a legitimate
+    # prompt bump look like a defect. What the test is actually about is that
+    # the LENIENT helper resolves a known mode to that mode's declared version,
+    # the same thing test_strict_helper_returns_the_per_mode_version asserts
+    # for the strict one -- so state it as the relationship, not as a number
+    # that has to be edited every time a prompt changes.
+    assert prompt_version_for_mode("range_chart") == PROMPT_VERSION["range_chart"]
 
 
 def test_strict_helper_returns_the_per_mode_version():
@@ -98,11 +104,22 @@ def _key(mode: str) -> str:
 
 
 def test_two_resolved_modes_with_different_versions_get_different_keys():
-    """Regression: an "auto" request resolved to range_chart (v5) and one
-    resolved to abundance_diagram (v4) must never share a cache entry."""
+    """Regression: an "auto" request resolved to range_chart and one
+    resolved to abundance_diagram must never share a cache entry.
+
+    AUDIT-2026-10-15: the two version pins here read "v5" / "v4" and were the
+    only thing failing after a legitimate prompt bump. The PRECONDISE of this
+    test is that the two modes carry different versions -- so assert that
+    directly instead of two literals that must be edited on every bump. If a
+    future bump ever gives both modes the same version, this now says so
+    explicitly rather than tripping over an unrelated literal.
+    """
+    assert PROMPT_VERSION["range_chart"] != PROMPT_VERSION["abundance_diagram"]
     assert _key("range_chart") != _key("abundance_diagram")
-    assert prompt_version_for_cache_key("range_chart") == "v5"
-    assert prompt_version_for_cache_key("abundance_diagram") == "v4"
+    assert (prompt_version_for_cache_key("range_chart")
+            == PROMPT_VERSION["range_chart"])
+    assert (prompt_version_for_cache_key("abundance_diagram")
+            == PROMPT_VERSION["abundance_diagram"])
 
 
 def test_same_resolved_mode_always_gets_the_same_key():
@@ -119,8 +136,13 @@ def test_contract_bump_invalidates_the_auto_path_key():
         **BASE_FIELDS, mode="range_chart",
         prompt_version=prompt_version_for_mode("auto"))  # the old bug: "v3"
     assert stale_v3_key != resolved_key
-    # and the resolved key visibly carries the bumped version
-    assert prompt_version_for_cache_key("range_chart") == "v5"
+    # ...and the resolved key visibly carries the mode's OWN version, not the
+    # fallback. AUDIT-2026-10-15: this pinned `== "v5"`, which broke on every
+    # legitimate bump; the claim is the inequality above line, so state it as
+    # one. If range_chart's version ever fell back onto the "auto" value, the
+    # original bug would be back and this goes red -- which is the point.
+    assert (prompt_version_for_cache_key("range_chart")
+            != prompt_version_for_mode("auto"))
 
 
 # ---------------------------------------------------------------------------

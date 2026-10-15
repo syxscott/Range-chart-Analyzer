@@ -549,6 +549,252 @@ _IRON_RULE_ZONE_RE = re.compile(
 )
 
 
+# ---------------------------------------------------------------------------
+# AUDIT-2026-10-15 (D1): a column header printed VERTICALLY over two lines is
+# returned as two rows.
+#
+# Measured on Li Xin et al. 2018a Fig. 4 (`_figtest/r10_lixin_col_result.json`,
+# shipped extract over the real plate): the 24 taxon headers are rotated 90 and
+# wrapped, so one column reads
+#
+#     Bekoma? cf. demissa
+#     robusta Nishimura
+#
+# and the model returned FOUR `species_ranges` rows for the two columns that
+# share that stem --
+#
+#     Bekoma? cf. demissa   ZN1-16 .. ZN1-20
+#     robustus Nishimura    ZN1-20 .. ZN1-21
+#     Bekoma? cf. demissa   ZN1-15 .. ZN1-15
+#     demissa Foreman       ZN1-15 .. ZN1-16
+#
+# "robustus Nishimura" and "demissa Foreman" are not printed anywhere on the
+# plate: each is the second PRINTED LINE of a header whose first line is
+# already a row of its own. They exported as taxa with FAD/LAD endpoints, i.e.
+# the normaliser turned a line-wrap artefact into two fabricated occurrence
+# records (2 of 20 rows; 3 of 20 names were not complete labels).
+#
+# The name-shape vocabulary below is what separates the cases. Tokens are
+# whitespace-separated, so this deliberately does not try to parse
+# punctuation-heavy forms -- it only has to answer "is this the tail of a
+# wrapped header", "is this a bare epithet", "is this a bare authority" and
+# "is this a genus and nothing else".
+_NAME_OPEN_NOMINATURE = frozenset({"sp.", "spp.", "sp", "ssp."})
+_NAME_QUALIFIERS = frozenset({
+    "cf.", "aff.", "subsp.", "var.", "s.l.", "s.str.", "sensu", "nov.",
+    "n.sp.", "emend.", "et", "al.",
+})
+
+
+def _name_label_parts(name: Any) -> tuple[list[str], str, bool]:
+    """Split a taxon label into ``(name tokens, authority, open_nomenclature)``.
+
+    ``name tokens`` keeps the genus and every epithet that is part of the NAME,
+    in print order. A trailing authority is peeled off -- parenthesised
+    ("... (Nishimura)") or bare ("... carinatatum Ehrenberg") -- because an
+    authority is not an epithet and must not make a name look binomial.
+
+    The authority test is positional, not lexical: it can only START at the
+    second token, since the first token is the genus and a genus is always
+    capitalised. That is what keeps "Orbula sp." (one name token plus an
+    open-nomenclature abbreviation) apart from "Bekoma Foreman" (a genus plus
+    an authority), and it needs no authority lexicon, so it cannot mistake a
+    capitalised surname for a species epithet.
+
+    ``open_nomenclature`` reports whether an explicit ``sp.``/``spp.`` marked
+    the label genus-level. Such a label is complete ON PURPOSE, so it must
+    never be treated as a truncated one.
+    """
+    text = _stringify_scalar(name).strip()
+    if not text:
+        return [], "", False
+    tokens = text.split()
+    authority = ""
+    # Parenthesised authority anywhere in the label ("... (Nishimura)").
+    while tokens and tokens[-1].endswith(")") and tokens[-1].count("("):
+        authority = (tokens[-1] + " " + authority).strip()
+        tokens.pop()
+    # Bare authority: a capitalised token from position 1 onwards, together
+    # with the abbreviation run that commonly follows it ("Li and Matsuoka sp.
+    # nov.").
+    if len(tokens) >= 2 and tokens[1][:1].isupper():
+        authority = " ".join(tokens[1:]).strip()
+        tokens = tokens[:1]
+    # Trailing qualifier run ("... cf.", "... aff.").
+    while len(tokens) > 1 and tokens[-1].lower() in _NAME_QUALIFIERS:
+        tokens.pop()
+    open_nom = any(t.lower() in _NAME_OPEN_NOMINATURE for t in tokens[1:])
+    return tokens, authority, open_nom
+
+
+def _is_ascii_lowercase_start(token: str) -> bool:
+    """True when *token* begins with an ASCII lowercase letter.
+
+    The wrap repair reasons about Latin binomials ("robustus", "demissa"), and
+    ASCII is the right notion of "identifier character" here for the same
+    reason the iron rule and the zone_type ladder above spell their lookarounds
+    explicitly: a CJK or Greek letter has no case, so ``str.islower()`` reads it
+    as "not capitalised" and a genus like "图zone" would test as a bare epithet.
+    """
+    return bool(token[:1]) and "a" <= token[0] <= "z"
+
+
+def _is_wrapped_header_fragment(name: Any) -> bool:
+    """True when *name* is ``<epithet> <Authority>`` -- a wrapped header's tail.
+
+    The authority is REQUIRED, and that is the sharpest line in this whole
+    repair. A lone lowercase word is not enough evidence: it is exactly what
+    the committed parity fixture ``rc_iron_rule_boundaries`` feeds the iron
+    rule as a NON-zone ("zozone", "zoness"), so acting on the name alone would
+    delete rows a pinned contract says must survive. Pairing an epithet with
+    the capitalised surname that follows it is what makes the shape a
+    fragment: no taxon is named "robustus Nishimura", but "robustus" and
+    "Nishimura" are both real pieces of one wrapped column header.
+
+    The remaining token must start with an ASCII lowercase letter, because a
+    genus is capitalised by convention in every one of these payloads, so
+    "Orbula sp." / "Reophax spp." and the bare genus "Reophax" are not
+    fragments.
+    """
+    tokens, authority, open_nom = _name_label_parts(name)
+    if open_nom or len(tokens) != 1 or not authority:
+        return False
+    return _is_ascii_lowercase_start(tokens[0])
+
+
+def _is_bare_epithet(name: Any) -> bool:
+    """True when *name* reduces to a lone Latin epithet.
+
+    Weaker than :func:`_is_wrapped_header_fragment` on its own -- a lone
+    lowercase word is also what the iron-rule fixtures use for a label that is
+    not a zone. So this is only ever consulted as the TAIL of a repair, where
+    the preceding row has already been proven to be a genus and nothing else
+    and therefore has no other epithet the word could belong to.
+    """
+    tokens, _authority, open_nom = _name_label_parts(name)
+    if open_nom or len(tokens) != 1:
+        return False
+    return _is_ascii_lowercase_start(tokens[0])
+
+
+def _is_wrappable_header_base(name: Any) -> bool:
+    """True when *name* is a genus and nothing else -- provably incomplete.
+
+    A label with no epithet and no ``sp.``/``spp.`` is a genus on its own, so
+    a bare epithet printed immediately after it can only be that genus's
+    species: the pairing is forced by the plate, not guessed. "Orbula sp." is
+    excluded on purpose -- the abbreviation says the genus is the whole
+    determination, so nothing follows it.
+    """
+    tokens, _authority, open_nom = _name_label_parts(name)
+    if open_nom or len(tokens) != 1:
+        return False
+    return bool(tokens[0][:1].isupper())
+
+
+def _is_bare_authority(name: Any) -> bool:
+    """True when *name* is a single unpunctuated capitalised word.
+
+    That is the shape of an authority that lost its genus ("Foreman",
+    "Nishimura") -- and it is AMBIGUOUS, because it is also exactly what a
+    genus-level determination looks like. It is therefore never used to flag or
+    drop a row: the committed parity fixture ``rc_string_row_biozones`` reads
+    ``{"species": "Beta"}`` off a bare string and is a legitimate label, so any
+    flag on this shape is a false positive by construction, and deleting on a
+    coin-flip is the destructive half of this repository's rule that an
+    unsupported row is worse than a missing one. It is used in exactly one
+    place: :func:`_guard_wrapped_header_rows` refuses to build a repair on a
+    base this ambiguous, so the one decision it drives can only ever refuse.
+
+    A genus followed by ``?`` or ``sp.`` is punctuated or abbreviated and
+    returns False.
+    """
+    tokens, authority, open_nom = _name_label_parts(name)
+    if open_nom or authority or len(tokens) != 1:
+        return False
+    token = tokens[0]
+    return bool(token[:1].isupper()) and token.isalpha()
+
+
+def _row_is_iron_rule_rejected(row: dict[str, Any]) -> bool:
+    """True when the iron-rule pass already rejected *row*'s name.
+
+    A label it rejected is a zone label, not a taxon name, so it can be
+    neither the tail of a wrapped header nor the genus one completes --
+    "Postouwia Zone" reads as genus-plus-authority to the name parser and
+    would otherwise swallow the fragment that follows it. The two rules answer
+    different questions and the older, fixture-pinned one wins.
+
+    Reads ``_warning`` in both shapes :func:`_add_row_flag` writes (one flag as
+    a bare string, several as a list).
+    """
+    existing = row.get("_warning")
+    if isinstance(existing, list):
+        return "iron_rule_zone_label" in existing
+    return existing == "iron_rule_zone_label"
+
+
+def _guard_wrapped_header_rows(rows: list[dict[str, Any]],
+                                root_warnings: list[str],
+                                ) -> list[str]:
+    """Repair or drop the rows a two-line column header was split into.
+
+    Returns the text of every row that was removed WITHOUT being rejoined, for
+    the caller to preserve under ``_extras`` -- the same "warn, and keep the
+    raw text" contract ``_fold_axis_calibration`` uses for a calibration block
+    it cannot use. A tail consumed by a repair is not reported, because its
+    text is still on the plate, in the row that now carries it.
+
+    Repair fires only when the preceding row is a genus and nothing else, so
+    which row the fragment belongs to is decided by the plate rather than by
+    list position alone (see :func:`_is_wrappable_header_base`). Everything
+    else is dropped, because on the measured figure the two candidate columns
+    carry the SAME stem ("Bekoma? cf. demissa" twice) and their endpoint
+    readings straddle both columns' bars -- there is no evidence in the
+    payload that picks one, and inventing a FAD/LAD would be worse than the
+    missing row.
+
+    Three ways a row can be neither dropped nor repaired, all of which leave
+    it untouched: the iron rule already rejected it as a non-taxon; it is the
+    first row, so there is no base to test it against (a lone epithet is not
+    enough on its own); or its predecessor was itself consumed by an earlier
+    repair, leaving no base.
+    """
+    dropped: list[str] = []
+    joined = False
+    doomed: set[int] = set()
+    for i, row in enumerate(rows):
+        name = _stringify_scalar(row.get("species"))
+        if _row_is_iron_rule_rejected(row) or i == 0 or (i - 1) in doomed:
+            continue
+        base = rows[i - 1]
+        base_name = _stringify_scalar(base.get("species"))
+        repairable = (not _row_is_iron_rule_rejected(base)
+                      and _is_wrappable_header_base(base_name)
+                      and not _is_bare_authority(base_name))
+        if repairable:
+            if not _is_bare_epithet(name):
+                continue
+        elif not _is_wrapped_header_fragment(name):
+            continue
+        else:
+            dropped.append(name)
+            doomed.add(i)
+            continue
+        base["species"] = f"{base_name} {name}".strip()
+        _add_row_flag(base, "wrapped_header_joined")
+        joined = True
+        doomed.add(i)
+    if not doomed:
+        return dropped
+    rows[:] = [r for i, r in enumerate(rows) if i not in doomed]
+    if joined and "wrapped_header_row_joined" not in root_warnings:
+        root_warnings.append("wrapped_header_row_joined")
+    if "wrapped_header_fragment_dropped" not in root_warnings:
+        root_warnings.append("wrapped_header_fragment_dropped")
+    return dropped
+
+
 def _classify_array_item(item: dict[str, Any]) -> str | None:
     """Classify an item from a top-level array to the appropriate key.
 
@@ -2237,6 +2483,46 @@ def normalize_result(parsed):
             if "iron_rule_zone_label" not in root_warnings:
                 root_warnings.append("iron_rule_zone_label")
 
+    # AUDIT-2026-10-15 (D1): repair the rows a two-line column header was
+    # split into, and drop the ones no evidence can place. See
+    # _guard_wrapped_header_rows for the measured figure.
+    dropped_fragments = _guard_wrapped_header_rows(
+        out["species_ranges"], root_warnings)
+
+    # AUDIT-2026-10-15 (D4): one biozone stamped on every row.
+    #
+    # Measured on Diaz & Velez 2018 Fig. 5 (`_figtest/diaz_fig5_result.json`):
+    # all 28 rows carry the identical
+    #     biozone = "Trochammina sp. Zone, Marsonella oxycona Subzone"
+    # including the radiolarians drawn OUTSIDE the pink foraminiferal block,
+    # while the figure's zonation column is a band that covers only part of the
+    # section. Per-row biozone is copied verbatim from the model
+    # (_normalize_species_into), so nothing here can correct it: there is no
+    # positional evidence in the payload to say which zone a given row sits in,
+    # and guessing one would stamp a different fabrication. Two root-level
+    # warnings are raised instead, and nothing is rewritten.
+    #
+    # Root-level, not per-row, on purpose: aggregate.py:1168 records an earlier
+    # attempt at a per-row flag for a whole-result pattern that turned four
+    # contract tests red, and _warnings is the established vocabulary for a
+    # result-level shape problem (dict_shaped_array / string_row_coerced /
+    # iron_rule_zone_label all live there). aggregate.py:1454 carries it
+    # through a multi-run merge, so the operator still sees it.
+    _zones = [s(_bz.get("name")).strip() for _bz in out["biozones"]]
+    _zones = [z for z in _zones if z]
+    _row_zones = [s(sp.get("biozone")).strip() for sp in out["species_ranges"]]
+    _used = [z for z in _row_zones if z]
+    if len(_used) >= 3 and len(set(_used)) == 1:
+        if "biozone_uniform_across_figure" not in root_warnings:
+            root_warnings.append("biozone_uniform_across_figure")
+        # The sharper form: the constant is not one of the declared zones at
+        # all, it is the figure's ENTIRE zone list joined into one cell -- so
+        # the stamp asserts every row belongs to every zone on the plate.
+        if (len(_zones) >= 2
+                and _used[0] == ", ".join(_zones)
+                and "biozone_spans_whole_figure" not in root_warnings):
+            root_warnings.append("biozone_spans_whole_figure")
+
     of = parsed.get("other_fossils") or []
     # Fix B-3: handle case where model returns a string instead of a list.
     # REVIEW-2026-09-10: dict-shaped entries used to be dropped here while
@@ -2260,6 +2546,12 @@ def normalize_result(parsed):
                   if k not in _KNOWN_RANGE_CHART_KEYS}
     extras_src.pop("_array_root", None)
     extras_src.pop("_note", None)
+    # AUDIT-2026-10-15 (D1): a wrapped-header fragment that no evidence could
+    # place is removed from species_ranges, so its text is preserved here
+    # rather than lost -- the same "warn, and keep the raw text" contract
+    # _fold_axis_calibration below follows for an unusable calibration block.
+    if dropped_fragments:
+        extras_src["dropped_species_fragments"] = dropped_fragments
     # BORROW-2026-09-20 (B): hoist the optional calibration to a root key so
     # the geometry sidecars' numbers are re-derivable downstream. Absent when
     # the model emitted none — legacy results keep their exact old key set.

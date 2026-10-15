@@ -30,7 +30,7 @@ writes no HTTP of its own.
 
 THE VERIFIER IS PROMPTED TO REPORT ABSENCES ONLY
 ================================================
-Asymmetry is the whole design, and it is deliberate. A verifier asked "which of
+Asymmetry is the design, and it is deliberate. A verifier asked "which of
 these names are in the figure?" answers with a list, and a model under pressure
 to be useful will always produce a list - so its silence becomes indistinguishable
 from laziness. A verifier asked "which are you CERTAIN are absent?" can only
@@ -38,6 +38,40 @@ speak up when it has positive evidence, so a wrong-but-quiet verifier degrades t
 the honest, conservative answer ("nothing is missing") instead of inventing
 absences. The false-negative direction is the one we can afford; a clean report
 costs a re-read, a false accusation costs the user their trust in the tool.
+
+MEASURED, AND THE ONE PLACE THAT ARGUMENT DID NOT HOLD
+======================================================
+Running the check over ten real results (round 2) showed the asymmetry alone
+is not enough. Of the 7 absences it reported across 10 figures, my own reading
+of the images confirms 2 true positives and 5 false positives:
+
+  Zhang Lei et al. 2018 Fig. 3   Kungurian Stage / Artinskian Stage /
+                                 Sakmarian Stage / Asselian Stage
+                                 -> ALL FOUR PRINTED, in the rotated
+                                 stage-header column. Four false positives.
+  Ozsvart et al. 2016 Fig. ...  UAZ 16 - Spica -> PRINTED (16 sits inside the
+                                 merged "Spica" cell). One false positive.
+  Ozsvart et al.                 Xitus subtilis -> figure prints "Xitus
+                                 subitis". TRUE POSITIVE.
+  Souza et al.                   "Geomagnetic Polarity Time Scale (GPTS)" ->
+                                 the header reads "Paleomagnetic scale". TRUE
+                                 POSITIVE.
+  Tomimatsu et al. 2022 Fig. 8   no_names - see NAME_SOURCES.
+
+The stage-name failure is not the verifier being unreliable; it is the
+question being asked. A stage printed as a rotated axis header is among the
+most visually salient text in the figure, but it is not a taxon row, and the
+verifier resolved "not a taxon row" into "not present". Rule 2 already
+forbade reporting names printed "in a header"; it did not say that a name
+which IS a header is present. Rules 3-6 of the prompt now say so explicitly,
+each anchored to a case measured above, and the candidate list is framed as
+"names printed in this figure, of every kind" rather than "taxon names".
+
+Tightening the presence test is the safe direction: every rule added above
+moves names from absent to present. That is also why each one is paired with
+a positive instruction to keep reading, and why the regression test pins the
+two true positives above - a prompt that stops reporting anything would score
+better on false positives while being worthless.
 
 EVERY FAILURE PATH IS "NOT PERFORMED", NEVER "CLEAN"
 ====================================================
@@ -85,6 +119,8 @@ __all__ = [
     "GROUNDING_NOT_PERFORMED",
     "GROUNDING_NO_NAMES",
     "NAME_SOURCES",
+    "ROW_IS_NAME",
+    "BARE_STRING_ROW_TABLES",
     "GROUNDING_MAX_TOKENS",
     "GROUNDING_MAX_CANDIDATES",
 ]
@@ -107,14 +143,22 @@ GROUNDING_NO_NAMES = "no_names"
 # ONE TABLE. A mode is covered by adding its keys HERE, not by editing five
 # branches: every collector, every row-flagging pass and every test reads this
 # tuple. The keys and row keys were read off the normalizers in
-# rca_core/extractor.py (see ``_KNOWN_ZONATIONS_KEYS`` / ``_KNOWN_CORRELATION_KEYS``
-# / ``normalize_generic_table_result``) and the column lists in
+# rca_core/extractor.py (see ``_PRIMARY_ID_KEYS`` / ``_KNOWN_CHEMICAL_STRAT_*``
+# / ``normalize_columnar_result``) and the column lists in
 # rca_core/exporter.py::get_configs_for_result, rather than guessed.
 #
 # A key that is absent from this table is a key whose contents are NOT claimed
 # to be printed in the figure - so a result that carries only those keys gets
 # GROUNDING_NO_NAMES instead of a fabricated "verified clean".
 # ---------------------------------------------------------------------------
+
+#: Row key meaning "the row IS the name". ``other_fossils`` is normalised to a
+#: list of PLAIN DISPLAY STRINGS (``extractor._merge_other_fossils`` keeps
+#: only ``isinstance(x, str)``; ``_other_fossils_from`` stringifies a dict
+#: entry), so a row has no dict to read a field from. Empty string rather than
+#: ``None`` so it can never collide with a real field name, and so this stays
+#: ONE table rather than a second one keyed by table name.
+ROW_IS_NAME = ""
 
 NAME_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
     # range_chart
@@ -134,7 +178,44 @@ NAME_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("columns", ("label", "name")),
     # zonation_chart correlation edges - both ends are printed zone names.
     ("correlations", ("from_zone", "to_zone", "from_zonation", "to_zonation")),
+
+    # --- AUDIT item 10: modes that carry names and were checked for NOTHING.
+    # Round 2 measured the cost: Tomimatsu et al. 2022 Fig. 8 was classified
+    # ``chemical_stratigraphy``, so every name it carries sat in one of the
+    # three tables below, ``collect_candidate_names`` returned [], and the check
+    # answered ``no_names`` - a figure whose entire content is taxon ranges
+    # with ZERO names verified. An unchecked result reported no problem; that
+    # is the failure mode this table exists to prevent.
+    #
+    # chemical_stratigraphy: every one of its tables is name-bearing and none
+    # was listed. ``sample_id`` is the row's printed label
+    # (``extractor._PRIMARY_ID_KEYS["data_points"]``); ``stage`` is the
+    # chronostratigraphic name on the age axis. ``events`` and ``intervals``
+    # carry ``name`` in their normalisers AND as a column in the generic-table
+    # exporter path (chemical_stratigraphy is in ``_TABLELESS_MODES`` but still
+    # exports its three tables).
+    ("data_points", ("sample_id", "stage")),
+    ("events", ("name",)),
+    ("intervals", ("name",)),
+    # abundance_diagram locality headers - the column labels every abundance
+    # row is keyed on, printed verbatim above each column.
+    ("sites", ("name",)),
+    # range_chart section headers carry ``name`` (``_normalize_section_into``);
+    # columnar_section carries ``id`` instead (``normalize_columnar_result``
+    # writes id/group, never name). One table key, two modes, both read.
+    ("sections", ("name", "id")),
+    # range_chart free-text fossil labels. Rows are PLAIN STRINGS after
+    # normalisation (11 of 12 FAD/LAD events landed here in an earlier round),
+    # so ROW_IS_NAME carries them; ``fossil``/``text`` are the dict-shaped
+    # spellings the exporter's own row lambda reads for third-party producers.
+    ("other_fossils", (ROW_IS_NAME, "fossil", "text")),
 )
+
+#: Tables whose rows may be plain strings rather than dicts. ``other_fossils``
+#: is the only one today; the collector treats a non-dict row in one of these
+#: as the name itself instead of skipping it.
+BARE_STRING_ROW_TABLES = frozenset(k for k, keys in NAME_SOURCES
+                                   if ROW_IS_NAME in keys)
 
 #: Deliberately small. The reply is meant to be a handful of names, and the
 #: verifier is asked for ABSENCES only - a large budget invites a large answer.
@@ -156,7 +237,8 @@ GROUNDING_ROW_FLAG = "name_not_in_figure"
 GROUNDING_SYSTEM_PROMPT = (
     "You verify scientific names against a single figure for a paleontology "
     "chart-extraction tool. You are shown ONE figure and a list of taxon / "
-    "biozone names that a vision model claimed it read from that figure.\n"
+    "biozone / stage names that a vision model claimed it read from that "
+    "figure.\n"
     "\n"
     "Report ONLY the names that are ABSENT from the figure. This is the only "
     "thing you are asked for.\n"
@@ -169,14 +251,38 @@ GROUNDING_SYSTEM_PROMPT = (
     "orthographic variant or a typo, or printed in a legend, an axis label, a "
     "header, a caption inside the figure, or a footnote. Do NOT report a name "
     "merely because you cannot read it clearly or it is small.\n"
-    "3. NEVER report a name because it is unfamiliar to you. Many valid names "
+    "3. A name printed as a STRATIGRAPHIC STAGE OR AGE is PRINTED. In a "
+    "zonation chart the stage names sit in their own rotated axis header "
+    "column, in a stage/age header row, or in a column header cell - they are "
+    "visually among the LARGEST, boldest text in the figure. \"It is not a "
+    "taxon row\" and \"it is not next to a range bar\" are NOT evidence of "
+    "absence; a stage name is not in the figure only if no stage name like it "
+    "appears at all.\n"
+    "4. A candidate that is a printed name plus a RANK SUFFIX is PRESENT. Read "
+    "the printed name and match it against the candidate's stem: if the "
+    "figure prints \"Kungurian\" and the candidate is \"Kungurian Stage\", or "
+    "the figure prints \"Albian\" and the candidate is \"Albian Stage\", the "
+    "candidate is PRESENT. The same applies to Zone, Subzone, Group, "
+    "Substage, Superstage, Age, Formation and Member.\n"
+    "5. A name whose characters are DISTRIBUTED over two lines, two table "
+    "cells or two columns is PRESENT. \"P. scalprata m.\" above "
+    "\"rhombothoracata Zone\" is one zone name, not two; \"GTS\" above "
+    "\"(Subcommission on\" above \"Permian stratigraphy, 2016)\" is one "
+    "header. A hyphen at the end of a line is a LAYOUT HYPHEN from wrapping, "
+    "so \"P. lomentaria-\" over \"P. sakmarensis\" matches the candidate "
+    "\"P. lomentaria-P. sakmarensis Assemblage-Zone\". Absorb whitespace and "
+    "line breaks before you compare.\n"
+    "6. A numeral that falls inside a MERGED cell counts as labelled by that "
+    "cell. If a band prints \"15  16\" above the single word \"Spica\", then "
+    "both \"UAZ 15 - Spica\" and \"UAZ 16 - Spica\" are PRESENT.\n"
+    "7. NEVER report a name because it is unfamiliar to you. Many valid names "
     "look odd, archaic or misspelled. Plausibility is NOT evidence of "
     "absence, and a real fossil name you have never seen is still a real "
     "fossil name.\n"
-    "4. NEVER add, expand, correct, split or reformat names. Echo each "
+    "8. NEVER add, expand, correct, split or reformat names. Echo each "
     "reported name character-for-character from the candidate list you were "
     "given.\n"
-    "5. If every candidate name appears in the figure, answer with an empty "
+    "9. If every candidate name appears in the figure, answer with an empty "
     "list.\n"
     "\n"
     "Reply with a single JSON object and nothing else - no prose, no markdown "
@@ -258,7 +364,10 @@ def collect_candidate_names(data: Any) -> tuple[list[str], int]:
 
     Never raises: a payload that is not a dict, a table that is not a list, a
     row that is not a dict, and a name field holding ``None`` are all skipped
-    rather than propagated - this runs on whatever the model produced.
+    rather than propagated - this runs on whatever the model produced. The one
+    exception is a table listed in :data:`BARE_STRING_ROW_TABLES`, whose rows
+    ARE the name (``other_fossils``); elsewhere a non-dict row is junk and is
+    skipped.
     """
     names: list[str] = []
     seen: set[str] = set()
@@ -268,11 +377,17 @@ def collect_candidate_names(data: Any) -> tuple[list[str], int]:
         rows = data.get(table_key)
         if not isinstance(rows, list):
             continue
+        bare = table_key in BARE_STRING_ROW_TABLES
         for row in rows:
-            if not isinstance(row, dict):
+            if isinstance(row, dict):
+                values: list[Any] = [row.get(k) for k in row_keys
+                                     if k != ROW_IS_NAME]
+            elif bare and isinstance(row, str):
+                # ``other_fossils`` after normalisation: the row is the name.
+                values = [row]
+            else:
                 continue
-            for row_key in row_keys:
-                raw = row.get(row_key)
+            for raw in values:
                 if raw is None:
                     continue
                 name = _clean_text(raw)
@@ -289,14 +404,30 @@ def collect_candidate_names(data: Any) -> tuple[list[str], int]:
 
 
 def build_verifier_user_text(candidates: Sequence[str]) -> str:
-    """The inline candidate list the verifier is asked to check."""
+    """The inline candidate list the verifier is asked to check.
+
+    The list MIXES kinds of printed name on purpose - taxon/zone names,
+    zonation-framework column headers, and chronostratigraphic stage names all
+    came out of one result, so all of them are things the figure is expected
+    to print. Saying so is load-bearing: measured on Zhang Lei et al. 2018
+    Fig. 3, the verifier reported four stage names absent while all four were
+    printed in the rotated stage header column, and the failure mode was
+    reading \"not a taxon row\" as \"not in the figure\". A list framed as
+    \"taxon / biozone names\" invites exactly that; a list framed as \"names
+    printed in this figure, of every kind\" does not.
+    """
     listing = "\n".join("%d. %s" % (i, n)
                         for i, n in enumerate(candidates, start=1))
     return (
         "The figure is attached above. These %d names were extracted from it "
-        "by a vision model:\n\n%s\n\n"
-        "Which of them appear NOWHERE in the figure? Reply with the JSON "
-        'object only, e.g. {"absent": []} if they all appear.'
+        "by a vision model. They are not all taxon names: the list mixes "
+        "taxon and zone names with the figure's column headers (author / "
+        "framework names) and with chronostratigraphic stage names. Every one "
+        "of them is expected to be printed SOMEWHERE in the figure - in a row, "
+        "a cell, a header, or a rotated axis label.\n\n%s\n\n"
+        "Which of them appear NOWHERE in the figure? Check every name against "
+        "the whole figure, headers included, before deciding. Reply with the "
+        'JSON object only, e.g. {"absent": []} if they all appear.'
         % (len(candidates), listing)
     )
 
@@ -451,6 +582,10 @@ def flag_unverified_rows(data: Any, unverified: Iterable[str]) -> dict[str, int]
 
     Returns ``{table_key: rows_flagged}`` for the tables that were touched.
     Mutates ``data`` in place, which is the caller's own result dict.
+
+    A table whose rows are plain strings (``other_fossils``) contributes
+    candidates that get checked and reported but cannot be flagged per row -
+    there is no dict to attach ``_warning`` to.
     """
     wanted: set[str] = set()
     for name in (unverified or ()):
@@ -470,11 +605,17 @@ def flag_unverified_rows(data: Any, unverified: Iterable[str]) -> dict[str, int]
         rows = data.get(table_key)
         if not isinstance(rows, list):
             continue
+        dict_keys = tuple(k for k in row_keys if k != ROW_IS_NAME)
         hits = 0
         for row in rows:
+            # A plain-string row (other_fossils) is verified as a candidate but
+            # CANNOT carry a flag: there is no dict to write ``_warning`` onto
+            # and string rows are immutable. The name still reaches the user
+            # through the ``grounding.unverified`` list and the warning that
+            # lists it; only the per-row marker is unavailable there.
             if not isinstance(row, dict):
                 continue
-            for row_key in row_keys:
+            for row_key in dict_keys:
                 if _match_key(row.get(row_key)) in wanted:
                     _add_row_flag(row, GROUNDING_ROW_FLAG)
                     hits += 1

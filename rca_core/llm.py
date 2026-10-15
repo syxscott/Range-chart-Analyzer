@@ -1887,6 +1887,59 @@ def call_llm_api(
     return raw_text, truncated, status, err_body, usage
 
 
+def _image_geometry(image_b64: str) -> tuple[int, int] | None:
+    """``(width, height)`` in pixels, or None when the header cannot be read.
+
+    Decodes in full rather than truncating the base64: a truncated stream
+    raises on its padding, and a JPEG's SOF marker sits at a format-dependent
+    offset, so a "just the header" prefix is not a safe shortcut. These images
+    are well under a megabyte.
+    """
+    if not image_b64:
+        return None
+    try:
+        import base64 as _b64
+        import io as _io
+
+        from PIL import Image as _Image  # lazy: keeps this module importable
+        with _Image.open(_io.BytesIO(_b64.b64decode(image_b64))) as im:
+            return int(im.size[0]), int(im.size[1])
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# A resolution threshold was proposed here and REJECTED. Recording the negative
+# result so nobody re-derives it.
+#
+# The claim was: a figure below some long-edge pixel count is too coarse to
+# read taxon labels off, so warn the user instead of returning a confident
+# empty result. The motivating measurement is real -- Motoyama 2019 Fig. 1 at
+# 1751x2892 extracts fine, and the SAME figure downsampled to half resolution
+# extracts ZERO zones, not a few wrong ones. The step is a cliff.
+#
+# It does not become a size rule, because the evidence contradicts every size
+# rule tried:
+#
+#     Motoyama Fig. 1 @ half resolution   875 x 1446   -> 0 zones   FAIL
+#     Bjorklund 2019 Fig. 4               1331 x  788  -> 189 rows  PASS
+#     Matsuoka 2019 Fig. 1                1096 x 1316  ->  41 rows  PASS
+#     Matsuzaki 2020 Fig. 10             1316 x  840  ->  39 rows  PASS
+#
+# An 875px edge fails while an 788px edge passes, so neither edge nor area nor
+# long-edge separates the cases. What actually decides it is how many pixels
+# land on a ROTATED taxon label, which depends on the figure's aspect ratio and
+# on where the model is looking -- not on any single number. A threshold here
+# would have been a plausible-looking constant that fires on figures that work
+# and stays quiet on ones that do not, which is worse than saying nothing.
+#
+# What is reported instead is the measurement itself: ``image_pixels`` in the
+# usage block, unconditionally, so a user comparing two runs can see the input
+# size that produced each result. Turning that into a real warning needs a
+# corpus of figures with known outcomes, not two data points.
+# ---------------------------------------------------------------------------
+
+
 def estimate_image_tokens(image_b64: str) -> int | None:
     """Rough vision-token cost of one image, from its real pixel size.
 
@@ -1898,23 +1951,20 @@ def estimate_image_tokens(image_b64: str) -> int | None:
     Returns None when the size cannot be read, which is a normal outcome
     (Pillow missing, a format the header scan does not cover) and must never
     raise.
+
+    NOTE ON WHAT THIS NUMBER IS WORTH. Measured on ten real figures it came
+    back as exactly 1600 for every one of them, from 1096x1316 to 1623x1310 --
+    once both edges exceed 750px the tile count is 4, and 4 x 750 exceeds the
+    cap. So the capped figure is real (the vision cost really is flat at this
+    scale) but it cannot RANK figures by cost. ``_annotate_image_tokens``
+    therefore also reports the pixel size and whether the cap bound, so a
+    constant 1600 is readable as "capped" rather than being mistaken for a
+    measurement that lost its discriminating power.
     """
-    if not image_b64:
+    size = _image_geometry(image_b64)
+    if not size:
         return None
-    try:
-        import base64 as _b64
-        import io as _io
-
-        from PIL import Image as _Image  # lazy: keeps this module importable
-
-        # Decode in full rather than truncating the base64: a truncated stream
-        # raises on its padding, and a JPEG's SOF marker sits at a
-        # format-dependent offset, so a "just the header" prefix is not a safe
-        # shortcut. These images are well under a megabyte.
-        with _Image.open(_io.BytesIO(_b64.b64decode(image_b64))) as im:
-            w, h = im.size
-    except Exception:
-        return None
+    w, h = size
     if not w or not h:
         return None
     longest, shortest = max(w, h), min(w, h)
@@ -1941,13 +1991,33 @@ def _annotate_image_tokens(usage: dict[str, Any], image_b64: str) -> None:
     ``input_tokens``: for a provider that already bills the image there, adding
     it would double-count, and quietly inflating a number the user is billed on
     is worse than showing it separately.
+
+    ``image_pixels`` and ``image_tokens_capped`` exist because the capped
+    estimate is a CONSTANT for every figure in the size range this tool
+    actually sees (see ``estimate_image_tokens``). Reporting 1600 with no
+    context looks like a measurement that stopped working; with the pixel size
+    and the cap flag beside it, it reads as what it is.
     """
-    est = estimate_image_tokens(image_b64) if image_b64 else None
+    usage.setdefault("image_tokens_estimated", None)
+    if not image_b64:
+        return
+    size = _image_geometry(image_b64)
+    if size:
+        usage["image_pixels"] = [size[0], size[1]]
+    est = estimate_image_tokens(image_b64)
     if est is None:
-        usage.setdefault("image_tokens_estimated", None)
         return
     usage["image_tokens_estimated"] = est
     usage["image_tokens_are_estimate"] = True
+    if size:
+        longest, shortest = max(size), min(size)
+        if longest > 1568:
+            scale = 1568.0 / longest
+            longest, shortest = sorted((int(size[0] * scale),
+                                       int(size[1] * scale)), reverse=True)
+        uncapped = ((longest + 749) // 750) * ((shortest + 749) // 750) * 750
+        usage["image_tokens_uncapped"] = uncapped
+        usage["image_tokens_capped"] = bool(uncapped > est)
 
 
 # ---------------------------------------------------------------------------

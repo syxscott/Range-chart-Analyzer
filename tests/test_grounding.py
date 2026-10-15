@@ -148,9 +148,13 @@ class TestCollectCandidateNames:
         assert names == ["Zone A", "Zone B"]
 
     def test_a_mode_with_no_name_keys_collects_nothing(self):
-        # columnar_section: real mode, but none of its tables is in the table.
-        data = {"sections": [{"id": "Sec A", "lithology_blocks": []}],
-                "cross_beds": [], "lithology_legend": [], "fossil_legend": []}
+        # Every table here is genuinely absent from NAME_SOURCES. An earlier
+        # draft used `sections` as the example -- it no longer qualifies,
+        # because AUDIT item 10 added it (range_chart prints a section NAME,
+        # columnar_section a section ID) and that addition is the point.
+        data = {"cross_beds": [{"from_bed_idx": 1, "to_bed_idx": 2}],
+                "lithology_legend": [{"pattern": "brick", "meaning": "sandstone"}],
+                "fossil_legend": [{"marker": "*", "meaning": "mollusc"}]}
         names, dropped = collect_candidate_names(data)
         assert names == [] and dropped == 0
 
@@ -180,7 +184,9 @@ class TestAbsencesAreReported:
         stub = _Stub('{"absent": ["Calocycletta costata", "Callimitra rebus"]}')
         result = _check(_zonation_result(), stub)
         assert result.status == GROUNDING_VERIFIED
-        assert result.checked == 3
+        # 3 species_ranges + 1 sections header; the section name became a
+        # candidate in AUDIT item 10 and is genuinely printed in the figure.
+        assert result.checked == 4
         assert result.unverified == ("Calocycletta costata", "Callimitra rebus")
         assert result.clean is False
         assert result.reason == ""
@@ -307,7 +313,9 @@ class TestFailuresDegradeToNotPerformed:
 
 class TestNoNamesToCheck:
     def test_a_mode_without_name_keys_says_so_instead_of_claiming_clean(self):
-        data = {"sections": [{"id": "Sec A"}], "cross_beds": [],
+        # `sections` cannot be the example any more: AUDIT item 10 made it a
+        # name source, so a columnar_section result IS checkable now.
+        data = {"cross_beds": [{"from_bed_idx": 1, "to_bed_idx": 2}],
                 "lithology_legend": [], "fossil_legend": []}
         result = _check(data, _Stub('{"absent": []}'))
         assert result.status == GROUNDING_NO_NAMES
@@ -319,6 +327,244 @@ class TestNoNamesToCheck:
         stub = _Stub('{"absent": []}')
         _check({"cross_beds": []}, stub)
         assert stub.calls == 0
+
+
+# ---------------------------------------------------------------------------
+# AUDIT item 10 -- COVERAGE. A mode that carries names must not be silently
+# unchecked.
+#
+# Measured cost of the gap: Tomimatsu et al. 2022 Fig. 8 was classified
+# ``chemical_stratigraphy``, so all 32 of its names sat in ``data_points`` /
+# ``events`` / ``intervals`` -- none of which was in NAME_SOURCES -- the
+# collector returned [], and the check answered ``no_names`` for a figure whose
+# whole content is taxon ranges. No warning, no evidence, nothing checked.
+# ---------------------------------------------------------------------------
+
+# (table_key, rows, names_that_must_be_collected). The row keys were read off
+# ``extractor._PRIMARY_ID_KEYS`` / ``_KNOWN_CHEMICAL_STRAT_*`` /
+# ``normalize_columnar_result`` and the ``data_keys`` of the matching
+# ``exporter.get_configs_for_result`` config.
+_COVERAGE_CASES = [
+    # chemical_stratigraphy -- all three tables, all three name-bearing.
+    ("data_points", [{"sample_id": "Os-1", "stage": "Julian"}],
+     ["Os-1", "Julian"]),
+    ("data_points", [{"sample_id": "Os-2", "stage": ""}], ["Os-2"]),
+    ("events", [{"name": "Initial 187Os/188Os negative excursion"}],
+     ["Initial 187Os/188Os negative excursion"]),
+    ("intervals", [{"name": "Julian (lower; TR4A)"}],
+     ["Julian (lower; TR4A)"]),
+    # abundance_diagram locality headers.
+    ("sites", [{"name": "Suigetsu"}], ["Suigetsu"]),
+    # range_chart sections print `name`; columnar_section sections print `id`.
+    ("sections", [{"name": "Jurassic nassellarian range chart"}],
+     ["Jurassic nassellarian range chart"]),
+    ("sections", [{"id": "Sec A"}], ["Sec A"]),
+    # range_chart free-text fossils. After normalisation these rows are PLAIN
+    # STRINGS; `fossil` / `text` are the dict spellings the exporter reads.
+    ("other_fossils", ["Archaeocenosphaera", "  Brachiopod  "],
+     ["Archaeocenosphaera", "Brachiopod"]),
+    ("other_fossils", [{"fossil": "Trilobite"}], ["Trilobite"]),
+    ("other_fossils", [{"text": "Crinoid"}], ["Crinoid"]),
+]
+
+
+class TestEveryModeThatCarriesNamesIsChecked:
+    @pytest.mark.parametrize("table,rows,expected", _COVERAGE_CASES,
+                             ids=[c[0] + ":" + str(i)
+                                  for i, c in enumerate(_COVERAGE_CASES)])
+    def test_the_row_key_is_collected(self, table, rows, expected):
+        names, _ = collect_candidate_names({table: rows})
+        assert names == expected, (
+            "%r is emitted by a normaliser and printed in the figure, but "
+            "NAME_SOURCES does not collect it" % table)
+
+    def test_the_coverage_table_is_registered_for_each_of_them(self):
+        # The collector and the flagger both drive off NAME_SOURCES, so a
+        # table that is collected but not registered would be verified and
+        # then silently unflagged.
+        from rca_core.grounding import BARE_STRING_ROW_TABLES
+        assert BARE_STRING_ROW_TABLES == {"other_fossils"}
+        for table in ("data_points", "events", "intervals", "sites",
+                      "sections", "other_fossils"):
+            assert table in {k for k, _ in NAME_SOURCES}, \
+                "%s is collected from no NAME_SOURCES entry" % table
+
+    def test_a_chemical_stratigraphy_result_is_checked_not_declared_empty(self):
+        # The measured regression, in the shape round 2 actually produced.
+        data = {
+            "metadata": {"section": "Tiezzi"},
+            "data_points": [{"sample_id": "Os-%d" % i, "stage": "Julian"}
+                            for i in range(1, 4)],
+            "events": [{"name": "Reducing condition"}],
+            "intervals": [{"name": "Julian (lower; TR4A)"}],
+            "confidence": 0.7,
+        }
+        result = _check(data, _Stub('{"absent": ["Reducing condition"]}'))
+        assert result.status == GROUNDING_VERIFIED, (
+            "a chemostrat figure reported no_names is the item-10 defect "
+            "returning: nothing was checked")
+        # Os-1..Os-3 + "Julian" (deduped across the three data_points) +
+        # the event + the interval.
+        assert result.checked == 6
+        assert result.unverified == ("Reducing condition",)
+
+    def test_the_names_match_the_extractor_primary_id_keys(self):
+        # Cross-check against the normaliser rather than a copy of it, so a
+        # rename upstream empties this table instead of quietly disabling it.
+        from rca_core.extractor import _PRIMARY_ID_KEYS
+        by_table = dict(NAME_SOURCES)
+        for table in ("abundances", "sections", "biozones", "species_ranges",
+                      "sites", "zones", "zonations", "data_points"):
+            assert _PRIMARY_ID_KEYS[table] in by_table[table], (
+                "%s: the extractor's primary id key is not read" % table)
+
+    def test_a_row_with_no_name_field_still_collects_nothing(self):
+        # Guards the opposite failure: reading the whole row as the name would
+        # turn every numeric field into a "candidate".
+        assert collect_candidate_names({"sections": [{"thickness_m": "30"}]})[0] \
+            == []
+        assert collect_candidate_names(
+            {"data_points": [{"depth_m": "12.5"}]})[0] == []
+
+    def test_a_bare_string_row_is_junk_in_every_other_table(self):
+        # Only other_fossils is normalised to strings. A string in `sections`
+        # is malformed and must not be read as a name.
+        assert collect_candidate_names({"sections": ["Sec A"]})[0] == []
+        assert collect_candidate_names({"zones": ["Zone A"]})[0] == []
+
+    def test_a_bare_string_name_is_reported_but_cannot_be_flagged(self):
+        # There is no dict to attach `_warning` to, so the per-row marker is
+        # unavailable for other_fossils -- the name still reaches the user
+        # through the unverified list. Both halves are pinned here so the
+        # limitation is a recorded fact, not a surprise.
+        data = {"other_fossils": ["Brachiopod", "Trilobite"]}
+        result = _check(data, _Stub('{"absent": ["Trilobite"]}'))
+        assert result.status == GROUNDING_VERIFIED
+        assert result.unverified == ("Trilobite",)
+        assert flag_unverified_rows(data, result.unverified) == {}
+        assert data["other_fossils"] == ["Brachiopod", "Trilobite"], (
+            "a string row must never be mutated in place")
+
+
+# ---------------------------------------------------------------------------
+# AUDIT item 8 -- STAGE NAMES ARE PRINTED, NOT ABSENT.
+#
+# Zhang Lei et al. 2018 Fig. 3: the verifier reported Kungurian / Artinskian /
+# Sakmarian / Asselian "Stage" absent. All four are printed, in the rotated
+# stage-header column -- the largest, boldest text in the figure. Rule 2
+# already forbade reporting a name printed "in a header"; it never said that a
+# name WHICH IS a header is present.
+# ---------------------------------------------------------------------------
+
+
+class TestPrintedStageNamesAreNotFalsePositives:
+    def test_the_prompt_says_a_stage_header_counts_as_printed(self):
+        from rca_core.grounding import GROUNDING_SYSTEM_PROMPT
+        low = GROUNDING_SYSTEM_PROMPT.lower()
+        assert "stratigraphic stage or age is printed" in low
+        assert "rotated axis header" in low
+        # The exact reasoning error, named so the model has to contradict it.
+        assert "not a taxon row" in low
+
+    def test_the_prompt_matches_a_stem_plus_a_rank_suffix(self):
+        # Printed "Kungurian" vs candidate "Kungurian Stage": the candidate
+        # wins on the stem. (Checked at 6x, the figure prints "Asselian"
+        # correctly spelled -- the difference is the suffix, not a letter.)
+        from rca_core.grounding import GROUNDING_SYSTEM_PROMPT
+        assert ("the figure prints \"Kungurian\" and the candidate is "
+                "\"Kungurian Stage\"") in GROUNDING_SYSTEM_PROMPT
+        assert "RANK SUFFIX" in GROUNDING_SYSTEM_PROMPT
+
+    def test_the_candidate_list_is_not_framed_as_taxon_names_only(self):
+        # Framing the list as "taxon / biozone names" invites the very
+        # inference that caused the false positives.
+        text = build_verifier_user_text(["Kungurian Stage"])
+        assert "taxon and zone names" in text
+        assert "chronostratigraphic stage names" in text
+        assert "headers included" in text
+        assert "taxon / biozone names" not in text
+
+    def test_a_stage_name_the_verifier_reports_still_reaches_the_result(self):
+        # The false positives are fixed in the PROMPT. This pins that they are
+        # not "fixed" by suppressing stage names from the report path, which
+        # would hide a genuinely absent stage for good.
+        data = {"zones": [{"name": "Kungurian Stage"},
+                          {"name": "Ghostia absentia"}]}
+        result = _check(data, _Stub('{"absent": ["Kungurian Stage"]}'))
+        assert result.status == GROUNDING_VERIFIED
+        assert result.unverified == ("Kungurian Stage",)
+        assert flag_unverified_rows(data, result.unverified) == {"zones": 1}
+
+    def test_a_promoted_prompt_would_not_silence_the_check(self):
+        # Every rule added for item 8 moves names from absent to present, so
+        # the risk is a prompt that reports nothing at all. The spine is
+        # asserted here: absences are still demanded, still certifiable, and
+        # an all-present answer is still an empty list rather than no answer.
+        from rca_core.grounding import GROUNDING_SYSTEM_PROMPT as p
+        low = p.lower()
+        assert "report only the names that are absent" in low
+        assert "only when you are certain" in low
+        assert "silence is a valid" in low
+        assert "unfamiliar" in low and "plausibility" in low
+        assert "echo each" in low
+        assert "answer with an empty" in low
+        # ...and a verifier that still answers is still believed.
+        assert _check({"zones": [{"name": "Z1"}]},
+                      _Stub('{"absent": ["Z1"]}')).unverified == ("Z1",)
+
+
+# ---------------------------------------------------------------------------
+# AUDIT item 9 -- TEXT DISTRIBUTED OVER LINES AND CELLS.
+#
+# The claim under test was that 12 printed zone names were missed because the
+# text is split across table cells and a hyphenated zone name straddles a line
+# break. Reading r10_zhanglei.png directly: all 24 candidate names are printed,
+# the verifier reported 4 of them, and every one of those 4 was a false
+# positive -- so there was nothing to miss on that figure, and the real defect
+# was item 8. The split-text robustness is still worth pinning (three of the
+# names ARE wrapped: "P. scalprata m." / "rhombothoracata Zone",
+# "P. lomentaria-" / "P. sakmarensis" / "Assemblage-Zone", and the GTS header
+# over four lines), so these tests guard the prompt rule rather than claim a
+# recall improvement that was not measured.
+# ---------------------------------------------------------------------------
+
+
+class TestTextSplitOverLinesAndCells:
+    def test_the_prompt_requires_wrapped_text_to_be_rejoined(self):
+        from rca_core.grounding import GROUNDING_SYSTEM_PROMPT
+        assert ("DISTRIBUTED over two lines, two table cells or two columns is "
+                "PRESENT") in GROUNDING_SYSTEM_PROMPT
+        assert "LAYOUT HYPHEN" in GROUNDING_SYSTEM_PROMPT
+        assert ("\"P. lomentaria-\" over \"P. sakmarensis\"") \
+            in GROUNDING_SYSTEM_PROMPT
+
+    def test_the_prompt_counts_a_numeral_inside_a_merged_cell(self):
+        # Ozsvart: the band prints "15  16" above the single word "Spica", so
+        # "UAZ 16 - Spica" IS printed -- round 2 called it absent.
+        from rca_core.grounding import GROUNDING_SYSTEM_PROMPT
+        assert "MERGED cell" in GROUNDING_SYSTEM_PROMPT
+        assert "15  16" in GROUNDING_SYSTEM_PROMPT
+
+    def test_the_split_rule_does_not_eat_the_whole_prompt(self):
+        # A single fuzzy-matching rule must not displace rule 1: the verifier
+        # is still asked for certified absences, not a similarity score.
+        from rca_core.grounding import GROUNDING_SYSTEM_PROMPT as p
+        low = p.lower()
+        assert "absorb whitespace and" in low          # a match instruction...
+        assert "only when you are certain" in low      # ...that still certifies
+        assert low.count("report a name only when") == 1
+
+    # NOTE, recorded so it is not re-attempted blind: a further rule was
+    # TRIED and REVERTED here. Tomimatsu et al. 2022 Fig. 8 labels its
+    # intervals with composed strings ("Julian (lower; TR4A)") laid over a
+    # stage row reading Julian | Tuvalian, and a "judge the parts of a
+    # composite label" rule was added for it. Measured over the ten round-2
+    # figures it made that figure report 4 -> 25 absences in one 4-second
+    # call, because "every part is printed" gave the verifier licence to
+    # reason about parts and then declare the whole thing absent. With one
+    # sample per figure, that is not evidence for the rule, so it is gone.
+    # There is no assertion pinning the rule's absence; the honest statement
+    # is that prompt rules for this class did not survive measurement.
 
 
 class TestPromptShape:

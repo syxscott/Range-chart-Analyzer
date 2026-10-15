@@ -1045,10 +1045,35 @@ def _looks_occurrence_matrix(data: dict[str, Any] | None) -> bool:
                 and isinstance(occ[0], dict))
 
 
+def _strat_values(row: dict[str, Any]) -> str:
+    """One comparison band's per-column values as ONE cell, left to right.
+
+    ``strat_rows[i]["values"]`` is POSITIONAL: ``values[j]`` belongs to
+    ``columns[j]`` (see the prompt's "in the same left-to-right column
+    order"), and the band has as many values as the matrix has columns --
+    18 values for 18 localities on the real figure. One cell per value would
+    need one header per matrix column, i.e. the locality labels themselves as
+    ``cols`` entries, and every ``cols`` entry is an i18n key passed through
+    ``translate()`` / ``t()`` -- a data literal renders as ``[?87 B1 4C]`` in
+    the browser (js/i18n.js t() tags a missing key) while the export writes
+    the raw string. So the values go out as one left-to-right cell and the
+    ``columns`` sheet above them keeps the printed order they align to.
+
+    Runs every value through ``_export_cell_text``, the same text step every
+    other cell in this module goes through, so a band value that is None or a
+    non-finite float blanks here exactly as it would in any other cell.
+    """
+    vals = row.get("values") if isinstance(row, dict) else None
+    if not isinstance(vals, list):
+        return ""
+    return ", ".join(_export_cell_text(v) for v in vals)
+
+
 def _occurrence_matrix_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Occurrence-matrix table configs.
 
-    Three sheets, in the order a systematic section reads them:
+    Three sheets, in the order a systematic section reads them, plus a fourth
+    when the figure carried a comparison band:
 
     * ``columns`` - the locality / borehole header list, with its printed
       order preserved as a visible ``index`` column. Column order is data.
@@ -1059,6 +1084,7 @@ def _occurrence_matrix_tables(data: dict[str, Any] | None) -> list[dict[str, Any
       comparison band can be filtered out without re-reading the figure.
     * ``legend`` - the code -> class mapping READ FROM THE FIGURE, never
       assumed, because the same letter means different classes across papers.
+    * ``strat_rows`` - the NON-TAXON comparison band, see below.
     """
     multi = bool(data) and int(data.get("runs", 1) or 1) > 1
 
@@ -1105,6 +1131,64 @@ def _occurrence_matrix_tables(data: dict[str, Any] | None) -> list[dict[str, Any
             "data_keys": ["code", "class"],
             "identity_keys": ["code"],
             "row": lambda e: [e.get("code", ""), e.get("class", "")],
+        },
+    ] + _strat_rows_configs(data)
+
+
+def _strat_rows_configs(data: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The comparison-band sheet - empty list when there is no band.
+
+    AUDIT-2026-10-15 (item 3): ``strat_rows`` is READ by
+    ``normalize_occurrence_matrix_result``, declared a root key in
+    ``modes.py``, counted as quality signal in ``quality.py`` - and then
+    dropped on the floor by this function, which returned exactly three
+    configs. So the strip a user needs to align the matrix against the
+    conodont / bed scale ("Conodont level (see text)", a zone strip, a
+    numerical bed-scale row - the ``row_kind: "strat_correlation"`` rows the
+    prompt forbids as taxa) never reached the workbook. js/table.js DID render
+    it, as the fourth table of its eight: data on screen, absent from the file
+    the user cites, which is the same defect class this module's
+    ``_looks_occurrence_matrix`` docstring already records happening the other
+    way round.
+
+    WHEN THERE IS NO BAND. The config is emitted only for a list of dicts,
+    which is byte-for-byte the test ``_looks_occurrence_matrix`` applies to
+    ``occurrences``:
+
+      * ``strat_rows`` absent / ``[]`` -> NO sheet. This is the common case -
+        the normalizer always emits the key, empty when the figure had no
+        strip - and a header-only sheet per empty list is precisely the
+        "four empty sheets" lie ``_nonempty_or_none`` exists to prevent. The
+        three-sheet shape for a band-less matrix is also what
+        tests/test_occurrence_matrix.py pins, and it stays three.
+      * ``strat_rows`` whose first row is not a dict -> NO sheet, for the
+        same reason a non-dict ``occurrences`` list gets no table: there is no
+        label/value pair to write. (A non-dict row AFTER a dict one is still
+        exported, as a single cell, by ``_row_values`` - the module-wide
+        convention, not a special case here.)
+
+    ``values`` is read-only for Apply-edits (``readonly_data_keys``): the
+    exported cell is the values JOINED left to right (see ``_strat_values``),
+    so writing an edited cell back would replace the model's list with one
+    comma-joined string. js/table.js mirrors that with ``rcaECro``.
+    """
+    band = data.get("strat_rows") if isinstance(data, dict) else None
+    if not (isinstance(band, list) and band and isinstance(band[0], dict)):
+        return []
+    return [
+        {
+            "id": "strat_rows",
+            # `_title_label`, not a hand-written literal. This DID resolve to
+            # the humanised "Strat Rows" for the first days of this sheet,
+            # because no dictionary defined `sec.stratRows`; the key was added
+            # to all three languages at the same time the sheet was, so the
+            # title translates. js/table.js passes the same key verbatim.
+            "title_key": _title_label("strat_rows"),
+            "cols": ["col.label", "col.level"],
+            "data_keys": ["label", "values"],
+            "readonly_data_keys": ["values"],
+            "identity_keys": ["label"],
+            "row": lambda r: [r.get("label", ""), _strat_values(r)],
         },
     ]
 
@@ -1663,6 +1747,14 @@ def apply_table_edits(
         return data
     data_keys = cfg.get("data_keys") or cfg["cols"]
     identity_keys = list(cfg.get("identity_keys") or [])
+    # Fields the table SHOWS but must never write back. `agreement` is the
+    # computed-at-merge-time case above; `readonly_data_keys` is the general
+    # form for a column whose exported cell is a rendering of the model field
+    # rather than the field itself (today: `strat_rows.values`, exported as
+    # the band's values joined left to right, which an edited cell would write
+    # back as one comma-joined string instead of a list). js/table.js mirrors
+    # it with `rcaECro`.
+    readonly_keys = set(cfg.get("readonly_data_keys") or ())
     if cfg.get("nested_in"):
         return _apply_nested_table_edits(data, table_id, cfg, rows, data_keys, identity_keys)
     out: list[Any] = []
@@ -1702,8 +1794,9 @@ def apply_table_edits(
         # row (the operator may have corrected the name itself).
         edited: dict[str, Any] = {}
         for ci, dk in enumerate(data_keys, start=1):
-            if dk == "agreement":
+            if dk == "agreement" or dk in readonly_keys:
                 # agreement is computed at merge time — ignore on edit.
+                # Same for anything the config declares read-only.
                 continue
             v = row[ci] if ci < len(row) else ""
             edited[dk] = _coerce_cell(v, dk, table_id)

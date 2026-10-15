@@ -2010,6 +2010,155 @@ function rcaCoerceRangeChartList(raw, kind, out, rootWarnings, axes) {
 }
 
 // Mirror of rca_core/extractor.normalize_result.
+// ---------------------------------------------------------------------------
+// AUDIT-2026-10-15: mirror of rca_core/extractor.py's wrapped-header guards and
+// biozone-uniformity warnings.
+//
+// These landed Python-only first. Measured divergence on the same figure, both
+// engines fed one payload: the desktop dropped the fragment row and reported
+// `wrapped_header_fragment_dropped`, the browser kept the row and reported no
+// warning at all -- one row versus two for the same plate.
+// `tests_diff_frontend_parity.js` said "0 diverged" because the committed
+// fixtures never exercise these shapes, which is silence, not parity.
+//
+// Mirrored rule by rule. The two Python-vs-JS string behaviours that actually
+// bite are spelled out where they occur:
+//   * Python's `str.split()` discards empty fields; JS `'a  b'.split(/\s+/)`
+//     does not, so trim-then-filter.
+//   * `str.isupper()` / `str.isalpha()` are Unicode-aware, so /^\p{Lu}/u and
+//     /^\p{L}+/u rather than [A-Z]/[a-z]. But `_is_ascii_lowercase_start` is
+//     deliberately ASCII-only on BOTH sides: a CJK or Greek genus has no case,
+//     so it must not read as a bare epithet.
+// ---------------------------------------------------------------------------
+
+// Mirror of extractor.py `_NAME_QUALIFIERS`.
+const _RCA_NAME_QUALIFIERS = new Set([
+  'aff.', 'al.', 'cf.', 'emend.', 'et', 'n.sp.', 'nov.', 's.l.', 's.str.',
+  'sensu', 'subsp.', 'var.',
+]);
+// Mirror of extractor.py `_NAME_OPEN_NOMINATURE`.
+const _RCA_NAME_OPEN_NOM = new Set(['sp', 'sp.', 'spp.', 'ssp.']);
+
+// Mirror of extractor.py `_name_label_parts`: {tokens, authority, openNom}.
+// The authority is peeled off POSITIONALLY -- it can only start at token 1,
+// since a genus is capitalised -- so no authority lexicon is needed and a
+// capitalised surname is never mistaken for a species epithet.
+function rcaNameLabelParts(name) {
+  const text = rcaStringifyScalar(name).trim();
+  if (!text) return { tokens: [], authority: '', openNom: false };
+  const tokens = text.split(/\s+/).filter((t) => t.length);
+  let authority = '';
+  while (tokens.length && tokens[tokens.length - 1].endsWith(')')
+         && tokens[tokens.length - 1].includes('(')) {
+    authority = (tokens.pop() + ' ' + authority).trim();
+  }
+  if (tokens.length >= 2 && /^\p{Lu}/u.test(tokens[1][0])) {
+    authority = tokens.slice(1).join(' ').trim();
+    tokens.length = 1;
+  }
+  while (tokens.length > 1
+         && _RCA_NAME_QUALIFIERS.has(tokens[tokens.length - 1].toLowerCase())) {
+    tokens.pop();
+  }
+  const openNom = tokens.slice(1).some((t) => _RCA_NAME_OPEN_NOM.has(t.toLowerCase()));
+  return { tokens, authority, openNom };
+}
+
+// Mirror of extractor.py `_is_ascii_lowercase_start` — ASCII on purpose.
+function rcaIsAsciiLowercaseStart(token) {
+  return !!token && token[0] >= 'a' && token[0] <= 'z';
+}
+
+// Mirror of extractor.py `_is_wrapped_header_fragment`. The authority is
+// REQUIRED: a lone lowercase word is exactly what the committed iron-rule
+// boundary fixture feeds as a NON-zone ("zozone"), so the name on its own is
+// not evidence that a column header was wrapped.
+function rcaIsWrappedHeaderFragment(name) {
+  const { tokens, authority, openNom } = rcaNameLabelParts(name);
+  if (openNom || tokens.length !== 1 || !authority) return false;
+  return rcaIsAsciiLowercaseStart(tokens[0]);
+}
+
+// Mirror of extractor.py `_is_bare_epithet` — only ever consulted as the TAIL of
+// a repair, where the preceding row is already proven to be a genus alone.
+function rcaIsBareEpithet(name) {
+  const { tokens, openNom } = rcaNameLabelParts(name);
+  if (openNom || tokens.length !== 1) return false;
+  return rcaIsAsciiLowercaseStart(tokens[0]);
+}
+
+// Mirror of extractor.py `_is_wrappable_header_base`: a genus and nothing else.
+function rcaIsWrappableHeaderBase(name) {
+  const { tokens, openNom } = rcaNameLabelParts(name);
+  if (openNom || tokens.length !== 1) return false;
+  return /^\p{Lu}/u.test(tokens[0][0]);
+}
+
+// Mirror of extractor.py `_is_bare_authority`. Python's `str.isalpha()` also
+// requires at least one CASED character, which `\p{L}+` alone does not -- so an
+// all-CJK word that Python rejects would be accepted here without the second
+// test.
+function rcaIsBareAuthority(name) {
+  const { tokens, authority, openNom } = rcaNameLabelParts(name);
+  if (openNom || authority || tokens.length !== 1) return false;
+  const token = tokens[0];
+  return /^\p{Lu}/u.test(token[0]) && /^\p{L}+$/u.test(token)
+         && /[\p{Lu}\p{Ll}]/u.test(token);
+}
+
+// Mirror of extractor.py `_row_is_iron_rule_rejected`. A label the iron rule
+// already rejected is not a taxon, so it can be neither the tail of a wrapped
+// header nor a genus that completes one ("Postouwia Zone" parses as
+// genus-plus-authority and would otherwise swallow the fragment after it).
+// Reads `_warning` in both shapes rcaAddRowFlag writes.
+function rcaRowIsIronRuleRejected(row) {
+  const existing = row ? row._warning : undefined;
+  if (Array.isArray(existing)) return existing.indexOf('iron_rule_zone_label') !== -1;
+  return existing === 'iron_rule_zone_label';
+}
+
+// Mirror of extractor.py `_guard_wrapped_header_rows`. Returns the text of every
+// row removed WITHOUT being rejoined, for the caller to keep under `_extras`;
+// a tail consumed by a repair is not reported, because its text still lives in
+// the row that now carries it.
+function rcaGuardWrappedHeaderRows(rows, rootWarnings) {
+  const dropped = [];
+  let joined = false;
+  const doomed = new Set();
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    const name = rcaNameStr(row, 'species');
+    if (rcaRowIsIronRuleRejected(row) || i === 0 || doomed.has(i - 1)) continue;
+    const base = rows[i - 1];
+    const baseName = rcaNameStr(base, 'species');
+    const repairable = !rcaRowIsIronRuleRejected(base)
+                       && rcaIsWrappableHeaderBase(baseName)
+                       && !rcaIsBareAuthority(baseName);
+    if (repairable) {
+      if (!rcaIsBareEpithet(name)) continue;
+    } else if (!rcaIsWrappedHeaderFragment(name)) {
+      continue;
+    } else {
+      dropped.push(name);
+      doomed.add(i);
+      continue;
+    }
+    base.species = `${baseName} ${name}`.trim();
+    rcaAddRowFlag(base, 'wrapped_header_joined');
+    joined = true;
+    doomed.add(i);
+  }
+  if (!doomed.size) return dropped;
+  const kept = rows.filter((row, i) => !doomed.has(i));
+  rows.length = 0;
+  rows.push(...kept);
+  if (joined) rcaPushWarning(rootWarnings, 'wrapped_header_row_joined');
+  // Python raises this one whenever ANY row was consumed, repaired or dropped.
+  rcaPushWarning(rootWarnings, 'wrapped_header_fragment_dropped');
+  return dropped;
+}
+
+
 function rcaNormalizeResult(parsed) {
   // MEDIUM fix: a non-dict payload must not crash the normalizer (Python
   // returns the empty shape with `normalize_non_dict_input`).
@@ -2068,6 +2217,30 @@ function rcaNormalizeResult(parsed) {
     }
   }
 
+  // AUDIT-2026-10-15 (D1): repair the rows a two-line column header was split
+  // into, and drop the ones no evidence can place. Mirror of extractor.py's
+  // `_guard_wrapped_header_rows` call site, in the same order.
+  const droppedFragments = rcaGuardWrappedHeaderRows(out.species_ranges, rootWarnings);
+
+  // AUDIT-2026-10-15 (D4): one biozone stamped on every row. Measured on Diaz &
+  // Velez Fig. 5: all 28 rows carry the identical zone, including the
+  // radiolarians drawn outside the pink foraminiferal block. Nothing is
+  // rewritten -- there is no positional evidence in the payload to say which
+  // zone a row sits in, and guessing would stamp a different fabrication.
+  const declaredZones = (out.biozones || [])
+    .map((bz) => rcaNameStr(bz, 'name')).filter(Boolean);
+  const rowZones = (out.species_ranges || [])
+    .map((sp) => rcaNameStr(sp, 'biozone')).filter(Boolean);
+  if (rowZones.length >= 3 && new Set(rowZones).size === 1) {
+    rcaPushWarning(rootWarnings, 'biozone_uniform_across_figure');
+    // The sharper form: the constant is not one declared zone at all, it is the
+    // figure's ENTIRE zone list joined into one cell.
+    if (declaredZones.length >= 2
+        && rowZones[0] === declaredZones.join(', ')) {
+      rcaPushWarning(rootWarnings, 'biozone_spans_whole_figure');
+    }
+  }
+
   // Fix B-3 / REVIEW-2026-09-20 #1: `other_fossils` may be a string, a dict or
   // a list, and entries may be dicts carrying label/species/taxon — and the
   // merge must not drop what the array unwrap already salvaged.
@@ -2081,6 +2254,10 @@ function rcaNormalizeResult(parsed) {
   // unusable one warns (`axis_calibration_unusable`) and its raw block stays
   // under `_extras` (mirror of _fold_axis_calibration, audit item 7).
   const extras = rcaTopExtras(parsed, _RCA_KNOWN_RANGE_CHART_KEYS, false) || {};
+  // AUDIT-2026-10-15 (D1): a fragment row was removed from species_ranges, so
+  // its text is preserved here rather than lost -- the same "warn, and keep the
+  // raw text" contract rcaFoldAxisCalibration follows below.
+  if (droppedFragments.length) extras.dropped_species_fragments = droppedFragments;
   rcaFoldAxisCalibration(parsed, axes, out, extras, rootWarnings);
   if (Object.keys(extras).length) out._extras = extras;
   if (rootWarnings.length) out._warnings = rootWarnings;

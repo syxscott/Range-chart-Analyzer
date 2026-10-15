@@ -6461,6 +6461,539 @@
   },
   {
    "group": "range_chart",
+   "id": "rc_wrapped_header_repaired",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Reophax",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "robustus Nishimura",
+      "range_top": "5",
+      "range_base": "2"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Reophax",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0,
+    "_extras": {
+     "dropped_species_fragments": [
+      "robustus Nishimura"
+     ]
+    },
+    "_warnings": [
+     "wrapped_header_fragment_dropped"
+    ]
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_wrapped_header_dropped",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Phormocyrtis striata praequista Nishimura",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "demissa Foreman",
+      "range_top": "5",
+      "range_base": "2"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Phormocyrtis striata praequista Nishimura",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0,
+    "_extras": {
+     "dropped_species_fragments": [
+      "demissa Foreman"
+     ]
+    },
+    "_warnings": [
+     "wrapped_header_fragment_dropped"
+    ]
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_wrapped_header_iron_rule_tail",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Postouwia Zone",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "demissa Foreman",
+      "range_top": "5",
+      "range_base": "2"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Postouwia Zone",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": "[zone-mislabel-warning]",
+      "_warning": "iron_rule_zone_label"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0,
+    "_extras": {
+     "dropped_species_fragments": [
+      "demissa Foreman"
+     ]
+    },
+    "_warnings": [
+     "iron_rule_zone_label",
+     "wrapped_header_fragment_dropped"
+    ]
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_biozone_uniform_across_figure",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Alpha one",
+      "biozone": "Zone A, Zone B",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "Beta two",
+      "biozone": "Zone A, Zone B",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "Gamma three",
+      "biozone": "Zone A, Zone B",
+      "range_top": "5",
+      "range_base": "2"
+     }
+    ],
+    "biozones": [
+     {
+      "name": "Zone A"
+     },
+     {
+      "name": "Zone B"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Alpha one",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "Zone A, Zone B",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     },
+     {
+      "species": "Beta two",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "Zone A, Zone B",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     },
+     {
+      "species": "Gamma three",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "Zone A, Zone B",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [
+     {
+      "name": "Zone A",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     },
+     {
+      "name": "Zone B",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     }
+    ],
+    "other_fossils": [],
+    "confidence": 0.0,
+    "_warnings": [
+     "biozone_uniform_across_figure",
+     "biozone_spans_whole_figure"
+    ]
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_wrapped_header_non_ascii_epithet",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Phormocyrtis striata praequista Nishimura",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "ακμε Smith",
+      "range_top": "5",
+      "range_base": "2"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Phormocyrtis striata praequista Nishimura",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     },
+     {
+      "species": "ακμε Smith",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_biozone_uniform_not_the_whole_figure",
+   "payload": {
+    "sections": [
+     {
+      "name": "S1"
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Alpha one",
+      "biozone": "Zone A",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "Beta two",
+      "biozone": "Zone A",
+      "range_top": "5",
+      "range_base": "2"
+     },
+     {
+      "species": "Gamma three",
+      "biozone": "Zone A",
+      "range_top": "5",
+      "range_base": "2"
+     }
+    ],
+    "biozones": [
+     {
+      "name": "Zone A"
+     },
+     {
+      "name": "Zone B"
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [
+     {
+      "name": "S1",
+      "age_range": "",
+      "formations": [],
+      "formation_thickness_m": "",
+      "coordinates": ""
+     }
+    ],
+    "species_ranges": [
+     {
+      "species": "Alpha one",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "Zone A",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     },
+     {
+      "species": "Beta two",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "Zone A",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     },
+     {
+      "species": "Gamma three",
+      "section": "",
+      "range_top": "5",
+      "range_base": "2",
+      "biozone": "Zone A",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": null,
+      "range_base_idx": null,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [
+     {
+      "name": "Zone A",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     },
+     {
+      "name": "Zone B",
+      "section": "",
+      "age": "",
+      "thickness_m": "",
+      "zone_type": "biozone"
+     }
+    ],
+    "other_fossils": [],
+    "confidence": 0.0,
+    "_warnings": [
+     "biozone_uniform_across_figure"
+    ]
+   }
+  },
+  {
+   "group": "range_chart",
    "id": "rc_index_order_swap",
    "payload": {
     "species_ranges": [

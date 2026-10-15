@@ -195,17 +195,30 @@ function rcaLooksOccurrenceMatrix(data) {
   return Array.isArray(occ) && occ.length > 0 && rcaIsDict(occ[0]);
 }
 
+function rcaStratValues(r) {
+  // exporter.py `_strat_values` — mirror. `values` is POSITIONAL (values[j]
+  // belongs to columns[j], left to right), so the whole list goes out as one
+  // cell rather than one header per matrix column: every `cols` entry goes
+  // through t(), which renders a data literal as `[?87 B1 4C]`. The
+  // `columns` table above keeps the printed order these values align to.
+  // rcaExportCellText is Python's `_export_cell_text`, the same text step
+  // every other cell runs through.
+  if (!r || !Array.isArray(r.values)) return '';
+  return r.values.map(rcaExportCellText).join(', ');
+}
+
 function rcaOccurrenceMatrixConfigs(data, multi) {
   // exporter.py `_occurrence_matrix_tables` — mirror. Three tables in the order
   // a systematic section reads them: the locality header list (printed order is
   // data, so its ordinal is a visible column), the sparse long table the user
   // actually cites, and the legend READ FROM THE FIGURE rather than assumed
-  // (the same letter means different classes across papers).
+  // (the same letter means different classes across papers) — plus the
+  // comparison band when the figure carried one.
   const occCols = ['col.taxon', 'col.authority', 'col.site', 'col.code', 'col.class'];
   const occRow = (r) => [r.taxon, r.authority, r.site, r.code, r.class];
   const occColsFinal = multi ? occCols.concat(['col.agreement']) : occCols;
   const occRowFinal = multi ? (r) => occRow(r).concat([r.agreement || '']) : occRow;
-  return [
+  const configs = [
     {
       id: 'columns',
       titleKey: 'sec.columns',
@@ -235,6 +248,32 @@ function rcaOccurrenceMatrixConfigs(data, multi) {
       row: (e) => [e.code, e.class],
     },
   ];
+  // The non-taxon comparison band. exporter.py's `_strat_rows_configs` emits
+  // this sheet ONLY for a list of dicts — the same test
+  // rcaLooksOccurrenceMatrix applies to `occurrences`, so a band-less matrix
+  // is three tables on both engines rather than a header-only fourth, and a
+  // non-dict band row gets no table at all (there is no label/value pair to
+  // write). `values` is read-only for the same reason: the cell is the list
+  // joined, so writing an edited cell back would replace the array with one
+  // comma-joined string (exporter.py `readonly_data_keys`).
+  const band = data && data.strat_rows;
+  if (Array.isArray(band) && band.length > 0 && rcaIsDict(band[0])) {
+    configs.push({
+      id: 'strat_rows',
+      // The i18n key, not rcaHumanize('strat_rows'). The humanised literal is
+      // what this shipped before `sec.stratRows` existed in any dictionary,
+      // which left the tab untranslatable; exporter.py's `_title_label` now
+      // resolves to the same key, and
+      // tests/test_table_configs_parity.py::test_both_engines_title_the_band_the_same
+      // pins the two engines to one key.
+      titleKey: 'sec.stratRows',
+      cols: ['col.label', 'col.level'],
+      edit: [rcaEC('label'), rcaECro('values')],
+      italicCol: -1,
+      row: (r) => [r.label, rcaStratValues(r)],
+    });
+  }
+  return configs;
 }
 
 // AUDIT-2026-09-27 [item 6.1] — the generalisation fix, mirrored from

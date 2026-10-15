@@ -258,6 +258,11 @@ const RCA_I18N = {
     'col.authority': '命名人',
     'col.code': '代码',
     'col.class': '丰度等级',
+    // The non-taxon comparison band (a conodont-level strip, a zone strip, a
+    // bed scale). Added 2026-10-15 with the `strat_rows` sheet itself: until
+    // this key existed js/table.js's titleKey stayed the humanised literal
+    // "strat_rows", so the tab did not translate.
+    'sec.stratRows': '地层对比带 (Stratigraphic Bands)',
     'sec.nodes': '节点 (Nodes)',
     'col.nodeId': '节点 ID',
     'col.parent': '父节点',
@@ -634,6 +639,9 @@ RCA_I18N.en = {
   'col.authority': 'Authority',
   'col.code': 'Code',
   'col.class': 'Class',
+  // The non-taxon comparison band — see the zh block's note for why this key
+  // did not exist before the `strat_rows` sheet landed.
+  'sec.stratRows': 'Stratigraphic Bands',
   'col.depthUnit': 'Depth unit',
   'col.levelRange': 'Level range',
   'sec.nodes': 'Nodes',
@@ -988,6 +996,9 @@ RCA_I18N.ja = {
   'col.authority': '命名者',
   'col.code': 'コード',
   'col.class': '頻度等級',
+  // The non-taxon comparison band — see the zh block's note for why this key
+  // did not exist before the `strat_rows` sheet landed.
+  'sec.stratRows': '地層対比帯 (Stratigraphic Bands)',
   'col.depthUnit': '深度単位',
   'col.levelRange': '層準範囲',
   'sec.nodes': 'ノード',

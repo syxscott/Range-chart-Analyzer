@@ -48,6 +48,23 @@ rather than hand-transcribed -- which is the defect this file exists to catch.
 CHART_CLASSIFY_SYSTEM_PROMPT is in the same boat: the Python side gained an
 ``occurrence_matrix`` entry and js/prompt.js was regenerated from it, so the
 pair is still byte-identical.
+
+SECOND PASS (2026-10-15, audit items 1/2/19): every name-bearing prompt now
+embeds ONE shared block, ``rca_core/prompt.py::_literal_reading_rules()`` --
+four rules (transcribe the characters, never assemble a label that is not
+printed as one string, a name you cannot point at is not there, copy
+abbreviations as printed) that used to be ZONATION_CHART's private text while
+all the measured transcription drift came out of RANGE_CHART, which carried
+none of them.  That touched all eleven constants on the Python side, so all
+eleven js/prompt.js blocks were regenerated from the Python constants rather
+than hand-edited.  None of them diverged: the generator inserts the block's
+element lines and leaves every pre-existing element alone (a whole-block
+rewrite would have flattened js/prompt.js's runtime _degradationClause() /
+_contractClauses() / _axisPositionClause() calls into typed literals), and the
+node+vm comparison below is what proves the two transports still send the same
+text.  Which rules each constant carries is pinned by
+tests/test_prompt_literal_rules_2026_10_15.py; that file also records why
+CHART_CLASSIFY is deliberately NOT a caller of the block.
 """
 import importlib.util
 import sys
@@ -83,9 +100,9 @@ IDENTICAL = (
     # "zonation / correlation chart"), which is harmless on its own — but this
     # prompt is where the real extraction failure lives, so the JS copy was
     # regenerated wholesale from the Python constant rather than hand-edited
-    # again, and the whole text (6333 chars) is now byte-identical. Both
-    # engines send this prompt; see the rules added about never emitting a zone
-    # the figure does not draw.
+    # again, and the whole text is now byte-identical. Both engines send this
+    # prompt; see the literal-reading rules it shares with the other nine
+    # name-bearing prompts (see the module docstring).
     "ZONATION_CHART_SYSTEM_PROMPT",
 )
 

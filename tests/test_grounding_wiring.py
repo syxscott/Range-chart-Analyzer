@@ -175,6 +175,33 @@ class TestOptOutAndDegradation:
             "the check was not given the image it is supposed to verify "
             "against -- it would have reported everything absent")
 
+    def test_the_second_call_is_disclosed_in_the_response(self, monkeypatch):
+        """A cost the user is billed on must not be a cost nobody mentioned.
+
+        The check is a second model call and is on by default, so without this
+        the bill and the response disagree. It reports what ACTUALLY went out:
+        a `no_names` verdict costs nothing (no request is made) and a
+        `not_performed` verdict may or may not have cost a failed request, so
+        neither is honestly countable as 1.
+        """
+        import rca_core.grounding as G
+        from rca_core.grounding import GroundingResult
+        import server
+
+        data = {"species_ranges": [{"species": "Alveolinella camposi"}]}
+        for status, expected in (("verified", 1), ("no_names", 0),
+                                 ("not_performed", 0)):
+            def fake(_status=status, **_kw):
+                return GroundingResult(
+                    status=_status, checked=1,
+                    reason="" if _status == "verified" else "x")
+
+            monkeypatch.setattr(G, "check_name_grounding", fake)
+            out = server._safe_ground_and_score(data, provider=object(),
+                                                enabled=True)
+            assert out["grounding"]["extra_model_calls"] == expected, (
+                "status=%s reported the wrong cost" % status)
+
     def test_a_raising_check_degrades_to_a_plain_score(self, monkeypatch):
         """Never a failed extraction, never a silent pass."""
         import rca_core.grounding as G

@@ -506,7 +506,28 @@ def _safe_ground_and_score(data, *, image_b64="", media_type="image/png",
         print(f"[grounding] check raised: {type(exc).__name__}: {exc}",
               file=sys.stderr)
         return _safe_score_range_chart(data)
-    return score_range_chart(data, grounding=result)
+
+    out = score_range_chart(data, grounding=result)
+    # Say out loud that this cost a second call.
+    #
+    # The check is a second model call and it is ON by default, so a user who
+    # compares two bills will otherwise find a cost the response never
+    # mentioned. ``extra_model_calls`` counts what ACTUALLY went out, not what
+    # was intended: a `not_performed` verdict may have cost a request that
+    # failed, and a `no_names` verdict costs nothing at all. Reporting the
+    # intended cost instead of the real one would overstate it in the common
+    # case and understate it in the expensive one.
+    try:
+        performed = bool(getattr(result, "performed", False))
+    except Exception:  # noqa: BLE001 - never let bookkeeping break delivery
+        performed = False
+    try:
+        report = out.get("grounding")
+        if isinstance(report, dict):
+            report["extra_model_calls"] = 1 if performed else 0
+    except Exception:  # noqa: BLE001 - ditto
+        pass
+    return out
 
 
 # P1-3 (REVIEW-2026-07-27): wire the server into HistoryStore so web

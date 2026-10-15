@@ -238,6 +238,12 @@ TRANSLATIONS["zh"] = {
     "col.authority": "命名人",
     "col.code": "代码",
     "col.class": "丰度等级",
+    # The non-taxon comparison band (a conodont-level strip, a zone strip, a
+    # bed scale). Added 2026-10-15 with the `strat_rows` sheet itself: until
+    # this key existed `_title_label("strat_rows")` fell through to the
+    # humanised literal "Strat Rows", so the tab read in English inside a
+    # Chinese UI.
+    "sec.stratRows": "地层对比带 (Stratigraphic Bands)",
     # P-UI (2026-08-07): phylogenetic-tree node table columns. The exporter
     # has referenced these keys since phylo support landed, but the i18n
     # tables never defined them — GUI table headers rendered the raw keys
@@ -745,6 +751,9 @@ TRANSLATIONS["en"] = {
     "col.authority": "Authority",
     "col.code": "Code",
     "col.class": "Class",
+    # The non-taxon comparison band — see the zh block's note for why this key
+    # did not exist before the `strat_rows` sheet landed.
+    "sec.stratRows": "Stratigraphic Bands",
     # P-UI (2026-08-07): phylogenetic-tree node table columns.
     "sec.nodes": "Nodes",
     "col.nodeId": "Node ID",
@@ -1244,6 +1253,9 @@ TRANSLATIONS["ja"] = {
     "col.authority": "命名者",
     "col.code": "コード",
     "col.class": "頻度等級",
+    # The non-taxon comparison band — see the zh block's note for why this key
+    # did not exist before the `strat_rows` sheet landed.
+    "sec.stratRows": "地層対比帯 (Stratigraphic Bands)",
     # P-UI (2026-08-07): phylogenetic-tree node table columns.
     "sec.nodes": "ノード",
     "col.nodeId": "ノード ID",
