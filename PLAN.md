@@ -123,6 +123,7 @@ D:\GIthub\Range-chart Analyzer\
 | API Key 暴露在浏览器 | 中 | 明确 UI 提示；key 仅存 localStorage/sessionStorage，绝不上传任何服务器；适用"用户用自己 key"场景 |
 | `max_tokens` 截断（种属很多的大图） | 中 | 已修：默认上限 4000 → 16000（`rca_core/extractor.py` + `js/config.js`，由 `tests/test_token_bounds_parity.py` 锁住两侧一致）。实测一张 22×18 的矩阵图需要 4417–5428 输出 token，4000 会**静默截掉整行**——原缓解措施只有"检测 `stop_reason` 并提示"，实测不足以让使用者察觉结果不完整 |
 | MiniMax JSON 带围栏/尾部杂质 | 中 | 已移植 `_safeJsonLoads` 容错，与 Python 版行为一致 |
+| **双引擎表配置漂移**：Python 与 JS 各自实现 `get_configs_for_result` / `rcaTableConfigs`，新增模式时只改一侧不会报错，只会导出和显示不一致 | **高** | 已修：`tests/test_table_configs_parity.py` 逐模式比对表 id 与列；`tests/test_table_config_detectors_parity.py` 的覆盖断言已从硬编码 `len(PAIRS) == 5` 改为**从 exporter 模块枚举真实 `_looks_*` 集合**——那个硬编码正是 `occurrence_matrix` 单边加入仍全绿的原因。实测一次单边改动可被 5 条断言拦下 |
 | 超大扫描图请求体过大 / base64 膨胀 33% | 低 | 客户端 canvas 缩放压缩（如长边限制 2000px） |
 | Excel 打开 CSV 中文乱码 | 低 | 导出加 UTF-8 BOM |
 

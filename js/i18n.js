@@ -234,6 +234,9 @@ const RCA_I18N = {
     'col.crossTo': '对比剖面',
     'col.crossToBed': '床位',
     'col.index': '#',
+    // AUDIT-2026-10-15: `col.index` is the ROW-NUMBER header (js/table.js
+    // `[t('col.index')].concat(cfg.cols)`), not an ordinal data column.
+    'col.columnIndex': '序号',
     'sec.sites': '站点 / 岩心 (Sites)',
     'sec.abundances': '丰度记录 (Abundances)',
     'sec.zones': '孢粉带 (Zones)',
@@ -244,6 +247,17 @@ const RCA_I18N = {
     'col.abundance': '丰度值',
     'col.abundanceUnit': '丰度单位',
     'col.location': '位置',
+    // AUDIT-2026-10-15: occurrence-matrix table keys — mirror of the same
+    // block in rca_core/i18n.py. Translator.t() returns an unknown key
+    // verbatim, so js/table.js's rcaOccurrenceMatrixConfigs rendered raw
+    // `sec.occurrences` / `col.authority` headers until these existed.
+    'sec.columns': '产地 / 钻孔列 (Columns)',
+    'sec.occurrences': '出现记录 (Occurrences)',
+    'sec.legend': '图例 (Legend)',
+    'col.kind': '列类型',
+    'col.authority': '命名人',
+    'col.code': '代码',
+    'col.class': '丰度等级',
     'sec.nodes': '节点 (Nodes)',
     'col.nodeId': '节点 ID',
     'col.parent': '父节点',
@@ -595,6 +609,8 @@ RCA_I18N.en = {
     'col.crossTo': 'To section',
     'col.crossToBed': 'Bed idx',
   'col.index': '#',
+  // AUDIT-2026-10-15: `col.index` is the ROW-NUMBER header — see zh note.
+  'col.columnIndex': 'Column no.',
   'sec.sites': 'Sites',
   'sec.abundances': 'Abundances',
   'sec.zones': 'Zones',
@@ -605,6 +621,14 @@ RCA_I18N.en = {
   'col.abundance': 'Abundance',
   'col.abundanceUnit': 'Abundance unit',
   'col.location': 'Location',
+  // AUDIT-2026-10-15: occurrence-matrix table keys — see the zh block's note.
+  'sec.columns': 'Localities / Columns',
+  'sec.occurrences': 'Occurrences',
+  'sec.legend': 'Legend',
+  'col.kind': 'Column kind',
+  'col.authority': 'Authority',
+  'col.code': 'Code',
+  'col.class': 'Class',
   'col.depthUnit': 'Depth unit',
   'col.levelRange': 'Level range',
   'sec.nodes': 'Nodes',
@@ -934,6 +958,8 @@ RCA_I18N.ja = {
     'col.crossTo': '対比断面',
     'col.crossToBed': '層準',
   'col.index': '#',
+  // AUDIT-2026-10-15: `col.index` is the ROW-NUMBER header — see zh note.
+  'col.columnIndex': '列番号',
   'sec.sites': '地点 / コア (Sites)',
   'sec.abundances': '産出頻度 (Abundances)',
   'sec.zones': '花粉帯 (Zones)',
@@ -944,6 +970,14 @@ RCA_I18N.ja = {
   'col.abundance': '産出頻度',
   'col.abundanceUnit': '頻度単位',
   'col.location': '位置',
+  // AUDIT-2026-10-15: occurrence-matrix table keys — see the zh block's note.
+  'sec.columns': '地点 / 列 (Columns)',
+  'sec.occurrences': '産出記録 (Occurrences)',
+  'sec.legend': '凡例 (Legend)',
+  'col.kind': '列の種類',
+  'col.authority': '命名者',
+  'col.code': 'コード',
+  'col.class': '頻度等級',
   'col.depthUnit': '深度単位',
   'col.levelRange': '層準範囲',
   'sec.nodes': 'ノード',

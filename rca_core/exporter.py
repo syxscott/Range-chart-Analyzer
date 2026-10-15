@@ -1023,7 +1023,12 @@ def _occurrence_matrix_tables(data: dict[str, Any] | None) -> list[dict[str, Any
         {
             "id": "columns",
             "title_key": "sec.columns",
-            "cols": ["col.index", "col.label", "col.kind"],
+            # `col.columnIndex`, NOT `col.index`: the latter is the ROW-NUMBER
+            # header (build_table_export's `index_label`, and js/table.js
+            # `[t('col.index')].concat(cfg.cols)`), and the GUI prepends its own
+            # "#" too. Reusing it as a data column rendered the header as
+            # `# | # | Label | Kind` in every language.
+            "cols": ["col.columnIndex", "col.label", "col.kind"],
             "data_keys": ["index", "label", "kind"],
             "identity_keys": ["index"],
             "row": lambda c: [

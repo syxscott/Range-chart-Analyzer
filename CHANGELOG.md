@@ -7,7 +7,56 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **`occurrence_matrix` had no table configs in the browser.** `js/table.js`
+  carried a `_looks_*` predicate for every mode except this one, so
+  `rcaTableConfigs` fell through to the range-chart branch — which returns its
+  four configs unconditionally. On a real 73-record result the browser produced
+  **8** tables against the desktop's **3**: the three real ones plus four
+  PHANTOM EMPTY ones (`sections` / `species_ranges` / `biozones` /
+  `other_fossils`), and the real three arrived through the generic fallback with
+  humanised, untranslatable headers. `rcaLooksOccurrenceMatrix` and
+  `rcaOccurrenceMatrixConfigs` now mirror the Python twin, in the same branch
+  position (above abundance, since a partially-migrated matrix answer carries
+  abundance-shaped rows).
+  *This was latent, not user-visible:* `js/minimax.js` refuses the mode inside
+  `extractRangeChart` before the backend dispatch, the desktop renders through
+  `exporter.py`, and the browser has no result-import path. Verified by
+  execution, not by reading the guard. It was one commit from live, since
+  flipping `browser_supported` to `True` is the documented way to enable it.
+- **Ten i18n keys the occurrence-matrix tables referenced were never defined.**
+  `Translator.t` returns an unknown key *verbatim*, so the desktop rendered
+  `sec.occurrences (73)` and headers reading `col.authority` / `col.code` /
+  `col.class` in a Chinese UI; the browser renders the same gap as `[?col.x]`.
+  Added in zh/en/ja on both sides.
+- **`col.index` meant two different things.** It is the ROW-NUMBER header
+  (`build_table_export`'s `index_label`, and `js/table.js`'s
+  `[t('col.index')].concat(cfg.cols)`) — and the GUI prepends its own `#`. The
+  occurrence-matrix `columns` table also used it as a data column, so its header
+  read `# | # | Label | Kind` in every language. The data column is now
+  `col.columnIndex`.
+- **Generic-table headers disagreed between engines.** `rcaColLabel` tested
+  `t(key) !== key`, but `t()` renders a missing key as `[?col.topic]`, which is
+  never equal to the key — so the test accepted *every* column and the browser
+  headed an unrecognised column `col.topic` where the export wrote `Topic`. It
+  now tests membership of the English table, exactly as `_col_label` does.
+
+### Added
+
+- **`tests/test_table_configs_parity.py`.** Cross-engine parity for the table
+  configs themselves (ids and columns), which the harness never covered — it
+  proved the two engines picked the same *branch* while nothing replayed
+  `rcaTableConfigs` against `get_configs_for_result`. Pins the invariant that
+  holds on every payload (the browser may add the four documented editing
+  shells, but must never drop or reshape an exported table) separately from the
+  one that holds only on specific branches.
+- **occurrence-matrix shapes in `tests/test_table_config_detectors_parity.py`**,
+  and the scope assertion no longer pins `len(PAIRS) == 5`. That count asserted
+  the hand-written list against its own length instead of against the detectors
+  the code actually has, which is precisely why a one-sided `_looks_*`
+  addition passed unnoticed. The set is now enumerated from the exporter module
+  and from what `js/table.js` really defines.
 
 ## [0.1.0] — 2026-10-15
 

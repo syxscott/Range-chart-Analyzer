@@ -181,6 +181,10 @@ TRANSLATIONS["zh"] = {
     "sec.biozones": "生物带 (Biozones)",
     "sec.fossils": "其他化石 (Other Fossils)",
     "col.index": "#",
+    # AUDIT-2026-10-15: `col.index` is the ROW-NUMBER header, not an ordinal
+    # data column. The occurrence_matrix `columns` table needs the latter, and
+    # reusing the former rendered `# | # | Label | Kind`.
+    "col.columnIndex": "序号",
     "col.name": "名称",
     "col.ageRange": "年代范围",
     "col.formation": "组 / 地层",
@@ -219,6 +223,21 @@ TRANSLATIONS["zh"] = {
     "col.abundance": "丰度值",
     "col.abundanceUnit": "丰度单位",
     "col.location": "位置",
+    # AUDIT-2026-10-15: occurrence-matrix table keys. Same defect class as the
+    # P-UI block below — exporter.py's `_occurrence_matrix_tables` referenced
+    # them from the day the mode landed, but the i18n tables never defined them.
+    # `Translator.t` falls through to returning the key VERBATIM, so every
+    # occurrence_matrix tab read `sec.occurrences (73)` and its headers read
+    # `col.authority` / `col.code` / `col.class` in a Chinese UI, while every
+    # other mode was translated. The desktop is the ONLY place this mode runs
+    # today (the browser refuses it), so this was user-visible, not latent.
+    "sec.columns": "产地 / 钻孔列 (Columns)",
+    "sec.occurrences": "出现记录 (Occurrences)",
+    "sec.legend": "图例 (Legend)",
+    "col.kind": "列类型",
+    "col.authority": "命名人",
+    "col.code": "代码",
+    "col.class": "丰度等级",
     # P-UI (2026-08-07): phylogenetic-tree node table columns. The exporter
     # has referenced these keys since phylo support landed, but the i18n
     # tables never defined them — GUI table headers rendered the raw keys
@@ -676,6 +695,8 @@ TRANSLATIONS["en"] = {
     "sec.biozones": "Biozones",
     "sec.fossils": "Other Fossils",
     "col.index": "#",
+    # AUDIT-2026-10-15: `col.index` is the ROW-NUMBER header — see zh note.
+    "col.columnIndex": "Column no.",
     "col.name": "Name",
     "col.ageRange": "Age range",
     "col.formation": "Formations",
@@ -711,6 +732,14 @@ TRANSLATIONS["en"] = {
     "col.abundance": "Abundance",
     "col.abundanceUnit": "Abundance unit",
     "col.location": "Location",
+    # AUDIT-2026-10-15: occurrence-matrix table keys — see the zh block's note.
+    "sec.columns": "Localities / Columns",
+    "sec.occurrences": "Occurrences",
+    "sec.legend": "Legend",
+    "col.kind": "Column kind",
+    "col.authority": "Authority",
+    "col.code": "Code",
+    "col.class": "Class",
     # P-UI (2026-08-07): phylogenetic-tree node table columns.
     "sec.nodes": "Nodes",
     "col.nodeId": "Node ID",
@@ -1159,6 +1188,8 @@ TRANSLATIONS["ja"] = {
     "sec.biozones": "生層帯 (Biozones)",
     "sec.fossils": "その他の化石 (Other Fossils)",
     "col.index": "#",
+    # AUDIT-2026-10-15: `col.index` is the ROW-NUMBER header — see zh note.
+    "col.columnIndex": "列番号",
     "col.name": "名称",
     "col.ageRange": "年代範囲",
     "col.formation": "累層 / 地層",
@@ -1194,6 +1225,14 @@ TRANSLATIONS["ja"] = {
     "col.abundance": "産出頻度",
     "col.abundanceUnit": "頻度単位",
     "col.location": "位置",
+    # AUDIT-2026-10-15: occurrence-matrix table keys — see the zh block's note.
+    "sec.columns": "地点 / 列 (Columns)",
+    "sec.occurrences": "産出記録 (Occurrences)",
+    "sec.legend": "凡例 (Legend)",
+    "col.kind": "列の種類",
+    "col.authority": "命名者",
+    "col.code": "コード",
+    "col.class": "頻度等級",
     # P-UI (2026-08-07): phylogenetic-tree node table columns.
     "sec.nodes": "ノード",
     "col.nodeId": "ノード ID",

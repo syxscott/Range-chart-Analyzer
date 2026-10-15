@@ -166,6 +166,77 @@ function rcaPaleomapConfigs(data, multi) {
   ].filter((c) => Array.isArray(g(c.id)) && g(c.id).length > 0);
 }
 
+// ---- occurrence-matrix mode (2026-10-15) ---------------------------------
+//
+// exporter.py `_looks_occurrence_matrix` — mirror. The discriminator is
+// `occurrences`, NOT `columns`: `normalize_generic_table_result` also emits
+// `columns`, so keying on it classified every generic_table result as an
+// occurrence matrix and its `rows` vanished from the export. Only the
+// occurrence normalizer emits `occurrences`, so it is genuinely unique.
+//
+// LATENCY NOTE (read before "fixing" this): the browser cannot reach this
+// branch today. js/minimax.js `RCA_BROWSER_UNSUPPORTED_MODES` refuses
+// occurrence_matrix inside `extractRangeChart` BEFORE the backend dispatch
+// (verified by execution, not by reading: it returns errorKey 'err.mode' and
+// never touches the network), and the desktop renders through
+// rca_core/exporter.py, not through this file — gui_fluent.py's QWebEngineView
+// hosts only phylogenetic_tree.html. There is also no result-import path in the
+// browser (FileReader is only used for the input image).
+//
+// So before this branch existed the browser would have produced FOUR PHANTOM
+// EMPTY tables (sections / species_ranges / biozones / other_fossils) from the
+// unconditional range-chart fallback, plus three generic tables whose headers
+// came out as untranslated humanised literals. Degraded, not lost — but one
+// commit away from live, since flipping `browser_supported` to True is the
+// documented way to enable the mode. This branch is that landing pad.
+function rcaLooksOccurrenceMatrix(data) {
+  if (!data) return false;
+  const occ = data.occurrences;
+  return Array.isArray(occ) && occ.length > 0 && rcaIsDict(occ[0]);
+}
+
+function rcaOccurrenceMatrixConfigs(data, multi) {
+  // exporter.py `_occurrence_matrix_tables` — mirror. Three tables in the order
+  // a systematic section reads them: the locality header list (printed order is
+  // data, so its ordinal is a visible column), the sparse long table the user
+  // actually cites, and the legend READ FROM THE FIGURE rather than assumed
+  // (the same letter means different classes across papers).
+  const occCols = ['col.taxon', 'col.authority', 'col.site', 'col.code', 'col.class'];
+  const occRow = (r) => [r.taxon, r.authority, r.site, r.code, r.class];
+  const occColsFinal = multi ? occCols.concat(['col.agreement']) : occCols;
+  const occRowFinal = multi ? (r) => occRow(r).concat([r.agreement || '']) : occRow;
+  return [
+    {
+      id: 'columns',
+      titleKey: 'sec.columns',
+      cols: ['col.columnIndex', 'col.label', 'col.kind'],
+      edit: [rcaEC('index'), rcaEC('label'), rcaEC('kind')],
+      italicCol: -1,
+      row: (c) => [c.index, c.label, c.kind],
+    },
+    {
+      id: 'occurrences',
+      titleKey: 'sec.occurrences',
+      cols: occColsFinal,
+      edit: occColsFinal.map((c) => (c === 'col.agreement' ? rcaECro('agreement')
+        : c === 'col.taxon' ? rcaEC('taxon')
+          : c === 'col.authority' ? rcaEC('authority')
+            : c === 'col.site' ? rcaEC('site')
+              : c === 'col.code' ? rcaEC('code') : rcaEC('class'))),
+      italicCol: 0,
+      row: occRowFinal,
+    },
+    {
+      id: 'legend',
+      titleKey: 'sec.legend',
+      cols: ['col.code', 'col.class'],
+      edit: [rcaEC('code'), rcaEC('class')],
+      italicCol: -1,
+      row: (e) => [e.code, e.class],
+    },
+  ];
+}
+
 // AUDIT-2026-09-27 [item 6.1] — the generalisation fix, mirrored from
 // exporter.py `_generic_tables`. A real 48-figure corpus run measured 4
 // results carrying 131 rows (chemical_stratigraphy: data_points / events /
@@ -203,16 +274,25 @@ function rcaHumanize(key) {
     .join(' ');
 }
 
-// col.<camel> when that translation exists, else the humanised literal.
-// Translator.t() returns an unknown key verbatim, so a literal renders as
-// itself — same trick as exporter.py `_col_label`.
+// col.<camel> when that translation exists, else the humanised literal —
+// exporter.py `_col_label`, and the test is MEMBERSHIP of the English table,
+// exactly as Python's is.
+//
+// AUDIT-2026-10-15: this used to read `if (t(i18nKey) !== i18nKey) return
+// i18nKey`. That is not the same question. js/i18n.js `t()` renders a missing
+// key as `[?col.topic]`, which is never equal to the key itself, so the test
+// accepted EVERY column — including ones no dictionary has ever heard of — and
+// the browser headed the column `col.topic` where the export wrote `Topic`.
+// The generic fallback is exactly where unknown keys appear, so this fired on
+// every unrecognised table the model returned.
 function rcaColLabel(key) {
   const camel = String(key).replace(/_([a-z])/g, (m, c) => c.toUpperCase());
   const i18nKey = 'col.' + camel;
-  if (typeof t === 'function') {
-    try {
-      if (t(i18nKey) !== i18nKey) return i18nKey;
-    } catch (e) { /* not initialised yet; fall through to the literal */ }
+  // `typeof` on an undeclared identifier is safe, so table.js still loads when
+  // i18n.js is absent (tests that stub t() but not the dictionary).
+  if (typeof RCA_I18N !== 'undefined' && RCA_I18N.en
+      && Object.prototype.hasOwnProperty.call(RCA_I18N.en, i18nKey)) {
+    return i18nKey;
   }
   return rcaHumanize(key);
 }
@@ -225,16 +305,21 @@ function rcaColLabel(key) {
 // "agreement" column showing how many runs produced each row.
 //
 // M4 (REVIEW-2026-09-20): the branch ORDER is the mirror of
-// rca_core/exporter.py get_configs_for_result — zonation → abundance →
-// columnar (incl. the empty-sections fallback) → phylogenetic tree →
-// paleomap (AUDIT-2026-09-27 item 4.2) → range chart (default) → generic
-// fallback (item 6.1). The JS used to test abundance first and zonation
-// fourth, so a payload that carried both `abundances` rows and zonation
-// descriptors rendered as an abundance diagram in the browser and as a zones
-// table in the GUI/Excel export.
+// rca_core/exporter.py get_configs_for_result — zonation → occurrence_matrix
+// (2026-10-15) → abundance → columnar (incl. the empty-sections fallback) →
+// phylogenetic tree → paleomap (AUDIT-2026-09-27 item 4.2) → range chart
+// (default) → generic fallback (item 6.1). The JS used to test abundance first
+// and zonation fourth, so a payload that carried both `abundances` rows and
+// zonation descriptors rendered as an abundance diagram in the browser and as a
+// zones table in the GUI/Excel export.
 function rcaTableConfigs(data) {
   const multi = data && Number(data.runs) > 1;
   if (rcaLooksZonationChart(data)) return rcaZonationChartConfigs(data, multi);
+  // occurrence_matrix sits ABOVE abundance, mirroring exporter.py:931. A
+  // partially-migrated matrix answer carries `abundances`-like rows AND
+  // `columns`; `occurrences` is the authoritative signal that this is a
+  // locality matrix, not a down-core abundance diagram.
+  if (rcaLooksOccurrenceMatrix(data)) return rcaOccurrenceMatrixConfigs(data, multi);
   if (rcaLooksAbundance(data)) return rcaAbundanceDiagramConfigs(data, multi);
   if (rcaLooksColumnar(data) || rcaLooksColumnarEmptySections(data)) {
     return rcaColumnarSectionConfigs(data, multi);
