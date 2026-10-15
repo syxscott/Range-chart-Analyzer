@@ -434,6 +434,81 @@ def _safe_score_range_chart(data):
         }
 
 
+def _safe_score_cached(data):
+    """Score a CACHE-HIT payload that predates the quality badge.
+
+    A cache entry written before the quality scorer existed has to be scored on
+    read so the badge is consistent. It must NOT run name grounding: a cache hit
+    is free by contract, and a second billable model call here would mean the
+    cache made the request more expensive, not less.
+
+    That leaves a result with no grounding verdict, so the absence is stated
+    explicitly. Bare absence would be read as "checked and clean" -- the exact
+    confusion this feature exists to remove.
+    """
+    from rca_core.grounding import GROUNDING_NOT_PERFORMED, GroundingResult
+    out = _safe_score_range_chart(data)
+    try:
+        report = GroundingResult(
+            status=GROUNDING_NOT_PERFORMED,
+            reason="restored from a cache entry written before name grounding "
+                   "existed; this result was not checked",
+        ).to_dict()
+    except Exception:  # noqa: BLE001 - metadata must not break delivery
+        return out
+    out["grounding"] = report
+    return out
+
+
+def _safe_ground_and_score(data, *, image_b64="", media_type="image/png",
+                           provider=None, enabled=True):
+    """Score the result and, when enabled, run the name-grounding check first.
+
+    WHY THIS EXISTS. Measured on one published figure (Motoyama 2019 Fig. 1),
+    four runs of the SAME image produced 36/91/45/51 zone rows and every one of
+    them contained zone names that appear nowhere in the image --
+    ``Buccinosphaera invaginata``, ``Callimitra rebus`` and so on. All four runs
+    scored **grade A / 1.0 / zero issues**. That is the worst shape of bug: not a
+    wrong number but a confident all-clear on invented content. No structural
+    check can catch it, because "is this string in this picture" is not a
+    property of the result. So it gets its own second vision call.
+
+    Three rules this wrapper enforces, because getting them wrong reintroduces
+    the original defect:
+
+    * the check NEVER blocks the extraction. ``check_name_grounding`` swallows
+      its own failures and returns ``not_performed``, and anything that escapes
+      it lands here and degrades to a plain score with no grounding key at all.
+    * a failure is reported as "could not check", never as "checked and clean".
+    * the result is score-neutral: ``score`` and ``grade`` come from the four
+      reproducible dimensions exactly as before. See
+      ``rca_core/quality.py::_apply_grounding``.
+
+    The check costs one extra model call, so ``ground_names: false`` in the
+    request turns it off. It is ON by default because a silently-off safety
+    check is indistinguishable from the bug it was written to fix.
+    """
+    if not enabled:
+        return _safe_score_range_chart(data)
+    try:
+        from rca_core.grounding import check_name_grounding
+        from rca_core.quality import score_range_chart
+    except Exception as exc:  # noqa: BLE001 - metadata must not break delivery
+        print(f"[grounding] unavailable: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        return _safe_score_range_chart(data)
+    try:
+        result = check_name_grounding(
+            data=data, image_b64=image_b64 or "", media_type=media_type,
+            provider=provider,
+        )
+    except Exception as exc:  # noqa: BLE001 - defensive; see docstring
+        print(f"[grounding] check raised: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        return _safe_score_range_chart(data)
+    return score_range_chart(data, grounding=result)
+
+
 # P1-3 (REVIEW-2026-07-27): wire the server into HistoryStore so web
 # extractions produce a real audit trail (previously only GUI extractions
 # were persisted). The import is lazy-ish to avoid pulling sqlite if the
@@ -2656,6 +2731,17 @@ class Handler(BaseHTTPRequestHandler):
         from rca_core.cache import stable_extra_body as _stable_extra_body
         from rca_core.cache import stable_extra_headers as _stable_extra_headers
 
+        # Name grounding (rca_core/grounding.py) costs one extra model call per
+        # extraction, so it is opt-out rather than opt-in. Defaulting it OFF
+        # would leave the tool in exactly the state it is being fixed for -- a
+        # confident A/1.0 grade on names that are not in the figure -- so a
+        # silently-disabled check is not an acceptable default.
+        # `"ground_names": false` turns it off.
+        # Defined here, OUTSIDE the `runs == 1` branch: the merged multi-run
+        # path scores too, and a name bound only inside the single-run branch
+        # made that path raise NameError on every runs>=2 request.
+        ground_names = req.get("ground_names") is not False
+
         if runs == 1:
             # FIX (cache): check the cache first so identical reruns are
             # free. The key includes image, provider, model, prompt version,
@@ -2725,7 +2811,7 @@ class Handler(BaseHTTPRequestHandler):
                 # a cache hit. The cached payload may predate the quality
                 # scorer if an older client wrote it.
                 if "quality" not in cache_hit:
-                    cache_hit["quality"] = _safe_score_range_chart(cache_hit)
+                    cache_hit["quality"] = _safe_score_cached(cache_hit)
                 # REVIEW-2026-09-10: the truncation signal lives on
                 # ExtractResult, never inside result.data, so a cache hit used
                 # to drop it entirely - the user saw "result may be truncated"
@@ -2838,7 +2924,11 @@ class Handler(BaseHTTPRequestHandler):
             if result.ok and result.data and isinstance(result.data, dict):
                 if mode_source:
                     result.data["_auto_mode"] = {"mode": mode, "source": mode_source}
-                result.data["quality"] = _safe_score_range_chart(result.data)
+                result.data["quality"] = _safe_ground_and_score(
+                    result.data, image_b64=image_b64,
+                    media_type=req.get("media_type") or "image/png",
+                    provider=provider,
+                    enabled=ground_names)
                 # UI-REVIEW-2026-09-07 (evidence chain): attach the audit
                 # report (mode decision, truncation, row counts, empty-table
                 # reasons, ICS version) - borrowed from thu-digitizer.
@@ -3005,7 +3095,7 @@ class Handler(BaseHTTPRequestHandler):
                     cached = None
                 if cached is not None:
                     if "quality" not in cached:
-                        cached["quality"] = _safe_score_range_chart(cached)
+                        cached["quality"] = _safe_score_cached(cached)
                     # P0-4 (REVIEW-2026-07-25): KEYED BY SLOT INDEX so
                     # non-contiguous cache hits do not cause the
                     # submission loop to skip the true miss or re-run
@@ -3185,7 +3275,10 @@ class Handler(BaseHTTPRequestHandler):
         merged = merge_results(ok_datas, total_runs=runs, schema=schema)
         # FIX (quality): score the merged result so the UI can show a
         # quality badge ("0.87 / B-Good") and flag low-confidence rows.
-        quality = _safe_score_range_chart(merged)
+        quality = _safe_ground_and_score(
+            merged, image_b64=image_b64,
+            media_type=req.get("media_type") or "image/png",
+            provider=provider, enabled=ground_names)
         merged["quality"] = quality
         if mode_source:
             merged["_auto_mode"] = {"mode": mode, "source": mode_source}

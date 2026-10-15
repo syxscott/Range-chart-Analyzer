@@ -1882,7 +1882,72 @@ def call_llm_api(
             "cache_creation_tokens": 0,
             "estimated": True,
         }
+    if usage is not None:
+        _annotate_image_tokens(usage, image_b64)
     return raw_text, truncated, status, err_body, usage
+
+
+def estimate_image_tokens(image_b64: str) -> int | None:
+    """Rough vision-token cost of one image, from its real pixel size.
+
+    Anthropic's published rule: the image is fitted to at most 1568px on the
+    long edge, then costs ~750 tokens per (w/750) x (h/750) tile, capped near
+    1600. That is a MODEL-SPECIFIC formula, so the number is an estimate and
+    is only ever reported as one.
+
+    Returns None when the size cannot be read, which is a normal outcome
+    (Pillow missing, a format the header scan does not cover) and must never
+    raise.
+    """
+    if not image_b64:
+        return None
+    try:
+        import base64 as _b64
+        import io as _io
+
+        from PIL import Image as _Image  # lazy: keeps this module importable
+
+        # Decode in full rather than truncating the base64: a truncated stream
+        # raises on its padding, and a JPEG's SOF marker sits at a
+        # format-dependent offset, so a "just the header" prefix is not a safe
+        # shortcut. These images are well under a megabyte.
+        with _Image.open(_io.BytesIO(_b64.b64decode(image_b64))) as im:
+            w, h = im.size
+    except Exception:
+        return None
+    if not w or not h:
+        return None
+    longest, shortest = max(w, h), min(w, h)
+    if longest > 1568:
+        scale = 1568.0 / longest
+        w, h = int(w * scale), int(h * scale)
+        longest, shortest = max(w, h), min(w, h)
+    tiles = ((longest + 749) // 750) * ((shortest + 749) // 750)
+    return min(tiles * 750, 1600)
+
+
+def _annotate_image_tokens(usage: dict[str, Any], image_b64: str) -> None:
+    """Attach the image estimate SEPARATELY from ``input_tokens``.
+
+    AUDIT-2026-10-15: measured against the MiniMax Anthropic-compatible
+    endpoint. A 1751x2892 chart reported ``input_tokens=97`` with
+    ``cache_read_tokens=1920`` — 97 is the text, and the image was billed
+    somewhere the usage block does not name. A smaller figure (343 KB) on the
+    same endpoint reported 9606. So ``input_tokens`` means different things on
+    different calls and providers, and the app's usage display was
+    under-reporting vision cost with no way for the user to tell.
+
+    The estimate is therefore reported as its own field and NEVER added into
+    ``input_tokens``: for a provider that already bills the image there, adding
+    it would double-count, and quietly inflating a number the user is billed on
+    is worse than showing it separately.
+    """
+    est = estimate_image_tokens(image_b64) if image_b64 else None
+    if est is None:
+        usage.setdefault("image_tokens_estimated", None)
+        return
+    usage["image_tokens_estimated"] = est
+    usage["image_tokens_are_estimate"] = True
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ from typing import Any, Callable
 # rca_core.bed_parser.parse_bed so the exporter and the quality
 # scorer always agree.
 from .bed_parser import parse_bed as _parse_bed_impl  # noqa: E402  (post-import hook)
+from .bed_parser import label_ordinal as _label_ordinal_impl  # noqa: E402
 
 
 def _parse_bed(value):
@@ -182,6 +183,36 @@ def validate_export_invariants(
                     top_val = row.get("range_top")
                     base_parsed = _parse_bed(base_val)
                     top_parsed = _parse_bed(top_val)
+
+                    # AUDIT-2026-10-15: `range_base_le_range_top` is the only
+                    # export-BLOCKING invariant a species row has, and until now
+                    # it reached its comparison only when BOTH endpoints parsed
+                    # as a bed. Measured on Diaz & Velez 2018 Fig. 5 — a real
+                    # extraction whose samples are labelled "A1 (607 m)" ..
+                    # "A21 (602 m)" — `parse_bed` returns None for every one of
+                    # them, so the whole block fell through to `float()`,
+                    # raised ValueError, and was swallowed by the `except:
+                    # pass` below. 21 rows carried inverted endpoints and the
+                    # result still validated ok=True / 0 blocking / 0 warnings,
+                    # while the control "Bed 5" -> "Bed 1" blocked correctly.
+                    #
+                    # Sample labels carry their own position, so compare those
+                    # when the bed parser declines. Kept deliberately narrow: it
+                    # reads a NUMBER out of the label and never guesses, and it
+                    # refuses a trailing unit ("607 m") so a depth is never
+                    # compared against a sample index.
+                    if base_parsed is None or top_parsed is None:
+                        _bo = _label_ordinal_impl(base_val)
+                        _to = _label_ordinal_impl(top_val)
+                        if _bo is not None and _to is not None and _bo != _to:
+                            if _to < _bo:
+                                issues.append({
+                                    "table": table_id, "row_index": ridx,
+                                    "constraint": constraint,
+                                    "base": base_val, "top": top_val,
+                                    "resolved_by": "label_ordinal",
+                                })
+                            continue
                     try:
                         if base_parsed is not None and top_parsed is not None:
                             # Both are Bed strings: compare bed_num first, then
@@ -228,7 +259,30 @@ def validate_export_invariants(
                                     "base": base, "top": top,
                                 })
                     except (TypeError, ValueError):
-                        pass
+                        # Previously a bare `pass`, which is what made the
+                        # invariant invisible on real labels: the row was
+                        # neither validated nor reported. Stay quiet when BOTH
+                        # endpoints are unreadable OR either one is blank —
+                        # the blank case is already reported by
+                        # `warn_if_missing`, and a second warning for the same
+                        # row would just be noise. Speak up only when both
+                        # endpoints are present but exactly one can be read,
+                        # because then the row claims a range and only half of
+                        # it could be checked.
+                        if not (str(base_val or "").strip()
+                                and str(top_val or "").strip()):
+                            pass
+                        else:
+                            _bo2 = _label_ordinal_impl(base_val)
+                            _to2 = _label_ordinal_impl(top_val)
+                            if (_bo2 is None) != (_to2 is None):
+                                warnings.append({
+                                    "table": table_id, "row_index": ridx,
+                                    "constraint": constraint,
+                                    "severity": "warning",
+                                    "reason": "endpoint_not_comparable",
+                                    "base": base_val, "top": top_val,
+                                })
                 # Sprint B (REVIEW-2026-09-04): the "has_biozone_or_age"
                 # branch was removed — it tested an ``age`` key that species
                 # rows never carry (see EXPORT_INVARIANTS note above).

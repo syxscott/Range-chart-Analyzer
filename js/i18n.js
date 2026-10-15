@@ -361,6 +361,11 @@ const RCA_I18N = {
     // FIX-2026-09-22 (item 5): display wrapper for the reason_code.* catalog,
     // consumed by js/app.js (rcaCoverageReasonIssues).
     'quality.coverage_reasons': '覆盖理由码：{reasons}',
+    // 2026-10-15: name grounding (rca_core/grounding.py). Mirror of the three
+    // rca_core/i18n.py keys; reported beside the score, never inside it.
+    'grounding.unverified_names': '图中未找到的名称（{count} 个）：{names}。这些名称可能来自模型记忆而非图面，请逐一核对',
+    'grounding.not_performed': '未能完成名称落地核对（{reason}）。本次结果中名称是否印在图上属于未知，不代表已核对通过',
+    'grounding.no_names': '本图表模式没有可核对的分类群/带名称（无相关字段），未进行名称落地核对',
     // BORROW-2026-09-20 (A): 12 个理由码（slug 稳定，供 UI 与导出使用）。
     // The slugs themselves — and their English glosses — live in
     // js/reason-codes.js (RCA_REASON_CODES); the localized strings are the
@@ -716,6 +721,11 @@ RCA_I18N.en = {
   // mirror of rca_core/i18n.py TRANSLATIONS["en"].
   'quality.coverage_ledger': 'Coverage ledger: {answered} of {cells} requested cells answered ({not_drawn} explicitly not drawn on the chart), {gaps} silently missing',
   'quality.coverage_reasons': 'Coverage reason codes: {reasons}',
+  // 2026-10-15: name grounding (rca_core/grounding.py) - mirror of the three
+  // rca_core/i18n.py keys for the same signal.
+  'grounding.unverified_names': 'Names not found in the figure ({count}): {names}. These may come from the model\'s own knowledge rather than the image — check each one',
+  'grounding.not_performed': 'Name grounding could not be completed ({reason}). Whether these names are printed in the figure is UNKNOWN — this is not a clean result',
+  'grounding.no_names': 'This chart mode has no verifiable taxon / zone names (no name-bearing field), so no name grounding was performed',
   'reason_code.not_drawn': 'The column exists on the chart but this taxon is deliberately not drawn (dash/blank): an explicit absence record, not a missed extraction',
   'reason_code.uncertain': 'Uncertain reading: boundary, label or legend could not be interpreted reliably',
   'reason_code.obscured': 'The mark or its label is covered by other elements, a caption, a fold or print bleed',
@@ -1060,6 +1070,10 @@ RCA_I18N.ja = {
   // reason-code catalog (was zh-only on both transports; see the en block).
   'quality.coverage_ledger': 'カバレッジ台帳：要求された {cells} セル中 {answered} 個が回答済み（うち {not_drawn} 個は図上で意図的に未描写）、{gaps} 個が沉默的欠落',
   'quality.coverage_reasons': 'カバレッジ理由コード：{reasons}',
+  // 2026-10-15: name grounding（rca_core/grounding.py）— js/i18n.js 側のミラー。
+  'grounding.unverified_names': '図面に見つからなかった名称（{count} 件）：{names}。これらは画像ではなくモデルの知識から補われた可能性があります。個別に確認してください',
+  'grounding.not_performed': '名称の検証を完了できませんでした（{reason}）。これらの名称が図面に印されているかは不明であり、検証済みという意味ではありません',
+  'grounding.no_names': 'このチャートモードには検証対象となる分類群／帯名がありません（該当フィールドなし）。名称の検証は行っていません',
   'reason_code.not_drawn': '列は図上に存在するがこの分類群は意図的に描かれていない（ダッシュ/空白）：明確な欠如記録であり、抽出漏れではない',
   'reason_code.uncertain': '読み取り不確実：境界、ラベルまたは凡例を確実に判読できない',
   'reason_code.obscured': 'マークまたはそのラベルが他の要素、キャプション、折り目、印刷のかすれに隠されている',

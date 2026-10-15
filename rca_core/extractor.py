@@ -1879,11 +1879,54 @@ def _normalize_species_into(sp: dict[str, Any],
         _top_idx, _base_idx = _base_idx, _top_idx
         _idx_warnings.append("index_order_swap")
 
+    # AUDIT-2026-10-15: the indices above are ordered, but the TEXT endpoints
+    # were taken verbatim from the model, so the two could disagree — and the
+    # text is what the export writes.
+    #
+    # Measured on Diaz & Velez 2018 Fig. 5 (33 taxa, real extraction):
+    # 21 of 28 rows carried
+    #     range_base="A5 (606 m)"  range_base_idx=1
+    #     range_top ="A1 (607 m)"  range_top_idx =5
+    # A1 is the DEEPEST sample (607 m), so it is the OLD end and belongs in
+    # range_base; the numeric pair was right and the text pair was transposed.
+    # The workbook therefore shipped the older end labelled as the younger one,
+    # and quality.py's FAD/LAD check read the text, so it raised 21
+    # `range_top_lt_base` warnings while `to_xlsx` still wrote the wrong values
+    # — `validate_export_invariants` reported ok=True because
+    # `range_base_le_range_top` parses endpoints through the strict
+    # `parse_bed`, which returns None for "A1 (607 m)" and so never reached
+    # its own comparison.
+    #
+    # Repair when the two representations CONTRADICT each other: the labels
+    # carry their own ordinal (A1 -> 1, A5 -> 5), and when that order disagrees
+    # with the index order the text is the transposed half. Swap text + bed
+    # labels together and keep the indices, so all three agree afterwards.
+    # When the labels cannot be read, or the two orders merely agree, nothing
+    # is touched — a wrong "repair" would be worse than the original defect.
+    _range_top = s(sp.get("range_top"))
+    _range_base = s(sp.get("range_base"))
+    _top_bed = s(sp.get("range_top_bed", ""))
+    _base_bed = s(sp.get("range_base_bed", ""))
+    if _base_idx is not None and _top_idx is not None and _base_idx != _top_idx:
+        from .bed_parser import label_ordinal, ordinal_kind
+        _ord_base = label_ordinal(_range_base or _base_bed)
+        _ord_top = label_ordinal(_range_top or _top_bed)
+        _kinds = {ordinal_kind(_range_base or _base_bed),
+                  ordinal_kind(_range_top or _top_bed)}
+        if (_ord_base is not None and _ord_top is not None
+                and _ord_base != _ord_top
+                and len(_kinds) == 1 and None not in _kinds
+                # opposite signs: labels say one order, indices the other
+                and (_ord_base > _ord_top) != (_base_idx > _top_idx)):
+            _range_top, _range_base = _range_base, _range_top
+            _top_bed, _base_bed = _base_bed, _top_bed
+            _idx_warnings.append("endpoint_label_index_swap")
+
     row = {
         "species": s(sp.get("species")),
         "section": s(sp.get("section")),
-        "range_top": s(sp.get("range_top")),
-        "range_base": s(sp.get("range_base")),
+        "range_top": _range_top,
+        "range_base": _range_base,
         "biozone": s(sp.get("biozone")),
         "author": s(sp.get("author", "")),
         "year": s(sp.get("year", "")),
@@ -1896,8 +1939,8 @@ def _normalize_species_into(sp: dict[str, Any],
         # reworked flag, and exact bed labels. Promote them to first-class
         # row keys and ALSO drop them from _KNOWN_SPECIES_KEYS so _carry_extras
         # does not double-write them.
-        "range_top_bed": s(sp.get("range_top_bed", "")),
-        "range_base_bed": s(sp.get("range_base_bed", "")),
+        "range_top_bed": _top_bed,
+        "range_base_bed": _base_bed,
         "range_top_idx": _top_idx,
         "range_base_idx": _base_idx,
         "endpoint_kind": _normalize_endpoint_kind(sp.get("endpoint_kind")),

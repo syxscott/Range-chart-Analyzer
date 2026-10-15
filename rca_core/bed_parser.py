@@ -155,6 +155,131 @@ def parse_bed_int(value: Any) -> Optional[int]:
     return int(info["bed_num"])
 
 
+# ---------------------------------------------------------------------------
+# Axis-label ordinals (AUDIT-2026-10-15)
+# ---------------------------------------------------------------------------
+#
+# `parse_bed` above is deliberately strict: it returns None for anything that
+# is not a bare or "Bed"-prefixed number, because a misread age or thickness
+# silently becomes a wrong bed number. That strictness has a cost, measured on
+# a real published figure (Diaz & Velez 2018, Fig. 5) whose samples are
+# labelled `A1 (607 m)` .. `A21 (602 m)`:
+#
+#   parse_bed("A1 (607 m)") -> None     parse_bed("Sample 3") -> None
+#   parse_bed("87 B1 4C")   -> None     parse_bed("607 m")     -> None
+#
+# The exporter's ONLY export-blocking invariant, `range_base_le_range_top`,
+# parses through `parse_bed`, so on that figure it never once reached its own
+# comparison: a result with 21 inverted range endpoints validated as
+# ok=True / 0 blocking / 0 warnings, while the control "Bed 5" -> "Bed 1"
+# blocked correctly. The guard was inert for the label style real charts use.
+#
+# `label_ordinal` is the deliberately NARROW companion: it never claims to be a
+# bed parser and never guesses one. It answers a single question — "does this
+# axis label carry its own position number?" — so two endpoints can be
+# cross-checked against the index the model assigned them. None is the common,
+# expected answer and callers MUST read it as "cannot check", never as
+# "not inverted".
+
+_LABEL_TRAILING_UNIT_RE = re.compile(
+    r"(?:ma|myr|ka|kyr|m\b|cm|mm|ft|in)\s*$", re.IGNORECASE)
+_ANY_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+_BARE_DECIMAL_RE = re.compile(r"^\d+\.\d+$")
+_LETTER_PREFIX_RE = re.compile(r"^[A-Za-z]{1,4}[-_. ]?\d")
+
+
+def label_ordinal(value: Any) -> Optional[int]:
+    """The position number a sample/bed label carries, or None.
+
+    Accepts the label styles real range charts print, and only those it can
+    read without guessing::
+
+        "A1" / "A21"      -> 1 / 21   letter-prefixed sample
+        "Sample 3"       -> 3        word-prefixed
+        "87 B1 4C"       -> 4        LAST number: the bed, not the section
+        "Bed 23" / "23c" -> 23       what parse_bed already handles
+        "1.7"            -> 1        a Ma value: monotonic, usable
+        "607 m"          -> None     a DEPTH, not an ordinal
+        "1.7 Ma"         -> None     an AGE carries a unit
+        "" / "zone Z1"   -> None     nothing to read
+
+    Depth-like values are refused on purpose. ``"607 m"`` is monotonic but its
+    unit is spelled out, and a figure may print depth on one axis and a bed
+    index on another; comparing across the two would manufacture inversions out
+    of nothing. The caller needs "can I check this?", and for a bare
+    ``NNN <unit>`` the honest answer is no.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        # float() carries NaN/inf, and int(NaN) raises — the same guard
+        # parse_bed_int applies. A NaN cell reaches here through the exporter's
+        # NaN-sanitisation tests, so this is a live path, not a theoretical one.
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return None
+        if f != f or f in (float("inf"), float("-inf")):
+            return None
+        return int(f)
+    s = str(value).strip()
+    if not s:
+        return None
+
+    # Already a bed by the strict parser — take its number, no guessing.
+    info = parse_bed(s)
+    if info is not None:
+        return int(info["bed_num"])
+
+    # A trailing unit means an age or a thickness, never a position label.
+    if _LABEL_TRAILING_UNIT_RE.search(s):
+        return None
+    if _BARE_DECIMAL_RE.match(s):
+        return int(float(s))
+
+    # A parenthesised tail is an ANNOTATION, not part of the label. This is the
+    # form a measured section prints — "A1 (607 m)" is sample A1 annotated with
+    # its depth — so the ordinal is whatever precedes the bracket. Reading the
+    # last number instead returned 607 for "A1 (607 m)" and 100 for
+    # "S1 (100 ft)", i.e. the depth, which orders the opposite way from the
+    # sample index it is being compared against.
+    if "(" in s:
+        head = s.split("(", 1)[0]
+        nums = _ANY_NUM_RE.findall(head)
+        return int(float(nums[0])) if nums else None
+
+    nums = _ANY_NUM_RE.findall(s)
+    if not nums:
+        return None
+    # No bracket: take the LAST number, because "87 B1 4C" is section 87 / well
+    # 1 / bed 4 and the bed is the position.
+    return int(float(nums[-1]))
+
+
+def ordinal_kind(value: Any) -> Optional[str]:
+    """Coarse family of an axis label, so two endpoints are only compared when
+    they could plausibly sit on the same axis.
+
+    ``"letter"`` (A1, Sample 3), ``"number"`` (Bed 23, 23c, 4) or None. Lax on
+    purpose — its job is to stop an age being compared against a sample index,
+    not to police spelling.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    if _LABEL_TRAILING_UNIT_RE.search(s):
+        return None
+    if _LETTER_PREFIX_RE.match(s) or re.search(r"\b[A-Za-z]{3,}\b", s):
+        return "letter"
+    if re.search(r"\d", s):
+        return "number"
+    return None
+
+
 def bed_position(value: Any) -> float | None:
     """A bed's position on a continuous scale, subscript included.
 

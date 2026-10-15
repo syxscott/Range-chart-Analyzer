@@ -78,6 +78,15 @@ IDENTICAL = (
     "PHYLOGENETIC_TREE_SYSTEM_PROMPT",
     "RANGE_CHART_SYSTEM_PROMPT",
     "SCATTER_PLOT_SYSTEM_PROMPT",
+    # AUDIT-2026-10-15: ZONATION_CHART moved here from DIVERGENT. It used to
+    # differ only in capitalisation ("ZONATION / CORRELATION CHART" vs
+    # "zonation / correlation chart"), which is harmless on its own — but this
+    # prompt is where the real extraction failure lives, so the JS copy was
+    # regenerated wholesale from the Python constant rather than hand-edited
+    # again, and the whole text (6333 chars) is now byte-identical. Both
+    # engines send this prompt; see the rules added about never emitting a zone
+    # the figure does not draw.
+    "ZONATION_CHART_SYSTEM_PROMPT",
 )
 
 # Measured different, pinned verbatim on both sides. (name, live?, python, js)
@@ -85,9 +94,6 @@ DIVERGENT = (
     ("COLUMNAR_SECTION_SYSTEM_PROMPT", True,
      "Each vertical column ('section') in the figure",
      "Each vertical column (section) in the figure"),
-    ("ZONATION_CHART_SYSTEM_PROMPT", True,
-     "a BIOSTRATIGRAPHIC ZONATION / CORRELATION CHART",
-     "a BIOSTRATIGRAPHIC zonation / correlation chart"),
     ("PALEOMAP_SYSTEM_PROMPT", False,   # backend-only: js/minimax.js has no
                                        # normalizer for paleomap
      "put its value into the site's note",
@@ -152,17 +158,30 @@ class TestKnownDivergences:
         assert js_snippet not in py, f"{name}: the js snippet also appears in python"
         assert py_snippet not in js, f"{name}: the python snippet also appears in js"
 
-    def test_the_two_live_ones_are_the_modes_both_engines_send(self):
-        """A live divergence must be a mode js/minimax.js actually dispatches."""
+    def test_live_divergences_are_exactly_the_ones_the_browser_dispatches(self):
+        """`live` must mean "textually divergent AND sent by js/minimax.js".
+
+        Derived from js/minimax.js rather than hardcoded, because AUDIT-2026-10-15
+        moved ZONATION_CHART_SYSTEM_PROMPT from DIVERGENT to IDENTICAL and a
+        literal set broke on the move instead of on a real regression. Deriving it
+        also widens the check: this used to assert only the forward direction (a
+        live prompt is dispatched), so marking a prompt live that the browser
+        never sends -- the stale-pin failure -- passed silently.
+        """
         live = {name for name, is_live, _, _ in DIVERGENT if is_live}
-        assert live == {"COLUMNAR_SECTION_SYSTEM_PROMPT",
-                        "ZONATION_CHART_SYSTEM_PROMPT"}
         js_src = (REPO / "js" / "minimax.js").read_text(encoding="utf-8")
-        for name in live:
-            assert name in js_src, (
-                f"{name} is recorded as LIVE but js/minimax.js no longer names it; "
-                "if the browser stopped sending that prompt, move it to the "
-                "backend-only half of DIVERGENT")
+        sent = {n for n, _, _, _ in DIVERGENT if n in js_src}
+
+        assert live == sent, (
+            f"live/sent disagreement. marked live but not dispatched: "
+            f"{sorted(live - sent)}; dispatched but not marked live: "
+            f"{sorted(sent - live)}. Update the DIVERGENT live flag or the "
+            "browser dispatch, whichever actually changed.")
+
+        # Not vacuous: the classification must still mark something live, or the
+        # comparison above would hold for the wrong reason (e.g. every DIVERGENT
+        # entry was flipped to False and js/minimax.js names none of them).
+        assert live, "no divergence is marked live; check js/minimax.js still ships one"
 
     def test_paleomap_is_still_backend_only(self):
         """The one inert divergence depends on the browser lacking a normalizer."""

@@ -60,6 +60,14 @@ from .reason_codes import (  # noqa: E402
     coverage_state,
 )
 
+# 2026-10-15: the name-grounding signal (rca_core/grounding.py). Imported for
+# its status vocabulary and its result shape ONLY — see _apply_grounding for
+# why it is reported beside the score and never folded into it.
+from .grounding import (  # noqa: E402
+    GROUNDING_NO_NAMES,
+    GROUNDING_VERIFIED,
+)
+
 
 def is_not_drawn(row: Any) -> bool:
     """True when a row is an explicit "the chart did not draw this range"."""
@@ -1419,30 +1427,131 @@ def _score_abundance_sum(data: dict[str, Any]) -> list[dict[str, Any]]:
     return _abundance_sum_violations(level_sums)
 
 
-def score_range_chart(data: dict[str, Any]) -> dict[str, Any]:
+def _grounding_report(grounding: Any) -> dict[str, Any] | None:
+    """Normalise a ``GroundingResult`` (or an equivalent dict) to a plain dict.
+
+    Duck-typed rather than isinstance-checked so a caller may hand over either
+    the dataclass, its ``to_dict()`` output, or the dict it got back over the
+    wire. Returns None for anything unusable, which the caller treats as "no
+    grounding information" — the same outcome as not having run the check.
+    """
+    if grounding is None:
+        return None
+    to_dict = getattr(grounding, "to_dict", None)
+    try:
+        report = to_dict() if callable(to_dict) else dict(grounding)
+    except Exception:
+        return None
+    if not isinstance(report, dict):
+        return None
+    return report
+
+
+def _apply_grounding(out: dict[str, Any], grounding: Any) -> None:
+    """Report a name-grounding result beside the score. SCORE-NEUTRAL.
+
+    2026-10-15. The four weighted dimensions are computed from the result alone
+    and reproduce offline. Name grounding is a second model call: it can fail,
+    time out, or be wrong, and none of those are the same thing as the result
+    being wrong. Folding it into the composite would let the least reliable
+    signal in the product outrank the ones that are checked, and would make a
+    grade vary between two runs of one image — so it is reported as its own
+    field plus its own issue, and ``score``/``grade`` are left exactly as the
+    dimensions computed them. This is deliberate and pinned by
+    tests/test_grounding.py::TestGroundingNeverMovesTheScore.
+
+    The msg_keys are ``grounding.*``, NOT ``quality.*``, and that is a hard
+    requirement rather than taste: tests/test_quality_untested_paths.py asserts
+    that every ``quality.*`` key rca_core/quality.py can emit is ALSO emittable
+    by js/quality.js (the desktop and the browser must agree on what a grade
+    says), and this signal has no browser counterpart — the browser transport
+    runs its own scorer and cannot make a second vision call. A separate
+    namespace says "reported beside the quality grade, not part of it", which
+    is exactly the relationship.
+
+    The three outcomes stay distinguishable in the output, because the whole
+    reason this signal exists is that "checked and clean" and "could not check"
+    used to look identical:
+      * verified + names   -> warning listing them (the thing we are hunting)
+      * verified + none    -> ``grounding`` field only; nothing to say
+      * not_performed      -> info; the result is UNKNOWN, not clean
+      * no_names           -> info; this mode has no verifiable names
+    """
+    report = _grounding_report(grounding)
+    if report is None:
+        return
+    out["grounding"] = report
+    status = report.get("status")
+    issues = out.setdefault("issues", [])
+
+    if status == GROUNDING_VERIFIED:
+        unverified = [str(n) for n in (report.get("unverified") or []) if n]
+        if not unverified:
+            return
+        shown = ", ".join(unverified[:8])
+        if len(unverified) > 8:
+            shown += ", ..."
+        issues.append({
+            "severity": "warning",
+            "msg_key": "grounding.unverified_names",
+            "params": {"count": str(len(unverified)), "names": shown},
+        })
+        return
+
+    if status == GROUNDING_NO_NAMES:
+        issues.append({"severity": "info",
+                       "msg_key": "grounding.no_names"})
+        return
+
+    # not_performed, and any status this build does not recognise: an unknown
+    # verdict is not a clean one, so it is reported as the failure it is rather
+    # than dropped. (`GROUNDING_NOT_PERFORMED` is the only other status
+    # grounding.py can produce, so the fall-through catches only a mismatch
+    # between the two modules.)
+    reason = str(report.get("reason") or "").strip()[:160]
+    issues.append({
+        "severity": "info",
+        "msg_key": "grounding.not_performed",
+        "params": {"reason": reason or "unknown"},
+    })
+
+
+def score_range_chart(data: dict[str, Any], grounding: Any = None) -> dict[str, Any]:
     """Score a normalized result and return {score, grade, issues}.
 
     Args:
         data: a normalized result dict (the ``data`` field of an
               ExtractResult, or the merged result from aggregate.py).
+        grounding: optional :class:`rca_core.grounding.GroundingResult` (or its
+              dict) from a name-grounding pass. Reported as its own field and
+              issue; it NEVER changes ``score`` or ``grade``. Omitted — the
+              default, and what every existing caller passes — the output is
+              byte-for-byte what it always was.
 
     Returns:
         dict with integer weighted ``score`` (0.0–1.0), letter ``grade``
         (A/B/C/D/F), and a list of ``issues`` each with ``severity``
-        (info/warning) and an i18n ``msg_key``.
+        (info/warning) and an i18n ``msg_key``. When ``grounding`` is supplied
+        a ``grounding`` key is added.
     """
     if not data or not isinstance(data, dict):
-        return {"score": 0.0, "grade": "F",
-                "issues": [{"severity": "warning",
-                            "msg_key": "quality.invalid_result"}]}
+        out: dict[str, Any] = {
+            "score": 0.0, "grade": "F",
+            "issues": [{"severity": "warning",
+                        "msg_key": "quality.invalid_result"}],
+        }
+        _apply_grounding(out, grounding)
+        return out
 
     # C5 fix: detect "the model ran an extraction but produced nothing".
     # Previously this case scored 0.94 / A because all-empty arrays didn't
     # trigger any check — a serious false-positive for the user.
     if _is_pure_extraction_miss(data):
-        return {"score": 0.0, "grade": "F",
-                "issues": [{"severity": "warning",
-                            "msg_key": "quality.empty_result"}]}
+        out = {"score": 0.0, "grade": "F",
+               "issues": [{"severity": "warning",
+                           "msg_key": "quality.empty_result"}]}
+        _apply_grounding(out, grounding)
+        return out
 
     dimensions = (
         ("completeness", W_COMPLETENESS, _score_completeness),
@@ -1502,6 +1611,13 @@ def score_range_chart(data: dict[str, Any]) -> dict[str, Any]:
                     "gaps": str(totals.get("silent_missing", 0)),
                 },
             })
+    # 2026-10-15: name grounding, reported LAST and score-neutrally. See
+    # _apply_grounding — this appends to all_issues (the same list object
+    # `out["issues"]` refers to, which is how the coverage block above works)
+    # and adds one key; `composite` was computed before it and is not
+    # recomputed, which is what makes "the verifier cannot move the grade" a
+    # property of this code path rather than a promise.
+    _apply_grounding(out, grounding)
     return out
 
 

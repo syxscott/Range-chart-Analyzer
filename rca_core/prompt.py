@@ -1099,6 +1099,32 @@ ZONATION_CHART_SYSTEM_PROMPT = "\n".join([
     "- INDEX TAXA ARE NOT ZONES. A zone NAMED after a species (\"H. parvus "
     "Zone\") is a zone; a bare species name in a species column of a RANGE "
     "chart is not a zone. Never invent a zone that is not drawn.",
+    # AUDIT-2026-10-15. Measured on Motoyama 2019 Fig. 1 (a real extraction,
+    # run four times on the same image). The chart prints three side-by-side
+    # zonations, and the model returned 36 / 91 / 45 / 51 zone rows across
+    # those runs. A large share of the names were NOT on the figure at all:
+    # Buccinosphaera invaginata, Calocycletta costata, Calocycletta virginis,
+    # Calocycletta serrata, Bujtospora uviformis, Didymocyrtis penultima,
+    # Diartus petterssoni, Stichocorys wolffii, Acrospyris grupium. They are
+    # all REAL Neogene radiolarian zone names, so they are indistinguishable
+    # from a correct answer by inspection — they are being supplied from
+    # training knowledge, not read off the pixels, and the quality grader
+    # scored every one of those runs A / 1.0 with zero issues.
+    "- A NAME YOU CANNOT POINT AT IS NOT A ZONE. Emit a zone only if you can "
+    "see its label in this image. You know the standard Neogene and Mesozoic "
+    "zonations by heart, and that knowledge is the main source of error "
+    "here: a plausible zone name for this age and region is NOT evidence that "
+    "the figure draws it. If a column's labels are illegible, emit nothing "
+    "for it and say so in `confidence` and in a `note` — an empty column is a "
+    "correct answer, a filled one full of remembered names is not.",
+    "- COPY ABBREVIATIONS AS PRINTED, NEVER EXPAND THEM. This figure type "
+    "routinely labels its tie events with abbreviated genera (\"T.L. sakaii\", "
+    "\"T.A. setosa\", \"T.S. japonicus\") while printing the full binomial "
+    "only in the zone column. If the event column shows the abbreviation, put "
+    "the abbreviation in `defined_by` and, if you need the full name, in "
+    "`note` marked as an expansion — never silently replace one with the "
+    "other, and never \"correct\" a printed epithet to the form you remember "
+    "(\"japonicus\" is not \"japonica\").",
     "- CORRELATION LINES ARE DATA. Every horizontal tie line / band linking "
     "a zone boundary or zone body across two columns becomes one "
     "`correlations` entry. If a line links a zone to a stage column, the "
