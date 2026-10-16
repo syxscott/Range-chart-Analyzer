@@ -33,6 +33,8 @@ so the exe itself can sit in a read-only directory.
 
 from PyInstaller.utils.hooks import collect_submodules
 
+import os
+
 block_cipher = None
 
 # qfluentwidgets resolves most of its widget tree through dynamic imports
@@ -111,6 +113,82 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-16 size work: strip payload that provably cannot affect a run
+# ---------------------------------------------------------------------------
+# Measured on the 0.1.1 baseline (dist = 323.5 MB, uncompressed payload
+# 839.1 MB over 4342 entries, read from PKG-00.toc -- not from site-packages
+# directory sizes, which over-count up to 3x):
+#
+#     204.8 MB  PySide6/Qt6WebEngineCore.dll
+#     145.1 MB  cv2  (86.3 cv2.pyd + 58.9 two ffmpeg videoio DLLs)
+#      75.8 MB  PySide6/resources/qtwebengine_devtools_resources.debug.pak
+#      20.6 MB  PySide6/opengl32sw.dll
+#      11.6 MB  PySide6/resources/qtwebengine_devtools_resources.pak
+#
+# The two entries removed here are worth 146.3 MB of the 839 MB payload and
+# cost nothing at runtime:
+#
+# 1. `*.debug.pak` / `qtwebengine_devtools_resources.pak` -- DevTools DEBUG
+#    symbol tables and the DevTools frontend bundle. QtWebEngine loads these
+#    only when a profile is opened with DevTools enabled; this project never
+#    calls showDevTools() or sets a DevTools attribute. PyInstaller's
+#    `collect_qtwebengine_files()` sweeps the whole `resources/` directory
+#    with no filter, so debug builds ride along in every bundle.
+#
+# 2. The two `opencv_videoio_ffmpeg*.dll` -- 58.9 MB of video decoders for a
+#    tool that extracts from still images. deskew.py and extractor.py call
+#    resize / GaussianBlur / Canny / HoughLinesP / fastNlMeansDenoising /
+#    createCLAHE / cvtColor, all imgproc or photo; nothing in the repository
+#    calls a videoio entry point. Verified by moving both DLLs aside and
+#    running every call site in a fresh interpreter: 10/10 passed and
+#    `import cv2` still succeeded, restored afterwards by digest.
+#    (scripts/audit_exclude_imports.py and audit_exclude_suite.py cover Python
+#    imports; a binary dropped from `a.binaries` is invisible to both, which
+#    is why this one needed its own probe.)
+
+def _drop(entries, should_drop):
+    """Remove matching TOC entries and report what went."""
+    kept, dropped = [], []
+    for entry in entries:
+        name = str(entry[0]).replace("\\", "/").lower()
+        (dropped if should_drop(name) else kept).append(entry)
+    return kept, dropped
+
+
+def _src_size(entry):
+    """Bytes a TOC entry costs.
+
+    A .toc entry is (dest_name, src_path, typecode[, size]) and, in this
+    PyInstaller version, carries no length -- the source path points at the
+    real file, so stat it. Two earlier drafts of the size probe assumed the
+    length was there and reported every entry as 0.0 MB while still printing a
+    confident table.
+    """
+    try:
+        return os.path.getsize(str(entry[1]))
+    except (OSError, IndexError):
+        return 0
+
+
+def _is_devtools_bulk(name):
+    base = name.rsplit("/", 1)[-1]
+    return (base.endswith(".debug.pak")
+            or base.startswith("qtwebengine_devtools_resources"))
+
+
+def _is_ffmpeg_videoio(name):
+    base = name.rsplit("/", 1)[-1]
+    return base.startswith("opencv_videoio_ffmpeg")
+
+
+a.binaries, dropped_bin = _drop(a.binaries, _is_ffmpeg_videoio)
+a.datas, dropped_data = _drop(a.datas, _is_devtools_bulk)
+_removed = sum(_src_size(e) for e in (dropped_bin + dropped_data))
+print("[spec] dropped %d binary + %d data entries, %.1f MB of payload"
+      % (len(dropped_bin), len(dropped_data), _removed / 1e6))
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

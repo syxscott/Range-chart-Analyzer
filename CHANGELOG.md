@@ -5,7 +5,7 @@ All notable changes to Range Chart Analyzer are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.1] — 2026-10-16
 
 ### Fixed
 
@@ -107,6 +107,12 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   merged results and every pre-field payload lack the key. Found by loading the
   real page: the diff-parity suite compares JS output against Python output, and
   a branch missing on BOTH sides compares equal.
+- **`rca_core.__version__` read `2.0.0`** while the project shipped 0.1.0. It is
+  not cosmetic: `exporter._package_version()` stamps it into the header of every
+  CSV/TSV/JSON/XLSX exchange file, so every export claimed to come from a version
+  of this software that has never existed. No test pinned it — nothing under
+  `tests/` mentions `__version__` — which is how a number that was wrong from the
+  start survived the whole release history. It now tracks the CHANGELOG.
 
 ### Added
 
@@ -180,6 +186,58 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **exe 308.5 MB → 257.9 MB (−16.4%), with no loss of function.** Measured on
+  the 0.1.1 baseline rather than estimated: 839.1 MB of uncompressed payload
+  over 4342 entries, read from `build/…/PKG-00.toc`. (Site-packages directory
+  sizes over-count by up to 3× — torch is 1874 MB on disk and 98.5 MB inside the
+  exe — so the 0.1.0 exclusion audit's inputs and this one's are not the same
+  quantity.)
+
+  Two entries, 148.9 MB of payload:
+
+  - **87.4 MB of QtWebEngine DevTools bulk** —
+    `qtwebengine_devtools_resources.debug.pak` (75.8) and
+    `qtwebengine_devtools_resources.pak` (11.6). These load only when a
+    profile is opened with DevTools enabled; nothing here calls
+    `showDevTools()` or sets a DevTools attribute. PyInstaller's
+    `collect_qtwebengine_files()` sweeps the whole `resources/` directory with
+    no filter, so debug builds ride along in every bundle.
+  - **58.9 MB of opencv ffmpeg video decoders** — `opencv_videoio_ffmpeg500_64`
+    (30.9) and `ffmpeg4110` (28.0), for a tool that extracts from still images.
+    `deskew.py` and `extractor.py` call `resize` / `GaussianBlur` / `Canny` /
+    `HoughLinesP` / `fastNlMeansDenoising` / `createCLAHE` / `cvtColor`, all
+    imgproc or photo. Verified by moving both DLLs aside and running every call
+    site in a fresh interpreter: 10/10 passed, `import cv2` still succeeded,
+    restored afterwards by digest. The existing exclusion audits cover Python
+    imports and cannot see a binary dropped from `a.binaries`, which is why
+    this one needed its own probe.
+
+- **Corrected a false claim that had been protecting 204.8 MB.** The build spec
+  and the 0.1.0 release notes both stated that dropping QtWebEngine "removes
+  79.8 MB of Chromium and breaks the main content area", because
+  `gui_fluent.py` "embeds the web frontend in the native window". It does not.
+  `QWebEngineView` is used in exactly two places — `PhyloTreeWidget`, the D3
+  phylogenetic-tree renderer, and the rich History detail dialog — and both
+  already have absence paths: `HAS_PHYLO_TREE_WIDGET = False` leaves
+  `self.phylotree` as `None` and `_show_phylotree()` logs and returns, and
+  `HistoryDetailDialog` falls back to a read-only `QTreeWidget`. A false claim
+  that something is mandatory is the most expensive kind of wrong, because it
+  reads as a constraint and nobody revisits it.
+
+  **0.1.1 keeps QtWebEngine.** Dropping it would save a further ~68 MB; that was
+  put to the user and declined, so the 204.8 MB above is Chromium that is
+  demonstrably *not* free to remove — recorded so the next person measures
+  instead of citing 0.1.0's reasoning. The functional cost of dropping it would
+  be: no interactive D3 tree (the right panel falls back to the empty state) and
+  no rich History detail (a plain `QTreeWidget` instead).
+
+- **UPX was considered and rejected on measurement, not taste.** PyInstaller's
+  onefile archive is already zlib-compressed — 839.1 MB of payload shipped as
+  323.5 MB, so 61% of the bytes were compressed before any outer tool ran. UPX
+  over already-compressed data returns single-digit percent, so it was not worth
+  adding a binary compressor and another build cycle to chase it. The lever that
+  works here is payload, not compression ratio.
+
 - **The truncation warning names its numbers.** It was copy-pasted identically
   into eleven extractors and reported no quantities at all, so a reader could not
   tell 16000 from 32000. That ambiguity had already been misread once — an
@@ -219,6 +277,33 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   hallucination, which is the worse failure for a table that gets cited.
   Upscaling was also measured and made cells *worse* (0.429 → 0.397 → 0.377 at
   1×/2×/3×) while improving only the labels.
+
+### Verification
+
+Python **3921 passed / 0 failed / 0 errors / 52 skipped**. Browser: 13 suites
+green, `tests_frontend.js` at 825 assertions (from 760), differential parity
+fixture at **1332 matched / 0 diverged**.
+
+Every fix in this release was reverted in turn and required to turn its own
+suite red — 8 mutations, 8 reds, files restored by content afterwards. The two
+guards that could not have seen a one-sided change (differential parity compares
+JS output against Python output, so a branch missing on BOTH sides compares
+equal) were written as new cases instead: five `gated` payload shapes in the
+detector suite, and a merge suite that passes the keymap the way `app.js` does
+rather than the way neither engine's default does.
+
+Browser, live: the exact state that produced **zero** network requests before
+the fix now produces `GET 200` + `POST 200` on `/api/extract`, and the
+occurrence sheet is headed 「出现记录 (格子未经图版网格核验)」 instead of the bare
+「出现记录」.
+
+Packaging: both exes were launched from this tag's source. The windowed build
+opens a window titled `Range Chart Analyzer`; the console twin serves on a port
+and answers `GET /` with 200. The shipped `js/` was read back *out of the
+running exe* — `defaultMaxTokens = 16000`, `maxMaxTokens = 32000`,
+`err.imageLoading`, `sec.taxonRows`, `data.cell_status`, the `taxon_rows`
+conditional, and the post-classification guard were all confirmed present in
+the binary rather than only in the repository.
 
 ## [0.1.0] — 2026-10-15
 
