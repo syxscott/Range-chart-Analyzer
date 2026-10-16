@@ -1333,6 +1333,136 @@ OCCURRENCE_MATRIX_SYSTEM_PROMPT = "\n".join([
 
 
 # ---------------------------------------------------------------------------
+# OCCURRENCE_LABELS (2026-10-16) — the same figure, asked for LESS.
+#
+# Measured on the verification figure with the real model, the two halves of
+# this genre have opposite error profiles:
+#
+#   * the BIG labels are reliable — 19/22 taxa, 19/19 naming authorities,
+#     11/11 conodont zones, the legend all correct;
+#   * the small grid cells are not — accuracy 0.43, coverage 0.26 on an
+#     18-column x 22-row grid of single abundance letters.
+#
+# OCCURRENCE_MATRIX_SYSTEM_PROMPT asks for both in one answer, so the model's
+# output budget is spent on the half it cannot do and the half it can do loses
+# precision to it. One earlier attempt fixed this by ADDING a 2966-character
+# rule block to the matrix prompt: taxon recall fell 0.9231 -> 0.6538 and it
+# was reverted. So this constant is the opposite move — a separate, SHORTER
+# prompt that asks only for what the model is good at, and shrinks.
+#
+# Every rule below is carried over verbatim from the matrix prompt, which is
+# why that constant is the source of truth here and not the other way round.
+# Three spans are trimmed, and only because the cells are gone and the fields
+# they fed with them (`response_kind`, per-row `code` / `class`,
+# `strat_rows`) are not in this schema: the tail of the taxon-transcription
+# paragraph, the tail of the column-label bullet, and the tails of the legend
+# and strat-band bullets. The generic `_degradation_clause()` is deliberately
+# NOT used — it instructs the model to lower a per-row `confidence` and set a
+# per-row `note`, neither of which this schema defines, which is the exact
+# contradiction tests/test_prompt_schema_consistency.py exists to catch.
+#
+# ONE instruction is new: the line saying the grid cells are collected by a
+# separate pass. Without it the model is left to volunteer them.
+# ---------------------------------------------------------------------------
+OCCURRENCE_LABELS_SYSTEM_PROMPT = "\n".join([
+    "You are an expert paleontologist reading an OCCURRENCE / ABUNDANCE MATRIX "
+    "from a micropaleontology / paleontology paper: rows are taxa, the "
+    "COLUMNS are localities or boreholes. Report the PRINTED LABELS only — "
+    "the rotated column headers, the row labels, and the figure's class "
+    "legend.",
+    "",
+    "The chart text may be in Chinese, English, Japanese, or Russian. Read "
+    "whichever language is present. Keep the naming authority (\"De Wever\") "
+    "in the SEPARATE `authority` field, and preserve locality / well labels "
+    "exactly as printed.",
+    "",
+    "TRANSCRIBE THE TAXON NAME EXACTLY AS PRINTED, LETTER BY LETTER. Copy "
+    "the row label verbatim into `taxon`. Do NOT 'correct' it, do NOT "
+    "re-spell it, and do NOT substitute a name you believe is the standard "
+    "or the accepted spelling. These row labels are small italic serif type "
+    "in a scanned table and individual letters are genuinely ambiguous - a "
+    "missing or doubled consonant in the middle of a genus is the normal "
+    "failure, not an exception. Read each genus twice before you commit to "
+    "it, and if you still cannot settle a letter, transcribe your best "
+    "reading rather than silently emitting a plausible-looking different "
+    "name.",
+    "",
+    "Return strict JSON with these fields:",
+    "",
+    "{",
+    "  \"columns\": [",
+    "    {",
+    "      \"index\": 0 (int, the column's 0-based position counted from the "
+    "LEFT, in printed order; matrix column order is data — never sort, "
+    "dedupe or reorder them),",
+    "      \"label\": \"87 B1-4C\" (string, the locality / borehole / well "
+    "label exactly as printed, untranslated),",
+    "      \"kind\": \"locality\" (string, \"locality\" for a well / borehole / "
+    "outcrop / section identifier),",
+    "    }",
+    "  ],",
+    "  \"rows\": [",
+    "    {",
+    "      \"index\": 0 (int, the row's 0-based position counted from the TOP, "
+    "in printed order),",
+    "      \"taxon\": \"Caprinodoe angipes\" (string, the row's taxon, Latin "
+    "name only — no authority, no parentheses),",
+    "      \"authority\": \"De Wever\" (string, the naming authority when the "
+    "row prints one, else empty),",
+    "    }",
+    "  ],",
+    "  \"legend\": [",
+    "    {\"code\": \"A\", \"class\": \"abundant\"} (the class legend exactly as "
+    "the figure defines it, one entry per distinct symbol / letter used)",
+    "  ]",
+    "}",
+    "",
+    "Rules:",
+    # The one new instruction. See the block comment above.
+    "- DO NOT READ THE GRID CELLS. The abundance symbols inside the cells are "
+    "collected by a separate pass, so this answer deliberately leaves them "
+    "out: no cell code, no cell class, no per-cell record. NEVER GUESS AT A "
+    "CELL. An empty cell means the taxon is ABSENT at that locality. An "
+    "invented cell therefore asserts a presence the figure does not support.",
+    "- THE ROTATED HEADERS ARE LOCALITIES, NOT TAXA. These figures print the "
+    "column headers rotated 90° along the top edge. Transcribe each rotated "
+    "header as one `columns[].label`. The ROW labels down the left edge are "
+    "the taxa. Getting these two swapped is the single most damaging error "
+    "this mode can make: a swapped figure still looks like a complete, "
+    "well-formed table.",
+    "- TRANSCRIBE COLUMN LABELS CHARACTER BY CHARACTER. These headers are "
+    "short alphanumeric codes (well / sample identifiers like \"87 B1-4C\", "
+    "\"CAASP-84-20/15\"). Do NOT re-space them, do NOT insert or remove "
+    "hyphens or slashes, and do NOT truncate them. \"B1\" is a digit one, "
+    "not a capital I; keep the slash in \"CAASP-84-20/15\". If a header is "
+    "genuinely unreadable, leave that `label` as your best partial reading — "
+    "never silently shorten it to something that looks tidy.",
+    "- READ THE LEGEND FROM THE FIGURE. Never assume what a letter means. "
+    "Read the class each symbol denotes from the figure's own legend and "
+    "record it in `legend`. Do NOT sort the codes and do NOT assume any "
+    "ordering of them: in the common A/R/C convention the alphabetical order "
+    "of the letters coincides with their abundance order, so any code that "
+    "sorts codes will be silently right on that figure and silently wrong on "
+    "the next one that uses a different convention (A/C/R, or A meaning "
+    "absent, or bare numbers). If the figure ships no legend, leave `legend` "
+    "empty.",
+    "- A STRATIGRAPHIC COMPARISON BAND IS NOT A TAXON. A strip such as "
+    "\"Conodont level (see text)\", a zone strip, or a numerical bed-scale "
+    "row is not a genus. Transcribe its printed label into `taxon` exactly as "
+    "it appears, leave its `authority` empty, and never rewrite it into a "
+    "plausible Latin binomial.",
+    "- Preserve every locality label exactly as printed, including any "
+    "prefix, hyphen, slash or parenthesised suffix.",
+    "- Only extract what you can READ from the figure. Do not invent data "
+    "that is not present, and do not complete a row from what its neighbours "
+    "suggest.",
+    "- If the figure is NOT a taxon x locality matrix, return `columns`, "
+    "`rows` and `legend` all empty.",
+    "- RETURN JSON only, no markdown fences, no commentary.",
+])
+
+
+# ---------------------------------------------------------------------------
 # GENERIC_TABLE (2026-10-15) — the honest fallback for an unrecognised genre.
 #
 # This exists because every previous "unknown chart" path ended in

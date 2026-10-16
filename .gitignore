@@ -37,6 +37,26 @@ _huge.bin
 # paper figures + per-run API test results stay local, never on GitHub.
 outputs/e2e_radiolaria/
 outputs/e2e_oa/
+# Same class, newer corpus (AUDIT-2026-10-15): _figtest/ holds cropped figures
+# out of ten stratigraphy papers plus every per-run extraction result and
+# report. 401 untracked files at last count, and `git add .` would have put
+# copyrighted plates into history -- which cannot be replaced in place, only
+# rewritten with a history-rewrite that moves every clone.
+#
+# What IS committed from this work is tests/eval/ (the on-figure ground truth,
+# the scorer and the runner) and tests/fixtures/, which carry no image data.
+_figtest/
+# One-off probe scripts at the repo root (AUDIT-2026-10-16). They are the
+# throwaway harnesses written to answer a single question during a session -
+# `_r11_run.py`, `_moto_variants.py`, `_fig10_cmp.py`, `_diaz_truth.py` and 34
+# more. None of them is tracked, and none is meant to be: they are not tests,
+# they call the live API with a real key, and they print whatever the model
+# happened to say. A `git add .` would commit all of them.
+#
+# This is a ROOT-anchored pattern on purpose. The same names inside tests/ and
+# rca_core/ are real code and must keep being tracked - `_tmpwin/` below
+# already covers the scratch directory itself.
+/_*.py
 # Same class of data, larger (AUDIT-2026-09-28): the lit2020 corpora are 522
 # cropped figures out of 2020 stratigraphy papers -- 299.66 MB across the three
 # directories. They are INPUT to tests_real_corpus.py, not fixtures; the

@@ -185,6 +185,7 @@ TRANSLATIONS["zh"] = {
     # data column. The occurrence_matrix `columns` table needs the latter, and
     # reusing the former rendered `# | # | Label | Kind`.
     "col.columnIndex": "序号",
+    "col.rowIndex": "行号",
     "col.name": "名称",
     "col.ageRange": "年代范围",
     "col.formation": "组 / 地层",
@@ -233,6 +234,7 @@ TRANSLATIONS["zh"] = {
     # today (the browser refuses it), so this was user-visible, not latent.
     "sec.columns": "产地 / 钻孔列 (Columns)",
     "sec.occurrences": "出现记录 (Occurrences)",
+    "sec.occurrencesUnverified": "出现记录 (格子未经图版网格核验)",
     "sec.legend": "图例 (Legend)",
     "col.kind": "列类型",
     "col.authority": "命名人",
@@ -244,6 +246,7 @@ TRANSLATIONS["zh"] = {
     # humanised literal "Strat Rows", so the tab read in English inside a
     # Chinese UI.
     "sec.stratRows": "地层对比带 (Stratigraphic Bands)",
+    "sec.taxonRows": "分类单元行标签 (Taxon Row Labels)",
     # P-UI (2026-08-07): phylogenetic-tree node table columns. The exporter
     # has referenced these keys since phylo support landed, but the i18n
     # tables never defined them — GUI table headers rendered the raw keys
@@ -301,6 +304,7 @@ TRANSLATIONS["zh"] = {
     "err.imageTooLarge": "图片过大（超过服务器限制）。请降低「图像分辨率上限」后重试。",
     "err.imageInvalidBase64": "上传的图片数据不是有效的 base64（可能带了 data: 前缀或传输不完整）。请重新选择图片后重试。",
     "err.parse": "无法解析模型返回的内容。",
+    "err.emptyResponse": "模型返回了空结果。这次调用没有产出任何记录，可能是模型中途停止输出；请重跑后再看结论。",
     "err.empty": "模型返回为空。",
     "err.truncated": "结果可能被截断（达到 max_tokens）。可调高最大输出 Token 后重试。",
     "dialog.saveCsv": "保存 CSV 文件",
@@ -708,6 +712,7 @@ TRANSLATIONS["en"] = {
     "col.index": "#",
     # AUDIT-2026-10-15: `col.index` is the ROW-NUMBER header — see zh note.
     "col.columnIndex": "Column no.",
+    "col.rowIndex": "Row no.",
     "col.name": "Name",
     "col.ageRange": "Age range",
     "col.formation": "Formations",
@@ -746,6 +751,7 @@ TRANSLATIONS["en"] = {
     # AUDIT-2026-10-15: occurrence-matrix table keys — see the zh block's note.
     "sec.columns": "Localities / Columns",
     "sec.occurrences": "Occurrences",
+    "sec.occurrencesUnverified": "Occurrences (cells not verified against the figure's grid)",
     "sec.legend": "Legend",
     "col.kind": "Column kind",
     "col.authority": "Authority",
@@ -754,6 +760,7 @@ TRANSLATIONS["en"] = {
     # The non-taxon comparison band — see the zh block's note for why this key
     # did not exist before the `strat_rows` sheet landed.
     "sec.stratRows": "Stratigraphic Bands",
+    "sec.taxonRows": "Taxon Row Labels",
     # P-UI (2026-08-07): phylogenetic-tree node table columns.
     "sec.nodes": "Nodes",
     "col.nodeId": "Node ID",
@@ -801,6 +808,7 @@ TRANSLATIONS["en"] = {
     "err.imageTooLarge": "Image is too large (exceeds the server limit). Lower \"Max image resolution\" in settings and retry.",
     "err.imageInvalidBase64": "The uploaded image data is not valid base64 (it may carry a data: prefix or have arrived incomplete). Re-select the image and retry.",
     "err.parse": "Could not parse the model response.",
+    "err.emptyResponse": "The model returned an empty result. This call produced no records at all, which usually means it stopped partway through; re-run before drawing any conclusion from it.",
     "err.empty": "The model returned an empty response.",
     "err.truncated": "Result may be truncated (hit max_tokens). Increase max output tokens and retry.",
     "dialog.saveCsv": "Save CSV file",
@@ -1210,6 +1218,7 @@ TRANSLATIONS["ja"] = {
     "col.index": "#",
     # AUDIT-2026-10-15: `col.index` is the ROW-NUMBER header — see zh note.
     "col.columnIndex": "列番号",
+    "col.rowIndex": "行番号",
     "col.name": "名称",
     "col.ageRange": "年代範囲",
     "col.formation": "累層 / 地層",
@@ -1248,6 +1257,7 @@ TRANSLATIONS["ja"] = {
     # AUDIT-2026-10-15: occurrence-matrix table keys — see the zh block's note.
     "sec.columns": "地点 / 列 (Columns)",
     "sec.occurrences": "産出記録 (Occurrences)",
+    "sec.occurrencesUnverified": "産出記録 (セルは図版グリッドと照合されていません)",
     "sec.legend": "凡例 (Legend)",
     "col.kind": "列の種類",
     "col.authority": "命名者",
@@ -1256,6 +1266,7 @@ TRANSLATIONS["ja"] = {
     # The non-taxon comparison band — see the zh block's note for why this key
     # did not exist before the `strat_rows` sheet landed.
     "sec.stratRows": "地層対比帯 (Stratigraphic Bands)",
+    "sec.taxonRows": "分類单元行ラベル (Taxon Row Labels)",
     # P-UI (2026-08-07): phylogenetic-tree node table columns.
     "sec.nodes": "ノード",
     "col.nodeId": "ノード ID",
@@ -1303,6 +1314,7 @@ TRANSLATIONS["ja"] = {
     "err.imageTooLarge": "画像が大きすぎます（サーバー上限超過）。設定の「画像解像度の上限」を下げて再試行してください。",
     "err.imageInvalidBase64": "アップロードされた画像データが有効な base64 ではありません（data: プレフィックスが付いているか、転送が不完全な可能性があります）。画像を選び直して再試行してください。",
     "err.parse": "モデルの応答を解析できませんでした。",
+    "err.emptyResponse": "モデルが空の結果を返しました。この呼び出しはレコードを一切生成しておらず、途中で出力が止まった可能性があります。結論を出す前に再実行してください。",
     "err.empty": "モデルの応答が空でした。",
     "err.truncated": "結果が途切れている可能性があります（max_tokens 到達）。最大出力トークンを上げて再試行してください。",
     "dialog.saveCsv": "CSV ファイルを保存",

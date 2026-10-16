@@ -237,6 +237,7 @@ const RCA_I18N = {
     // AUDIT-2026-10-15: `col.index` is the ROW-NUMBER header (js/table.js
     // `[t('col.index')].concat(cfg.cols)`), not an ordinal data column.
     'col.columnIndex': '序号',
+    'col.rowIndex': '行号',
     'sec.sites': '站点 / 岩心 (Sites)',
     'sec.abundances': '丰度记录 (Abundances)',
     'sec.zones': '孢粉带 (Zones)',
@@ -253,6 +254,7 @@ const RCA_I18N = {
     // `sec.occurrences` / `col.authority` headers until these existed.
     'sec.columns': '产地 / 钻孔列 (Columns)',
     'sec.occurrences': '出现记录 (Occurrences)',
+    'sec.occurrencesUnverified': '出现记录 (格子未经图版网格核验)',
     'sec.legend': '图例 (Legend)',
     'col.kind': '列类型',
     'col.authority': '命名人',
@@ -263,6 +265,7 @@ const RCA_I18N = {
     // this key existed js/table.js's titleKey stayed the humanised literal
     // "strat_rows", so the tab did not translate.
     'sec.stratRows': '地层对比带 (Stratigraphic Bands)',
+    'sec.taxonRows': '分类单元行标签 (Taxon Row Labels)',
     'sec.nodes': '节点 (Nodes)',
     'col.nodeId': '节点 ID',
     'col.parent': '父节点',
@@ -291,6 +294,7 @@ const RCA_I18N = {
     'err.networkBackend': '网络请求失败。请检查网络连接或后端服务是否正常运行。',
     'err.http': 'API 返回错误',
     'err.parse': '无法解析模型返回的内容。下方是原始返回，供排查。',
+    'err.emptyResponse': '模型返回了空结果。这次调用没有产出任何记录，可能是模型中途停止输出；请重跑后再看结论。',
     'err.empty': '模型返回为空。',
     'err.truncated': '结果可能被截断（达到 max_tokens）。可在设置中调高「最大输出 Token」后重试。',
     'err.imageRead': '无法读取图片文件。',
@@ -621,6 +625,7 @@ RCA_I18N.en = {
   'col.index': '#',
   // AUDIT-2026-10-15: `col.index` is the ROW-NUMBER header — see zh note.
   'col.columnIndex': 'Column no.',
+  'col.rowIndex': 'Row no.',
   'sec.sites': 'Sites',
   'sec.abundances': 'Abundances',
   'sec.zones': 'Zones',
@@ -634,6 +639,7 @@ RCA_I18N.en = {
   // AUDIT-2026-10-15: occurrence-matrix table keys — see the zh block's note.
   'sec.columns': 'Localities / Columns',
   'sec.occurrences': 'Occurrences',
+  'sec.occurrencesUnverified': "Occurrences (cells not verified against the figure's grid)",
   'sec.legend': 'Legend',
   'col.kind': 'Column kind',
   'col.authority': 'Authority',
@@ -642,6 +648,7 @@ RCA_I18N.en = {
   // The non-taxon comparison band — see the zh block's note for why this key
   // did not exist before the `strat_rows` sheet landed.
   'sec.stratRows': 'Stratigraphic Bands',
+  'sec.taxonRows': 'Taxon Row Labels',
   'col.depthUnit': 'Depth unit',
   'col.levelRange': 'Level range',
   'sec.nodes': 'Nodes',
@@ -667,6 +674,7 @@ RCA_I18N.en = {
   'err.networkBackend': 'Network request failed. Check your network connection or whether the backend service is running.',
   'err.http': 'The API returned an error',
   'err.parse': 'Could not parse the model response. The raw response is shown below for debugging.',
+  'err.emptyResponse': 'The model returned an empty result. This call produced no records at all, which usually means it stopped partway through; re-run before drawing any conclusion from it.',
   'err.empty': 'The model returned an empty response.',
   'err.truncated': 'The result may be truncated (hit max_tokens). Increase "Max output tokens" in settings and retry.',
   'err.imageRead': 'Could not read the image file.',
@@ -978,6 +986,7 @@ RCA_I18N.ja = {
   'col.index': '#',
   // AUDIT-2026-10-15: `col.index` is the ROW-NUMBER header — see zh note.
   'col.columnIndex': '列番号',
+  'col.rowIndex': '行番号',
   'sec.sites': '地点 / コア (Sites)',
   'sec.abundances': '産出頻度 (Abundances)',
   'sec.zones': '花粉帯 (Zones)',
@@ -991,6 +1000,7 @@ RCA_I18N.ja = {
   // AUDIT-2026-10-15: occurrence-matrix table keys — see the zh block's note.
   'sec.columns': '地点 / 列 (Columns)',
   'sec.occurrences': '産出記録 (Occurrences)',
+  'sec.occurrencesUnverified': '産出記録 (セルは図版グリッドと照合されていません)',
   'sec.legend': '凡例 (Legend)',
   'col.kind': '列の種類',
   'col.authority': '命名者',
@@ -999,6 +1009,7 @@ RCA_I18N.ja = {
   // The non-taxon comparison band — see the zh block's note for why this key
   // did not exist before the `strat_rows` sheet landed.
   'sec.stratRows': '地層対比帯 (Stratigraphic Bands)',
+  'sec.taxonRows': '分類单元行ラベル (Taxon Row Labels)',
   'col.depthUnit': '深度単位',
   'col.levelRange': '層準範囲',
   'sec.nodes': 'ノード',
@@ -1024,6 +1035,7 @@ RCA_I18N.ja = {
   'err.networkBackend': 'ネットワーク要求に失敗しました。ネットワーク接続またはバックエンドサービスが動作しているか確認してください。',
   'err.http': 'API がエラーを返しました',
   'err.parse': 'モデルの応答を解析できませんでした。デバッグ用に生応答を以下に表示します。',
+  'err.emptyResponse': 'モデルが空の結果を返しました。この呼び出しはレコードを一切生成しておらず、途中で出力が止まった可能性があります。結論を出す前に再実行してください。',
   'err.empty': 'モデルの応答が空でした。',
   'err.truncated': '結果が途切れている可能性があります（max_tokens に到達）。設定で「最大出力トークン」を上げて再試行してください。',
   'err.imageRead': '画像ファイルを読み込めませんでした。',

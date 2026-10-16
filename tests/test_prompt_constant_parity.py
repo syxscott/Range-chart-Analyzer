@@ -65,8 +65,21 @@ node+vm comparison below is what proves the two transports still send the same
 text.  Which rules each constant carries is pinned by
 tests/test_prompt_literal_rules_2026_10_15.py; that file also records why
 CHART_CLASSIFY is deliberately NOT a caller of the block.
+
+THIRD PASS (2026-10-16): OCCURRENCE_LABELS_SYSTEM_PROMPT joins the compared
+list.  It is the labels-only half of the occurrence_matrix genre, added
+because the two halves of that figure have opposite measured error profiles --
+big labels 19/22 taxa, 19/19 authorities, 11/11 zones; small grid cells
+accuracy 0.43, coverage 0.26.  An earlier attempt to fix the cells by ADDING
+a 2966-character rule block to OCCURRENCE_MATRIX_SYSTEM_PROMPT made taxon
+recall fall 0.9231 -> 0.6538 and was reverted, so this one REDUCES instead: it
+is the same genre asked for less, and the tests below pin the two properties
+that make it that way -- it carries the matrix prompt's load-bearing rules
+over verbatim, and its schema asks for no field the matrix schema only exists
+to carry cell data in.
 """
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -91,6 +104,10 @@ IDENTICAL = (
     "CHART_CLASSIFY_SYSTEM_PROMPT",
     "CHEMICAL_STRATIGRAPHY_SYSTEM_PROMPT",
     "OCCURRENCE_MATRIX_SYSTEM_PROMPT",
+    # AUDIT-2026-10-16: the labels-only sibling of the prompt above. The two
+    # must agree byte for byte exactly like every other pair here, because both
+    # engines will eventually be asked the same question of the same figure.
+    "OCCURRENCE_LABELS_SYSTEM_PROMPT",
     "GENERIC_TABLE_SYSTEM_PROMPT",
     "PHYLOGENETIC_TREE_SYSTEM_PROMPT",
     "RANGE_CHART_SYSTEM_PROMPT",
@@ -215,3 +232,187 @@ def _first_diff(a: str, b: str) -> int:
     while i < min(len(a), len(b)) and a[i] == b[i]:
         i += 1
     return i
+
+
+# ---------------------------------------------------------------------------
+# OCCURRENCE_LABELS (2026-10-16) — the labels-only sibling prompt.
+#
+# The point of this constant is that it is SHORTER. An earlier attempt to make
+# the matrix prompt read grid cells better went the other way (a +2966
+# character rule block) and cost 27 points of taxon recall, so the tests below
+# pin the two halves of "ask for less" that are checkable from the text:
+# every rule that fixes a MEASURED failure in the matrix prompt survives here
+# verbatim, and the schema asks for nothing the matrix schema needs in order
+# to carry cell data. Both are derived from the two constants at runtime --
+# the field names are read out of each prompt's own JSON skeleton -- so the
+# assertions follow the text instead of a transcription of it.
+# ---------------------------------------------------------------------------
+
+LABELS = "OCCURRENCE_LABELS_SYSTEM_PROMPT"
+MATRIX = "OCCURRENCE_MATRIX_SYSTEM_PROMPT"
+
+#: Fields the labels prompt legitimately defines. Anything else the matrix
+#: prompt defines exists to describe a cell, and must not reappear here.
+LABEL_FIELDS = frozenset({
+    "columns", "rows", "legend",
+    "index", "label", "kind", "taxon", "authority", "code", "class",
+})
+
+#: One phrase per measured failure that the labels prompt must still carry.
+#: Asserted against BOTH constants, which is what makes "carried over" a claim
+#: about the matrix prompt instead of a claim about new text: a phrase that is
+#: not already in OCCURRENCE_MATRIX_SYSTEM_PROMPT cannot pass.
+CARRIED_OVER = (
+    # multi-language figures (the verification paper is not an English one)
+    "The chart text may be in Chinese, English, Japanese, or Russian.",
+    # the taxon-name 'correction' failure: 16 wrong spellings out of 17
+    "TRANSCRIBE THE TAXON NAME EXACTLY AS PRINTED, LETTER BY LETTER.",
+    "Do NOT 'correct' it, do NOT re-spell it, and do NOT substitute a name "
+    "you believe is the standard",
+    "These row labels are small italic serif type in a scanned table and "
+    "individual letters are genuinely ambiguous",
+    # rotated headers get sorted/deduped/reordered by aggregators
+    "matrix column order is data \u2014 never sort, dedupe or reorder them",
+    # the A/R/C alphabet trap: alphabetical order == abundance order
+    "the alphabetical order of the letters coincides with their abundance "
+    "order, so any code that sorts codes will be silently right on that "
+    "figure and silently wrong on the next one",
+    # sparsity polarity: an invented cell asserts a presence that is absent
+    "An empty cell means the taxon is ABSENT at that locality.",
+    # the conodont-zone strip is read correctly only while it is not a genus
+    "A STRATIGRAPHIC COMPARISON BAND IS NOT A TAXON.",
+    "A strip such as \"Conodont level (see text)\", a zone strip, or a "
+    "numerical bed-scale row is not a genus.",
+    # and the two that keep a rotated header from being tidied up
+    "THE ROTATED HEADERS ARE LOCALITIES, NOT TAXA.",
+    "TRANSCRIBE COLUMN LABELS CHARACTER BY CHARACTER.",
+)
+
+
+def _schema_block(text: str) -> str:
+    """The prompt's JSON skeleton: the lone '{' line through the lone '}'.
+
+    Parsed by shape rather than by a marker phrase, so re-wording the sentence
+    above the schema cannot silently turn these assertions into no-ops.
+    """
+    lines = text.split("\n")
+    start = next(i for i, ln in enumerate(lines) if ln == "{")
+    end = next(i for i, ln in enumerate(lines[start:], start) if ln == "}")
+    return "\n".join(lines[start:end + 1])
+
+
+def _array_body(block: str, container: str) -> str:
+    head = '  "%s": [' % container
+    start = block.index(head) + len(head)
+    return block[start:block.index("\n  ]", start)]
+
+
+def _array_containers(block: str) -> list:
+    """Top-level keys whose value really is a multi-line array.
+
+    `confidence` is a scalar and `strat_rows` is written inline as `[]`, so
+    neither is walked into: both would raise inside _array_body rather than
+    contributing fields.
+    """
+    return re.findall(r'^  "(\w+)": \[(?!\])\s*$', block, re.M)
+
+
+def _top_level_keys(block: str) -> set:
+    return set(re.findall(r'^  "(\w+)":', block, re.M))
+
+
+def _object_keys(arr: str) -> set:
+    return set(re.findall(r'"(\w+)":', arr))
+
+
+def _rule_bullets(text: str) -> list:
+    rules = text.split("\nRules:\n", 1)[1]
+    return [ln[2:] for ln in rules.split("\n") if ln.startswith("- ")]
+
+
+def _matrix_schema_fields() -> set:
+    """Every field name the matrix prompt's own schema defines."""
+    block = _schema_block(getattr(P, MATRIX))
+    fields = set(_top_level_keys(block))
+    for container in _array_containers(block):
+        fields |= _object_keys(_array_body(block, container))
+    return fields
+
+
+class TestLabelsPromptIsLessThanTheMatrixPrompt:
+    def test_the_carry_over_list_is_load_bearing(self):
+        """A truncated phrase list would make the assertions below vacuous."""
+        assert len(CARRIED_OVER) >= 6
+        assert all(len(p) >= 40 for p in CARRIED_OVER), (
+            "a 'carried over' phrase got too short to be evidence of carry-over")
+
+    def test_every_measured_rule_survives_in_both_prompts(self):
+        labels, matrix = getattr(P, LABELS), getattr(P, MATRIX)
+        missing = [p for p in CARRIED_OVER if p not in labels or p not in matrix]
+        assert not missing, (
+            "the labels prompt must carry these over from the matrix prompt; "
+            "not present in both: %r" % (missing,))
+
+    def test_it_is_shorter(self):
+        labels, matrix = getattr(P, LABELS), getattr(P, MATRIX)
+        assert len(labels) < len(matrix), (
+            "the labels prompt is %d chars against the matrix prompt's %d; "
+            "asking for less has to SHOW UP as fewer tokens, or the split "
+            "only relabels the problem" % (len(labels), len(matrix)))
+
+
+class TestLabelsPromptAsksForNoCells:
+    """The whole reason this constant exists: the cells are someone else's job."""
+
+    def test_the_schema_declares_only_the_three_label_arrays(self):
+        keys = _top_level_keys(_schema_block(getattr(P, LABELS)))
+        assert keys == {"columns", "rows", "legend"}, (
+            "expected exactly the label arrays; got %r" % sorted(keys))
+
+    def test_each_object_carries_the_fields_the_contract_promises(self):
+        block = _schema_block(getattr(P, LABELS))
+        assert _object_keys(_array_body(block, "columns")) == {
+            "index", "label", "kind"}
+        assert _object_keys(_array_body(block, "rows")) == {
+            "index", "taxon", "authority"}
+        assert _object_keys(_array_body(block, "legend")) == {
+            "code", "class"}
+
+    def test_no_field_the_matrix_prompt_added_for_cells_leaks_in(self):
+        """Derived from the matrix prompt's own schema, not from a hand list."""
+        matrix_fields = _matrix_schema_fields()
+        # Premise of the test: the matrix prompt really does carry cell data.
+        assert {"occurrences", "site", "code"} <= matrix_fields, sorted(
+            matrix_fields)
+
+        labels = getattr(P, LABELS)
+        cell_only = matrix_fields - set(LABEL_FIELDS)
+        leaked = sorted(f for f in cell_only if f in labels)
+        assert not leaked, (
+            "the labels prompt names %r, which exists in the matrix schema "
+            "only to describe a grid cell" % (leaked,))
+
+    def test_code_and_class_stay_inside_the_legend(self):
+        """`code` / `class` are legal in `legend` and nowhere else.
+
+        The name-only check above cannot see this: `code` IS one of the fields
+        the labels prompt legitimately defines, so a `code` smuggled onto a row
+        record slips through it. This is the positional form of the same rule.
+        """
+        block = _schema_block(getattr(P, LABELS))
+        without_legend = block.replace(_array_body(block, "legend"), "")
+        assert "code" not in without_legend, (
+            "a columns[]/rows[] record carries `code`, which only the legend "
+            "may: it is a cell value")
+        assert "class" not in without_legend, (
+            "a columns[]/rows[] record carries `class`, which only the legend "
+            "may: it is a cell value")
+
+    def test_one_rule_disclaims_the_grid_cells_and_the_rest_is_silent(self):
+        labels = getattr(P, LABELS)
+        cell_rules = [b for b in _rule_bullets(labels) if "cell" in b.lower()]
+        assert cell_rules, (
+            "no rule mentions the cells, so the model is left to volunteer "
+            "them -- the one instruction this prompt has to add")
+        assert any(("NOT" in b or "NEVER" in b) for b in cell_rules), (
+            "the cell rule must forbid reading them, not merely mention them")

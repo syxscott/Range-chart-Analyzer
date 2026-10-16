@@ -1088,6 +1088,21 @@ def _occurrence_matrix_tables(data: dict[str, Any] | None) -> list[dict[str, Any
     """
     multi = bool(data) and int(data.get("runs", 1) or 1) > 1
 
+    # 2026-10-16: the sheet title is the first thing a reader of the exported
+    # workbook sees, so it is where the provenance of the cells belongs.
+    #
+    # The default is the CAVEATED title, not the plain one. `cell_status` is
+    # absent on merged results (merge_results carries the named lists and drops
+    # scalar root keys it does not model) and absent on any older payload, and
+    # in both cases the honest reading is "nobody checked these cells against
+    # the figure", not "they were checked and passed". Failing toward the
+    # warning is the whole point: the measured single-pass run reads 43% of
+    # cells correctly, and a sheet titled plain "Occurrences" gives a reader no
+    # way to know that.
+    cell_status = (data or {}).get("cell_status") or ""
+    occ_title_key = ("sec.occurrences" if cell_status == "grid_cells"
+                     else "sec.occurrencesUnverified")
+
     occ_cols = ["col.taxon", "col.authority", "col.site", "col.code",
                 "col.class"]
     occ_data = ["taxon", "authority", "site", "code", "class"]
@@ -1117,7 +1132,7 @@ def _occurrence_matrix_tables(data: dict[str, Any] | None) -> list[dict[str, Any
         },
         {
             "id": "occurrences",
-            "title_key": "sec.occurrences",
+            "title_key": occ_title_key,
             "cols": occ_cols + (["col.agreement"] if multi else []),
             "data_keys": occ_data + (["agreement"] if multi else []),
             "identity_keys": ["taxon", "site"],
@@ -1132,7 +1147,34 @@ def _occurrence_matrix_tables(data: dict[str, Any] | None) -> list[dict[str, Any
             "identity_keys": ["code"],
             "row": lambda e: [e.get("code", ""), e.get("class", "")],
         },
-    ] + _strat_rows_configs(data)
+    ] + _taxon_rows_configs(data) + _strat_rows_configs(data)
+
+
+def _taxon_rows_configs(data: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The labels-only sheet - empty list unless that path was used.
+
+    AUDIT-2026-10-16: the ``gated`` cell strategy returns the column headers,
+    the taxon row labels and the legend but no cell reading, because those
+    are what the model measurably reads well (19/22 taxa, 19/19 authorities)
+    and the cells are what it does not. Those taxon labels cannot ride in
+    ``occurrences``: that list is sparse by contract, so a label with no code
+    is indistinguishable from a blank cell and is dropped.
+
+    Conditional, exactly like ``_strat_rows_configs``, so a payload without
+    the key still yields the three tables the rest of the module pins.
+    """
+    rows = (data or {}).get("taxon_rows")
+    if not isinstance(rows, list) or not rows:
+        return []
+    return [{
+        "id": "taxon_rows",
+        "title_key": "sec.taxonRows",
+        "cols": ["col.rowIndex", "col.taxon", "col.authority"],
+        "data_keys": ["index", "taxon", "authority"],
+        "identity_keys": ["index"],
+        "row": lambda r: [r.get("index", ""), r.get("taxon", ""),
+                          r.get("authority", "")],
+    }]
 
 
 def _strat_rows_configs(data: dict[str, Any] | None) -> list[dict[str, Any]]:

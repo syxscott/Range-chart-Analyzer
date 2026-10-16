@@ -45,14 +45,21 @@ _SPEC.loader.exec_module(GEN)
 
 from rca_core import extractor as E  # noqa: E402
 
-# extractor.py:1359-1360 — the prose every mode puts in ``warning``.
-TRUNCATION_PROSE = (
-    "Result may be truncated (model hit max_tokens). "
-    "Try raising the max_tokens setting and re-running."
-)
+_USAGE = {"input_tokens": 1, "output_tokens": 1}
+
+# The prose every mode puts in ``warning``.
+#
+# 2026-10-16: built by calling the shared helper rather than repeating the
+# string. The old literal named no numbers, which made it impossible to tell
+# 16000 from 32000 - and that ambiguity had already been misread once as "the
+# cap was hit, raising it will not help" when only the DEFAULT had been hit.
+# Asserting against the helper's output means a future wording change moves
+# this expectation automatically, while a change to the NUMBERS still fails,
+# because the fixtures below pin max_tokens=100 against a 32000 ceiling.
+TRUNCATION_PROSE = E._truncation_warning(_USAGE, 100)
+
 _RESCUED = " | rescued inner object: unusable"
 _NO_ROWS = " | truncated output rescued no usable records"
-_USAGE = {"input_tokens": 1, "output_tokens": 1}
 
 
 def _run(mode: str, text: str, truncated: bool) -> E.ExtractResult:

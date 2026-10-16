@@ -1375,6 +1375,57 @@ def _mode_root_keys(mode_key: str) -> tuple[str, ...]:
     return tuple(globals().get(names.get(mode_key) or "", ()) or ())
 
 
+def _usage_int(usage: dict[str, Any] | None, key: str) -> int | None:
+    """One integer out of a provider usage block, or None.
+
+    Providers disagree on the spelling (``output_tokens`` vs
+    ``completion_tokens``) and any of them may omit the block entirely when the
+    call was served from cache or failed midway, so every read is defensive.
+    A reported 0 is a real reading and is returned as 0, not as None.
+    """
+    if not isinstance(usage, dict):
+        return None
+    if key in usage:
+        raw = usage[key]
+    elif key == "output_tokens":
+        raw = usage.get("completion_tokens")
+    else:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _truncation_warning(usage: dict[str, Any] | None, max_tokens: int) -> str:
+    """The one truncation sentence, shared by all eleven extractors.
+
+    FIX-2026-10-16: this string was copy-pasted into eleven places and every
+    copy said the same two sentences with no numbers in them. That is not
+    merely terse - it made a recoverable failure look fatal and an
+    unrecoverable one look trivial, because the user could not tell 16000 from
+    32000 or see whether the run had already been pushed to the ceiling.
+
+    The concrete case: ``r10_bjorklund`` reported ``output_tokens=16058`` and
+    the run was read as "max_tokens is capped, raising it will not help".
+    It was not. 16058 was the DEFAULT (DEFAULT_MAX_TOKENS=16000); the clamp
+    ceiling is MAX_MAX_TOKENS=32000, and re-running at 32000 recovered the
+    result. A warning that cannot be acted on is worse than none, because it
+    teaches the reader that the situation is hopeless.
+
+    Reporting all three numbers makes the sentence checkable: what was used,
+    what this run allowed, and what the program would permit.
+    """
+    out_tokens = _usage_int(usage, "output_tokens")
+    return (
+        "Result may be truncated: the model used %s of the %d max_tokens "
+        "allowed for this run (the program ceiling is %d). Raising max_tokens "
+        "and re-running recovers the missing rows."
+        % ("an unreported number" if out_tokens is None else out_tokens,
+           max_tokens, MAX_MAX_TOKENS)
+    )
+
+
 def _ok_result(*, p: LlmProvider, mode_key: str, data: dict[str, Any],
                raw_text: str, truncated: bool, usage: dict[str, Any] | None,
                latency_ms: int, image_sha256: str, max_tokens: int,
@@ -1388,8 +1439,7 @@ def _ok_result(*, p: LlmProvider, mode_key: str, data: dict[str, Any],
     all eight the same contract, and keeps the honest-empty-result degradation
     (an explanatory note) working.
     """
-    warning = ("Result may be truncated (model hit max_tokens). "
-               "Try raising the max_tokens setting and re-running.")
+    warning = _truncation_warning(usage, max_tokens)
     request_meta = _build_request_meta(
         p, mode_key, max_tokens, image_sha256,
         prompt_version_for_mode(mode_key))
@@ -2647,8 +2697,7 @@ def extract_range_chart(
     # may be incomplete" banner without treating the call as a hard
     # failure. The previous version only set the boolean `truncated`
     # and left the operator to guess what to do about it.
-    warning = ("Result may be truncated (model hit max_tokens). "
-               "Try raising the max_tokens setting and re-running.")
+    warning = _truncation_warning(usage, max_tokens)
     if raw_text is None:
         return _error_from_status_with_body(status, err_body, latency_ms, image_sha256=image_sha256)
     try:
@@ -3191,8 +3240,7 @@ def extract_columnar_section(
             image_sha256=image_sha256,
         )
     latency_ms = int((time.perf_counter() - t0) * 1000)
-    warning = ("Result may be truncated (model hit max_tokens). "
-               "Try raising the max_tokens setting and re-running.")
+    warning = _truncation_warning(usage, max_tokens)
     if raw_text is None:
         return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
     try:
@@ -3397,8 +3445,7 @@ def extract_abundance_diagram(
             image_sha256=image_sha256,
         )
     latency_ms = int((time.perf_counter() - t0) * 1000)
-    warning = ("Result may be truncated (model hit max_tokens). "
-               "Try raising the max_tokens setting and re-running.")
+    warning = _truncation_warning(usage, max_tokens)
     if raw_text is None:
         return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
     try:
@@ -3940,8 +3987,7 @@ def extract_phylogenetic_tree(
             image_sha256=image_sha256,
         )
     latency_ms = int((time.perf_counter() - t0) * 1000)
-    warning = ("Result may be truncated (model hit max_tokens). "
-               "Try raising the max_tokens setting and re-running.")
+    warning = _truncation_warning(usage, max_tokens)
     if raw_text is None:
         return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
     try:
@@ -4261,8 +4307,7 @@ def extract_chemical_stratigraphy(
             image_sha256=image_sha256,
         )
     latency_ms = int((time.perf_counter() - t0) * 1000)
-    warning = ("Result may be truncated (model hit max_tokens). "
-               "Try raising the max_tokens setting and re-running.")
+    warning = _truncation_warning(usage, max_tokens)
     if raw_text is None:
         return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
     try:
@@ -4643,8 +4688,7 @@ def extract_paleomap(
             image_sha256=image_sha256,
         )
     latency_ms = int((time.perf_counter() - t0) * 1000)
-    warning = ("Result may be truncated (model hit max_tokens). "
-               "Try raising the max_tokens setting and re-running.")
+    warning = _truncation_warning(usage, max_tokens)
     if raw_text is None:
         return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
     try:
@@ -4892,8 +4936,7 @@ def extract_scatter_plot(
             image_sha256=image_sha256,
         )
     latency_ms = int((time.perf_counter() - t0) * 1000)
-    warning = ("Result may be truncated (model hit max_tokens). "
-               "Try raising the max_tokens setting and re-running.")
+    warning = _truncation_warning(usage, max_tokens)
     if raw_text is None:
         return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
     try:
@@ -5105,8 +5148,7 @@ def extract_zonation_chart(
             image_sha256=image_sha256,
         )
     latency_ms = int((time.perf_counter() - t0) * 1000)
-    warning = ("Result may be truncated (model hit max_tokens). "
-               "Try raising the max_tokens setting and re-running.")
+    warning = _truncation_warning(usage, max_tokens)
     if raw_text is None:
         return _error_from_status(status, err_body, latency_ms, image_sha256=image_sha256)
     try:
@@ -5153,6 +5195,128 @@ _MODE_DISPATCH["zonation_chart"] = extract_zonation_chart
 # explicitly. It is deliberately absent from KNOWN_CHART_TYPES, so the vision
 # classifier can never name it and it can never quietly become a default.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# occurrence_matrix: how the cell table got its provenance, and how short an
+# answer may be before it stops being an answer at all.
+#
+# 2026-10-16, measured on a real 22-row x 18-column occurrence matrix scored
+# against a hand-checked CSV of all 93 filled cells: the model read the LABELS
+# well (19/22 taxa, 19/19 authorities, 11/11 conodont zones, legend all correct)
+# and the dense CELLS badly (0.43 accuracy at 0.26 coverage), and the failure
+# was omission, not misreading (33 cells never emitted, only 4 misread).
+#
+# That asymmetry is why `cell_status` exists. A single-pass answer cannot tell
+# its reader which half of it is trustworthy, because the result object looks
+# identical whether the cells were located geometrically or guessed. Carrying
+# the provenance as data lets the exporter refuse to present guessed cells as
+# measured ones.
+# ---------------------------------------------------------------------------
+OCCURRENCE_CELL_STATUSES = (
+    # Cells were read by the model in one pass, with no geometric check on
+    # whether each one landed in the column it names. The historical default,
+    # and the only status that can be wrong in an unverifiable way.
+    "single_pass_unverified",
+    # Cells were read against a locally detected grid, so every row's column
+    # identity was checked against a pixel rectangle.
+    "grid_cells",
+    # The labels-only path was used and no cell reading was attempted at all.
+    "not_attempted",
+    # A cell reading was attempted and did not produce usable output.
+    "failed",
+)
+DEFAULT_OCCURRENCE_CELL_STATUS = "single_pass_unverified"
+
+# The shortest plausible output for this mode, measured 2026-10-16 across four
+# real runs of a 22x18 matrix: 4190 / 4400 / 5587 / 5428 output tokens, plus a
+# deliberately compacted row-packed variant at 1755. Two runs came back at 528
+# and 40 tokens - near-empty bodies that parsed as valid JSON and would
+# otherwise have been handed to the user as "this figure contains no
+# occurrences".
+#
+# The floor is set well under the smallest GOOD run (1755), not just under the
+# bad ones, so an unusually terse-but-correct answer still passes. Output token
+# count is the earliest available signal that the model stopped working; a
+# self-reported `confidence` does not catch this, because a model that emitted
+# nothing is perfectly confident there is nothing there.
+OCCURRENCE_MIN_OUTPUT_TOKENS = 1600
+
+# The floor is per strategy, and the strategies are not the same size.
+#
+# 1600 was measured on the FULL answer (columns + legend + a row per filled
+# cell), where four real runs came back at 4190 / 4400 / 5587 / 5428 and a
+# deliberately compacted one at 1755. A labels-only answer asks for none of
+# that - it returns columns, rows and a legend and nothing else - so it is
+# legitimately a fraction of the size and reusing 1600 against it would reject
+# correct output.
+#
+# `gated` and `cells` are None until they have been MEASURED on a real figure.
+# A threshold guessed from the contract's arithmetic would be a guess, and a
+# guess here rejects good answers silently - which is the exact failure shape
+# the whole 2026-10-16 change set exists to remove.
+OCCURRENCE_MIN_OUTPUT_TOKENS_BY_STRATEGY = {
+    "single_pass": OCCURRENCE_MIN_OUTPUT_TOKENS,
+    "gated": None,
+    "cells": None,
+}
+
+# How `extract_occurrence_matrix` decides where the cells come from.
+#
+#   single_pass - one call, the model emits labels and cells together and is
+#                 asked to locate each cell itself. This is the historical
+#                 behaviour and stays the DEFAULT until the alternatives are
+#                 measured: defaulting to an unvalidated path is how the
+#                 2026-10-15 prompt change shipped a regression.
+#   gated       - labels are read in their own call and no cell reading is
+#                 attempted. Yields the half that measured well and admits it.
+#   cells       - labels plus a cell pass grounded in locally detected grid
+#                 geometry, so every row's column identity was checked against
+#                 a pixel rectangle.
+OCCURRENCE_CELL_STRATEGIES = ("single_pass", "gated", "cells")
+OCCURRENCE_DEFAULT_CELL_STRATEGY = "single_pass"
+
+# Maps a strategy onto the cell_status its output may honestly claim.
+# `single_pass` never earns `grid_cells` no matter how good the answer looks.
+OCCURRENCE_STATUS_BY_STRATEGY = {
+    "single_pass": "single_pass_unverified",
+    "gated": "not_attempted",
+    "cells": "grid_cells",
+}
+
+
+def _grid_geometry_clause(geom: Any) -> str:
+    """Describe the locally detected grid, in the image's own pixel units.
+
+    The model's cell-placement failure is an identity failure, not a reading
+    failure: measured on a 22 x 18 matrix, it emitted 19 column headers, wrote
+    "87 KT-A19" and "87 KT-A19A" twice, and misread "CAA-A27" - and a shift
+    scan of -3..+3 scored ZERO at every offset, which rules out misalignment
+    and leaves the wrong column IDENTITY. Naming each column and each row with
+    the rectangle it occupies turns "which column is this in" from a guess
+    into a lookup.
+
+    Deliberately ONE call. Cropping each cell and asking about it separately
+    would be up to n_cols * n_rows = 396 requests for this figure, which is a
+    different product with a different price, not a tuning knob.
+    """
+    cols = ", ".join("[%d]=x%d-%d" % (i, a, b)
+                     for i, (a, b) in enumerate(geom.col_spans))
+    rows = ", ".join("[%d]=y%d-%d" % (i, a, b)
+                     for i, (a, b) in enumerate(geom.row_spans))
+    label = ""
+    if geom.label_span:
+        label = ("\nThe row labels are printed in the left band x%d-%d; that "
+                 "band is NOT a data column." % geom.label_span)
+    return (
+        "\n\nGRID GEOMETRY, measured locally from this exact image (pixel "
+        "coordinates, origin top-left; confidence %.2f). Use these to place "
+        "each cell, and report `col_index` as the bracketed COLUMN number "
+        "below rather than counting columns yourself.%s"
+        "\nColumns: %s"
+        "\nTaxon rows: %s"
+        % (geom.confidence, label, cols, rows)
+    )
+
+
 def extract_occurrence_matrix(
     *,
     api_key: str,
@@ -5166,17 +5330,56 @@ def extract_occurrence_matrix(
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
     provider: LlmProvider | None = None,
     progress_callback=None,
+    cell_strategy: str = OCCURRENCE_DEFAULT_CELL_STRATEGY,
 ) -> ExtractResult:
     """Taxon x locality occurrence-matrix extraction.
 
     Same contract as extract_range_chart. Unlike every other mode, the taxa are
     the rows and the localities are the COLUMNS, so there is no continuous axis
     to calibrate and no ``pos_0_999`` to read.
+
+    ``cell_strategy`` selects how much of the figure the model is asked for.
+    See ``OCCURRENCE_CELL_STRATEGIES``. Whatever it is, the returned data
+    carries a ``cell_status`` saying which parts were verified.
     """
-    from .prompt import OCCURRENCE_MATRIX_SYSTEM_PROMPT
+    from .prompt import (OCCURRENCE_LABELS_SYSTEM_PROMPT,
+                         OCCURRENCE_MATRIX_SYSTEM_PROMPT)
 
     if not image_b64:
         return ExtractResult(ok=False, error_key="err.imageRead")
+    if cell_strategy not in OCCURRENCE_CELL_STRATEGIES:
+        cell_strategy = OCCURRENCE_DEFAULT_CELL_STRATEGY
+    cell_status = OCCURRENCE_STATUS_BY_STRATEGY[cell_strategy]
+    # The gated path asks a DIFFERENT question, not a shorter version of the
+    # same one. The 2026-10-15 attempt to fix this by adding rules to the
+    # matrix prompt was measured and reverted; asking for less is the opposite
+    # direction and is why OCCURRENCE_LABELS_SYSTEM_PROMPT exists.
+    # `gated` and `cells` are NOT the same question. `gated` asks for the
+    # labels and forbids reading cells; `cells` asks the full matrix question
+    # and adds locally measured pixel spans. Grouping them here made `cells`
+    # use the labels prompt AND skip the cells, i.e. a silently broken
+    # strategy that returned exactly what `gated` returns under a status
+    # claiming geometric verification.
+    gated = cell_strategy == "gated"
+    system_prompt = (OCCURRENCE_LABELS_SYSTEM_PROMPT if gated
+                     else OCCURRENCE_MATRIX_SYSTEM_PROMPT)
+    geometry_clause = ""
+    if cell_strategy == "cells":
+        # Detection can legitimately fail on a figure with no ruling lines at
+        # all, and a borderless matrix is not exotic. In that case this run
+        # degrades to the single-pass question and says so in the status,
+        # because "no geometry found" is exactly the condition under which
+        # claiming the cells were geometrically verified would be a lie.
+        try:
+            from .grid import detect_grid
+            geom = detect_grid(image_b64)
+        except Exception:
+            geom = None
+        if geom is None:
+            system_prompt = OCCURRENCE_MATRIX_SYSTEM_PROMPT
+            cell_status = OCCURRENCE_STATUS_BY_STRATEGY["single_pass"]
+        else:
+            geometry_clause = _grid_geometry_clause(geom)
     max_tokens = clamp_max_tokens(max_tokens)
     timeout_sec = clamp_timeout_sec(timeout_sec)
     image_sha256 = compute_image_sha256_from_b64(image_b64)
@@ -5193,14 +5396,18 @@ def extract_occurrence_matrix(
         + (caption.strip() if caption and caption.strip() else "(no caption)")
         + "\n\n"
         + lang_hint
-        + "Extract the taxon x locality occurrence matrix as the strict "
-        "JSON contract: one row per FILLED cell."
+        + ("Extract the column headers, the taxon row labels and the class "
+           "legend as the strict JSON contract. Do NOT read the grid cells."
+           if gated else
+           "Extract the taxon x locality occurrence matrix as the strict "
+           "JSON contract: one row per FILLED cell.")
+        + geometry_clause
     )
     t0 = time.perf_counter()
     try:
         raw_text, truncated, status, err_body, usage = _call_llm(
             provider=p,
-            system_prompt=OCCURRENCE_MATRIX_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             image_b64=image_b64,
             media_type=media_type,
             user_text=user_prompt,
@@ -5218,8 +5425,7 @@ def extract_occurrence_matrix(
             image_sha256=image_sha256,
         )
     latency_ms = int((time.perf_counter() - t0) * 1000)
-    warning = ("Result may be truncated (model hit max_tokens). "
-               "Try raising the max_tokens setting and re-running.")
+    warning = _truncation_warning(usage, max_tokens)
     if raw_text is None:
         return _error_from_status(status, err_body, latency_ms,
                                   image_sha256=image_sha256)
@@ -5234,12 +5440,47 @@ def extract_occurrence_matrix(
             image_sha256=image_sha256,
         )
     try:
-        data = normalize_occurrence_matrix_result(parsed)
+        data = normalize_occurrence_matrix_result(parsed,
+                                                  cell_status=cell_status)
     except Exception as exc:
         return ExtractResult(
             ok=False, error_key="err.extract",
             raw=raw_text, truncated=truncated, usage=usage or {},
             latency_ms=latency_ms, warning=f"normalize failed: {exc}",
+            image_sha256=image_sha256,
+        )
+    # --- EMPTY-RESPONSE GATE (2026-10-16) ---------------------------------
+    #
+    # A near-empty body is valid JSON and parses cleanly, so it sailed through
+    # both the truncation check and `safe_json_loads` and reached the user as
+    # "this figure contains no occurrences". Two real runs measured 528 and 40
+    # output tokens where the same figure normally costs 4190-5587; both were
+    # the model declining to work, not the figure being empty.
+    #
+    # The pair of conditions is what makes this safe. Token count alone would
+    # reject a genuinely sparse figure, and zero occurrences alone is a
+    # legitimate answer this mode is explicitly built to allow. It takes a
+    # body too short to have read a 22-row table AND no occurrences to show
+    # for it. A provider that reports no usage at all skips the gate, because
+    # there is nothing to judge on and inventing a threshold for it would only
+    # hide the difference between "empty" and "not reported".
+    out_tokens = _usage_int(usage, "output_tokens")
+    min_tokens = OCCURRENCE_MIN_OUTPUT_TOKENS_BY_STRATEGY.get(cell_strategy)
+    if (min_tokens is not None
+            and out_tokens is not None
+            and out_tokens < min_tokens
+            and not data.get("occurrences")):
+        return ExtractResult(
+            ok=False, error_key="err.emptyResponse",
+            raw=raw_text, truncated=truncated, usage=usage or {},
+            latency_ms=latency_ms,
+            warning=(
+                "The model returned %d output tokens and no occurrence rows. "
+                "That is below the %d this mode's own figures need, so this is "
+                "an empty response rather than an empty figure; re-run before "
+                "reading anything into the result."
+                % (out_tokens, min_tokens)
+            ),
             image_sha256=image_sha256,
         )
     return _ok_result(
@@ -5316,8 +5557,7 @@ def extract_generic_table(
             image_sha256=image_sha256,
         )
     latency_ms = int((time.perf_counter() - t0) * 1000)
-    warning = ("Result may be truncated (model hit max_tokens). "
-               "Try raising the max_tokens setting and re-running.")
+    warning = _truncation_warning(usage, max_tokens)
     if raw_text is None:
         return _error_from_status(status, err_body, latency_ms,
                                   image_sha256=image_sha256)
@@ -5372,11 +5612,20 @@ _CLASSIFY_MIN_CONFIDENCE = 0.5
 
 
 def normalize_occurrence_matrix_result(
-        parsed: dict[str, Any]) -> dict[str, Any]:
+        parsed: dict[str, Any],
+        cell_status: str = DEFAULT_OCCURRENCE_CELL_STATUS) -> dict[str, Any]:
     """Coerce the parsed taxon x LOCALITY matrix into the strict result shape.
 
-    Shape: ``columns`` (the localities, left to right), ``legend``, and a SPARSE
-    ``occurrences`` long table - one row per FILLED cell.
+    Shape: ``columns`` (the localities, left to right), ``legend``, a SPARSE
+    ``occurrences`` long table - one row per FILLED cell - and ``cell_status``,
+    which records HOW the cells were obtained (see
+    ``OCCURRENCE_CELL_STATUSES``).
+
+    ``cell_status`` is an argument, not something read off ``parsed``. The model
+    has no way to know whether its own cell coordinates were checked against
+    the figure's geometry, so letting it supply the field would mean the field
+    says whatever the prompt hoped for. The caller passes the status its own
+    code path earned.
 
     SPARSITY IS THE CONTRACT. The step-0 baseline run (a real occurrence matrix
     through the real model, asked to answer as an abundance_diagram) came back
@@ -5403,7 +5652,8 @@ def normalize_occurrence_matrix_result(
     """
     if not isinstance(parsed, dict):
         return {"columns": [], "legend": [], "occurrences": [],
-                "strat_rows": [], "confidence": 0.0}
+                "strat_rows": [], "taxon_rows": [], "confidence": 0.0,
+                "cell_status": cell_status}
 
     # H3-fix parity: a top-level array arrives wrapped as {"_array_root": [...]}.
     if "_array_root" in parsed and isinstance(parsed["_array_root"], list):
@@ -5426,7 +5676,10 @@ def normalize_occurrence_matrix_result(
         "legend": [],
         "occurrences": [],
         "strat_rows": [],
+        "taxon_rows": [],
         "confidence": 0.0,
+        "cell_status": (cell_status if cell_status in OCCURRENCE_CELL_STATUSES
+                        else DEFAULT_OCCURRENCE_CELL_STATUS),
     }
 
     # --- columns: the authoritative locality list -------------------------
@@ -5491,6 +5744,7 @@ def normalize_occurrence_matrix_result(
         return ""
 
     dropped_blank = 0
+    unknown_column_rows = 0
     for raw_row in parsed.get("occurrences") or []:
         if not isinstance(raw_row, dict):
             continue
@@ -5552,6 +5806,7 @@ def normalize_occurrence_matrix_result(
         if site and resolved is None:
             # A site that names no column is the transposition failure mode.
             # Keep the row (the taxon may still be readable) but flag it.
+            unknown_column_rows += 1
             row["site"] = site
             row["col_index"] = col_index
             extra = attach_row_contract(raw_row, row)
@@ -5601,6 +5856,43 @@ def normalize_occurrence_matrix_result(
 
         out["occurrences"].append(row)
 
+    # --- taxon_rows: the labels-only path (cell_strategy "gated") ---------
+    #
+    # The gated strategy asks the model for headers, taxon labels and the
+    # legend and explicitly NOT for grid cells, because those are the three
+    # things it measurably reads well (19/22 taxa, 19/19 authorities, legend
+    # all correct) while the cells are the thing it does not.
+    #
+    # These rows cannot go into `occurrences`. That list is SPARSE BY CONTRACT
+    # - one row per FILLED cell - so a label with no code and no class is
+    # indistinguishable from a blank cell and gets dropped by the rule above.
+    # Folding them in would both empty the list and destroy exactly the
+    # readings that were good.
+    #
+    # NO row_kind IS INFERRED HERE. The labels prompt transcribes a
+    # stratigraphic comparison band ("Conodont level (see text)") into `taxon`
+    # verbatim with an empty `authority`, as instructed, and there is no
+    # reliable way to tell that row from a genus that simply has no named
+    # authority. Guessing here would put a band into every taxon-level
+    # statistic computed from this table. The band is carried faithfully and
+    # its discriminator is documented rather than invented.
+    for raw_row in parsed.get("rows") or []:
+        if not isinstance(raw_row, dict):
+            continue
+        taxon = first_text(raw_row.get("taxon") or raw_row.get("label"))
+        if not taxon:
+            warnings.append("labels-only row with no taxon label; dropped")
+            continue
+        try:
+            index = int(raw_row.get("index"))
+        except (TypeError, ValueError):
+            index = len(out["taxon_rows"])
+        out["taxon_rows"].append({
+            "index": index,
+            "taxon": taxon,
+            "authority": s(raw_row.get("authority") or "").strip(),
+        })
+
     # --- strat_rows: the non-taxon comparison band -----------------------
     for band in parsed.get("strat_rows") or []:
         if not isinstance(band, dict):
@@ -5620,6 +5912,29 @@ def normalize_occurrence_matrix_result(
             f"dropped {dropped_blank} row(s) for blank cells; this mode is "
             f"sparse by contract (one row per FILLED cell)")
 
+    # --- transposition, decided on the DISTRIBUTION not on a single row ----
+    #
+    # An occasional unknown_column row is one misread header, which the
+    # per-row `uncertain` flag already reports honestly. But when MOST rows
+    # name a site that is not a column, the whole table is rotated: the
+    # baseline run of this mode did exactly that, returning the column headers
+    # as taxa. That output is complete, well-formed and entirely wrong, which
+    # is the failure shape this module's docstring calls worse than a refusal.
+    #
+    # The obvious alternative check - fewer taxa than columns - was rejected:
+    # a 3-taxon x 18-locality matrix is an ordinary figure, so that ratio
+    # says nothing about orientation.
+    if (unknown_column_rows
+            and len(out["occurrences"]) >= 3
+            and len(out["columns"]) >= 3
+            and unknown_column_rows * 2 > len(out["occurrences"])):
+        warnings.append(
+            f"{unknown_column_rows} of {len(out['occurrences'])} occurrence "
+            f"rows name a site that is not one of the {len(out['columns'])} "
+            f"column headers; the matrix may be transposed (rows and columns "
+            f"swapped). Column labels and row labels stay usable; the "
+            f"cell table should not be cited until this is resolved.")
+
     conf = parsed.get("confidence")
     try:
         out["confidence"] = _confidence_clamped(float(conf))
@@ -5627,7 +5942,7 @@ def normalize_occurrence_matrix_result(
         out["confidence"] = 0.0
 
     _carry_extras(parsed, ("columns", "legend", "occurrences", "strat_rows",
-                           "confidence"), out)
+                           "taxon_rows", "confidence", "cell_status"), out)
     if warnings:
         out["warnings"] = warnings
     return out

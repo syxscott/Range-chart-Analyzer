@@ -282,8 +282,16 @@ class TestRegistration:
         assert "occurrence_matrix" in modes.BROWSER_UNSUPPORTED_MODES
 
     def test_root_keys_declared(self):
+        # 2026-10-16: `cell_status` and `taxon_rows` joined the list.
+        # `cell_status` says how the cells were obtained and the exporter reads
+        # it to choose between a plain and a caveated sheet title. `taxon_rows`
+        # carries the labels-only path's taxon names, which cannot ride in
+        # `occurrences` because that list is sparse by contract and drops a row
+        # with no code. Keys the normalizer emits but modes.py does not declare
+        # are invisible to the "unrelated root key" guard in _ok_result.
         assert extractor._mode_root_keys("occurrence_matrix") == (
-            "columns", "legend", "occurrences", "strat_rows", "confidence")
+            "columns", "legend", "occurrences", "strat_rows", "taxon_rows",
+            "confidence", "cell_status")
 
     def test_merge_schema_exists_and_is_wired(self):
         assert "occurrence_matrix" in SCHEMA_BY_MODE

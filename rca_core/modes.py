@@ -356,7 +356,7 @@ _add(ModeSpec(
     browser_supported=False,
     merge_wired=True,
     root_keys_inline=("columns", "legend", "occurrences", "strat_rows",
-                      "confidence"),
+                      "taxon_rows", "confidence", "cell_status"),
     row_tables=("occurrences",),
     keywords_ascii=("localit", "borehole", "boreholes", "wellbore",
                     "well log", "well no", "occurrence matrix",
