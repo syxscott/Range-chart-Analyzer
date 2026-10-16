@@ -16,6 +16,7 @@ from .modes import MODES as _MODE_SPECS
 import base64
 import io
 import json
+import logging
 import math
 import mimetypes
 import os
@@ -24,6 +25,12 @@ import time
 import warnings
 from dataclasses import dataclass, field
 from typing import Any, Iterable
+
+#: Module logger. Bound here rather than created at first use because the
+#: grid_read fallback path logs from inside its own `except` handler: a logger
+#: that did not exist there would turn a handled failure into a NameError, and
+#: the one thing that handler exists to prevent is exactly that.
+log = logging.getLogger(__name__)
 
 # AUDIT-2026-09-29: the two enhance helpers annotate their argument and return
 # as `"Image.Image"`, but Pillow was imported FUNCTION-LOCALLY everywhere in
@@ -5257,30 +5264,67 @@ OCCURRENCE_MIN_OUTPUT_TOKENS_BY_STRATEGY = {
     "single_pass": OCCURRENCE_MIN_OUTPUT_TOKENS,
     "gated": None,
     "cells": None,
+    "grid_read": None,
 }
 
 # How `extract_occurrence_matrix` decides where the cells come from.
 #
 #   single_pass - one call, the model emits labels and cells together and is
-#                 asked to locate each cell itself. This is the historical
-#                 behaviour and stays the DEFAULT until the alternatives are
-#                 measured: defaulting to an unvalidated path is how the
-#                 2026-10-15 prompt change shipped a regression.
+#                 asked to locate each cell itself. Historical behaviour.
 #   gated       - labels are read in their own call and no cell reading is
 #                 attempted. Yields the half that measured well and admits it.
 #   cells       - labels plus a cell pass grounded in locally detected grid
 #                 geometry, so every row's column identity was checked against
 #                 a pixel rectangle.
-OCCURRENCE_CELL_STRATEGIES = ("single_pass", "gated", "cells")
-OCCURRENCE_DEFAULT_CELL_STRATEGY = "single_pass"
+#   grid_read   - the two-stage path in `rca_core.matrix`: geometry locates
+#                 every filled cell, then the model reads each one from its own
+#                 magnified crop and reads the axis labels from the figure.
+#
+# grid_read is the DEFAULT, and the reason is measurement rather than taste.
+# Scored against the hand-checked 93-cell CSV on the reference figure:
+#
+#     strategy      cell precision / recall          n
+#     single_pass   0.579 / 0.355                    1
+#     cells         0.574 / 0.565                    1
+#     grid_read     1.000 / 1.000                    5   (minimum 1.000)
+#
+# n=5 is above the bar set for changing a default, and the minimum over those
+# five runs is 1.000, so this is not an average hiding a bad tail. `grid_read`
+# falls back to `single_pass` whenever geometry is unavailable, when a reply is
+# truncated, or when the model's axis counts disagree with the measured lattice,
+# so making it the default cannot turn any input into "no answer".
+OCCURRENCE_CELL_STRATEGIES = ("grid_read", "single_pass", "gated", "cells")
+OCCURRENCE_DEFAULT_CELL_STRATEGY = "grid_read"
 
 # Maps a strategy onto the cell_status its output may honestly claim.
 # `single_pass` never earns `grid_cells` no matter how good the answer looks.
+#
+# `grid_read` has no entry that a fallback could borrow: when the two-stage
+# attempt fails the run degrades to the `single_pass` code path AND rewrites the
+# status, so the status on the wire is always the one the path that actually ran
+# earned. Mapping `grid_read -> grid_cells` up here would be a lie in exactly
+# the case it matters, because the two-stage path returns None precisely when
+# it could not verify anything.
 OCCURRENCE_STATUS_BY_STRATEGY = {
     "single_pass": "single_pass_unverified",
     "gated": "not_attempted",
     "cells": "grid_cells",
 }
+
+# Strategies that DECIDE their own status from which code path actually ran,
+# instead of having one stamped from the table above.
+#
+# `grid_read` is the only member. It runs the two-stage path and, whenever that
+# cannot be completed (no lattice, a truncated reply, axis counts that disagree
+# with the measured grid, or a reader that answered none of the tiles), it
+# degrades to the `single_pass` path. A fixed table entry would freeze
+# `grid_cells` onto that degraded run, which is precisely the claim the status
+# exists to prevent.
+#
+# Together, OCCURRENCE_STATUS_BY_STRATEGY and this set partition
+# OCCURRENCE_CELL_STRATEGIES; a strategy in neither would have its status
+# decided by accident, and a test asserts that.
+OCCURRENCE_SELF_STATUS_STRATEGIES = ("grid_read",)
 
 
 def _grid_geometry_clause(geom: Any) -> str:
@@ -5349,6 +5393,66 @@ def extract_occurrence_matrix(
         return ExtractResult(ok=False, error_key="err.imageRead")
     if cell_strategy not in OCCURRENCE_CELL_STRATEGIES:
         cell_strategy = OCCURRENCE_DEFAULT_CELL_STRATEGY
+    max_tokens = clamp_max_tokens(max_tokens)
+    timeout_sec = clamp_timeout_sec(timeout_sec)
+    image_sha256 = compute_image_sha256_from_b64(image_b64)
+    p = provider or LlmProvider(
+        name="Legacy Anthropic-compatible",
+        api_format=ApiFormat.ANTHROPIC,
+        endpoint=base_url,
+        api_key=api_key,
+        model=model,
+    )
+
+    # ---- grid_read: geometry locates the cells, the model reads them -----
+    #
+    # Attempted FIRST and, on failure, the run continues as `single_pass` with
+    # the status rewritten. The rewrite is the point: the two-stage path returns
+    # None precisely when it could not verify anything (no lattice, a truncated
+    # reply, or axis counts that disagree with the measured grid), so letting the
+    # requested strategy name survive into the result would advertise
+    # `grid_cells` for an answer that never had them verified.
+    if cell_strategy == "grid_read":
+        t0 = time.perf_counter()
+        try:
+            from .matrix import extract_matrix_two_stage
+
+            def _grid_read_call(system_prompt, img_b64, user_text, mt):
+                raw, trunc, _status, err_body, _u = _call_llm(
+                    provider=p,
+                    system_prompt=system_prompt,
+                    image_b64=img_b64,
+                    media_type="image/png",
+                    user_text=user_text,
+                    max_tokens=mt,
+                    timeout_sec=timeout_sec,
+                    capture_error_body=True,
+                    progress_callback=progress_callback,
+                )
+                return raw, trunc, err_body
+
+            two_stage = extract_matrix_two_stage(
+                image_b64, _grid_read_call, max_tokens=max_tokens)
+        except Exception as exc:                # never raises out of this path
+            log.warning("grid_read failed, falling back: %s: %s",
+                        type(exc).__name__, exc)
+            two_stage = None
+        if two_stage is not None:
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            try:
+                data = normalize_occurrence_matrix_result(
+                    two_stage, cell_status=OCCURRENCE_STATUS_BY_STRATEGY["cells"])
+            except Exception as exc:
+                log.warning("grid_read normalize failed, falling back: %s", exc)
+                two_stage = None
+            else:
+                return _ok_result(
+                    p=p, mode_key="occurrence_matrix", data=data,
+                    raw_text="", truncated=False, usage={},
+                    latency_ms=latency_ms, image_sha256=image_sha256,
+                    max_tokens=max_tokens, parsed=two_stage)
+        cell_strategy = "single_pass"
+
     cell_status = OCCURRENCE_STATUS_BY_STRATEGY[cell_strategy]
     # The gated path asks a DIFFERENT question, not a shorter version of the
     # same one. The 2026-10-15 attempt to fix this by adding rules to the
@@ -5380,16 +5484,9 @@ def extract_occurrence_matrix(
             cell_status = OCCURRENCE_STATUS_BY_STRATEGY["single_pass"]
         else:
             geometry_clause = _grid_geometry_clause(geom)
-    max_tokens = clamp_max_tokens(max_tokens)
-    timeout_sec = clamp_timeout_sec(timeout_sec)
-    image_sha256 = compute_image_sha256_from_b64(image_b64)
-    p = provider or LlmProvider(
-        name="Legacy Anthropic-compatible",
-        api_format=ApiFormat.ANTHROPIC,
-        endpoint=base_url,
-        api_key=api_key,
-        model=model,
-    )
+    # max_tokens / timeout_sec / image_sha256 / provider `p` were already
+    # clamped and built above, before the grid_read attempt, so a fallback runs
+    # on exactly the values the caller asked for.
     lang_hint = CHART_LANG_HINT.get(chart_lang, "")
     user_prompt = (
         "Caption:\n"

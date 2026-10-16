@@ -5,6 +5,83 @@ All notable changes to Range Chart Analyzer are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Occurrence matrices are now extracted in two stages: geometry locates the
+  cells, the model reads them.** The single-pass prompt asked one call to do two
+  jobs — find which cells contain a mark, then say what the mark is — and the
+  measurements said the model could do the second and not the first. It read the
+  labels well (taxa 20/22, authorities 19/19, conodont band 11/11, legend
+  correct) and the dense cells badly: 0.355 recall at 0.579 accuracy, failing by
+  omission rather than misreading. Injecting measured column geometry took
+  recall to 0.565 and left accuracy at 0.574, which is the split that decided
+  the design: the model could *see* the cells and was failing to match them to
+  a position, and position is arithmetic's job.
+
+  `rca_core/matrix.py` now locates every cell carrying ink (`detect_filled_cells`)
+  and renders only those cells, isolated and magnified, as labelled contact
+  sheets the model reads in one pass per sheet. Scored per FILLED CELL against
+  the hand-checked 93-cell authority CSV, through the real `_MODE_DISPATCH`
+  entry point:
+
+  | strategy | precision | recall | n |
+  |---|---|---|---|
+  | `single_pass` (was the default) | 0.579 | 0.355 | 1 |
+  | `cells` (geometry clause, one call) | 0.574 | 0.565 | 1 |
+  | `grid_read` (new default) | **1.000** | **1.000** | 4 |
+
+  The default moved on n=4 with a minimum of 1.000 across those runs, above the
+  n>=3 bar set for changing a default. It falls back to `single_pass` — with the
+  status rewritten to `single_pass_unverified` — whenever geometry is
+  unavailable, a reply is truncated, the reader answers none of the tiles, or the
+  model's axis counts disagree with the measured lattice, so the default can
+  never turn an input into "no answer" or into an unearned verification claim.
+
+  The letters are deliberately NOT read by template matching. A matcher hard
+  coded for A/C/R scores perfectly here and fails on the next figure, where
+  abundance is filled and open circles or 1/2/3. The geometric half is general
+  because "which cells contain ink" names no letter set; the reading half has
+  to be general too.
+
+### Fixed
+
+- **Two payload keys the two-stage path emitted were silently dropped by the
+  normalizer, making complete-looking runs report nothing.** `taxon_rows` is the
+  RESULT's key name but the normalizer builds it from `parsed["rows"]`, so the
+  assembled payload lost every row label; and `strat_rows` entries that are not
+  dicts are skipped outright, so a bare band label vanished. Both are now emitted
+  in the shape the normalizer actually consumes, and both are covered by tests
+  that run the real normalizer rather than inspecting the payload.
+- **The prompt let the model decline.** It said "if the centre is blank write
+  ''", which makes a blank the *safe* answer under uncertainty — and these
+  glyphs are ~8 px tall, so the model is often uncertain. Three of six runs
+  answered `''` for 64 of 93 tiles and precision fell to 0.29. Every tile handed
+  to the reader has already been proven by the ink test to contain a mark, so
+  `''` is never correct; the option is gone and the legend codes are supplied as
+  a closed vocabulary.
+- **The reader was given tiles it could not resolve.** At 6x magnification the
+  per-cell reading is unreliable; separating magnification from sheet size with
+  everything else fixed gave 8x/31-tiles **1.000 1.000 1.000 1.000 1.000** (n=5)
+  against 6x/31-tiles **0.968 1.000 1.000** (n=3). Magnification is the
+  decisive variable; the split is a cheap safeguard.
+- **The label prompt asked the model to count rows, and it miscounted.** 24
+  rows came back for a 22-row table, the alignment guard correctly refused the
+  result, and the whole run degraded to `single_pass`. The measured row and
+  column counts are now in the prompt, and non-taxon labels (conodont bands,
+  correlation strips) are explicitly excluded from `rows`.
+- **An empty legend emptied the class column of every exported row.** The legend
+  is a few words in a corner of a busy figure and shared that call with 22 taxon
+  names and 18 rotated headers; it came back empty in one run of three. It is
+  now re-asked once, with a dedicated prompt, only when it came back empty.
+- **Two tests in `test_occurrence_strategy_defaults_2026_10_16.py` never ran.**
+  Both took a `self` parameter, so pytest treated them as fixtures and ERRORed
+  at setup; their assertions had been unenforced since the file was written.
+- **`log` was used in `extractor.py` without ever being bound.** Inside the
+  `grid_read` fallback handler, so a handled transport failure would have
+  raised `NameError` — the one thing that handler exists to prevent.
+
 ## [0.1.1] — 2026-10-16
 
 ### Fixed

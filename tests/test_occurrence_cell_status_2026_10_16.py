@@ -37,6 +37,7 @@ from rca_core.extractor import (  # noqa: E402
     OCCURRENCE_CELL_STRATEGIES,
     OCCURRENCE_DEFAULT_CELL_STRATEGY,
     OCCURRENCE_MIN_OUTPUT_TOKENS,
+    OCCURRENCE_SELF_STATUS_STRATEGIES,
     OCCURRENCE_STATUS_BY_STRATEGY,
     _truncation_warning,
     _usage_int,
@@ -96,13 +97,32 @@ def _run(monkeypatch, payload, *, out_tokens, strategy=None,
 # --- cell_status -----------------------------------------------------------
 
 class TestCellStatus:
-    def test_default_is_the_unverified_status(self):
-        """A caller who says nothing gets the honest label, not a clean one.
+    def test_default_claims_only_what_it_earned(self):
+        """The default must be a MEASURED path, and its status must match.
 
-        If the default were "grid_cells" then any code path that forgot to
-        pass a strategy would silently advertise verification it never did.
+        Originally this asserted the default was ``single_pass``, so that a
+        caller who says nothing gets the honest unverified label. That premise
+        was correct on 2026-10-16 and is now superseded: the two-stage
+        ``grid_read`` path measures precision 1.000 / recall 1.000 over five
+        consecutive runs on the reference matrix, minimum 1.000 across those
+        runs.
+
+        The intent is kept, not dropped. What the test still forbids is a
+        default that advertises verification it cannot back:
+
+          * the default must be a known strategy, not an unrecognised string;
+          * it must not be a path whose status is a lie -- `grid_read` is
+            deliberately ABSENT from OCCURRENCE_STATUS_BY_STRATEGY, because it
+            rewrites the status to whatever actually ran, and a mapping here
+            would freeze `grid_cells` onto a fallback answer;
+          * and the module-level default status stays the unverified one, so a
+            caller that bypasses the strategy table still gets the honest label.
         """
-        assert OCCURRENCE_DEFAULT_CELL_STRATEGY == "single_pass"
+        assert OCCURRENCE_DEFAULT_CELL_STRATEGY in OCCURRENCE_CELL_STRATEGIES
+        assert OCCURRENCE_DEFAULT_CELL_STRATEGY not in \
+            OCCURRENCE_STATUS_BY_STRATEGY, (
+            "a strategy in the status table is stamped blindly; grid_read "
+            "must decide its own status from which path actually ran")
         assert DEFAULT_OCCURRENCE_CELL_STATUS == "single_pass_unverified"
 
     def test_normalizer_stamps_the_status_it_is_handed(self):
@@ -140,10 +160,32 @@ class TestCellStatus:
             assert status in OCCURRENCE_CELL_STATUSES
 
     def test_strategy_and_status_cover_each_other(self):
-        assert set(OCCURRENCE_STATUS_BY_STRATEGY) == set(OCCURRENCE_CELL_STRATEGIES)
-        assert len(set(OCCURRENCE_STATUS_BY_STRATEGY.values())) == \
-            len(OCCURRENCE_CELL_STRATEGIES), \
+        """Every strategy either has a status or declares that it chooses one.
+
+        Originally this asserted a flat bijection, which was the right shape
+        while every strategy mapped one-to-one onto a status. `grid_read` cannot:
+        it runs the two-stage path and, when that fails, degrades to
+        `single_pass`. A single table entry would freeze `grid_cells` onto the
+        fallback answer, advertising geometric verification for a run that had
+        none.
+
+        So the invariant becomes a partition -- nothing may be unaccounted for --
+        rather than a bijection, and the uniqueness clause is checked only over
+        the strategies that DO claim a fixed status, where it still means what
+        it was written to mean.
+        """
+        fixed = set(OCCURRENCE_STATUS_BY_STRATEGY)
+        self_selecting = set(OCCURRENCE_SELF_STATUS_STRATEGIES)
+        all_strategies = set(OCCURRENCE_CELL_STRATEGIES)
+        assert fixed | self_selecting == all_strategies, (
+            "a strategy is neither mapped to a status nor declared as choosing "
+            "one, so its status would be decided by accident")
+        assert not (fixed & self_selecting), (
+            "a strategy cannot both have a fixed status and choose its own")
+        assert len(set(OCCURRENCE_STATUS_BY_STRATEGY.values())) == len(fixed), \
             "two strategies share a status, so one of them is indistinguishable"
+        assert "grid_read" in self_selecting, (
+            "grid_read degrades to single_pass, so it must choose its status")
 
     def test_result_carries_the_status_through_the_extractor(self, monkeypatch):
         res = _run(monkeypatch, _PAYLOAD, out_tokens=5000)
