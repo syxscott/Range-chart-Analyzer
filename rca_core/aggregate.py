@@ -805,12 +805,39 @@ def _looks_occurrence_matrix(data: Optional[dict]) -> bool:
     rows and returned a single deep copy of the first run, so two different
     localities of the same genus silently collapsed into one record. A missing
     auto-detect branch is not a degradation here, it is data loss.
+
+    AUDIT-2026-10-16: ``taxon_rows`` joins it as a SECOND signal, because the
+    ``gated`` cell strategy empties ``occurrences`` BY DESIGN and a gated
+    payload was therefore invisible to auto-detection.
+    ``js/aggregate.js::rcaAutoDetectKeymap`` had the identical omission, and
+    js/app.js:1318 feeds this function's answer straight into the merge, so a
+    browser merge of gated results silently merged them as range charts while
+    the desktop did the same for a different reason.
+
+    Measured before changing anything (two gated runs, one input, both routes):
+
+      auto-detect -> range chart : ``columns`` merged to 2 of 3 labels
+      forced OCCURRENCE_MATRIX   : ``columns`` merged to 3 of 3 labels
+
+    so the occurrence route is strictly better for the header list. What the
+    range-chart route "kept" that this one does not is four PHANTOM empty
+    lists - ``species_ranges``, ``sections``, ``biozones``,
+    ``other_fossils`` - that no matrix result has anything to put in. Both
+    routes preserve ``taxon_rows`` and ``legend`` identically. The misroute was
+    real and this change costs nothing measurable.
+
+    What it does NOT fix: ``taxon_rows`` is carried from the first run rather
+    than merged, so a taxon only the second run reported is still lost. That is
+    a schema ``list_keys`` question, measured separately, and it is not what
+    this branch is about.
     """
     if not data:
         return False
     occ = data.get("occurrences")
-    return bool(isinstance(occ, list) and occ
-                and isinstance(occ[0], dict))
+    if isinstance(occ, list) and occ and isinstance(occ[0], dict):
+        return True
+    taxa = data.get("taxon_rows")
+    return bool(isinstance(taxa, list) and taxa and isinstance(taxa[0], dict))
 
 
 def _auto_detect_schema(results):
@@ -1252,6 +1279,18 @@ def _merge_named_lists(runs, schema):
             seen = set()
             merged_strs = []
             for s in all_items:
+                # AUDIT-2026-10-16: null guard. ``str(None)`` is the literal
+                # string "None", so a ``null`` in a plain-string list_key
+                # (``other_fossils``, ``biozones``, ``root_ids``) used to be
+                # merged as a row CALLED "None" -- a ghost taxon in the export,
+                # indistinguishable from a genus a model might legitimately
+                # read off the figure. js/aggregate.js produced "null" for the
+                # same input, so the two engines also disagreed on the text of
+                # the ghost: a null in ``other_fossils`` gave "None" on the
+                # desktop and "null" in the browser. Both were wrong; the fix
+                # is to emit nothing, on both sides.
+                if s is None:
+                    continue
                 t = str(s).strip()
                 if t and t.lower() not in seen:
                     seen.add(t.lower())
@@ -1276,6 +1315,16 @@ def _merge_named_lists(runs, schema):
             items = r.get(key) or []
             for it in items:
                 if not isinstance(it, dict):
+                    # AUDIT-2026-10-16: null guard. js/aggregate.js's twin of
+                    # this branch already had one (`String(it === null ||
+                    # it === undefined ? '' : it)`); Python did not, so a
+                    # `null` inside a MIXED list (some runs emit objects,
+                    # another emits bare strings) produced a stray row reading
+                    # "None" on the desktop while the browser produced nothing.
+                    # One-sided, and invisible: both merged lists look
+                    # plausible.
+                    if it is None:
+                        continue
                     text = str(it).strip()
                     if text:
                         stray_strings.append(text)

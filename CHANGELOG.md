@@ -41,9 +41,89 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never equal to the key — so the test accepted *every* column and the browser
   headed an unrecognised column `col.topic` where the export wrote `Topic`. It
   now tests membership of the English table, exactly as `_col_label` does.
+- **The browser-unsupported guard ran BEFORE the backend dispatch.** Reproduced
+  live: with the server running, connection mode 「自动」, and 出现矩阵 explicitly
+  selected, Extract produced **ZERO network requests** and told the user to
+  switch to 「经本地后端」 or start the server — advice already followed on all
+  three counts. `extractRangeChart` refused before `rcaCallBackend` was ever
+  reached, so the mode was unavailable in the browser even though the backend
+  handles it perfectly well (`modes.py` `SERVER_MODE_NAMES`). The guard exists
+  because the DIRECT path has no normalizer for those modes; on the backend path
+  it was simply the wrong tool. It now sits after the dispatch and guards only
+  what it is for. *This also corrects the claim in the entry above, which said
+  the refusal happened before the backend dispatch — verified by execution, and
+  the browser went on to prove it by sending the request.*
+- **The guard was not re-checked after automatic classification.** It ran while
+  `mode` was still the literal `auto` (not in `RCA_BROWSER_UNSUPPORTED_MODES`),
+  and the classifier then rewrote `mode` to whatever it recognised. There is no
+  prompt branch or normalizer below for `paleomap` / `scatter_plot` /
+  `chemical_stratigraphy` / `occurrence_matrix`, so the request went out with
+  `RANGE_CHART_SYSTEM_PROMPT` and the answer was normalized as a range chart —
+  a confidently wrong result, reachable from the default path with no
+  misconfiguration. Re-checked after the classification round, and the
+  extraction request is refused rather than sent.
+- **Cancelling left the results area blank.** `setBusy(true)` hides BOTH
+  `#results-empty` and `#results-content`, and only the `!res.ok` branch put one
+  back — so the four early returns around it (superseded extraction, cancelled
+  twice) all returned to an empty card. With a prior result the user's data was
+  still in memory and unreachable until they re-ran the extraction. The
+  invariant is now stated once, in `updateActionButtons`, and every exit gets it
+  because `setBusy(false)` routes through that function.
+- **Extract could send the previous image while the new one was still
+  decoding.** `handleFile` deliberately defers `state.file` / `state.dataUrl`
+  until the decode resolves, so during that window both still describe the
+  PREVIOUS image while the file input already shows the new one. Nothing keyed
+  off the window — `updateActionButtons` looked only at `state.busy`, which
+  `handleFile` never sets — so Extract and Ctrl+Enter were both live. Worse,
+  the misattributed result SURVIVED: the load's token guard covers only the
+  load, so once the new image arrived the rows rendered normally and every
+  export named the new file. `state.loading` now locks the window.
+- **`occurrence_matrix` had no merge schema in the browser.** Python has had
+  `OCCURRENCE_MATRIX_SCHEMA` in `SCHEMA_BY_MODE` and `_auto_detect_schema`
+  since 2026-10-15; `js/aggregate.js` mirrored neither, so a two-run matrix was
+  merged with the range-chart schema's `species_ranges` primary — which this
+  payload does not have. The consequence is data loss, not degradation: the
+  merge produced nothing for the real rows, so a locality only the second run
+  reported vanished and two localities of one genus collapsed into one record.
+- **A `null` in a plain-string list became a phantom row.** `str(None)` is the
+  literal `"None"` and `String(null)` is `"null"`, so one null in
+  `other_fossils` produced a ghost taxon on the desktop AND a differently-spelled
+  ghost in the browser. Both now emit nothing. The mixed-list branch had the
+  guard on the JS side only.
+- **A cancellation was retried like a transient failure.** The backoff loop
+  caught every rejection alike, so pressing Cancel still went round it:
+  measured through the real `extractRangeChart`, 4 fetch attempts and 4606 ms
+  before the user's own command took effect, against 1 attempt and 303 ms for
+  the control.
+- **`in` walked the prototype chain when validating node ids.** `idToNode` is a
+  plain `{}`, so `root_ids: ["toString"]` and a `parent` of `"constructor"`
+  passed validation against keys the model chose, and the tree was built on a
+  node that does not exist.
+- **The occurrence sheet's title did not say where its cells came from.**
+  `sec.occurrencesUnverified` existed in all three dictionaries with no
+  consumer, so the browser headed identical data 「出现记录」 while the desktop
+  exporter headed it 「出现记录 (格子未经图版网格核验)」. `cell_status` now drives
+  the choice, defaulting to the CAVEATED title — absence is not proof, since
+  merged results and every pre-field payload lack the key. Found by loading the
+  real page: the diff-parity suite compares JS output against Python output, and
+  a branch missing on BOTH sides compares equal.
 
 ### Added
 
+- **`tests/test_occurrence_matrix_merge_parity_2026_10_16.py`.** The browser
+  must merge occurrence matrices the way the desktop does. Two things make it
+  real rather than decorative: it passes the keymap into `rcaMergeResults` the
+  way `js/app.js:1318` does (that function does NOT auto-detect, while Python's
+  `merge_results` does — comparing them without it compares a range-chart merge
+  against an occurrence merge), and it compares the merged RESULT rather than
+  the chosen primary, because two engines agreeing on a list name while writing
+  different key sets is the divergence that costs data.
+- **The `gated` payload shapes the occurrence detectors were missing.** Five
+  shapes where `occurrences` is empty BY DESIGN and `taxon_rows` carries the
+  names. Before them, every such shape classified as "not a matrix" on BOTH
+  engines, so no shape in `tests/test_table_config_detectors_parity.py` could
+  tell them apart and the one-sided fix exporter.py had just received passed
+  that suite untouched.
 - **`tests/test_table_configs_parity.py`.** Cross-engine parity for the table
   configs themselves (ids and columns), which the harness never covered — it
   proved the two engines picked the same *branch* while nothing replayed

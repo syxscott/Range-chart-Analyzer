@@ -278,6 +278,11 @@ const RCA_I18N = {
 
     'err.noKey': '请先在「API 设置」中填入 MiniMax API Key。',
     'err.noImage': '请先上传一张图片。',
+    // AUDIT-2026-10-16: the extraction now refuses while an image is still
+    // decoding, because `state.dataUrl` belongs to the PREVIOUS image until
+    // the load resolves and the result would otherwise be misattributed to
+    // the file the user just picked.
+    'err.imageLoading': '图片仍在读取/解码中，请稍候再提取。',
     'err.noEndpoint': '请先选择并配置一个端点。',
     'err.401': 'API Key 无效或已过期（401）。请检查设置中的密钥。',
   'err.methodNotAllowed': '请求方法不被允许（405）。此端点不支持 HEAD 请求。',
@@ -661,6 +666,9 @@ RCA_I18N.en = {
 
   'err.noKey': 'Please enter your MiniMax API key in "API Settings" first.',
   'err.noImage': 'Please upload an image first.',
+  // AUDIT-2026-10-16: extraction is refused while an image is still decoding,
+  // because the previous image's dataUrl is what would otherwise be sent.
+  'err.imageLoading': 'The image is still being read/decoded. Wait a moment and try extracting again.',
   'err.noEndpoint': 'Please select and configure an endpoint first.',
   'err.401': 'API key is invalid or expired (401). Check the key in settings.',
     'err.methodNotAllowed': 'Method not allowed (405). This endpoint does not support HEAD.',
@@ -1022,6 +1030,9 @@ RCA_I18N.ja = {
 
   'err.noKey': 'まず「API 設定」で MiniMax API キーを入力してください。',
   'err.noImage': '先に画像をアップロードしてください。',
+  // AUDIT-2026-10-16: extraction is refused while an image is still decoding,
+  // because the previous image's dataUrl is what would otherwise be sent.
+  'err.imageLoading': '画像を読み込み/デコード中です。しばらくしてから抽出してください。',
   'err.noEndpoint': '先にエンドポイントを選択して設定してください。',
   'err.401': 'API キーが無効または期限切れです（401）。設定のキーを確認してください。',
     'err.methodNotAllowed': '許可されていないメソッドです（405）。このエンドポイントは HEAD に対応していません。',

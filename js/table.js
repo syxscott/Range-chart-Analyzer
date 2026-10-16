@@ -192,7 +192,23 @@ function rcaPaleomapConfigs(data, multi) {
 function rcaLooksOccurrenceMatrix(data) {
   if (!data) return false;
   const occ = data.occurrences;
-  return Array.isArray(occ) && occ.length > 0 && rcaIsDict(occ[0]);
+  if (Array.isArray(occ) && occ.length > 0 && rcaIsDict(occ[0])) return true;
+  // FIX-2026-10-16: `taxon_rows` as a SECOND signal — exporter.py
+  // `_looks_occurrence_matrix` had just gained it, and this twin had not, so
+  // the two engines disagreed on the SAME payload. That is not theoretical:
+  // the `gated` cell strategy empties `occurrences` BY DESIGN, so in the
+  // browser every gated result fell past this test into the range-chart
+  // branch below and rendered four phantom tables (sections /
+  // species_ranges / biozones / other_fossils) plus generic tables for
+  // `taxon_rows` whose headers came out as untranslated humanised literals.
+  // exporter.py sent the same payload to `_occurrence_matrix_tables` and got
+  // the taxon names. The half the model reads best — measured 20/22 taxa,
+  // 7/8 authorities — was the half the browser threw away.
+  //
+  // The key is as unique as `occurrences`: modes.py declares it for
+  // occurrence_matrix and its normalizer is the only writer.
+  const taxa = data.taxon_rows;
+  return Array.isArray(taxa) && taxa.length > 0 && rcaIsDict(taxa[0]);
 }
 
 function rcaStratValues(r) {
@@ -218,6 +234,23 @@ function rcaOccurrenceMatrixConfigs(data, multi) {
   const occRow = (r) => [r.taxon, r.authority, r.site, r.code, r.class];
   const occColsFinal = multi ? occCols.concat(['col.agreement']) : occCols;
   const occRowFinal = multi ? (r) => occRow(r).concat([r.agreement || '']) : occRow;
+  // Which half of this sheet is trustworthy, said in the sheet's own title.
+  //
+  // FIX-2026-10-16: this key existed only in `js/i18n.js` until now. The
+  // translation string shipped, the consumer did not, and the browser headed
+  // the sheet with the plain "Occurrences" while the desktop exporter headed
+  // the same data with the unverified variant — identical payload, opposite
+  // claim. Found by loading the real page, not by the diff parity suite:
+  // that suite compares "JS output vs Python output" and a branch missing on
+  // BOTH sides compares equal.
+  //
+  // The default is the CAVEATED title. `cell_status` is absent on merged
+  // results (merge_results drops scalar root keys it does not model) and on
+  // every payload predating the field, and absence of proof is not proof.
+  const cellStatus = (data && data.cell_status) || '';
+  const occTitleKey = (cellStatus === 'grid_cells')
+    ? 'sec.occurrences' : 'sec.occurrencesUnverified';
+
   const configs = [
     {
       id: 'columns',
@@ -229,7 +262,7 @@ function rcaOccurrenceMatrixConfigs(data, multi) {
     },
     {
       id: 'occurrences',
-      titleKey: 'sec.occurrences',
+      titleKey: occTitleKey,
       cols: occColsFinal,
       edit: occColsFinal.map((c) => (c === 'col.agreement' ? rcaECro('agreement')
         : c === 'col.taxon' ? rcaEC('taxon')
@@ -248,6 +281,33 @@ function rcaOccurrenceMatrixConfigs(data, multi) {
       row: (e) => [e.code, e.class],
     },
   ];
+  // The labels-only sheet. `taxon_rows` is what the `gated` cell strategy
+  // returns: the column headers, the taxon row labels and the legend, and
+  // explicitly no cell reading. Those names cannot ride in `occurrences`,
+  // which is SPARSE BY CONTRACT — a label with no code is indistinguishable
+  // from a blank cell and is dropped.
+  //
+  // Conditional, exactly like the band below and like exporter.py's
+  // `_taxon_rows_configs`, so a payload without the key still yields the
+  // three tables the rest of this module pins.
+  //
+  // The dict-row test rides along, and both engines had grown its absence
+  // independently: `strat_rows` below requires it, and a `taxon_rows` of bare
+  // strings otherwise produced a sheet of three blank columns — a header-only
+  // lie, which is what `_nonempty_or_none` exists to prevent. Neither
+  // detector parity suite could see it, because rcaLooksOccurrenceMatrix /
+  // _looks_occurrence_matrix already refuse such a payload on their own.
+  const taxonRows = data && data.taxon_rows;
+  if (Array.isArray(taxonRows) && taxonRows.length > 0 && rcaIsDict(taxonRows[0])) {
+    configs.push({
+      id: 'taxon_rows',
+      titleKey: 'sec.taxonRows',
+      cols: ['col.rowIndex', 'col.taxon', 'col.authority'],
+      edit: [rcaEC('index'), rcaEC('taxon'), rcaEC('authority')],
+      italicCol: 1,
+      row: (r) => [r.index, r.taxon, r.authority],
+    });
+  }
   // The non-taxon comparison band. exporter.py's `_strat_rows_configs` emits
   // this sheet ONLY for a list of dicts — the same test
   // rcaLooksOccurrenceMatrix applies to `occurrences`, so a band-less matrix

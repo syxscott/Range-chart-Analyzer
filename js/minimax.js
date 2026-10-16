@@ -2795,7 +2795,21 @@ function rcaNormalizePhylogeneticTreeResult(parsed) {
   }
   if (!rootIds.length) throw new Error('root_ids is empty');
   for (const rid of rootIds) {
-    if (!(rid in idToNode)) throw new Error('root_ids contains unknown node id: ' + rid);
+    // AUDIT-2026-10-16: `in` walks the PROTOTYPE chain, and `idToNode` is a
+    // plain `{}` (js/minimax.js:2767), so this passed for 'toString',
+    // 'constructor', 'valueOf', '__proto__' — any Object.prototype key —
+    // against a `root_ids` list the MODEL produced. The result is a tree
+    // built on a node that does not exist, or a validation error naming a key
+    // nobody wrote, instead of the clear "unknown node id" this message
+    // promises. :3065 in this file already used the guarded form.
+    //
+    // (First draft of this comment claimed `idToNode` was built with
+    // `Object.create(null)`, which would have made the whole fix a no-op and
+    // the claim wrong. It is `{}`.)
+
+    if (!Object.prototype.hasOwnProperty.call(idToNode, rid)) {
+      throw new Error('root_ids contains unknown node id: ' + rid);
+    }
   }
 
   const nodesOut = [];
@@ -2805,7 +2819,7 @@ function rcaNormalizePhylogeneticTreeResult(parsed) {
     const parentVal = n.parent === undefined ? null : n.parent;
     if (rootIds.indexOf(nid) === -1) {
       if (parentVal === null) throw new Error('Non-root node ' + nid + ' must have a parent');
-      if (!(rcaPyStr(parentVal) in idToNode)) {
+      if (!Object.prototype.hasOwnProperty.call(idToNode, rcaPyStr(parentVal))) {
         throw new Error('Node ' + nid + ' references parent ' + rcaPyStr(parentVal) + ' not in node ids');
       }
     } else if (parentVal !== null) {
@@ -3744,17 +3758,6 @@ async function extractRangeChart(opts) {
   // this transport when their mirrors land, with their prompts already in
   // place -- the branch below picks the prompt up the moment a normalizer for
   // it exists.
-  if (RCA_BROWSER_UNSUPPORTED_MODES[mode]) {
-    return {
-      ok: false,
-      errorKey: 'err.mode',
-      warning: 'chart mode "' + mode + '" is only available through the backend '
-        + 'server (js/minimax.js has no normalizer for it). Switch the '
-        + 'connection mode in settings, or run the server, to extract this '
-        + 'figure type.',
-    };
-  }
-
   // Backend mode: when served by the Python server (http/https origin),
   // call the same-origin /api/extract so the outbound MiniMax request is
   // made server-side. This avoids the browser CORS restriction entirely.
@@ -3762,8 +3765,34 @@ async function extractRangeChart(opts) {
   // We dispatch on `opts.transport` (set by app.js), NOT on `opts.mode`,
   // because `mode` is the chart kind (range_chart / columnar_section).
   // Mixing them up was Bug C1 and made the backend path dead code.
+  //
+  // FIX-2026-10-16 (HIGH): this dispatch used to sit BELOW the
+  // browser-unsupported guard, so a mode the browser has no normalizer for
+  // was refused before the request was ever made — including on the backend,
+  // where the Python server normalizes it perfectly well
+  // (`modes.py` SERVER_MODE_NAMES). Reproduced live: with the server
+  // running and 连接模式 = 自动, explicitly picking 出现矩阵 produced ZERO
+  // fetches and the message "please switch to 后端 or start the server" —
+  // advice the user had already followed on all three counts. The refusal
+  // exists because the DIRECT path has nobody to fall back on; the backend
+  // path has rca_core and a server-side mode whitelist, so the guard is
+  // simply the wrong tool there.
   if (opts.transport === 'backend') {
     return rcaCallBackend(opts, base64);
+  }
+
+  // Past this point the request will be made by the BROWSER, so a mode with
+  // no JS normalizer really would fall through into a fabricated range chart.
+  if (RCA_BROWSER_UNSUPPORTED_MODES[mode]) {
+    return {
+      ok: false,
+      errorKey: 'err.mode',
+      warning: 'chart mode "' + mode + '" can only be extracted by the backend '
+        + 'server, because js/minimax.js has no normalizer for it and a '
+        + 'direct browser request would return a fabricated range chart. '
+        + 'Switch the connection mode to 「经本地后端」 (or 自动) and make sure '
+        + 'the server is running.',
+    };
   }
 
   const target = (proxyUrl && proxyUrl.trim())
@@ -3880,6 +3909,30 @@ async function extractRangeChart(opts) {
       // swallow — fall back to range_chart prompt, same as Python.
     }
     if (mode === 'auto') mode = 'range_chart';
+
+    // AUDIT-2026-10-16 (HIGH): re-check the browser-unsupported guard. The one
+    // above ran before this classification round, when `mode` was still the
+    // literal 'auto' — and 'auto' is not in RCA_BROWSER_UNSUPPORTED_MODES, so
+    // it passed. Whatever the classifier returns is what the request will
+    // actually use, and there is no prompt branch or normalizer below for
+    // `occurrence_matrix` / `scatter_plot` / `paleomap`: the prompt falls
+    // through to RANGE_CHART_SYSTEM_PROMPT and the answer is normalized as a
+    // range chart, i.e. a confidently wrong result rather than an error.
+    //
+    // Reachable without any misconfiguration: 自动 is the DEFAULT connection
+    // path for auto mode, and the user has no way to know the mode was
+    // rewritten underneath them.
+    if (RCA_BROWSER_UNSUPPORTED_MODES[mode]) {
+      return {
+        ok: false,
+        errorKey: 'err.mode',
+        warning: 'this figure was recognised as "' + mode + '", which only the '
+          + 'backend server can extract (js/minimax.js has no prompt or '
+          + 'normalizer for it, so a direct request would return a fabricated '
+          + 'range chart). Switch the connection mode to 「经本地后端」 and make '
+          + 'sure the server is running.',
+      };
+    }
   }
 
   const langHint = (CHART_LANG_HINT && CHART_LANG_HINT[chartLang]) || '';

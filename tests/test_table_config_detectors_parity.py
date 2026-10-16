@@ -104,7 +104,12 @@ def _species(extra=None):
     return base
 
 
-# label -> payload. 28 shapes, chosen to straddle each detector's decision.
+# label -> payload. Chosen to straddle each detector's decision.
+#
+# AUDIT-2026-10-16: the header used to say "28 shapes" and the file really did
+# hold 34. A stale count is worse than none -- it reads as a completeness
+# claim about a list nobody re-counted. The suite's own scope assertion lives
+# in `test_every_python_detector_has_a_js_mirror`; no count belongs here.
 SHAPES = [
     ("empty", {}),
     ("range: one species", {"species_ranges": [_species()]}),
@@ -173,6 +178,41 @@ SHAPES = [
     ("occurrence + species_ranges",
      {"occurrences": [{"taxon": "A", "site": "S1", "code": "A"}],
       "species_ranges": [_species()]}),
+    # --- the `gated` cell strategy's shapes (added 2026-10-16) ---
+    #
+    # The `gated` strategy asks for headers, taxon labels and the legend and
+    # explicitly NOT for grid cells, so `occurrences` comes back EMPTY BY
+    # DESIGN while `taxon_rows` carries the names. Before `taxon_rows` became
+    # a second detector signal, every one of these shapes classified as "not a
+    # matrix" on BOTH engines -- so no shape below could tell the two apart,
+    # and the one-sided fix that exporter.py had just received passed this
+    # suite untouched.
+    #
+    # These are the shapes that make the parity real: with the JS side
+    # reverted, `gated: labels only` is RED here. Measured.
+    ("gated: labels only",
+     {"columns": [{"index": 0, "label": "S1"}],
+      "occurrences": [],
+      "taxon_rows": [{"index": 0, "taxon": "Capnodoce", "authority": "Moser"}],
+      "legend": [], "cell_status": "not_attempted"}),
+    ("gated: no occurrences key at all",
+     {"columns": [{"index": 0, "label": "S1"}],
+      "taxon_rows": [{"index": 0, "taxon": "Capnodoce", "authority": ""}]}),
+    # `taxon_rows` is SPARSE-tolerant about emptiness the same way
+    # `occurrences` is: an empty list is not a signal, and neither engine may
+    # claim it.
+    ("gated: empty taxon_rows",
+     {"occurrences": [], "taxon_rows": [], "columns": [{"index": 0,
+                                                         "label": "S1"}]}),
+    # Rows that are not dicts must not claim it either -- otherwise the
+    # generic_tables fallback is skipped and the names vanish.
+    ("gated: taxon_rows not dicts",
+     {"occurrences": [], "taxon_rows": ["Capnodoce"]}),
+    # Both signals present: whichever the engines order them by, they must
+    # agree, and both must say YES.
+    ("gated: taxon_rows + occurrences",
+     {"occurrences": [{"taxon": "A", "site": "S1", "code": "A"}],
+      "taxon_rows": [{"index": 0, "taxon": "Capnodoce", "authority": "M"}]}),
 ]
 
 _NAMES = [j for j, _ in PAIRS]

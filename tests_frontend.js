@@ -4368,6 +4368,604 @@ function test_direct_408_budget_exhausted_key() {
 }
 trackAsync('fe-q-direct-408-exhausted', test_direct_408_budget_exhausted_key());
 
+// ---------------------------------------------------------------------------
+// FIX-2026-10-16 guards: dispatch order (G2) and the honest occurrence title
+// ---------------------------------------------------------------------------
+//
+// G2 is written as BEHAVIOUR, not as a source-order grep on js/minimax.js. A
+// text assertion ("the guard appears after the backend branch") would be
+// satisfied by a comment and broken by a reformat; what actually matters is
+// whether a request goes out. So: same opts, one with transport 'backend' and
+// one with 'direct', and the assertions are about the network, not the layout.
+//
+// Reproduced live before the fix: server running, connection mode 自动, the
+// user explicitly picking 出现矩阵 -> ZERO fetches and "please switch to 后端
+// or start the server", advice already followed on all three counts.
+
+const OCC_MODE = 'occurrence_matrix';
+
+function occurrenceBackendOpts(transport) {
+  return {
+    apiKey: 'sk', baseUrl: 'https://example.com', model: 'm', maxTokens: 4000,
+    mode: OCC_MODE, transport: transport,
+    dataUrl: 'data:image/png;base64,QUFB', mediaType: 'image/png',
+    caption: '', chartLang: 'auto', signal: nullSignal(),
+  };
+}
+
+function test_backend_dispatch_survives_the_browser_unsupported_guard() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const seen = { gets: 0, posts: 0 };
+  ctx.fetch = async (url, init) => {
+    const method = (init && init.method) || 'GET';
+    if (method === 'GET') {
+      seen.gets += 1;
+      return { ok: true, status: 200,
+               json: async () => ({ session_token: 's' + seen.gets,
+                                   csrf_token: 'c' + seen.gets }),
+               text: async () => '' };
+    }
+    seen.posts += 1;
+    return { ok: true, status: 200, json: async () => ({ ok: true, data: {} }),
+             text: async () => '' };
+  };
+  resetBackendSession(ctx);
+  return ctx.extractRangeChart(occurrenceBackendOpts('backend')).then((r) => {
+    check('g2-backend-actually-posts', seen.posts >= 1,
+          'posts=' + seen.posts + ' gets=' + seen.gets);
+    check('g2-backend-not-refused',
+          !(r && r.ok === false && r.errorKey === 'err.mode'),
+          JSON.stringify(r));
+  });
+}
+trackAsync('fe-g2-backend-dispatch',
+           test_backend_dispatch_survives_the_browser_unsupported_guard());
+
+// The guard is NOT dead code after the move: the direct path has no normalizer
+// and would fabricate a range chart. Dropping the guard wholesale would "fix"
+// G2 by removing the only thing standing between a direct request and a
+// confidently wrong table.
+function test_direct_path_still_refuses_an_unsupported_mode() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let fetches = 0;
+  ctx.fetch = async () => { fetches += 1; throw new Error('must not be called'); };
+  return ctx.extractRangeChart(occurrenceBackendOpts('direct')).then((r) => {
+    check('g2-direct-still-refuses', r && r.ok === false && r.errorKey === 'err.mode',
+          JSON.stringify(r));
+    check('g2-direct-makes-no-request', fetches === 0, 'fetches=' + fetches);
+    // The message must not tell the user to do the thing they already did.
+    check('g2-direct-message-names-the-real-fix',
+          typeof r.warning === 'string' && r.warning.indexOf('经本地后端') !== -1,
+          r && r.warning);
+  });
+}
+trackAsync('fe-g2-direct-guard',
+           test_direct_path_still_refuses_an_unsupported_mode());
+
+// ---- F2: the sheet title says which half of it was verified ---------------
+
+function occTitleFor(data) {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const cfgs = ctx.rcaTableConfigs(data, false);
+  const hit = cfgs.find((c) => c.id === 'occurrences');
+  return hit ? hit.titleKey : null;
+}
+
+function test_occurrence_title_follows_cell_status() {
+  const base = { columns: [{ index: 0, label: 'S1' }], legend: [],
+                 occurrences: [{ taxon: 'A', site: 'S1', code: 'A', class: 'abundant' }] };
+  check('f2-grid-cells-claims-verified',
+        occTitleFor({ ...base, cell_status: 'grid_cells' }) === 'sec.occurrences',
+        String(occTitleFor({ ...base, cell_status: 'grid_cells' })));
+  check('f2-single-pass-is-caveated',
+        occTitleFor({ ...base, cell_status: 'single_pass_unverified' })
+          === 'sec.occurrencesUnverified');
+  check('f2-missing-status-is-caveated',
+        occTitleFor(base) === 'sec.occurrencesUnverified',
+        String(occTitleFor(base)));
+  check('f2-failed-is-caveated',
+        occTitleFor({ ...base, cell_status: 'failed' })
+          === 'sec.occurrencesUnverified');
+}
+
+// ---- F2: the labels-only sheet, and the gated payload reaching it ----------
+
+function occIdsFor(data) {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  return ctx.rcaTableConfigs(data, false).map((c) => c.id);
+}
+
+function test_gated_payload_reaches_the_matrix_tables() {
+  // The `gated` strategy: headers and taxon labels, `occurrences` empty by
+  // design. Before both fixes this fell past the detector into the range-chart
+  // branch and rendered four phantom tables with the names thrown away.
+  const gated = {
+    columns: [{ index: 0, label: 'S1' }, { index: 1, label: 'S2' }],
+    legend: [{ code: 'A', class: 'abundant' }],
+    occurrences: [],
+    taxon_rows: [{ index: 0, taxon: 'Capnodoce', authority: 'Moser' },
+                 { index: 1, taxon: 'Capmuchosphaera', authority: 'Moser' }],
+    cell_status: 'not_attempted',
+  };
+  const ids = occIdsFor(gated);
+  check('f2-gated-no-phantom-rangecharts',
+        ids.indexOf('species_ranges') === -1 && ids.indexOf('other_fossils') === -1,
+        JSON.stringify(ids));
+  check('f2-gated-keeps-columns-and-legend',
+        ids.indexOf('columns') !== -1 && ids.indexOf('legend') !== -1,
+        JSON.stringify(ids));
+  check('f2-gated-adds-taxon-rows', ids.indexOf('taxon_rows') !== -1,
+        JSON.stringify(ids));
+  // And the names must actually reach the rows, not just the tab.
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const sheet = ctx.rcaTableConfigs(gated, false).find((c) => c.id === 'taxon_rows');
+  const row = sheet ? sheet.row(gated.taxon_rows[0]) : null;
+  check('f2-gated-taxon-row-reads-the-name',
+        Array.isArray(row) && row[1] === 'Capnodoce' && row[2] === 'Moser',
+        JSON.stringify(row));
+}
+
+function test_taxon_rows_sheet_is_conditional() {
+  const base = { columns: [{ index: 0, label: 'S1' }], legend: [],
+                 occurrences: [{ taxon: 'A', site: 'S1', code: 'A' }] };
+  const without = occIdsFor(base);
+  check('f2-absent-key-adds-no-sheet', without.indexOf('taxon_rows') === -1,
+        JSON.stringify(without));
+  check('f2-three-tables-without-the-key', without.length === 3,
+        JSON.stringify(without));
+  check('f2-empty-list-adds-no-sheet',
+        occIdsFor({ ...base, taxon_rows: [] }).indexOf('taxon_rows') === -1);
+  check('f2-non-dict-rows-add-no-sheet',
+        occIdsFor({ ...base, taxon_rows: ['Capnodoce'] }).indexOf('taxon_rows') === -1);
+  check('f2-populated-adds-the-sheet',
+        occIdsFor({ ...base, taxon_rows: [{ index: 0, taxon: 'A' }] })
+          .indexOf('taxon_rows') !== -1);
+}
+
+// Synchronous: these call check() at module scope, so they must be INVOKED
+// here. Defining them without a call site is exactly the mistake this block
+// was written to catch — the first draft of it shipped four test functions and
+// zero invocations, and the suite went 760 -> 765 (the five G2 assertions)
+// looking perfectly green.
+test_occurrence_title_follows_cell_status();
+test_gated_payload_reaches_the_matrix_tables();
+test_taxon_rows_sheet_is_conditional();
+
+// ---------------------------------------------------------------------------
+// AUDIT-2026-10-16: the decode window and the cancel path
+// ---------------------------------------------------------------------------
+//
+// Both were found by loading the real page / driving the real orchestrator,
+// and neither is visible in the diff-parity suite.
+//
+// The decode window exists because handleFile DEFERS `state.file` /
+// `state.dataUrl` until the decode resolves (H8, REVIEW-2026-08-19, and a test
+// pins that ordering). So for the length of that await, both still describe the
+// PREVIOUS image while the file input already shows the new one. Nothing keyed
+// off the window: updateActionButtons looked only at `state.busy`, which
+// handleFile never set, so #extract-btn was live and Ctrl+Enter was live.
+//
+// What makes it worse than "extracted the wrong image" is that the result
+// SURVIVES: the load's token guard covers only the load, so the misattributed
+// rows render normally once B arrives, and every export names B.
+//   before: sent payload => "data:image/png;base64,AAAA"
+//           export source_file would be => "B.png"
+//
+// So these assertions count REQUESTS rather than reading the last payload. The
+// first version of this probe read `sentDataUrl`, which is A's payload from the
+// earlier successful extraction and therefore identical before and after the
+// fix -- it could not tell "refused" from "sent the previous image", which is
+// the only distinction that matters here.
+
+function appCtx() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  // The stub element has no scrollIntoView; add a no-op so renderCurrentResult
+  // can complete.
+  const origGet = ctx.document.getElementById.bind(ctx.document);
+  ctx.document.getElementById = function (id) {
+    const el = origGet(id);
+    if (el && !el.scrollIntoView) el.scrollIntoView = function () {};
+    return el;
+  };
+  const $ = ctx.$;
+  $('api-key').value = 'sk-test';
+  $('endpoint').value = 'http://x/v1';
+  $('conn-mode').value = 'backend';
+  $('chart-mode').value = 'range_chart';
+  return { ctx, $ };
+}
+
+function twoImageLoader(ctx) {
+  ctx.rcaLoadAndMaybeResize = (f) => {
+    if (f.name === 'A.png') {
+      return Promise.resolve({ dataUrl: 'data:image/png;base64,AAAA',
+        mime: 'image/png', width: 10, height: 10, resized: false });
+    }
+    return new Promise((res) => {
+      ctx.__resolveB = () => res({ dataUrl: 'data:image/png;base64,BBBB',
+        mime: 'image/png', width: 20, height: 20, resized: false });
+    });
+  };
+}
+
+function panelsHidden($) {
+  const hidden = (id) => String($(id).className).split(/\s+/).includes('hidden');
+  return { empty: hidden('results-empty'), content: hidden('results-content') };
+}
+
+async function test_no_request_leaves_while_an_image_is_decoding() {
+  const { ctx, $ } = appCtx();
+  twoImageLoader(ctx);
+  const payloads = [];
+  ctx.extractRangeChart = (o) => {
+    payloads.push(o.dataUrl);
+    return Promise.resolve({ ok: true, data: { species_ranges: [] }, raw: '{}' });
+  };
+
+  await ctx.handleFile({ name: 'A.png', size: 100, type: 'image/png' });
+  await ctx.runExtraction();
+  check('dec-A-extracted-once', payloads.length === 1, payloads);
+
+  const loadB = ctx.handleFile({ name: 'B.png', size: 100, type: 'image/png' });
+  check('dec-button-locked', $('extract-btn').disabled === true);
+  check('dec-loading-flag-set', ctx.state.loading === true);
+  check('dec-dataUrl-still-previous', ctx.state.dataUrl.endsWith('AAAA'));
+
+  // The keyboard / programmatic path, which a disabled button cannot stop.
+  await ctx.runExtraction();
+  check('dec-no-request-left', payloads.length === 1, payloads);
+
+  // And the refusal has to be visible. `showAlert` builds with createElement +
+  // textContent (never innerHTML, so a raw payload cannot inject markup), and
+  // this harness's createElement is a flat stub whose textContent does NOT
+  // aggregate children -- so `slot.innerHTML` and `slot.textContent` are
+  // permanently "". Asserting on either is a vacuous pass. The banner's
+  // className carries the kind, and the inner node carries the literal text.
+  const slot = $('alert-slot');
+  const banner = slot && slot.children ? slot.children[0] : null;
+  const inner = banner && banner.children ? banner.children[0] : null;
+  const bannerText = (inner && inner.textContent) || (banner && banner.textContent) || '';
+  check('dec-refusal-is-a-warning-banner',
+    !!banner && String(banner.className || '').indexOf('alert-warning') !== -1,
+    banner && banner.className);
+  check('dec-refusal-has-a-message', bannerText.length > 0, bannerText);
+
+  ctx.__resolveB();
+  await loadB;
+  check('dec-unlocked-after-decode', ctx.state.loading === false && $('extract-btn').disabled === false);
+  await ctx.runExtraction();
+  check('dec-next-run-uses-the-new-image',
+    payloads.length === 2 && payloads[1].endsWith('BBBB'), payloads);
+  check('dec-export-name-matches-the-pixels',
+    ctx.state.file.name === 'B.png' && payloads[payloads.length - 1].endsWith('BBBB'));
+}
+trackAsync('fe-dec-no-request-during-decode', test_no_request_leaves_while_an_image_is_decoding());
+
+async function test_reset_during_decode_does_not_wedge_the_button() {
+  // The trap the fix above could easily introduce: resetUpload bumps
+  // loadToken, so the in-flight load's `finally` guard
+  // (`myToken === state.loadToken`) cannot match and never clears the flag.
+  // Measured before `updateActionButtons()` was added to resetUpload:
+  //   { busy: false, loading: false, dataUrl: null, disabled: true }
+  // -- Extract dead for the rest of the session, a worse bug than the original.
+  const { ctx, $ } = appCtx();
+  twoImageLoader(ctx);
+  ctx.extractRangeChart = () => Promise.resolve({ ok: true, data: { species_ranges: [] }, raw: '{}' });
+
+  await ctx.handleFile({ name: 'A.png', size: 100, type: 'image/png' });
+  const loadB = ctx.handleFile({ name: 'B.png', size: 100, type: 'image/png' });
+  check('wedge-resetUpload-is-reachable', typeof ctx.resetUpload === 'function');
+  ctx.resetUpload();
+  check('wedge-reset-clears-loading', ctx.state.loading === false);
+  check('wedge-reset-reenables-extract', $('extract-btn').disabled === false,
+        { busy: ctx.state.busy, loading: ctx.state.loading,
+          disabled: $('extract-btn').disabled });
+  ctx.__resolveB();
+  await loadB;
+  check('wedge-late-load-does-not-relock', $('extract-btn').disabled === false,
+        { busy: ctx.state.busy, loading: ctx.state.loading });
+}
+trackAsync('fe-dec-reset-does-not-wedge', test_reset_during_decode_does_not_wedge_the_button());
+
+async function test_cancelling_restores_the_results_area() {
+  // setBusy(true) hides BOTH #results-empty and #results-content. The one exit
+  // that put a panel back was the `!res.ok` branch, so the four early returns
+  // around it -- superseded, cancelled (twice) -- all returned to a blank card.
+  // With a prior result that data was still in memory and simply unreachable.
+  const { ctx, $ } = appCtx();
+  ctx.rcaLoadAndMaybeResize = () => Promise.resolve({
+    dataUrl: 'data:image/png;base64,AAAA', mime: 'image/png',
+    width: 10, height: 10, resized: false });
+
+  ctx.extractRangeChart = () => Promise.resolve({
+    ok: true,
+    data: { species_ranges: [{ species: 'A', section: 'S1',
+      range_base: '300 Ma', range_top: '290 Ma' }] },
+    raw: '{}' });
+  await ctx.handleFile({ name: 'A.png', size: 100, type: 'image/png' });
+  await ctx.runExtraction();
+  check('cancel-result-rendered', ctx.state.result !== null);
+
+  let release;
+  ctx.extractRangeChart = () => new Promise((res, rej) => {
+    release = () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+  });
+  const second = ctx.runExtraction();
+  await new Promise((r) => setTimeout(r, 5));
+  check('cancel-busy-during-run', ctx.state.busy === true);
+  const during = panelsHidden($);
+  check('cancel-busy-hides-both', during.empty && during.content, during);
+
+  if (ctx.state.abort) ctx.state.abort.abort();
+  release();
+  await second.catch(() => {});
+  await new Promise((r) => setTimeout(r, 5));
+
+  const after = panelsHidden($);
+  check('cancel-a-panel-comes-back', !(after.empty && after.content),
+        { after, resultStillInMemory: ctx.state.result !== null });
+  check('cancel-busy-cleared', ctx.state.busy === false);
+}
+trackAsync('fe-dec-cancel-restores-panels', test_cancelling_restores_the_results_area());
+
+async function test_cancelling_with_no_prior_result_shows_the_placeholder() {
+  const { ctx, $ } = appCtx();
+  ctx.rcaLoadAndMaybeResize = () => Promise.resolve({
+    dataUrl: 'data:image/png;base64,AAAA', mime: 'image/png',
+    width: 10, height: 10, resized: false });
+  let release;
+  ctx.extractRangeChart = () => new Promise((res, rej) => {
+    release = () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+  });
+  await ctx.handleFile({ name: 'A.png', size: 100, type: 'image/png' });
+  const run = ctx.runExtraction();
+  await new Promise((r) => setTimeout(r, 5));
+  if (ctx.state.abort) ctx.state.abort.abort();
+  release();
+  await run.catch(() => {});
+  await new Promise((r) => setTimeout(r, 5));
+  const after = panelsHidden($);
+  check('cancel-empty-state-returns', !after.empty && after.content, after);
+}
+trackAsync('fe-dec-cancel-empty-state', test_cancelling_with_no_prior_result_shows_the_placeholder());
+
+// ---------------------------------------------------------------------------
+// AUDIT-2026-10-16: the classification rewrite, the retry loop, the prototype
+// chain, and the ghost row
+// ---------------------------------------------------------------------------
+
+// ---- F6: the mode the classifier picks is the mode the guard must see -------
+//
+// The browser-unsupported guard runs before the classification round, when
+// `mode` is still the literal 'auto' — and 'auto' is not in
+// RCA_BROWSER_UNSUPPORTED_MODES, so it passed. Whatever the classifier returns
+// is then used verbatim, and there is no prompt branch or normalizer below for
+// paleomap / scatter_plot / chemical_stratigraphy / occurrence_matrix: the
+// prompt falls through to RANGE_CHART_SYSTEM_PROMPT and the answer is
+// normalized as a range chart. A confidently wrong result, reachable from the
+// DEFAULT path with no misconfiguration.
+function test_classification_result_reaches_the_guard() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const seen = [];
+  ctx.fetch = async (url, init) => {
+    const body = init && init.body ? JSON.parse(init.body) : {};
+    // max_tokens 500 is the classifier; anything else is the real request.
+    const isClassifier = body.max_tokens === 500;
+    seen.push(isClassifier ? 'classify' : 'extract');
+    if (isClassifier) {
+      return {
+        ok: true, status: 200,
+        json: async () => ({ content: [{ type: 'text',
+          text: JSON.stringify({ chart_type: 'paleomap', confidence: 0.93 }) }] }),
+        text: async () => '',
+      };
+    }
+    return { ok: true, status: 200,
+             json: async () => ({ content: [{ type: 'text', text: '{}' }] }),
+             text: async () => '' };
+  };
+  return ctx.extractRangeChart({
+    apiKey: 'sk', baseUrl: 'https://api.example.com', model: 'm', maxTokens: 4000,
+    mode: 'auto', transport: 'direct', dataUrl: 'data:image/png;base64,QUFB',
+    mediaType: 'image/png', caption: '', chartLang: 'en', signal: nullSignal(),
+  }).then((r) => {
+    check('f6-classifier-ran', seen.indexOf('classify') !== -1, seen);
+    check('f6-extraction-refused-after-classify',
+      r && r.ok === false && r.errorKey === 'err.mode', JSON.stringify(r));
+    // The decisive one: no extraction request may leave at all. A refusal
+    // AFTER the request would still have spent the call.
+    check('f6-no-extraction-request-was-sent',
+      seen.indexOf('extract') === -1, seen);
+    check('f6-message-names-the-detected-mode',
+      typeof r.warning === 'string' && r.warning.indexOf('paleomap') !== -1,
+      r && r.warning);
+  });
+}
+trackAsync('fe-f6-classify-then-guard', test_classification_result_reaches_the_guard());
+
+// A supported classification must still work: the re-check must not refuse
+// modes the browser CAN handle, or this fix would break auto mode outright.
+function test_supported_classification_still_extracts() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const seen = [];
+  ctx.fetch = async (url, init) => {
+    const body = init && init.body ? JSON.parse(init.body) : {};
+    const isClassifier = body.max_tokens === 500;
+    seen.push(isClassifier ? 'classify' : 'extract');
+    if (isClassifier) {
+      return {
+        ok: true, status: 200,
+        json: async () => ({ content: [{ type: 'text',
+          text: JSON.stringify({ chart_type: 'columnar_section', confidence: 0.9 }) }] }),
+        text: async () => '',
+      };
+    }
+    return { ok: true, status: 200,
+             json: async () => ({ content: [{ type: 'text',
+               text: JSON.stringify({ sections: [{ id: 'S1', group: 'g' }] }) }] }),
+             text: async () => '' };
+  };
+  return ctx.extractRangeChart({
+    apiKey: 'sk', baseUrl: 'https://api.example.com', model: 'm', maxTokens: 4000,
+    mode: 'auto', transport: 'direct', dataUrl: 'data:image/png;base64,QUFB',
+    mediaType: 'image/png', caption: '', chartLang: 'en', signal: nullSignal(),
+  }).then((r) => {
+    check('f6-supported-mode-still-extracts', seen.indexOf('extract') !== -1, seen);
+    check('f6-supported-mode-not-refused', r && r.ok !== false, JSON.stringify(r));
+  });
+}
+trackAsync('fe-f6-supported-still-works', test_supported_classification_still_extracts());
+
+// ---- F7: a cancellation is not a transient failure --------------------------
+//
+// Measured through the real extractRangeChart before the fix: 4 fetch attempts
+// and 4606 ms before Cancel took effect, against 1 attempt and 303 ms for the
+// control. Pressing Cancel spent the user's quota and delayed the response to
+// their own command.
+function test_an_abort_is_not_retried() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let calls = 0;
+  const aborting = () => {
+    calls += 1;
+    const e = new Error('Aborted');
+    e.name = 'AbortError';
+    return Promise.reject(e);
+  };
+  return Promise.all([
+    ctx.retryWithBackoff(aborting, { maxRetries: 3, initialDelay: 0 })
+      .then(() => 'resolved', (e) => 'threw:' + (e && e.name)),
+    ctx.retryWithBackoff(aborting, { maxRetries: 3, initialDelay: 0 })
+      .then(() => 'resolved', (e) => 'threw:' + (e && e.name)),
+  ]).then((res) => {
+    check('f7-abort-propagates', res.every((r) => r === 'threw:AbortError'), res);
+    check('f7-abort-tried-once', calls === 2, calls);
+  });
+}
+trackAsync('fe-f7-abort-not-retried', test_an_abort_is_not_retried());
+
+// The other signal for "the user cancelled": the fetch rejects with something
+// that is not an AbortError, but `signal.aborted` is true. The retry loop has
+// to honour that too, or a torn-down request still costs a full backoff chain.
+function test_an_aborted_signal_stops_the_retry_loop() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let calls = 0;
+  const signal = { aborted: true, addEventListener() {}, removeEventListener() {} };
+  return ctx.retryWithBackoff(() => {
+    calls += 1;
+    return Promise.reject(new TypeError('Failed to fetch'));
+  }, { maxRetries: 3, initialDelay: 0, signal })
+    .then(() => 'resolved', (e) => 'threw')
+    .then((r) => {
+      check('f7-aborted-signal-throws', r === 'threw', r);
+      check('f7-aborted-signal-tried-once', calls === 1, calls);
+    });
+}
+trackAsync('fe-f7-aborted-signal', test_an_aborted_signal_stops_the_retry_loop());
+
+// A GENUINE transient failure must still retry, or this fix has simply traded
+// one defect for another.
+function test_a_real_transient_failure_still_retries() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let calls = 0;
+  return ctx.retryWithBackoff(() => {
+    calls += 1;
+    return Promise.reject(Object.assign(new Error('boom'), { status: 503 }));
+  }, { maxRetries: 2, initialDelay: 0 })
+    .then(() => 'resolved', () => 'threw')
+    .then((r) => {
+      check('f7-transient-still-throws-eventually', r === 'threw', r);
+      check('f7-transient-still-retries', calls === 3, calls);
+    });
+}
+trackAsync('fe-f7-transient-still-retries', test_a_real_transient_failure_still_retries());
+
+// ---- F8: `in` walks the prototype chain -------------------------------------
+//
+// `idToNode` is a plain `{}` (js/minimax.js:2767), so `rid in idToNode` was
+// true for 'toString', 'constructor', 'valueOf', '__proto__' — keys the MODEL
+// picks. The validation silently passed and the tree was built on a node that
+// does not exist.
+const PROTO_KEYS = ['toString', 'constructor', 'valueOf', 'hasOwnProperty',
+                    'isPrototypeOf', 'propertyIsEnumerable'];
+
+function test_prototype_keys_are_not_node_ids() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const nodes = [
+    { id: 'r1', parent: null, name: 'root' },
+    { id: 'n1', parent: 'r1', name: 'leaf' },
+  ];
+  const ok = () => {
+    try {
+      ctx.rcaNormalizePhylogeneticTreeResult({
+        nodes, root_ids: ['r1'], metadata: {}, confidence: 0.9 });
+      return null;
+    } catch (e) { return e; }
+  };
+  check('f8-valid-tree-still-normalizes', ok() === null,
+        ok() && ok().message);
+  for (const k of PROTO_KEYS) {
+    const err = (() => {
+      try {
+        ctx.rcaNormalizePhylogeneticTreeResult({
+          nodes, root_ids: [k], metadata: {}, confidence: 0.9 });
+        return null;
+      } catch (e) { return e; }
+    })();
+    check('f8-root_id-rejects-' + k, err !== null,
+          'root_ids=[' + k + '] was accepted');
+  }
+  // And the same key as a PARENT, which was the second `in`.
+  for (const k of PROTO_KEYS) {
+    const err = (() => {
+      try {
+        ctx.rcaNormalizePhylogeneticTreeResult({
+          nodes: [{ id: 'r1', parent: null, name: 'root' },
+                  { id: 'n1', parent: k, name: 'leaf' }],
+          root_ids: ['r1'], metadata: {}, confidence: 0.9 });
+        return null;
+      } catch (e) { return e; }
+    })();
+    check('f8-parent-rejects-' + k, err !== null,
+          'parent=' + k + ' was accepted');
+  }
+}
+trackAsync('fe-f8-prototype-keys', test_prototype_keys_are_not_node_ids());
+
+// ---- F9 / P3: a null in a plain-string list is not a row --------------------
+//
+// Python's str(None) is the literal "None" and JavaScript's String(null) is
+// "null", so one null in `other_fossils` produced a ghost taxon reading "None"
+// on the desktop and "null" in the browser -- indistinguishable from a genus
+// a model might legitimately read off the figure.
+function test_a_null_in_a_string_list_is_not_a_row() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const merged = ctx.rcaMergeResults([
+    { species_ranges: [{ species: 'A', section: 'S1', range_base: '300 Ma', range_top: '290 Ma' }],
+      other_fossils: [null, 'Brachiopoda'], biozones: ['Z1'], confidence: 0.8 },
+    { species_ranges: [{ species: 'B', section: 'S1', range_base: '300 Ma', range_top: '295 Ma' }],
+      other_fossils: ['Mollusca', undefined], biozones: [], confidence: 0.7 },
+  ], 2);
+  check('f9-no-ghost-row-in-other_fossils',
+    JSON.stringify(merged.other_fossils) === JSON.stringify(['Brachiopoda', 'Mollusca']),
+    merged.other_fossils);
+  check('f9-no-ghost-in-biozones',
+    JSON.stringify(merged.biozones) === JSON.stringify(['Z1']), merged.biozones);
+}
+trackAsync('fe-f9-null-not-a-row', test_a_null_in_a_string_list_is_not_a_row());
+
 // Drain every registered async test before printing the summary. A fixed
 // timeout is not enough: assertions that resolve later would run after
 // process.exit() and be silently dropped, reporting a green run over checks

@@ -1041,8 +1041,22 @@ def _looks_occurrence_matrix(data: dict[str, Any] | None) -> bool:
     if not isinstance(data, dict):
         return False
     occ = data.get("occurrences")
-    return bool(isinstance(occ, list) and occ
-                and isinstance(occ[0], dict))
+    if isinstance(occ, list) and occ and isinstance(occ[0], dict):
+        return True
+    # 2026-10-16: `taxon_rows` is accepted as a SECOND signal, and without it
+    # the `gated` cell strategy is invisible to the export. That strategy
+    # returns headers, taxon labels and the legend and deliberately no cell
+    # reading, so `occurrences` is empty BY DESIGN - keying on it alone sent
+    # every gated result to `_generic_tables`, which renders `columns` and
+    # `legend` and drops the taxon names. So the half of the figure the model
+    # reads best (measured 20/22 taxa, 7/8 authorities) would be the half the
+    # exported workbook cannot show.
+    #
+    # The key is as unique as `occurrences`: declared only in this mode's
+    # normalizer (`normalize_occurrence_matrix_result`), which is exactly the
+    # property `occurrences` was chosen for when `columns` proved to collide.
+    taxa = data.get("taxon_rows")
+    return bool(isinstance(taxa, list) and taxa and isinstance(taxa[0], dict))
 
 
 def _strat_values(row: dict[str, Any]) -> str:
@@ -1162,9 +1176,22 @@ def _taxon_rows_configs(data: dict[str, Any] | None) -> list[dict[str, Any]]:
 
     Conditional, exactly like ``_strat_rows_configs``, so a payload without
     the key still yields the three tables the rest of the module pins.
+
+    That "exactly like" includes the dict-row test, which the first version of
+    this function did not carry: ``_strat_rows_configs`` requires
+    ``isinstance(rows[0], dict)`` and says why in its docstring, so a non-dict
+    row gets no sheet because there is no label to write. Without the check
+    here, a ``taxon_rows`` of bare strings produced a sheet of three blank
+    columns - a header-only lie of exactly the kind ``_nonempty_or_none``
+    exists to prevent - and js/table.js, which had grown the same omission
+    independently, agreed with it. Two engines being identically wrong is not
+    parity; the detector parity suite cannot see it either, because
+    ``_looks_occurrence_matrix`` already refuses such a payload on its own.
+    Found by executing the browser mirror (tests_frontend.js
+    ``f2-non-dict-rows-add-no-sheet``).
     """
     rows = (data or {}).get("taxon_rows")
-    if not isinstance(rows, list) or not rows:
+    if not (isinstance(rows, list) and rows and isinstance(rows[0], dict)):
         return []
     return [{
         "id": "taxon_rows",

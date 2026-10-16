@@ -427,12 +427,43 @@ const RCA_ZONATION_KEYMAP = {
   extraSections: null,
 };
 
+// Keymap for occurrence-matrix (taxon x locality) results.
+//
+// AUDIT-2026-10-16 (HIGH): this did not exist. rca_core/aggregate.py has had
+// OCCURRENCE_MATRIX_SCHEMA since 2026-10-15 and wired it into SCHEMA_BY_MODE
+// and _auto_detect_schema, and js/aggregate.js mirrored neither. So a
+// browser-side merge of two occurrence matrices picked RCA_DEFAULT_KEYMAP,
+// whose primary is `species_ranges` -- a key this payload does not have. The
+// Python docstring for _looks_occurrence_matrix names the consequence and it
+// is not a degradation: the merge produced NOTHING for the real rows and
+// returned a single deep copy of the first run, so a locality that only the
+// second run reported vanished and two localities of one genus collapsed into
+// one record. A missing auto-detect branch is DATA LOSS here.
+//
+// `code` is deliberately NOT in strModeFields, mirroring the schema comment:
+// runs that disagree about whether a cell is R or C must merge to ONE row
+// that exposes the disagreement, not into two rows that each look certain.
+const RCA_OCCURRENCE_KEYMAP = {
+  primary: 'occurrences',
+  // (taxon, site) is one record's identity; the same genus at two different
+  // boreholes is two observations, not one.
+  idKeys: ['taxon', 'site'],
+  strModeFields: ['authority', 'class', 'row_kind'],
+  sortKeys: [['agreement_count', 'desc'], ['taxon', 'asc'], ['site', 'asc']],
+  listKeys: ['legend', 'columns', 'strat_rows'],
+  confidence: 'confidence',
+  extraSections: null,
+};
+
 const RCA_KEYMAP_BY_MODE = {
   range_chart: RCA_DEFAULT_KEYMAP,
   columnar_section: RCA_COLUMNAR_KEYMAP,
   abundance_diagram: RCA_ABUNDANCE_KEYMAP,
   phylogenetic_tree: RCA_PHYLO_KEYMAP,
   zonation_chart: RCA_ZONATION_KEYMAP,
+  // AUDIT-2026-10-16: added. Without this entry, an explicitly-typed
+  // occurrence-matrix merge fell through to RCA_DEFAULT_KEYMAP.
+  occurrence_matrix: RCA_OCCURRENCE_KEYMAP,
 };
 
 // Deep clone helper (REVIEW-2026-08-17 P1-5): used by the single-run
@@ -481,7 +512,7 @@ function rcaAutoDetectKeymap(results) {
     return RCA_DEFAULT_KEYMAP;
   }
   const n = results.length;
-  let phyCount = 0, colCount = 0, abCount = 0;
+  let phyCount = 0, colCount = 0, abCount = 0, occCount = 0;
   for (const r of results) {
     if (!r || typeof r !== 'object') continue;
     if (Array.isArray(r.abundances) && r.abundances.length > 0) abCount++;
@@ -502,12 +533,35 @@ function rcaAutoDetectKeymap(results) {
         'id' in r.nodes[0] && 'parent' in r.nodes[0]) {
       phyCount++;
     }
+    // AUDIT-2026-10-16: occurrence_matrix, and the LAST place the mode was
+    // missing. Python's _auto_detect_schema has counted it since 2026-10-15;
+    // this loop counted phylo, columnar and abundance only, so a two-run
+    // occurrence matrix found no candidate at all and fell to the bottom
+    // `return RCA_DEFAULT_KEYMAP`. Mirrors _looks_occurrence_matrix in
+    // rca_core/aggregate.py: a populated `occurrences` list of dicts.
+    //
+    // `taxon_rows` is accepted as a second signal for the same reason
+    // exporter.py's twin accepts it: the `gated` cell strategy empties
+    // `occurrences` BY DESIGN, and misrouting that payload to the
+    // range-chart schema is the collapse described above.
+    if ((Array.isArray(r.occurrences) && r.occurrences.length > 0 &&
+         r.occurrences[0] && typeof r.occurrences[0] === 'object') ||
+        (Array.isArray(r.taxon_rows) && r.taxon_rows.length > 0 &&
+         r.taxon_rows[0] && typeof r.taxon_rows[0] === 'object')) {
+      occCount++;
+    }
   }
   // Preference order, filtered to the shapes that were actually seen. This
   // array IS the total order, so `pool` below needs no comparator.
+  //
+  // AUDIT-2026-10-16: occurrence_matrix slots BETWEEN columnar and abundance,
+  // which is where rca_core/aggregate.py::_auto_detect_schema puts it. Order
+  // matters only for ties, and a tie here is a real mixed-figure input, so
+  // the two engines must break it the same way.
   const ranked = [];
   if (phyCount > 0) ranked.push([RCA_PHYLO_KEYMAP, phyCount]);
   if (colCount > 0) ranked.push([RCA_COLUMNAR_KEYMAP, colCount]);
+  if (occCount > 0) ranked.push([RCA_OCCURRENCE_KEYMAP, occCount]);
   if (abCount > 0) ranked.push([RCA_ABUNDANCE_KEYMAP, abCount]);
   if (ranked.length === 0) return RCA_DEFAULT_KEYMAP;
   const majority = ranked.filter((e) => e[1] * 2 > n);
@@ -1021,6 +1075,16 @@ function mergeNamedLists(runs, km) {
       const seen = new Set();
       const merged = [];
       for (const s of allItems) {
+        // AUDIT-2026-10-16: null/undefined guard. `String(null)` is the
+        // literal "null" and `String(undefined)` is "undefined", so a `null`
+        // in a plain-string list_key (`other_fossils`, `biozones`, `root_ids`)
+        // was merged as a row CALLED "null" — a ghost taxon in the export,
+        // indistinguishable from a genus a model might legitimately read off
+        // the figure. Python produced "None" for the same input (str(None)),
+        // so the desktop and the browser did not even agree on the text of
+        // the ghost. Both now emit nothing. Mirrors
+        // rca_core/aggregate.py::_merge_named_lists.
+        if (s === null || s === undefined) continue;
         const t = String(s).trim();
         if (t && !seen.has(t.toLowerCase())) {
           seen.add(t.toLowerCase());

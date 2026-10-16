@@ -395,6 +395,21 @@ async function retryWithBackoff(func, {
                 break;
             }
         } catch (error) {
+            // AUDIT-2026-10-16: a cancellation is not a transient failure.
+            // The catch treated every rejection alike, so pressing Cancel --
+            // which rejects the in-flight fetch with an AbortError -- still
+            // went round the backoff loop. Measured through the real
+            // extractRangeChart: 4 fetch attempts and 4606 ms before the user
+            // saw the cancel take effect, against 1 attempt and 303 ms for the
+            // control. The user asked to stop; the retry is the app spending
+            // their quota and delaying the response to their own command.
+            //
+            // Checked on BOTH signals: the error name for the usual case, and
+            // `signal.aborted` for the fetch that rejects with something else
+            // (a TypeError from a torn-down request, say), where the evidence
+            // that the user cancelled lives on the signal.
+            if (error && error.name === 'AbortError') throw error;
+            if (signal && signal.aborted) throw error;
             lastError = error;
             if (attempt >= maxRetries) {
                 break;

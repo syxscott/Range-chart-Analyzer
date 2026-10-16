@@ -11,6 +11,22 @@
     result: null,      // last normalized result
     rawText: null,     // last raw model response
     busy: false,
+    // AUDIT-2026-10-16 (HIGH): true between starting an image load and its
+    // completion. `handleFile` defers `state.file` / `state.dataUrl` until
+    // the decode resolves (H8, REVIEW-2026-08-19), so during that window both
+    // still describe the PREVIOUS image while the file input already shows
+    // the new one. Nothing keyed off this, #extract-btn stayed enabled
+    // (updateActionButtons only looked at `busy`, and handleFile never set
+    // it), and Ctrl+Enter was live on the same flag. Clicking Extract then
+    // sent the OLD pixels -- and because the load's token guard only covers
+    // the load, the result rendered normally afterwards, so the preview,
+    // the footer and every export named the NEW file while the rows
+    // described the OLD one. Silent misattribution, reproduced:
+    //   sent payload => "data:image/png;base64,AAAA"
+    //   export source_file would be => "B.png"
+    // The app itself warns that large images decode slowly, so the window is
+    // not theoretical.
+    loading: false,
     // FR1/FR2: monotonically increasing token bumped on every "user action"
     // (file change, reset, extract start). Any async result whose token
     // doesn't match `state.expectedToken` is dropped. This makes last-write
@@ -756,6 +772,12 @@
     state.loadToken = state.expectedToken;
     state.extractToken = state.expectedToken;
     const myToken = state.expectedToken;
+    // AUDIT-2026-10-16: mark the decode window. `state.file`/`state.dataUrl`
+    // below still belong to the PREVIOUS image until this load resolves, so
+    // Extract has to be locked for the whole `await`. Cleared in `finally`,
+    // token-guarded, so a superseded load does not unlock a newer one's.
+    state.loading = true;
+    updateActionButtons();
     clearAlert();
     try {
       const edgeEl = $('max-edge');
@@ -808,6 +830,16 @@
           showAlert('danger', t('err.imageRead'), null, { key: 'err.imageRead' });
         }
       }
+    } finally {
+      // AUDIT-2026-10-16: unlock Extract. Token-guarded so a superseded load
+      // cannot clear the flag its replacement set -- the same rule the
+      // `state.abort` clearing at the extraction finally uses, and for the
+      // same reason: without it a fast double-pick leaves Extract disabled
+      // forever, which is a worse bug than the one being fixed.
+      if (myToken === state.loadToken) {
+        state.loading = false;
+        updateActionButtons();
+      }
     }
   }
 
@@ -820,9 +852,14 @@
   // and after a result is stored.
   function updateActionButtons() {
     const busy = state.busy;
+    // AUDIT-2026-10-16: `loading` participates because Extract must not be
+    // clickable while `state.dataUrl` still belongs to the previous image.
+    // Locking the button is the affordance; `runExtraction` re-checks, since
+    // a keyboard shortcut or a programmatic call bypasses a disabled button.
+    const blocked = busy || state.loading;
     const btn = $('extract-btn');
     if (btn) {
-      btn.disabled = busy;
+      btn.disabled = blocked;
       if (busy) {
         // M4: keep the data-i18n hook on the inner span so a language
         // switch mid-extraction still re-translates the spinner label.
@@ -854,9 +891,35 @@
     // An uploaded image (state.dataUrl) is the actionable precondition, not
     // a previous success.
     const rerunBtn = $('force-rerun-btn');
-    if (rerunBtn) rerunBtn.classList.toggle('hidden', busy || !(state.result || state.dataUrl));
+    if (rerunBtn) rerunBtn.classList.toggle('hidden', blocked || !(state.result || state.dataUrl));
+    // AUDIT-2026-10-16 (HIGH): this block hid BOTH panels when busy and never
+    // put either back. Only ONE exit path restored them -- the `!res.ok`
+    // branch further down -- so the four early returns in between (superseded
+    // extraction, user cancelled, and the two error paths) all returned to a
+    // blank results area with the spinner gone and no explanation.
+    //
+    // The asymmetry was itself the evidence: a hide with no matching restore,
+    // in a function whose job is to be called on every busy transition.
+    //
+    // Cancel was the one users hit: press Extract, press Cancel, and the page
+    // goes empty until they reload. The previous result, if there was one,
+    // was still in state and simply unreachable.
+    //
+    // The invariant is now stated once, here, and every exit from runExtraction
+    // gets it for free because setBusy(false) routes through this function:
+    //   busy                    -> both panels hidden (loading chrome shows)
+    //   !busy && state.result   -> the result panel
+    //   !busy && no result      -> the empty-state placeholder
+    // which is exactly how index.html ships them (results-empty visible,
+    // results-content hidden), so the first call on page load is a no-op.
     if (busy) {
       $('results-empty').classList.add('hidden');
+      $('results-content').classList.add('hidden');
+    } else if (state.result) {
+      $('results-content').classList.remove('hidden');
+      $('results-empty').classList.add('hidden');
+    } else {
+      $('results-empty').classList.remove('hidden');
       $('results-content').classList.add('hidden');
     }
   }
@@ -1170,6 +1233,15 @@
 
   async function runExtraction() {
     if (state.busy) return;
+    // AUDIT-2026-10-16: refuse while an image is still decoding. Disabling
+    // #extract-btn is the affordance, not the guard -- Ctrl+Enter is wired to
+    // the same flow from the keyboard, and nothing stops a programmatic call.
+    // Without this, `state.dataUrl` below is the PREVIOUS image's pixels while
+    // the file input, the preview meta and every export name the new one.
+    if (state.loading) {
+      showAlert('warning', t('err.imageLoading'), null, { key: 'err.imageLoading' });
+      return;
+    }
     const apiKey = $('api-key').value.trim();
     if (!apiKey) {
       showAlert('warning', t('err.noKey'), null, { key: 'err.noKey' });
@@ -1391,10 +1463,15 @@
       // stays hidden and the page looks blank apart from the alert. If a
       // prior successful result exists, re-render it so the user keeps their
       // data instead of losing it on a failed re-extraction.
+      //
+      // AUDIT-2026-10-16: `renderCurrentResult()` is still wanted here -- it
+      // repaints the DOM, and this function only flips classes, so a prior
+      // result whose tree was edited needs the rebuild. The `else` branch is
+      // now redundant with updateActionButtons' non-busy arm and was removed:
+      // it is one more copy of the same invariant, and the other four exits
+      // from this function do not have it.
       if (state.result) {
         renderCurrentResult();
-      } else {
-        $('results-empty').classList.remove('hidden');
       }
       return;
     }
@@ -1926,6 +2003,12 @@
     state.expectedToken += 1;
     state.loadToken = state.expectedToken;
     state.extractToken = state.expectedToken;
+    // AUDIT-2026-10-16: clear `loading` HERE as well as in handleFile's
+    // finally. Reset bumps loadToken, so the in-flight load's finally guard
+    // (`myToken === state.loadToken`) will NOT match -- without this line the
+    // flag would survive the reset and leave #extract-btn permanently
+    // disabled, which is a worse bug than the decode-window one this fixes.
+    state.loading = false;
     state.file = null;
     state.dataUrl = null;
     state.mediaType = null;
@@ -1967,6 +2050,15 @@
     if (vizHost) resultsContent.appendChild(vizHost);
     $('results-empty').classList.remove('hidden');
     clearAlert();
+    // AUDIT-2026-10-16: re-evaluate the button row. `state.loading = false`
+    // above is only half the job: #extract-btn's `disabled` is written in
+    // updateActionButtons and nowhere else, so without this call a Reset
+    // during an image decode left Extract disabled for the rest of the
+    // session. Measured before the call was added:
+    //   { busy: false, loading: false, dataUrl: null, disabled: true }
+    // The late-arriving load cannot fix it either -- its finally guard
+    // (`myToken === state.loadToken`) is exactly what Reset invalidated.
+    updateActionButtons();
   }
 
   // ---- language ----
@@ -2455,7 +2547,10 @@ cards.forEach((c, i) => {
       // triggers extraction.
       if (tag === 'INPUT' && t.type !== 'button') return;
       // Guard: skip extraction when already busy to prevent race conditions.
-      if (state.busy) return;
+      // AUDIT-2026-10-16: `loading` too -- the shortcut is the one path that
+      // can reach runExtraction with #extract-btn disabled, so without this
+      // the keyboard could still start an extraction on the previous image.
+      if (state.busy || state.loading) return;
       e.preventDefault();
       runExtraction();
     });
