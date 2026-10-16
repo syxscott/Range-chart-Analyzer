@@ -57,6 +57,88 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the code actually has, which is precisely why a one-sided `_looks_*`
   addition passed unnoticed. The set is now enumerated from the exporter module
   and from what `js/table.js` really defines.
+- **`cell_status` on every occurrence-matrix result.** `single_pass_unverified` /
+  `grid_cells` / `not_attempted` / `failed`. It records **where the cells came
+  from**, not how confident they are, and it is taken from the caller's code path
+  rather than from the model's payload — the model has no way to know whether its
+  own column coordinates were checked against the figure's geometry. `single_pass`
+  can never earn `grid_cells`, and a **missing** status means unverified, because
+  `merge_results` drops scalar root keys and older payloads predate the field.
+  The exporter turns it into the sheet title, so the caveat appears where a reader
+  of the workbook looks first.
+  *Why it exists:* on a real 22 × 18 matrix the labels scored 20/22 taxa, 7/8
+  authorities, 11/11 conodont zones, while the cells scored 0.58 accuracy at 0.36
+  coverage — and the result object looked identical in both cases.
+- **An empty-response gate for `occurrence_matrix`.** A near-empty body is valid
+  JSON, so it passed both the truncation check and the parser and reached the user
+  as "this figure contains no occurrences". Two real runs measured 528 and 40
+  output tokens where the same figure costs 4190–5587. Those are now rejected
+  with the numbers in the message. The floor is **per strategy** and is `None`
+  where it has not been measured: reusing the full-answer floor against a
+  labels-only answer would reject correct output, and guessing one rejects good
+  output silently.
+- **`rca_core/grid.py`.** Deterministic ruling-line detection, so the model is
+  not asked to locate cells by eye. Returns `None` rather than guessing —
+  a borderless matrix is not exotic, and the caller degrades to the single-pass
+  question and says so in `cell_status`. PIL + numpy only; `torch` and `scipy`
+  were just excluded from the PyInstaller build.
+- **`OCCURRENCE_LABELS_SYSTEM_PROMPT`.** A labels-only question (headers, taxon
+  rows, legend) at **4546 characters against the matrix prompt's 7683 (−40.8 %)**.
+  It *removes* the cell contract rather than adding rules to it, which is the
+  opposite direction from the prompt change reverted earlier today. Mirrored to
+  `js/prompt.js` with byte-equality guaranteed by construction.
+- **`cell_strategy` on `extract_occurrence_matrix`.** `single_pass` (default,
+  unchanged) / `gated` / `cells`. `cells` injects the locally measured pixel
+  spans into the matrix prompt; `gated` uses the labels prompt and attempts no
+  cell reading. `taxon_rows` carries the labels-only path's taxon names, which
+  cannot ride in `occurrences` because that list is sparse by contract and drops a
+  row with no code.
+- **157 tests** across `tests/test_grid.py` (35),
+  `tests/test_occurrence_cell_status_2026_10_16.py` (48) and
+  `tests/test_occurrence_strategy_defaults_2026_10_16.py` (4), each proven by
+  mutation: 16/16, 15/15 and 10/10 red.
+
+### Changed
+
+- **The truncation warning names its numbers.** It was copy-pasted identically
+  into eleven extractors and reported no quantities at all, so a reader could not
+  tell 16000 from 32000. That ambiguity had already been misread once — an
+  `output_tokens=16058` run was taken as "the cap was hit, raising it will not
+  help", when 16058 had only reached `DEFAULT_MAX_TOKENS` and `clamp_max_tokens`
+  still allowed 32000. One shared helper now reports the actual usage, this run's
+  limit, and the program ceiling.
+
+### Known limitations
+
+- **Filled cells are still unreliable, and the default strategy has not changed.**
+  Measured once on the real 22 × 18 figure, same entry point and scorer:
+
+  | | single_pass | gated | cells |
+  |---|---|---|---|
+  | output tokens | 5151 | 1103 | 6241 |
+  | column headers | 9/15 | **12/15** | 11/15 |
+  | taxa | 20/22 | 20/22 | 20/22 |
+  | authorities | **7/8** | **7/8** | 6/8 |
+  | conodont zones | **11/11** | **0/11** | 10/11 |
+  | legend | 3 | **0** | 3 |
+  | cell accuracy | 0.579 | — | 0.574 |
+  | cell coverage | 0.355 | — | **0.565** |
+
+  `gated` reads the most headers and costs a fifth of the tokens, but its schema
+  has no `strat_rows` and it returned no zones and no legend — so it is **not** the
+  default; `single_pass` keeps everything the others have. `cells`, with measured
+  pixel spans injected, lifts correct-cell **coverage** 0.355 → 0.565 at flat
+  accuracy, which matches the earlier shift-scan finding that the failure is
+  column *identity* rather than reading ability. Offered as an opt-in: n=1 does not
+  justify flipping a default, and 0.57 accuracy is not verification either way.
+- **Tiled per-row extraction was tried and rejected**, so the "next step" recorded
+  in 0.1.0 is not the way forward. Cutting the figure into 5-row strips with a
+  repeated header reached full row coverage (22/22) but fabricated **four genera
+  that do not appear in the figure** (`Archaeopyramisa engurensis`,
+  `Archaeocathartes rectangularis`, and two more) — trading omission for
+  hallucination, which is the worse failure for a table that gets cited.
+  Upscaling was also measured and made cells *worse* (0.429 → 0.397 → 0.377 at
+  1×/2×/3×) while improving only the labels.
 
 ## [0.1.0] — 2026-10-15
 
