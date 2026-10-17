@@ -75,9 +75,56 @@ class TestSparseByContract:
             "become a row, because absence is recoverable as the row that was "
             "not emitted while a blank row asserts the opposite")
 
+    def test_an_inked_but_unread_cell_is_kept_not_reported_absent(self):
+        """FIX-2026-10-17 (P1-3): sparsity applies to BLANK cells only.
+
+        On the geometric path every emitted row came from a pixel ink test,
+        so an empty code is not "this cell is blank" — it is "a mark is here
+        and the reader did not name it". Dropping it (which the loop did,
+        despite rca_core/matrix.py:771 stating the opposite contract) turned a
+        failed READING into a confident ABSENCE: 3 inked cells with 1
+        unanswered produced 2 occurrences, and the only warning described them
+        as blank padding.
+        """
+        payload = {
+            "columns": [{"index": 0, "label": "A1"}, {"index": 1, "label": "A2"}],
+            "legend": [{"code": "A", "class": "abundant"}],
+            "occurrences": [
+                {"taxon": "G a", "site": "A1", "code": "A"},
+                {"taxon": "G a", "site": "A2", "code": ""},
+                {"taxon": "G b", "site": "A1", "code": "A"},
+            ],
+        }
+        out = extractor.normalize_occurrence_matrix_result(
+            payload, cell_status="grid_cells")
+        assert len(out["occurrences"]) == 3, (
+            "an inked cell whose code was not read is still an occurrence")
+        unread = [r for r in out["occurrences"] if r.get("cell_read") == "unread"]
+        assert len(unread) == 1 and unread[0]["site"] == "A2"
+        assert any("no code was read" in w for w in out.get("_warnings", [])), (
+            "kept, but the reader must be told the code is missing")
+        assert not any("blank cells" in w for w in out.get("_warnings", [])), (
+            "an unread cell is NOT blank padding; conflating them is the bug")
+
+    def test_the_unread_rule_does_not_leak_into_the_single_pass_path(self):
+        """A single-pass answer has no ink test behind it, so an empty code
+        there really is the model's padding and must still be dropped."""
+        payload = {
+            "columns": [{"index": 0, "label": "A1"}],
+            "legend": [{"code": "A", "class": "abundant"}],
+            "occurrences": [
+                {"taxon": "G a", "site": "A1", "code": "A"},
+                {"taxon": "G a", "site": "A1", "code": ""},
+            ],
+        }
+        out = extractor.normalize_occurrence_matrix_result(
+            payload, cell_status="single_pass_unverified")
+        assert len(out["occurrences"]) == 1
+        assert any("blank cells" in w for w in out.get("_warnings", []))
+
     def test_the_drop_is_reported_not_silent(self):
         out = _norm()
-        assert any("blank" in w for w in out.get("warnings", [])), (
+        assert any("blank" in w for w in out.get("_warnings", [])), (
             "the number of rows dropped as padding is the single most useful "
             "quality signal this answer carries; it must be visible")
 
@@ -193,7 +240,35 @@ class TestNormalizerRobustness:
             {"columns": [{"index": 0, "label": ""}, {"index": 1, "label": "L1"}],
              "occurrences": []})
         assert len(out["columns"]) == 1
-        assert any("header" in w for w in out.get("warnings", []))
+        assert any("header" in w for w in out.get("_warnings", []))
+
+    def test_diagnostics_land_on_the_key_the_rest_of_the_app_reads(self):
+        """FIX-2026-10-17 (P3-4): the warnings key is ``_warnings``.
+
+        This normalizer wrote a bare ``warnings`` while the other eight modes,
+        ``rca_core/report.py:248`` (the audit report), ``aggregate.py:1503``
+        (the multi-run merge) and the JS mirror all read ``_warnings``. The
+        consequence was that this mode's only two diagnostics never reached
+        any consumer while the tests here read the local dict and passed — a
+        green suite over a disconnected feature.
+
+        Both spellings are asserted because a bare one must NOT be produced:
+        a second key that nobody reads is the bug, and a test that merely
+        accepted either spelling could not tell the fix from the defect.
+        """
+        out = extractor.normalize_occurrence_matrix_result(
+            {"columns": [{"index": 0, "label": ""}, {"index": 1, "label": "L1"}],
+             "occurrences": []})
+        assert out.get("_warnings"), "diagnostics must be on the read key"
+        assert "warnings" not in out, (
+            "a bare 'warnings' key is exactly what was broken; it must not "
+            "come back")
+        # The merge preserves it, which is what makes it survive to the UI.
+        merged = merge_results([dict(out, runs=1), dict(out, runs=1)],
+                               total_runs=2)
+        assert merged.get("_warnings"), (
+            "aggregate.py:1503 carries _warnings across runs; a diagnostic "
+            "the merge drops is a diagnostic the user never sees")
 
     def test_row_with_no_taxon_is_dropped(self):
         out = extractor.normalize_occurrence_matrix_result(
@@ -531,7 +606,7 @@ class TestRegression_2026_10_15_Review:
         assert len(out["occurrences"]) == 1, (
             "a falsy but present value must survive as a reading")
         assert out["occurrences"][0]["code"] == rendered
-        assert not any("blank" in w for w in out.get("warnings", [])), (
+        assert not any("blank" in w for w in out.get("_warnings", [])), (
             "a zero must not produce a 'dropped blank cells' warning")
 
     def test_d3_a_genus_named_zero_is_not_reported_as_a_missing_label(self):
@@ -543,7 +618,7 @@ class TestRegression_2026_10_15_Review:
                      "occurrences": [{"taxon": 0, "site": "L1", "code": "A"}]})
         assert len(out["occurrences"]) == 1
         assert out["occurrences"][0]["taxon"] == "0"
-        assert not any("no taxon" in w for w in out.get("warnings", []))
+        assert not any("no taxon" in w for w in out.get("_warnings", []))
 
     def test_d3_a_genuinely_absent_code_is_still_a_blank_cell(self):
         """The fix must not turn "missing" into "present": None and "" remain
@@ -568,7 +643,7 @@ class TestRegression_2026_10_15_Review:
         row = out["occurrences"][0]
         assert row["response_kind"] == "uncertain"
         assert "column_index_conflict" in row["reason_codes"]
-        assert any("col_index" in w for w in out.get("warnings", []))
+        assert any("col_index" in w for w in out.get("_warnings", []))
 
     def test_d4_a_consistent_pair_is_left_alone(self):
         out = _norm({"columns": [{"index": 0, "label": "A"},

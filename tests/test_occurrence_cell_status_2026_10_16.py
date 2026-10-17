@@ -300,7 +300,7 @@ class TestTransposition:
     def test_a_mostly_unknown_table_is_called_out(self):
         out = normalize_occurrence_matrix_result(
             _payload_with_unknown_columns(total=10, unknown=7))
-        joined = " ".join(out.get("warnings") or [])
+        joined = " ".join(out.get("_warnings") or [])
         assert "transposed" in joined
 
     def test_exactly_half_does_not_fire(self):
@@ -308,14 +308,14 @@ class TestTransposition:
         coin flip and firing would be a coin flip too."""
         out = normalize_occurrence_matrix_result(
             _payload_with_unknown_columns(total=10, unknown=5))
-        assert "transposed" not in " ".join(out.get("warnings") or [])
+        assert "transposed" not in " ".join(out.get("_warnings") or [])
 
     def test_a_stray_misread_header_does_not_fire(self):
         """One unknown row is one bad header, already reported per-row as
         uncertain. Calling that a transposed matrix cries wolf."""
         out = normalize_occurrence_matrix_result(
             _payload_with_unknown_columns(total=10, unknown=1))
-        assert "transposed" not in " ".join(out.get("warnings") or [])
+        assert "transposed" not in " ".join(out.get("_warnings") or [])
 
     def test_a_few_taxon_matrix_is_not_called_transposed(self):
         """The check that was deliberately rejected.
@@ -346,14 +346,14 @@ class TestTransposition:
         assert len(out["occurrences"]) == 4
         assert len({r["taxon"] for r in out["occurrences"]}) < \
             len(out["columns"]), "the premise of this test must hold"
-        assert "transposed" not in " ".join(out.get("warnings") or [])
+        assert "transposed" not in " ".join(out.get("_warnings") or [])
 
     def test_too_few_rows_to_diagnose(self):
         """Two rows cannot establish a distribution. Below three the check
         stands down rather than reading noise as a pattern."""
         out = normalize_occurrence_matrix_result(
             _payload_with_unknown_columns(total=2, unknown=2))
-        assert "transposed" not in " ".join(out.get("warnings") or [])
+        assert "transposed" not in " ".join(out.get("_warnings") or [])
 
     def test_the_warning_says_the_labels_are_still_usable(self):
         """The whole point is not to throw away the half that measured well.
@@ -361,7 +361,7 @@ class TestTransposition:
         re-run a figure whose taxon and zone labels were 100% correct."""
         out = normalize_occurrence_matrix_result(
             _payload_with_unknown_columns(total=10, unknown=7))
-        joined = " ".join(out.get("warnings") or [])
+        joined = " ".join(out.get("_warnings") or [])
         assert "usable" in joined
 
 
@@ -610,7 +610,7 @@ class TestGatedResult:
                    "confidence": 0.6}
         out = normalize_occurrence_matrix_result(payload)
         assert out["taxon_rows"] == []
-        assert any("no taxon label" in w for w in out.get("warnings") or [])
+        assert any("no taxon label" in w for w in out.get("_warnings") or [])
 
 
 class TestTokenFloorPerStrategy:

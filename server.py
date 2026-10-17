@@ -792,12 +792,30 @@ def populate_expected_hosts(host: str, port: int) -> None:
 
 
 def is_loopback_bind(host: str) -> bool:
-    """True when *host* binds loopback only (the safe default)."""
-    host = (host or "").strip().strip("[]")
-    if host in ("", "localhost"):
+    """True when *host* binds loopback only (the safe default).
+
+    FIX-2026-10-17 (P2-5): an EMPTY host is NOT loopback. It used to return
+    True for ``""``, which is how ``--host ""`` ended up silently exposed:
+    ``ThreadingHTTPServer(("", port))`` resolves to ``0.0.0.0`` (measured —
+    ``socket.getsockname()`` returns ``('0.0.0.0', <port>)``), so the one
+    guard that prints "binding to ... exposes this server to EVERY peer" was
+    skipped for the exact spelling that exposes it most. ``populate_expected_hosts``
+    then took its wildcard branch and added this machine's LAN IPs to the
+    Origin allowlist, so a LAN browser works normally — which makes it an
+    accident rather than a misconfiguration the operator would notice.
+
+    The trigger is ordinary shell quoting: ``--host "$RCA_HOST"`` with the
+    variable unset passes an empty string, not an error.
+    """
+    if host is None:
+        return False
+    stripped = host.strip().strip("[]")
+    if stripped == "":
+        return False
+    if stripped == "localhost":
         return True
     try:
-        return ipaddress.ip_address(host).is_loopback
+        return ipaddress.ip_address(stripped).is_loopback
     except ValueError:
         return False
 
@@ -1104,6 +1122,36 @@ from rca_core.ssrf import make_pinning_opener as _make_pinning_opener
 # urllib.request.urlopen() pins the resolved IP (TOCTOU / DNS-rebinding
 # mitigation) and refuses 3xx redirects.
 import urllib.request  # noqa: E402
+
+
+def _validate_endpoint_safe(endpoint: object) -> tuple[bool, str]:
+    """``_validate_endpoint`` that answers instead of raising.
+
+    FIX-2026-10-17 (P1-1): the validator resolves the host through DNS, and
+    that step can raise for input the handler is expected to REJECT rather
+    than crash on. It used to be called bare at both ``/api/extract`` sites,
+    outside the ``try`` that covers reading the body, so a hostname the IDNA
+    encoder refuses (``label too long`` / ``label empty``) escaped
+    ``do_POST``: socketserver logged a traceback and closed the socket, and
+    the client received ZERO bytes while every neighbouring unusable
+    endpoint answered ``err.badEndpoint``. Measured:
+
+        endpoint = "https://<70 x 'a'>.com/v1"
+        -> client: RemoteDisconnected
+        -> server: UnicodeEncodeError: 'idna' codec can't encode ...
+
+    ``rca_core.ssrf`` now refuses those names itself; this wrapper is the
+    second line, because the contract being protected here is the general
+    one -- a client-supplied endpoint must produce a structured error, not
+    an empty response. It is deliberately total: ``Exception`` rather than a
+    class list, since a crash in the validator must not be able to take the
+    whole HTTP response down with it.
+    """
+    try:
+        return _validate_endpoint(endpoint)  # type: ignore[arg-type]
+    except Exception as exc:  # noqa: BLE001 - the point is to never raise
+        return False, f"invalid endpoint: {type(exc).__name__}: {exc}"
+
 
 try:
     urllib.request.install_opener(_make_pinning_opener())
@@ -1880,8 +1928,31 @@ class Handler(BaseHTTPRequestHandler):
         # Reject any traversal outright before computing the target.
         if ".." in rel.split("/"):
             return None
-        # NOTE: a NUL or an over-long path is also un-representable, but it is
-        # not checked here -- see the realpath call below for why one place
+        # FIX-2026-10-17 (P1-6): an embedded NUL is not a path on ANY
+        # platform, so it is refused here, explicitly.
+        #
+        # This used to be deliberately absent. The comment below claimed the
+        # NUL was covered by the ``except (ValueError, OSError)`` around
+        # ``os.path.realpath``, because that call was MEASURED to raise
+        # ``ValueError: embedded null character in path``. On Python 3.13.5 /
+        # Windows it no longer does — measured, after the fix was written and
+        # then measured to be dead code and withdrawn:
+        #
+        #     os.path.realpath("...\\js\\a\x00b.js")
+        #     -> '...\\js\\a\x00b.js'      # no raise
+        #     os.path.isfile(that)        -> False
+        #
+        # so ``_safe_local_path`` returned a path containing a NUL (breaking
+        # its own docstring) and the client got 404 instead of the 403 every
+        # unusable path is contractually answered with: 7 failing tests in
+        # tests/test_server_path_resolution.py. ``open()`` still raises, which
+        # is what keeps this a hardening rather than a fix for an escape — but
+        # the argument for relying on that was wrong, and the documented
+        # contract was not met.
+        if "\x00" in rel:
+            return None
+        # NOTE: an over-long path is also un-representable but it is not
+        # checked here -- see the realpath call below for why one place
         # handles both.
         # First path segment must be in the allowed-entries whitelist.
         first = rel.split("/", 1)[0]
@@ -1897,33 +1968,37 @@ class Handler(BaseHTTPRequestHandler):
         # AUDIT-2026-10-01 [item 8.1]: the docstring promises "or None if
         # unsafe", but realpath is the one call here that touches the OS, and
         # it answers a path it cannot represent by RAISING rather than by
-        # returning. Two such shapes were found, and both are reachable from a
-        # client, because CPython's request-line cap (65536 bytes) sits well
-        # above where Windows gives up:
+        # returning. One such shape is reachable from a client, because
+        # CPython's request-line cap (65536 bytes) sits well above where
+        # Windows gives up:
         #
-        #   embedded NUL   -> ValueError: embedded null character in path
-        #                      reached with a plain "GET /js/a%00b.js", and
-        #                      only via js/ css/ assets/ -- a bare "/%00" is
-        #                      refused by the whitelist above before realpath
-        #                      ever runs
         #   path >= 32730  -> ValueError: path too long for Windows
         #                      (the \\?\ prefix caps a path at 32767 chars and
         #                      ROOT spends ~40 of them, so ~32791 bytes of
         #                      headroom fit under the cap; measured 404 at
         #                      rel=32716 vs. a dropped connection at rel=32757)
         #
-        # Either one escaped do_GET as an unhandled exception: socketserver
-        # closed the socket, so the client got zero bytes of response while
-        # every neighbouring unusable path gets a well-formed 403/404, and the
+        # It escaped do_GET as an unhandled exception: socketserver closed the
+        # socket, so the client got zero bytes of response while every
+        # neighbouring unusable path gets a well-formed 403/404, and the
         # server logged a traceback.
         #
-        # Fixing the first shape with an explicit `if "\x00" in rel` and
-        # shipping that is how the second one arrived as a fresh bug: the
-        # explicit check was then measured to be dead code (withdrawing it left
-        # the whole suite green) because this except already covers it. So it is
-        # not here. A path we cannot resolve is a path we will not serve.
-        # ValueError and OSError are unrelated classes (both realpath failures
-        # above are ValueError; ENAMETOOLONG and friends are OSError), so both
+        # A second shape used to live here — an embedded NUL, which this
+        # comment claimed realpath raised on. It does NOT on Python 3.13 /
+        # Windows (measured in FIX-2026-10-17 above), so that shape is now
+        # refused by an explicit check above rather than by this handler, and
+        # ``ValueError`` below covers the long-path case alone.
+        #
+        # The lesson from the previous round of this comment, kept because the
+        # code shape depends on it: an explicit guard and a caught exception
+        # are not interchangeable, and "measured to be dead code" is a
+        # statement about ONE interpreter on ONE platform. This except stays
+        # because the long-path measurement reproduces; the NUL guard moved
+        # out because its measurement does not.
+        #
+        # A path we cannot resolve is a path we will not serve.
+        # ValueError and OSError are unrelated classes (the realpath failure
+        # above is a ValueError; ENAMETOOLONG and friends are OSError), so both
         # are caught. normpath/join are pure string work and cannot raise, which
         # is why only this call is wrapped -- and real_root below is
         # deliberately left unwrapped, because if the repo root itself cannot
@@ -2634,7 +2709,7 @@ class Handler(BaseHTTPRequestHandler):
             # Bug-6 fix: validate the endpoint before issuing any
             # outbound HTTP request. A malicious client could otherwise
             # use this server as an SSRF probe for internal services.
-            ok, why = _validate_endpoint(endpoint)
+            ok, why = _validate_endpoint_safe(endpoint)
             if not ok:
                 self._send_json(200, {
                     "ok": False,
@@ -2654,7 +2729,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             # Bug-6 fix: also validate when the client supplied a full
             # provider dict — the legacy path above doesn't catch that.
-            ok, why = _validate_endpoint(provider.endpoint)
+            ok, why = _validate_endpoint_safe(provider.endpoint)
             if not ok:
                 self._send_json(200, {
                     "ok": False,

@@ -130,9 +130,26 @@ def is_private_host(host: str) -> bool:
     # Not a literal — resolve via DNS. If resolution fails we treat the
     # host as private (don't let an attacker bypass the check by passing
     # an unresolvable name).
+    #
+    # FIX-2026-10-17 (P1-1): a MALFORMED hostname is refused here rather
+    # than raised. ``socket.getaddrinfo`` encodes the name as IDNA first,
+    # and that step throws ``UnicodeEncodeError`` — not ``gaierror`` — for
+    # two shapes a user reaches by pasting a bad URL by hand:
+    #     label longer than 63 bytes   ``https://<70 x 'a'>.com/v1``
+    #     an empty label               ``https://a..b/v1``
+    # Neither raises here any more, so the exception walked out of
+    # ``validate_endpoint`` -> ``server.Handler._handle_extract_body`` ->
+    # ``do_POST``: socketserver logged a traceback and closed the socket, so
+    # the client received ZERO bytes while every neighbouring unusable
+    # endpoint answers ``err.badEndpoint``. Measured end to end:
+    #     UnicodeEncodeError: 'idna' codec can't encode characters in
+    #     position 0-69: label too long
+    # A name we cannot even encode is a name we will not resolve, and an
+    # unresolvable name was ALREADY refused on the line below; this only
+    # makes the two paths agree.
     try:
         infos = socket.getaddrinfo(bare, None)
-    except socket.gaierror:
+    except (socket.gaierror, UnicodeError, ValueError):
         return True
     saw_addr = False
     for info in infos:
@@ -294,7 +311,12 @@ def pinned_endpoint_ip(endpoint: str) -> str:
         return str(ip)
     try:
         infos = socket.getaddrinfo(bare, None)
-    except socket.gaierror as exc:
+    except (socket.gaierror, UnicodeError, ValueError) as exc:
+        # FIX-2026-10-17 (P1-1): see ``is_private_host``. A name the IDNA
+        # encoder rejects ("label too long", "label empty") is reported as
+        # an ordinary resolution failure here, which is what the caller can
+        # actually surface. It used to escape as ``UnicodeEncodeError``,
+        # which is not a ``ValueError`` subclass on the paths that catch one.
         raise ValueError(f"DNS resolution failed for {bare!r}: {exc}") from exc
     # REVIEW-2026-09-20 (item 15): this used to ``return`` on the FIRST entry
     # it liked, so with an answer of [public, private] it handed back the

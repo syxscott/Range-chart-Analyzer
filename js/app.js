@@ -48,6 +48,13 @@
     // the backend must not enhance them a second time. Set in handleFile,
     // cleared whenever the image (or its preview) is dropped.
     _frontendEnhanced: false,
+    // AUDIT-2026-10-17 (P1-5): the name of the image `state.result` was
+    // extracted FROM, recorded at the single success site in runExtraction.
+    // The export payloads write `source_file: state.file.name` -- i.e. the
+    // name of whatever image happens to be loaded at export time -- so
+    // without this field nothing could tell the two apart. See
+    // rcaResultMatchesCurrentFile(), the guard every export path calls.
+    _resultFileName: null,
   };
 
   // ---- element helpers ----
@@ -810,6 +817,55 @@
       // language switch can still show them while a large image is still
       // decoding (img.naturalWidth reads 0 until then).
       state._previewDims = { width: loaded.width, height: loaded.height };
+      // AUDIT-2026-10-17 (P1-5): a completed load means the PREVIOUS image's
+      // products no longer describe anything on screen. Before this line they
+      // survived, and the page went quietly out of sync: the left preview and
+      // every filename showed the NEW file while the table, the raw response
+      // and the GBIF hints were still the OLD one's — and "Export all (JSON)"
+      // happily wrote `{source_file: "B.png", result: <A's rows>}`. The user
+      // got a file that claims to be B with A's species in it, which is
+      // exactly the silent misattribution the AUDIT-2026-10-16 `loading` flag
+      // was added to stop; that flag only covers the DECODE window, so the
+      // gap between "decode finished" and "next Extract" was left open.
+      //
+      // Semantics (a product decision, not an inference): a new image
+      // INVALIDATES the previous one's result. There is no "keep both to
+      // compare" path — the panels are single-slot by construction, and a
+      // half-populated pair of panels (B's preview above A's table) is worse
+      // than an honest empty state.
+      //
+      // Placement is load-bearing and mirrors `resetUpload`: this runs AFTER
+      // `if (myToken !== state.loadToken) return;`. A superseded load must not
+      // wipe the newer image's result — the exact trap the token guard above
+      // exists to prevent. `rcaCancelNameVerify()` was already called at the
+      // top of this function, so no late GBIF round can repopulate the list.
+      state.result = null;
+      state.rawText = null;
+      state._nameIssues = [];
+      state._resultFileName = null;
+      // The in-place re-translation snapshots refer to nodes that are about to
+      // go away; invalidating them forces rcaRetranslateResult's rebuild path
+      // instead of letting it diff against a stale node list.
+      state._resultTexts = null;
+      state._resultAttrs = null;
+      // The edit layer and the canvas hold references to the old result layout
+      // and its delegated listeners. Same teardown resetUpload does (and for
+      // the same reason: a late commit into a detached model). Guarded because
+      // js/viz.js and the table.js edit layer are optional modules — both are
+      // absent in reduced hosts, where `typeof rcaViz` on an undeclared name
+      // would throw. Wrapped so a throwing optional module can never block the
+      // load we just completed.
+      try {
+        if (typeof rcaTableEditDetach === 'function') rcaTableEditDetach();
+        if (typeof rcaViz !== 'undefined' && rcaViz) rcaViz.clear();
+      } catch (_detachErr) { /* teardown is best-effort; never abort the load */ }
+      // Repaint the results area to the empty state. updateActionButtons owns
+      // that decision (`busy` / `!busy && state.result` / empty), so one call
+      // after the clears is the whole of it — no second copy of the invariant.
+      // Not skipped while `state.busy`: this function already unlocks Extract
+      // through the same function in its `finally`, and a stale busy flag from
+      // an aborted extraction is a different concern handled there.
+      updateActionButtons();
       // preview
       $('preview-img').src = loaded.dataUrl;
       const meta = [];
@@ -1478,6 +1534,12 @@
 
     state.result = res.data;
     state.rawText = res.raw;
+    // AUDIT-2026-10-17 (P1-5): bind the result to the image it came from.
+    // Every export payload names the CURRENT `state.file`, so this is the
+    // only thing that lets the export paths refuse a stale pairing. Recorded
+    // here — the one place a result is born — and cleared by handleFile and
+    // resetUpload when that image stops being on screen.
+    state._resultFileName = state.file ? state.file.name : null;
     // FE-FIX-2026-09-21 (audit item 8): a brand-new extraction replaces the
     // whole result — every action on the undo stack refers to the OLD model
     // and must not be reachable. The table.js attach will also self-clear on
@@ -1937,6 +1999,39 @@
   }
 
   // ---- result action buttons (event delegation) ----
+
+  // AUDIT-2026-10-17 (P1-5): does `state.result` still describe the image in
+  // `state.file`?
+  //
+  // The export payloads are `{source_file: state.file.name, result: ...}`, so
+  // the filename is read at export time while the rows were produced earlier.
+  // handleFile now drops the stale result, which closes the window for the
+  // normal path — but the two facts are kept in two different fields, and
+  // nothing structurally stops them drifting again (a future path that sets
+  // one without the other, a restore-from-history feature, a second upload
+  // route that skips handleFile). This is the cheap invariant that makes the
+  // failure loud instead of silent.
+  //
+  // Returns true when it is safe to export. `state.result` must be non-null and
+  // its recorded source name must equal the current file's name. A null file
+  // with a non-null result is a mismatch too: there is nothing to attribute
+  // the rows to, and `source_file: null` in a saved JSON is not provenance.
+  function rcaResultMatchesCurrentFile() {
+    if (!state.result) return false;
+    if (!state.file) return false;
+    return state._resultFileName === state.file.name;
+  }
+
+  // The user-facing half of the guard. Reuses the EXISTING `err.exportFailed`
+  // key (already present in all three locales of js/i18n.js) rather than
+  // introducing a new string: an export refusal is an export failure, the key
+  // reads correctly in every language, and adding a locale key would mean
+  // touching js/i18n.js, which is outside this change's file scope.
+  function rcaRefuseStaleExport() {
+    toast(t('err.exportFailed'));
+    return false;
+  }
+
   function bindResultActions() {
     const content = $('results-content');
     content.onclick = async (e) => {
@@ -1944,6 +2039,11 @@
       if (!target) return;
 
       if (target.id === 'btn-export-all') {
+        // AUDIT-2026-10-17 (P1-5): refuse to write a JSON whose
+        // `source_file` names an image its `result` was not extracted from.
+        // This is the one export whose payload carries the filename, so it is
+        // the one that can lie outright.
+        if (!rcaResultMatchesCurrentFile()) return rcaRefuseStaleExport();
         const payload = {
           extracted_at: new Date().toISOString(),
           source_file: state.file ? state.file.name : null,
@@ -1958,6 +2058,10 @@
 
       const copyId = target.getAttribute('data-copy');
       if (copyId) {
+        // Same guard. A copied TSV carries no filename, but it is still the
+        // previous image's rows sitting under the new image's preview — the
+        // paste lands in someone's spreadsheet with no way to tell.
+        if (!rcaResultMatchesCurrentFile()) return rcaRefuseStaleExport();
         const { headers, rows } = rcaBuildTableExport(state.result, copyId);
         const ok = await rcaCopyText(rcaToTsv(headers, rows));
         if (ok) toast(t('results.copied'));
@@ -1966,6 +2070,9 @@
 
       const csvId = target.getAttribute('data-csv');
       if (csvId) {
+        // Same guard: a CSV file on disk carries the wrong provenance the
+        // moment the preview above it shows a different image.
+        if (!rcaResultMatchesCurrentFile()) return rcaRefuseStaleExport();
         const { headers, rows } = rcaBuildTableExport(state.result, csvId);
         // M13: pick the file prefix based on the chart kind, same logic
         // as the all-JSON export above.
@@ -2017,6 +2124,10 @@
     state._frontendEnhanced = false;
     state.result = null;
     state.rawText = null;
+    // AUDIT-2026-10-17 (P1-5): the result is gone, so its provenance record
+    // must go with it — otherwise a stale name outlives the rows and the
+    // export guard would be comparing against a value that describes nothing.
+    state._resultFileName = null;
     // FE-BORROW-2026-09-20 (integration): tear the edit layer down BEFORE
     // the tree goes away - delegated listeners would otherwise let a late
     // commit write into a detached model, and the canvas keeps a reference

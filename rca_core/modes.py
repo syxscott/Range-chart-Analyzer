@@ -71,13 +71,16 @@ __all__ = [
     "ModeSpec",
     "MODES",
     "PROMPT_VERSIONS",
-    "CLASSIFY_PROMPT_VERSION",
+    # Was "CLASSIFY_PROMPT_VERSION", which has never existed in this module.
+    # `from rca_core.modes import *` raised AttributeError on it. The version
+    # this entry is meant to publish is the constant defined at the bottom,
+    # which PROMPT_VERSIONS["chart_classify"] is keyed by.
+    "CLASSIFICATION_PROMPT_VERSION",
     "PROMPT_ALIASES",
     "MODE_NAMES",
     "WIRED_MODE_NAMES",
     "SERVER_MODE_NAMES",
     "BROWSER_UNSUPPORTED_MODES",
-    "CLASSIFICATION_PROMPT_VERSION",
     "modes_for",
 ]
 

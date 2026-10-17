@@ -4736,6 +4736,206 @@ async function test_cancelling_with_no_prior_result_shows_the_placeholder() {
 trackAsync('fe-dec-cancel-empty-state', test_cancelling_with_no_prior_result_shows_the_placeholder());
 
 // ---------------------------------------------------------------------------
+// AUDIT-2026-10-17 (P1-5): a new image invalidates the previous one's result
+// ---------------------------------------------------------------------------
+//
+// The AUDIT-2026-10-16 `state.loading` flag closed the DECODE window —
+// clicking Extract while `state.dataUrl` still belonged to the previous image.
+// But that window ends when the decode resolves, and handleFile did nothing
+// else: `state.result`, `state.rawText` and `state._nameIssues` all survived a
+// completed load. So the reachable sequence was
+//
+//   extract A  ->  drop in B  ->  (do NOT extract)  ->  Export all (JSON)
+//
+// and the payload was `{source_file: "B.png", result: <A's species rows>}`.
+// The left preview showed B, the right-hand table showed A, the GBIF hints
+// still described A's names, and the saved JSON claimed to be B. Measured
+// before the fix, on this harness:
+//
+//   after B load: result= { species_ranges: [{ species: 'FROM_A', ... }] }
+//   downloads after B: 1        <- the mislabelled JSON was written
+//
+// The same misattribution the 10-16 audit called out, one step later in the
+// lifecycle: locking Extract during the decode stopped the wrong pixels going
+// out, but nothing stopped the wrong rows coming BACK.
+
+async function test_new_image_invalidates_the_previous_result() {
+  const { ctx, $ } = appCtx();
+  ctx.rcaLoadAndMaybeResize = (f) => Promise.resolve({
+    dataUrl: 'data:image/png;base64,' + (f.name === 'A.png' ? 'AAAA' : 'BBBB'),
+    mime: 'image/png', width: 10, height: 10, resized: false });
+  ctx.extractRangeChart = () => Promise.resolve({
+    ok: true,
+    data: { species_ranges: [{ species: 'FROM_A', section: 'S1',
+      range_base: '300 Ma', range_top: '290 Ma' }] },
+    raw: '{"species":"FROM_A"}' });
+
+  await ctx.handleFile({ name: 'A.png', size: 100, type: 'image/png' });
+  await ctx.runExtraction();
+  check('p15-A-result-present', ctx.state.result !== null);
+  check('p15-A-provenance-recorded', ctx.state._resultFileName === 'A.png',
+        ctx.state._resultFileName);
+
+  // B arrives. No extraction follows — the user just looks at the new chart.
+  await ctx.handleFile({ name: 'B.png', size: 100, type: 'image/png' });
+
+  check('p15-result-cleared-on-new-image', ctx.state.result === null, ctx.state.result);
+  check('p15-rawText-cleared', ctx.state.rawText === null, ctx.state.rawText);
+  check('p15-nameIssues-cleared',
+        Array.isArray(ctx.state._nameIssues) && ctx.state._nameIssues.length === 0,
+        ctx.state._nameIssues);
+  check('p15-provenance-cleared', ctx.state._resultFileName === null,
+        ctx.state._resultFileName);
+  // The in-place re-translation snapshots point at nodes that no longer exist;
+  // leaving them set would let a language switch diff against a dead tree.
+  check('p15-retranslate-snapshots-invalidated',
+        ctx.state._resultTexts === null && ctx.state._resultAttrs === null,
+        { texts: !!ctx.state._resultTexts, attrs: !!ctx.state._resultAttrs });
+  // And the panel must not keep showing A's table under B's preview.
+  const after = panelsHidden($);
+  check('p15-panel-back-to-empty', !after.empty && after.content, after);
+  check('p15-preview-is-the-new-image',
+        ctx.state.file.name === 'B.png' && ctx.state.dataUrl.endsWith('BBBB'),
+        { file: ctx.state.file.name, dataUrl: ctx.state.dataUrl });
+}
+
+async function test_export_refuses_a_result_from_another_image() {
+  // The export payload writes `source_file: state.file.name` at export time
+  // while the rows were produced earlier, so the two can disagree. The user
+  // click is the observable: nothing may be written.
+  const { ctx } = appCtx();
+  ctx.rcaLoadAndMaybeResize = (f) => Promise.resolve({
+    dataUrl: 'data:image/png;base64,' + (f.name === 'A.png' ? 'AAAA' : 'BBBB'),
+    mime: 'image/png', width: 10, height: 10, resized: false });
+  ctx.extractRangeChart = () => Promise.resolve({
+    ok: true,
+    data: { species_ranges: [{ species: 'FROM_A', section: 'S1',
+      range_base: '300 Ma', range_top: '290 Ma' }] },
+    raw: '{}' });
+
+  const downloads = [];
+  ctx.rcaDownload = (filename, text, mime) => downloads.push({ filename, text, mime });
+
+  await ctx.handleFile({ name: 'A.png', size: 100, type: 'image/png' });
+  await ctx.runExtraction();
+
+  // The panel's delegated handler is what a real click reaches. Capture it
+  // while A is on screen (bindResultActions runs inside renderCurrentResult).
+  const handler = ctx.document.getElementById('results-content').onclick;
+  check('p15-export-handler-bound', typeof handler === 'function');
+
+  const clickBtn = (id, attr, val) => handler({
+    target: { closest: () => ({ id, getAttribute: (a) => (a === attr ? val : null) }) },
+  });
+
+  // Control: same image, export must work. Without this the refusal below
+  // would pass for a broken handler rather than for the guard.
+  await clickBtn('btn-export-all', 'data-x', null);
+  check('p15-matching-image-exports', downloads.length === 1, downloads.length);
+  const okPayload = JSON.parse(downloads[0].text);
+  check('p15-payload-names-its-own-source',
+        okPayload.source_file === 'A.png' &&
+        okPayload.result.species_ranges[0].species === 'FROM_A',
+        JSON.stringify(okPayload.source_file));
+
+  // Now B. handleFile clears the result, so the stale rows are unreachable...
+  await ctx.handleFile({ name: 'B.png', size: 100, type: 'image/png' });
+  downloads.length = 0;
+  await clickBtn('btn-export-all', 'data-x', null);
+  check('p15-no-export-after-image-swap', downloads.length === 0, downloads);
+
+  // ...and the guard holds even if a stale result is somehow still in state
+  // (a future upload route, a history restore). This is the invariant, not an
+  // artefact of where the clears live.
+  ctx.state.result = { species_ranges: [{ species: 'FROM_A', section: 'S1',
+    range_base: '300 Ma', range_top: '290 Ma' }] };
+  ctx.state._resultFileName = 'A.png';   // current file is B.png
+  // Clear the shared toast first: an earlier refusal in this same test already
+  // wrote the same string into it, so comparing before/after would prove
+  // nothing. `toast()` writes textContent then adds .show, so emptying the
+  // text is enough to make the next refusal observable. Neither `t` nor
+  // `RCA_LANG` is exported onto the test context, so compare against the
+  // `err.exportFailed` string of whichever locale the dictionary is keyed by
+  // (js/i18n.js defaults to 'zh').
+  ctx.document.getElementById('toast').textContent = '';
+  await clickBtn('btn-export-all', 'data-x', null);
+  check('p15-stale-pairing-refused', downloads.length === 0, downloads);
+  const toastAfter = String(ctx.document.getElementById('toast').textContent || '');
+  const dict = ctx.RCA_I18N || {};
+  const localizedExportFailure = Object.keys(dict)
+    .map((lg) => dict[lg] && dict[lg]['err.exportFailed'])
+    .filter((s) => typeof s === 'string' && s.length > 0);
+  check('p15-refusal-is-announced',
+        toastAfter.length > 0 &&
+        localizedExportFailure.indexOf(toastAfter) !== -1,
+        { after: toastAfter, expected: localizedExportFailure });
+
+  // CSV takes the same route.
+  await clickBtn('btn-export-none', 'data-csv', 'species_ranges');
+  check('p15-stale-csv-refused', downloads.length === 0, downloads);
+  // ...and a matching pairing still exports through the very same handler,
+  // so the guard is a comparison and not a blanket block.
+  ctx.state._resultFileName = 'B.png';
+  await clickBtn('btn-export-none', 'data-csv', 'species_ranges');
+  check('p15-fresh-csv-still-exports',
+        downloads.length === 1 && /species_ranges\.csv$/.test(downloads[0].filename),
+        downloads.map((d) => d.filename));
+}
+
+async function test_a_superseded_load_cannot_wipe_the_new_result() {
+  // The placement trap. The clears in handleFile sit AFTER
+  // `if (myToken !== state.loadToken) return;` — a load that a newer selection
+  // superseded must not touch the newer image's state. Moving the block above
+  // the guard would make a slow A arriving late erase a fully extracted B, and
+  // the FR1 tests would not catch it: they only assert on `state.dataUrl`.
+  const { ctx } = appCtx();
+  let resolveSlow;
+  ctx.rcaLoadAndMaybeResize = (f) => {
+    if (f.name === 'slow.png') {
+      return new Promise((res) => {
+        resolveSlow = () => res({ dataUrl: 'data:image/png;base64,SLOW',
+          mime: 'image/png', width: 10, height: 10, resized: false });
+      });
+    }
+    return Promise.resolve({ dataUrl: 'data:image/png;base64,' + f.name,
+      mime: 'image/png', width: 10, height: 10, resized: false });
+  };
+  ctx.extractRangeChart = (o) => Promise.resolve({
+    ok: true,
+    data: { species_ranges: [{ species: 'FROM_' + o.dataUrl.split(';')[1],
+      section: 'S1', range_base: '300 Ma', range_top: '290 Ma' }] },
+    raw: '{}' });
+
+  // A slow load starts and stays pending.
+  const slow = ctx.handleFile({ name: 'slow.png', size: 100, type: 'image/png' });
+  await new Promise((r) => setTimeout(r, 5));
+  check('p15-superseded-load-is-pending', typeof resolveSlow === 'function');
+
+  // The user picks the real image and extracts it while slow is still out.
+  await ctx.handleFile({ name: 'keep.png', size: 100, type: 'image/png' });
+  await ctx.runExtraction();
+  check('p15-current-result-before-late-load',
+        ctx.state.result !== null && ctx.state._resultFileName === 'keep.png',
+        { result: !!ctx.state.result, name: ctx.state._resultFileName });
+
+  // Only now does the superseded load resolve. It must change nothing.
+  resolveSlow();
+  await slow;
+  check('p15-late-superseded-load-kept-the-result',
+        ctx.state.result !== null && ctx.state._resultFileName === 'keep.png',
+        { result: ctx.state.result, name: ctx.state._resultFileName });
+  check('p15-late-superseded-load-kept-the-file',
+        ctx.state.file.name === 'keep.png', ctx.state.file.name);
+}
+
+trackAsync('fe-p15-new-image-invalidates-result',
+  test_new_image_invalidates_the_previous_result());
+trackAsync('fe-p15-export-provenance-guard',
+  test_export_refuses_a_result_from_another_image());
+trackAsync('fe-p15-superseded-load-safe',
+  test_a_superseded_load_cannot_wipe_the_new_result());
+
+// ---------------------------------------------------------------------------
 // AUDIT-2026-10-16: the classification rewrite, the retry loop, the prototype
 // chain, and the ghost row
 // ---------------------------------------------------------------------------

@@ -230,16 +230,116 @@ function mergeScalarField(values) {
   // [true, true, "maybe"] merged to "true" while Python's _merge_scalar_field
   // (which keeps bools out of the string pool - see its docstring) returned
   // "maybe". Same runs, different merged value on the two endpoints.
-  const coerced = [];
+  //
+  // AUDIT-2026-10-17 (P3-3): Python's `_merge_scalar_field` was changed to
+  // return the representative's ORIGINAL value (a numeric field stays
+  // numeric) instead of its vote key. The mirror of that change lives in
+  // `rcaAggMode` itself, which has always carried a `representative` map —
+  // so this branch does not need to re-derive it.
+  //
+  // An earlier version of this edit added its own "walk the values and return
+  // the first whose String(v).trim() equals the winning key" loop. That was
+  // both redundant and WRONG, and adversarial testing caught it with three
+  // real divergences that did not exist before this change (both engines
+  // returned the same string for every one of them):
+  //
+  //     input            Python     this JS      correct JS
+  //     [1.0, 1]         1.0        1            1.0   (order-dependent!)
+  //     [1, 1.0]         1          1            1
+  //     [NaN, NaN]       nan        null         NaN
+  //     [Infinity]       inf        null         Infinity
+  //
+  // Two causes, both in that loop: `String(v).trim()` is NOT the vote key —
+  // `rcaStrForMerge` is — so integral floats and non-finite values never
+  // matched; and JSON.stringify turned a non-finite number into `null`, so
+  // the value looked like it had been silently DROPPED. Voting through
+  // rcaAggMode alone avoids both, and keeps the boolean branch above and
+  // this one sharing one code path.
+  //
+  // ADVERSARY-2026-10-17 (P0, caught by a fresh reviewer — the fix below is
+  // the second correction to this same branch): pushing the ORIGINAL value
+  // dropped the TRIM that Python performs when it builds its pool, so `"Ml"`
+  // and `" Ml "` were two tied candidates and the sorted tie-break handed
+  // back the padded one. Measured, before this change:
+  //
+  //     input              Python    js (broken)
+  //     ["Ml", " Ml "]     "Ml"      " Ml "
+  //     [" 7 ", 7]         "7"       " 7 "
+  //     ["-1", " -1 "]     "-1"      " -1 "
+  //
+  // Every one of those agreed BEFORE the type-preserving change, so it was a
+  // regression, and the differential suite reported 0 diverged through all of
+  // it: the fixture carried padded strings but never one merge field holding
+  // a padded AND an unpadded value across runs.
+  // The correction has to reproduce Python's rule EXACTLY, and the rule is
+  // subtler than "trim the value": Python's pool is built from
+  // `_str_for_merge(v).strip()`, so the TRIMMED string is what votes, and a
+  // tie among equal trimmed keys is broken on those keys — which means the
+  // first value SEEN survives. Verified against it shape by shape:
+  //
+  //     ["Ml", " Ml "] -> "Ml"    both keys "Ml"; 2 votes beat 1 for " Ml "
+  //     [" a ", " a"]  -> " a "   both keys "a"; a tie on equal keys, so the
+  //                               first value seen survives — " a "
+  //     [" 7 ", "7"]   -> " 7 "  the same shape
+  //     [" 7 ", 7]     -> "7"     the numeric run wins its own key
+  //     ["  ", " "]    -> no merge (blank == missing on both engines)
+  //
+  // So the pool holds trimmed strings — literally what Python's `.strip()`
+  // produces — and only a NUMBER stays untrimmed, so a numeric field keeps its
+  // type instead of collapsing to text. `typeof v` is the discriminator; a
+  // string "7" is text and stays text.
+  //
+  // ONE more subtlety, found by the differential suite the moment the cases
+  // above were added: pushing the TRIMMED string into the pool is also wrong,
+  // because Python keeps the ORIGINAL as the field's representative. On a tie
+  // between equal trimmed keys the sorted key-break is a no-op and the first
+  // value SEEN wins — so the padded spelling survives:
+  //
+  //     [" a ", " a"]  Python " a "   (pushing trimmed gave "a")
+  //     [" 7 ", "7"]   Python " 7 "
+  //
+  // So the pool carries (trimmed key, original value) pairs, which is exactly
+  // what Python's `_merge_scalar_field` holds in its `votes` list:
+  //
+  //     votes.append((s, v))        # s = _str_for_merge(v).strip()
+  //     ...
+  //     winning = _mode(strs)
+  //     for key, original in votes:
+  //         if key == winning: return original
+  const votes = [];
+  const keys = [];
+  let sawText = false;
+  let sawNumber = false;
   for (const v of values) {
     if (v == null) continue;
     if (typeof v === 'string' || typeof v === 'number') {
-      const s = String(v).trim();
-      if (s) coerced.push(s);
+      // The key is Python's key: `_str_for_merge(v).strip()`. Trimming is what
+      // makes "Ml" and " Ml " one candidate.
+      const key = rcaStrForMerge(v).trim();
+      if (!key) continue;                   // blank == missing, both engines
+      // The type test is on the ORIGINAL, so the string "7" stays text while
+      // the number 7 stays a number.
+      if (typeof v === 'string') sawText = true; else sawNumber = true;
+      keys.push(key);
+      votes.push([key, v]);
     }
   }
-  if (coerced.length === 0) return NO_MERGE;
-  return rcaAggMode(coerced);
+  if (keys.length === 0) return NO_MERGE;
+  const winning = rcaAggMode(keys);
+  // Type disagreement across runs ("8" in one, 8 in another): there is no
+  // single honest type, so the KEY is the answer — this returns BEFORE the
+  // representative lookup, which is what makes [" 7 ", 7] answer "7" rather
+  // than " 7 " on both engines. Order matters: Python checks this first too,
+  // so moving it after the representative lookup silently diverges on every
+  // mixed padded/numeric field.
+  if (sawText && sawNumber) return winning;
+  // Consistent type: hand back the representative of the winning key, which
+  // is where the type is preserved — a numeric field that agreed on a number
+  // stays a number.
+  for (const [key, original] of votes) {
+    if (key === winning) return original;
+  }
+  return winning;
 }
 
 function mergeTypedInteger(values) {

@@ -1736,6 +1736,48 @@ _AGG_SCALAR = [
     [1, "1"], ["1", 1], [1.0, 1], [1.5, 1.5, 2],
     [None, None, "x"], [{"a": 1}, "x"], [[1], "y"],
     ["", "", "z"], [0, 0, "a"], ["10", 2, "10", 2],
+    # AUDIT-2026-10-17 (adversarial pass): the same-key-different-type shapes
+    # are the ones the type-preserving change can silently break, and they were
+    # under-covered. `mergeScalarField` once re-derived the winning value with
+    # `String(v).trim() === key`, which is NOT the vote key (`rcaStrForMerge`
+    # is), so `[NaN, NaN]` gave js `null` against py `nan`, `[Infinity]` gave
+    # js `null` against py `inf`, and `[1, 1.0]` gave js `1` against py `1.0`
+    # — while every pre-existing case still agreed, so the whole differential
+    # suite reported 0 diverged through the regression.
+    #
+    # `[1.0, 1]` was already here and passed only because both engines still
+    # returned the vote key back then; it would have caught this had the JS
+    # side been edited first. The reverse orders are added because the old code
+    # was ORDER-DEPENDENT there.
+    #
+    # NaN/Infinity are deliberately NOT here: the generator refuses to write a
+    # case whose merged value is non-finite, because JSON.parse on the JS side
+    # rejects the bare `NaN`/`Infinity` literal Python's json emits. That is a
+    # property of JSON, not an oversight — those inputs are probed directly in
+    # tests/test_aggregate_scalar_type_2026_10_17.py instead.
+    [1.0, 1], [1, 1.0], [1.0, 1.0], [1.5, 1, 2.5], [2.0, 2, 3.0, 3.0],
+    [1e15, 1e15], [1e16, 1e16], [1e-7, 1e-7], [1e-5, 1e-5],
+    ["", 0], [0, ""], ["1.0", 1.0], ["0", 0.0],
+    # ADVERSARY-2026-10-17 (P0): the TRIM shapes. The type-preserving edit
+    # above also dropped the `.strip()` that `_merge_scalar_field` applies when
+    # it builds its pool, so `"Ml"` and `" Ml "` became two candidates instead
+    # of one, tied, and the sorted tie-break handed back the padded one:
+    #
+    #     input            Python    js (broken)
+    #     ["Ml", " Ml "]   "Ml"      " Ml "
+    #     [" 7 ", 7]       "7"       " 7 "
+    #     ["-1", " -1 "]   "-1"      " -1 "
+    #
+    # This list had padded strings in it, but no case where one merge field
+    # carries BOTH a padded and an unpadded value across runs — the triggering
+    # PATH existed and the triggering CONDITION did not, so the whole
+    # differential suite reported 0 diverged straight through the regression.
+    # These are exactly that condition, in both orders and in the mixed-type
+    # form where the string/number branch decides the answer.
+    ["Ml", " Ml "], [" Ml ", "Ml"], ["-1", " -1 "],
+    [" 7 ", 7], [7, " 7 "], [" 7 ", "7"], [" 2 ", 2],
+    ["a", " a"], [" a ", " a"], [" 7 ", 7, "7"], ["x", " x ", "x"],
+    ["  ", " "], ["\tx", "\tx"], ["0", " 0 "], [0, " 0 "],
 ]
 
 _AGG_TYPED = [

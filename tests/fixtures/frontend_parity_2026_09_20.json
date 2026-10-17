@@ -19722,7 +19722,7 @@
     ]
    },
    "extra": null,
-   "python": "0"
+   "python": 0
   },
   {
    "group": "aggregate",
@@ -19737,7 +19737,7 @@
     ]
    },
    "extra": null,
-   "python": "0"
+   "python": 0
   },
   {
    "group": "aggregate",
@@ -19782,7 +19782,7 @@
     ]
    },
    "extra": null,
-   "python": "1"
+   "python": 1.0
   },
   {
    "group": "aggregate",
@@ -19798,7 +19798,7 @@
     ]
    },
    "extra": null,
-   "python": "1.5"
+   "python": 1.5
   },
   {
    "group": "aggregate",
@@ -19901,7 +19901,432 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_291",
+   "id": "agscal_291",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      1.0,
+      1
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_292",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      1,
+      1.0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_293",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      1.0,
+      1.0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_294",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      1.5,
+      1,
+      2.5
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_295",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      2.0,
+      2,
+      3.0,
+      3.0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 2.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_296",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      1000000000000000.0,
+      1000000000000000.0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1000000000000000.0
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_297",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      1e+16,
+      1e+16
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1e+16
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_298",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      1e-07,
+      1e-07
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1e-07
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_299",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      1e-05,
+      1e-05
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 1e-05
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_300",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "",
+      0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_301",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      0,
+      ""
+     ]
+    ]
+   },
+   "extra": null,
+   "python": 0
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_302",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "1.0",
+      1.0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "1"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_303",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "0",
+      0.0
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "0"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_304",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "Ml",
+      " Ml "
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "Ml"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_305",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      " Ml ",
+      "Ml"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": " Ml "
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_306",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "-1",
+      " -1 "
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "-1"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_307",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      " 7 ",
+      7
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "7"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_308",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      7,
+      " 7 "
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "7"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_309",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      " 7 ",
+      "7"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": " 7 "
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_310",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      " 2 ",
+      2
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "2"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_311",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "a",
+      " a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "a"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_312",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      " a ",
+      " a"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": " a "
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_313",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      " 7 ",
+      7,
+      "7"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "7"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_314",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "x",
+      " x ",
+      "x"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "x"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_315",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "  ",
+      " "
+     ]
+    ]
+   },
+   "extra": null,
+   "python": null
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_316",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "\tx",
+      "\tx"
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "\tx"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_317",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      "0",
+      " 0 "
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "0"
+  },
+  {
+   "group": "aggregate",
+   "id": "agscal_318",
+   "payload": {
+    "op": "merge_scalar",
+    "args": [
+     [
+      0,
+      " 0 "
+     ]
+    ]
+   },
+   "extra": null,
+   "python": "0"
+  },
+  {
+   "group": "aggregate",
+   "id": "agtyped_319",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -19914,7 +20339,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_292",
+   "id": "agtyped_320",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -19929,7 +20354,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_293",
+   "id": "agtyped_321",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -19946,7 +20371,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_294",
+   "id": "agtyped_322",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -19963,7 +20388,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_295",
+   "id": "agtyped_323",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -19979,7 +20404,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_296",
+   "id": "agtyped_324",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -19995,7 +20420,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_297",
+   "id": "agtyped_325",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -20012,7 +20437,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_298",
+   "id": "agtyped_326",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -20028,7 +20453,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_299",
+   "id": "agtyped_327",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -20044,7 +20469,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_300",
+   "id": "agtyped_328",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -20061,7 +20486,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_301",
+   "id": "agtyped_329",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -20079,7 +20504,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_302",
+   "id": "agtyped_330",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -20094,7 +20519,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_303",
+   "id": "agtyped_331",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -20109,7 +20534,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_304",
+   "id": "agtyped_332",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -20125,7 +20550,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_305",
+   "id": "agtyped_333",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -20141,7 +20566,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_306",
+   "id": "agtyped_334",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -20161,7 +20586,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agtyped_307",
+   "id": "agtyped_335",
    "payload": {
     "op": "typed_mode",
     "args": [
@@ -20178,7 +20603,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_308",
+   "id": "agconf_336",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20190,7 +20615,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_309",
+   "id": "agconf_337",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20204,7 +20629,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_310",
+   "id": "agconf_338",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20219,7 +20644,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_311",
+   "id": "agconf_339",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20233,7 +20658,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_312",
+   "id": "agconf_340",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20248,7 +20673,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_313",
+   "id": "agconf_341",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20263,7 +20688,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_314",
+   "id": "agconf_342",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20277,7 +20702,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_315",
+   "id": "agconf_343",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20291,7 +20716,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_316",
+   "id": "agconf_344",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20305,7 +20730,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_317",
+   "id": "agconf_345",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20319,7 +20744,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_318",
+   "id": "agconf_346",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20333,7 +20758,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_319",
+   "id": "agconf_347",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20347,7 +20772,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_320",
+   "id": "agconf_348",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20361,7 +20786,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_321",
+   "id": "agconf_349",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20375,7 +20800,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_322",
+   "id": "agconf_350",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20389,7 +20814,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_323",
+   "id": "agconf_351",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20403,7 +20828,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_324",
+   "id": "agconf_352",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20418,7 +20843,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_325",
+   "id": "agconf_353",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20433,7 +20858,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_326",
+   "id": "agconf_354",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20450,7 +20875,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_327",
+   "id": "agconf_355",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20465,7 +20890,7 @@
   },
   {
    "group": "aggregate",
-   "id": "agconf_328",
+   "id": "agconf_356",
    "payload": {
     "op": "confidence",
     "args": [
@@ -20533,7 +20958,7 @@
    },
    "extra": null,
    "python": {
-    "a": "1"
+    "a": 1
    }
   },
   {
@@ -20554,7 +20979,7 @@
    },
    "extra": null,
    "python": {
-    "a": "1"
+    "a": 1
    }
   },
   {
@@ -20575,8 +21000,8 @@
    },
    "extra": null,
    "python": {
-    "a": "1",
-    "b": "2"
+    "a": 1,
+    "b": 2
    }
   },
   {
@@ -20597,7 +21022,7 @@
    },
    "extra": null,
    "python": {
-    "a": "1"
+    "a": 1
    }
   },
   {
@@ -20618,7 +21043,7 @@
    },
    "extra": null,
    "python": {
-    "a": "1"
+    "a": 1
    }
   },
   {
@@ -20644,7 +21069,7 @@
    "extra": null,
    "python": {
     "a": {
-     "b": "1"
+     "b": 1
     }
    }
   },
@@ -20671,8 +21096,8 @@
    "extra": null,
    "python": {
     "a": {
-     "b": "1",
-     "c": "1"
+     "b": 1,
+     "c": 1
     }
    }
   },
@@ -20783,8 +21208,8 @@
    },
    "extra": null,
    "python": {
-    "a": "2",
-    "z": "1"
+    "a": 2,
+    "z": 1
    }
   },
   {
@@ -20803,7 +21228,7 @@
    },
    "extra": null,
    "python": {
-    "a": "1"
+    "a": 1
    }
   },
   {
@@ -20822,7 +21247,7 @@
    },
    "extra": null,
    "python": {
-    "a": "1"
+    "a": 1
    }
   },
   {
@@ -20841,7 +21266,7 @@
    },
    "extra": null,
    "python": {
-    "a": "1"
+    "a": 1
    }
   },
   {
@@ -20864,7 +21289,7 @@
    },
    "extra": null,
    "python": {
-    "a": "1"
+    "a": 1
    }
   },
   {
@@ -21089,7 +21514,7 @@
    },
    "extra": null,
    "python": {
-    "a": "1"
+    "a": 1
    }
   },
   {
@@ -21108,7 +21533,7 @@
    },
    "extra": null,
    "python": {
-    "a": "1"
+    "a": 1
    }
   },
   {
@@ -21125,7 +21550,7 @@
     ]
    },
    "extra": null,
-   "python": "0"
+   "python": 0
   },
   {
    "group": "aggregate",
@@ -21140,7 +21565,7 @@
     ]
    },
    "extra": null,
-   "python": "0"
+   "python": 0
   },
   {
    "group": "aggregate",
@@ -21234,7 +21659,7 @@
    },
    "extra": null,
    "python": {
-    "a": "1"
+    "a": 1
    }
   },
   {
@@ -21253,7 +21678,7 @@
    },
    "extra": null,
    "python": {
-    "a": "1"
+    "a": 1
    }
   },
   {
@@ -21269,7 +21694,7 @@
     ]
    },
    "extra": null,
-   "python": "0.5"
+   "python": 0.5
   },
   {
    "group": "aggregate",
@@ -21284,7 +21709,7 @@
     ]
    },
    "extra": null,
-   "python": "1"
+   "python": 1
   },
   {
    "group": "aggregate",

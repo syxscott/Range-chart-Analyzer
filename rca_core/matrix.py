@@ -181,6 +181,65 @@ def detect_filled_cells(
     return FilledCells(geometry=geo, cells=tuple(cells))
 
 
+#: Magic numbers for the two formats this module can hand to a model. Only the
+#: leading bytes are needed, so sniffing costs nothing and -- unlike opening the
+#: image -- cannot fail on a truncated or corrupt upload.
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+JPEG_MAGIC = b"\xff\xd8\xff"
+
+#: What `guess_media_type` returns when the bytes are not recognisable. PNG is
+#: the status quo at every call site, so an unknown image keeps behaving as it
+#: does today instead of becoming a new failure.
+MEDIA_TYPE_FALLBACK = "image/png"
+
+
+def guess_media_type(image_b64: str) -> str:
+    """The media type that MATCHES these bytes, for a caller that must declare one.
+
+    WHY THIS EXISTS
+    ===============
+    ``render_label_image`` returns the caller's ORIGINAL bytes on three of its
+    four paths -- over ``LABEL_SCALE_MAX_EDGE``, a failed resize, and the
+    PIL-missing fallback. Only the resize path re-encodes to PNG. So a figure at
+    or above 2400px on its long edge (the DEFAULT_MAX_EDGE is 4000, so ordinary
+    phone and scanner JPEGs qualify) leaves this module still carrying JPEG.
+
+    The call site in ``extractor.py`` declared ``media_type="image/png"``
+    unconditionally, which is a JPEG declared as a PNG. A provider that
+    validates media types strictly (Anthropic) answers 400; a lenient one
+    guesses. Either way the two-stage path aborts and the run silently degrades
+    to single_pass, with nothing in the log but "grid_read failed".
+
+    So: read the magic number instead of assuming. Callers should pass
+    ``guess_media_type(img)``, never a literal.
+
+    Accepts a bare base64 string or a ``data:`` URL, matching ``_gray_array``.
+    Unknown bytes fall back to ``image/png`` rather than raising: this runs on
+    the request path, and a wrong-but-declared type is strictly better than an
+    exception that costs the whole run.
+    """
+    if not image_b64:
+        return MEDIA_TYPE_FALLBACK
+    payload = image_b64.strip()
+    if payload.lower().startswith("data:"):
+        payload = payload.split(",", 1)[-1]
+        # Enough for both signatures, and no more: a 4KB JPEG should not be
+    # decoded in full just to look at its first three bytes. The slice must land on a
+    # multiple of 4 (base64's quantum) or b64decode raises Incorrect padding and
+    # a perfectly good JPEG falls through to the fallback below.
+    head_b64 = payload[:24]
+    pad = (-len(head_b64)) % 4
+    try:
+        head = base64.b64decode(head_b64 + "=" * pad, validate=False)
+    except Exception:
+        return MEDIA_TYPE_FALLBACK
+    if head.startswith(PNG_MAGIC):
+        return "image/png"
+    if head.startswith(JPEG_MAGIC):
+        return "image/jpeg"
+    return MEDIA_TYPE_FALLBACK
+
+
 def _gray_array(image_b64: str):
     """base64 image -> float array of greys, or None when it cannot be read."""
     try:
@@ -424,9 +483,22 @@ def legend_codes(legend: Sequence[Dict[str, Any]]) -> List[str]:
 
     Falls back to a generic instruction when the legend came back without usable
     codes: one run returned three classes with a null ``code`` each.
+
+    Non-dict entries are SKIPPED, not rejected. Both guards around this function
+    already do that -- ``legend_is_plausible`` (below) and
+    ``assemble_occurrence_matrix`` -- so a legend of mixed shapes sailed past the
+    plausibility check and then raised ``AttributeError: 'str' object has no
+    attribute 'get'`` on the next line. The caller is
+    ``extract_matrix_two_stage``, whose exception ``extractor.py`` catches and
+    rewrites to single_pass: a paid label call plus the whole geometry pass
+    discarded, logged only as "grid_read failed". Filtering here keeps the mixed
+    list working -- the dict entries still carry the usable codes -- instead of
+    trading a lost run for a stricter one.
     """
     codes = []
     for item in legend or []:
+        if not isinstance(item, dict):
+            continue
         code = _text(item.get("code"))[:1]
         if code and code not in codes:
             codes.append(code)

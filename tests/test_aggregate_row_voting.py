@@ -120,7 +120,17 @@ class TestChimeraDetection:
         assert row["occurrence_mode"] == "in_situ"
         assert isinstance(row["_extras"], dict)
         assert row["_extras"]["source"] == "caption"
-        assert row["_extras"]["page"] == "2"
+        # RCA-2026-10-17 (P3-3): this was `== "2"`. The test is NAMED
+        # "..._without_stringification" and every other assertion in it checks
+        # a preserved type (two int indices via isinstance, a float
+        # confidence, a bool review flag) — this one line asserted the
+        # opposite of its own name. `_extras` reaches
+        # `_merge_mapping_field` -> `_merge_field_across_runs` ->
+        # `_merge_scalar_field`, which returned the VOTE KEY rather than the
+        # value, so a number observed identically in every run came back as
+        # text. Asserting the type now.
+        assert row["_extras"]["page"] == 2
+        assert isinstance(row["_extras"]["page"], int)
         assert row["_extras"]["review"] is True
 
     def test_single_run_passthrough_no_chimera_check(self):

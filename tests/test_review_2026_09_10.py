@@ -209,8 +209,43 @@ class TestAggregateParity:
         assert _merge_scalar_field([True, True, "maybe"]) == "maybe"
 
     def test_integral_float_stringifies_like_js(self):
+        """RCA-2026-10-17 (P3-3): the OLD assertion here was
+        ``_merge_scalar_field([1.0, 1.0]) == "1"``, and it is no longer the
+        contract.
+
+        What the assertion was actually protecting still holds and is still
+        tested below: 1.0 and 1 must be ONE vote, not two, so that a run
+        writing ``1`` and a run writing ``1.0`` cannot manufacture a phantom
+        disagreement. That part was never in doubt — it is the VOTE KEY that
+        normalises, not the returned value.
+
+        What the assertion got wrong was the RETURN: it pinned a numeric field
+        coming back as text. `_str_for_merge` was being returned instead of the
+        value it was derived from, so any field numeric in every run was
+        silently retyped on the second run (occurrence ``columns[].index``
+        ``0``/``1`` -> ``"0"``/``"1"``). That contradicted the sibling `_mode`,
+        which already returned the representative and kept an int index an int,
+        and it contradicted the boolean pool in this very function, which has
+        always preserved ``False`` rather than stringifying it. The result was
+        a string-typed cell in the exported XLSX from a numeric source.
+
+        js/aggregate.js's mergeScalarField still coerces unconditionally, so
+        after this change the mixed case below is a KNOWN one-sided divergence
+        until the JS mirror is updated in step. The consistent-type case --
+        which is every real numeric column -- is now correct on both sides
+        (JS has no int/float distinction in JSON, so it already returned the
+        number).
+        """
         from rca_core.aggregate import _merge_scalar_field
-        assert _merge_scalar_field([1.0, 1.0]) == "1"
+        # Consistent type: the native type survives.
+        assert _merge_scalar_field([1.0, 1.0]) == 1.0
+        assert isinstance(_merge_scalar_field([1.0, 1.0]), float)
+        assert _merge_scalar_field([1, 1]) == 1
+        assert isinstance(_merge_scalar_field([1, 1]), int)
+        # 1.0 and 1 are ONE candidate, so one vote each still ties (top == 1)
+        # and the deterministic tie-break decides -- it must not be a 2-vote
+        # "consensus" that hides a real cross-type split.
+        assert _merge_scalar_field([1.0, 1]) == 1.0
 
     def test_unhashable_mode_value_does_not_abort_the_merge(self):
         from rca_core.aggregate import RANGE_CHART_SCHEMA, merge_results

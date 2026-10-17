@@ -7,6 +7,114 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Full-code review of 2026-10-17: six P1 defects, all measured and fixed.**
+  Complete report in `docs/CODE-REVIEW-2026-10-17.md`. No P0 (no auth bypass,
+  no arbitrary file read/write, no data destruction); every finding below was
+  reproduced on this machine before being fixed and again after.
+
+  | area | defect | consequence |
+  |---|---|---|
+  | `server.py` / `ssrf.py` | a malformed endpoint hostname (an IDNA label > 63 bytes, or an empty label) raised `UnicodeEncodeError` out of `do_POST` | socketserver closed the socket and the client got **zero bytes** while every neighbouring unusable endpoint answers `err.badEndpoint`. Pasting a URL with one wrong character did it. |
+  | `server.py` | `_safe_local_path` declined to check for an embedded NUL, on the documented claim that `realpath` raises | On Python 3.13/Windows `realpath` returns the string unchanged, so a NUL path was answered **404 instead of the contractual 403** — seven failing tests, and a safety argument that no longer held. |
+  | `extractor.py` | `_extracted_any` counted `warnings` / `_extras` as extracted content, and `_payload_mismatch` opens with that predicate | The "truncated but nothing was rescued" guard **could not fire at all**. A max_tokens truncation that rescued one inner row returned `ok=True` with no warning. |
+  | `extractor.py` | the occurrence-matrix normalizer dropped code-less rows, which is what `matrix.py:771` explicitly promised not to do | An inked cell the reader failed to name became a **confident absence** — the one claim this mode must never get wrong. Now kept with `cell_read="unread"`, counted separately from blank padding. |
+  | `extractor.py` | `generic_table` skipped a column whose header was unreadable, compacting the list that the positional `cells` were sliced against | Headers and values **mislabelled**, and the last column's data dropped: `columns=[A,"",C]`, `cells=["a1","b1","c1"]` → column C showed `b1` and `c1` vanished, silently. |
+  | `js/app.js` | picking a new image never invalidated the previous result | The page showed B's preview above A's table, and "Export all" wrote `{source_file: "B.png", result: <A's rows>}`. The `loading` flag added on 10-16 covers only the *decode* window; the gap between decode-finished and next-extract was left open. |
+
+  Five P2 and three P3 findings are fixed alongside: `modes.__all__` listed a
+  name that has never existed (`from rca_core.modes import *` raised
+  `AttributeError`); `bed_parser.label_ordinal` answered an ordinal for
+  `"zone Z1"` and `"23-25"` while its own docstring promised `None`; the
+  two-stage matrix path declared `media_type="image/png"` for label images
+  that are returned unmodified and are usually JPEG; `legend_codes` raised
+  `AttributeError` on a legend list mixing dicts and strings, discarding a
+  paid-for extraction; `is_loopback_bind("")` returned `True` although
+  `bind("")` is `0.0.0.0`, so `--host "$RCA_HOST"` with the variable unset
+  ran wide open **without printing the exposure warning**; `_extract_qualifiers`
+  crashed on a non-string species; and `sections` could report
+  `agreement="3/2"` with `agreement_count > runs`.
+
+  The occurrence-matrix normalizer also moved its diagnostics onto
+  `_warnings`. It alone wrote a bare `warnings`, which no consumer reads —
+  `report.py`, `aggregate.py` and the JS mirror all read `_warnings` — so its
+  two warnings reached no UI while the tests that assert on them read the
+  local dict and passed. The tests are updated and a new one pins the key.
+
+  Merging across runs now also keeps a numeric field numeric when the runs
+  agree on the type (`aggregate._merge_scalar_field` and its
+  `js/aggregate.js` mirror, changed together): occurrence-schema
+  `columns[].index` merged `0`/`1` into `"0"`/`"1"` before, and
+  `_merge_field_across_runs([3.0, 3.0])` answered `'3'`. The vote still keys
+  on the string form — that is what makes `1` and `1.0` a single candidate —
+  but the value returned is the representative's original. Text is still the
+  answer when the runs genuinely disagree (`"8"` in one, `8` in another),
+  which is the case where there is no single honest type.
+  `tests/fixtures/frontend_parity_2026_09_20.json` was re-baselined by the
+  generator that exists for exactly this (`tests/gen_frontend_parity_fixtures.py`),
+  and `tests_diff_frontend_parity.js` reports **0 diverged** across its 1340
+  cases — the two engines agree on the new values, not only on the old ones.
+
+  Verification: `pytest` 3959 collected, **0 failed** (was 7 failed); `node`
+  13 suites, **0 failed** (`tests_frontend.js` 825 → 846 with the new cases).
+
+- **Adversarial re-review of the fixes above** — the round that checked the
+  fixes rather than the bugs. Full report in
+  `docs/ADVERSARY-2026-10-17.md`. A green suite carries no information about
+  whether a fix is *correct*, so every change was re-probed with inputs that
+  would have passed before it. **Three real problems, all fixed.**
+
+  - The JS mirror of the type-preserving merge re-derived the winning value
+    with `String(v).trim()`, which is **not** the vote key (`rcaStrForMerge`
+    is). Integral floats and non-finite values therefore never matched: `[1.0, 1]`
+    merged to `1.0` on Python and `1` in the browser, `[1, 1.0]` to different
+    values by order, and `[NaN, NaN]` to `nan` versus `null` — where `null` is
+    also how "no consensus" is spelled, so the value looked *dropped*.
+    `rcaAggMode` already carried a representative map; the extra layer was
+    both redundant and wrong, and is gone.
+  - `bed_parser`'s two new guards were written against invented labels and
+    rejected real well-log notation: `87 B1-4C` and `87 JED 8` answered `None`
+    where the pre-fix code read `4` and `8`. Both consumers of `label_ordinal`
+    — the exporter's only export-blocking invariant and the extractor's
+    endpoint-swap heuristic — go quiet for a whole figure class when it
+    returns `None`, and a check that never runs reports nothing while looking
+    clean. The range test now requires the two numbers to be adjacent (or
+    share a prefix, as in `A1-A5`), and the "names something else" test is a
+    **closed** list instead of "anything unrecognised", so a well name or an
+    institute code is read as the identifier it is.
+  - The differential harness cannot carry non-finite values at all — the
+    generator refuses them because `JSON.parse` rejects a bare `NaN` — which
+    is exactly the class the merge change broke, and why all 1340 existing
+    cases agreed throughout. New `tests/test_aggregate_scalar_type_2026_10_17.py`
+    probes both engines on those inputs directly; 13 further cases that JSON
+    *can* carry were added to the fixture (1340 → 1353, **0 diverged**).
+
+  Both new test files were mutation-checked: reinstating each regression turns
+  them red. One of the three (the JS merge) was introduced by the mirror edit
+  in the previous entry — the round that synced the two engines also needed
+  syncing, and "synced" was not the same as "equivalent".
+
+  - **A second pass over the JS merge found a fourth divergence, in the same
+    function, and it is the reason the three above took three attempts.** The
+    type-preserving change also dropped the `.strip()` that
+    `_merge_scalar_field` applies when it builds its vote pool, so `"Ml"` and
+    `" Ml "` became two tied candidates instead of one and the sorted
+    tie-break handed back the padded spelling — `" Ml "`, `" 7 "`, `" -1 "`
+    where Python answered `"Ml"`, `"7"`, `"-1"`. Every one of those agreed
+    before the change, so it was a regression, and the differential suite
+    reported `0 diverged` through all of it: the fixture carried padded
+    strings but never one merge field holding a padded **and** an unpadded
+    value across runs. The triggering path existed; the triggering condition
+    did not. The pool now holds `(trimmed key, original value)` pairs —
+    Python's `votes` list — with the mixed-type early return in the same
+    position Python puts it. Fifteen trim cases were added (1368 total);
+    mutation-checked by reverting the trim, which turns the differential
+    suite red at `agscal_318`.
+
+    Fields routed through `rcaAggNorm` — species, section, range_base,
+    range_top — were never affected, because that path trims too.
+
 ### Added
 
 - **Occurrence matrices are now extracted in two stages: geometry locates the

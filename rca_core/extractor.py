@@ -1231,14 +1231,51 @@ def _extracted_any(out: dict[str, Any]) -> bool:
     Used by the "unusable payload" guard (REVIEW-2026-09-20 #7): a rescued
     fragment that still produced rows is worth keeping, one that produced
     nothing but noise is not.
+
+    FIX-2026-10-17 (P1-2): METADATA IS NOT CONTENT. The loop used to accept
+    any non-empty value, and several normalizers emit bookkeeping of their own
+    (``warnings`` / ``_warnings``, ``confidence``, ``cell_status``). So a
+    payload in which the model produced NOTHING but the normalizer had
+    something to say about it counted as "extracted", which is the exact
+    opposite of what this predicate is for — and ``_payload_mismatch`` opens
+    with ``if _extracted_any(data): return ""``, so the guard it gates could
+    not fire at all. Measured on the real occurrence-matrix normalizer:
+
+        occurrences == []                       # every cell read failed
+        warnings == ['dropped 1 row(s) for blank cells; ...']
+        _payload_mismatch(out, truncated=True) -> ''      # should be an error
+        _payload_mismatch(normalize_result({}), truncated=True)
+            -> 'truncated output rescued no usable records'   # no bookkeeping
+
+    The list is explicit rather than a prefix rule, and it deliberately does
+    NOT contain ``_extras``: a non-empty ``_extras`` is the model handing us
+    SOMETHING (``{"totally_unrelated_key": 1}`` parks there for the other
+    eight modes, and tests/test_frontend_parity_fixtures_2026_09_20.py pins
+    that as a successful extraction), so treating it as bookkeeping inverted a
+    documented contract and broke 12 tests when tried.
     """
-    for value in out.values():
+    for key, value in out.items():
+        if key in _NON_CONTENT_KEYS:
+            continue
         if isinstance(value, (list, dict)):
             if len(value) > 0:
                 return True
         elif value not in (None, "", 0, 0.0, False):
             return True
     return False
+
+
+#: Keys whose presence says nothing about whether any DATA came out.
+#: Read by ``_extracted_any`` only; the normalizers themselves are unchanged.
+#: ``_extras`` is intentionally ABSENT — see ``_extracted_any``'s docstring.
+_NON_CONTENT_KEYS: frozenset[str] = frozenset({
+    # Diagnostic prose the normalizer wrote about its own work.
+    "_warnings", "warnings", "note", "_note",
+    # Scalars every mode fills in regardless of content.
+    "confidence", "confidence_by_section", "confidence_detail",
+    # Markers, not records.
+    "cell_status", "truncated",
+})
 
 
 def _unwrap_array_root_into(parsed: dict[str, Any], out: dict[str, Any],
@@ -1347,8 +1384,17 @@ def _payload_mismatch(data: dict[str, Any], result_truncated: bool) -> str:
         return ""
     if _extracted_any(data):
         return ""
-    warnings = data.get("_warnings")
-    tags = warnings if isinstance(warnings, list) else []
+    # FIX-2026-10-17 (P3-4): read BOTH spellings. Eight normalizers write
+    # ``_warnings``; this one used to write ``warnings`` (fixed above), and a
+    # payload assembled by an older caller or a re-imported JSON can still
+    # carry the bare key. Reading only ``_warnings`` meant the
+    # ``truncated_or_unrecognized_payload`` tag below was invisible whenever
+    # it arrived under the other name, so a rescued inner object was reported
+    # as a normal empty result.
+    raw_tags = data.get("_warnings")
+    if not isinstance(raw_tags, list):
+        raw_tags = data.get("warnings")
+    tags = raw_tags if isinstance(raw_tags, list) else []
     if "truncated_or_unrecognized_payload" in tags:
         return "rescued inner object: unusable"
     if result_truncated or "truncated" in tags or data.get("truncated"):
@@ -5415,14 +5461,28 @@ def extract_occurrence_matrix(
     if cell_strategy == "grid_read":
         t0 = time.perf_counter()
         try:
-            from .matrix import extract_matrix_two_stage
+            from .matrix import extract_matrix_two_stage, guess_media_type
 
             def _grid_read_call(system_prompt, img_b64, user_text, mt):
+                # FIX-2026-10-17 (P2-3): declare the media type the BYTES
+                # actually are. This closure serves two kinds of image — the
+                # magnified contact sheets (always PNG, re-encoded from a
+                # greyscale array) and the label image, which
+                # ``matrix.render_label_image`` returns UNMODIFIED on three of
+                # its four paths (over LABEL_SCALE_MAX_EDGE, a failed resize,
+                # the PIL-missing fallback). With DEFAULT_MAX_EDGE=4000 an
+                # ordinary 4000x3000 JPEG scan hits exactly that branch, and
+                # the hardcoded "image/png" then described JPEG bytes to the
+                # provider: Anthropic answers 400, the two-stage path returns
+                # None, and the run degrades to single_pass with one line of
+                # log saying "grid_read failed" — indistinguishable from a
+                # geometry miss. Magic-number detection costs a few bytes and
+                # cannot be wrong about a file the module itself produced.
                 raw, trunc, _status, err_body, _u = _call_llm(
                     provider=p,
                     system_prompt=system_prompt,
                     image_b64=img_b64,
-                    media_type="image/png",
+                    media_type=guess_media_type(img_b64),
                     user_text=user_text,
                     max_tokens=mt,
                     timeout_sec=timeout_sec,
@@ -5841,7 +5901,26 @@ def normalize_occurrence_matrix_result(
         return ""
 
     dropped_blank = 0
+    unread_cells = 0
     unknown_column_rows = 0
+    # FIX-2026-10-17 (P1-3): on the GEOMETRIC path an empty code does not
+    # mean "blank cell" — it means "the ink test proved a mark is here and
+    # the reader did not say what it was". Those are opposite claims and only
+    # one of them may become a silently absent cell.
+    #
+    # rca_core/matrix.py:771 states the contract the two-stage path was built
+    # around: "A tile the model did not answer is recorded with an empty code
+    # rather than dropped: the CELL EXISTS, and dropping it would turn a read
+    # failure into a silently wrong absence." This loop then dropped exactly
+    # those rows, so the guarantee never reached the result: 3 inked cells with
+    # 1 unanswered produced 2 occurrences, and the only trace was a warning
+    # that described them as blank padding — which is the opposite of what they
+    # were. `cell_status` is the discriminator, and it is exactly the right
+    # one: it is an ARGUMENT this function receives (never read off the model
+    # payload), and it is only `grid_cells` when every emitted cell came from a
+    # pixel ink test.
+    verified_geometry = (
+        out["cell_status"] == "grid_cells")
     for raw_row in parsed.get("occurrences") or []:
         if not isinstance(raw_row, dict):
             continue
@@ -5857,9 +5936,17 @@ def normalize_occurrence_matrix_result(
             code = first_text(raw_row.get("abundance"))
 
         # THE SPARSITY CONTRACT. No code and no class == a blank cell.
+        #
+        # ...except on the geometric path, where it means "inked but unread".
+        # See `verified_geometry` above: there, dropping is what converts a
+        # failed READING into a confident ABSENCE, and the count is reported
+        # separately so the two are never conflated in the output either.
         if not code and not klass:
-            dropped_blank += 1
-            continue
+            if verified_geometry:
+                unread_cells += 1
+            else:
+                dropped_blank += 1
+                continue
 
         taxon = first_text(raw_row.get("taxon"))
         if not taxon:
@@ -5882,6 +5969,12 @@ def normalize_occurrence_matrix_result(
             "code": code,
             "class": klass,
         }
+        if verified_geometry and not code and not klass:
+            # The cell EXISTS (a pixel ink test found a mark in it) and the
+            # reader did not name it. That is a reading failure attached to a
+            # known occurrence, and it has to be distinguishable downstream
+            # from both a blank cell (never emitted) and a real code.
+            row["cell_read"] = "unread"
 
         # --- column identity must be verifiable --------------------------
         col_index = row["col_index"]
@@ -6008,6 +6101,16 @@ def normalize_occurrence_matrix_result(
         warnings.append(
             f"dropped {dropped_blank} row(s) for blank cells; this mode is "
             f"sparse by contract (one row per FILLED cell)")
+    if unread_cells:
+        # FIX-2026-10-17 (P1-3): a DIFFERENT failure from the one above, and
+        # it is reported in different words on purpose. These cells were
+        # proven filled by the ink test; the reader simply did not answer
+        # them. They are kept, flagged `cell_read="unread"`, because the
+        # alternative — omitting them — states "this taxon does not occur
+        # here", which is the one claim this mode must never get wrong.
+        warnings.append(
+            f"{unread_cells} cell(s) carry a mark but no code was read for "
+            f"them; kept as cell_read='unread' rather than reported as absent")
 
     # --- transposition, decided on the DISTRIBUTION not on a single row ----
     #
@@ -6041,7 +6144,18 @@ def normalize_occurrence_matrix_result(
     _carry_extras(parsed, ("columns", "legend", "occurrences", "strat_rows",
                            "taxon_rows", "confidence", "cell_status"), out)
     if warnings:
-        out["warnings"] = warnings
+        # FIX-2026-10-17 (P3-4): this wrote ``warnings``, while the other
+        # eight normalizers write ``_warnings`` and every consumer reads that
+        # one (``_payload_mismatch`` at :1350, ``_ok_result``, report.py,
+        # aggregate.py, the JS mirror). Measured on the real normalizer, the
+        # key simply did not exist downstream — so this mode's only two
+        # diagnostics ("dropped N rows for blank cells", "matrix may be
+        # transposed") reached no UI and were dropped again at merge time,
+        # while the tests that assert on them read the local dict and passed.
+        # Nothing else in the file writes a bare ``warnings`` now; the
+        # compatibility shim below stays so a payload that already carries one
+        # from an older caller still reaches the guard.
+        out["_warnings"] = warnings
     return out
 
 
@@ -6077,6 +6191,7 @@ def normalize_generic_table_result(parsed: dict[str, Any]) -> dict[str, Any]:
     def s(v: Any) -> str:
         return _stringify_scalar(v)
 
+    warnings: list[str] = []      # FIX-2026-10-17 (P1-4)
     out: dict[str, Any] = {
         "columns": [],
         "rows": [],
@@ -6085,16 +6200,35 @@ def normalize_generic_table_result(parsed: dict[str, Any]) -> dict[str, Any]:
         "confidence": 0.0,
     }
 
-    for i, col in enumerate(parsed.get("columns") or []):
-        if not isinstance(col, dict):
-            continue
+    # FIX-2026-10-17 (P1-4): a column whose HEADER could not be read is kept
+    # as a position, not dropped. The loop used to `continue` on it, which
+    # compacted ``out["columns"]`` — and every row's ``cells`` is positional,
+    # so ``width = len(out["columns"])`` then shrank with it. The docstring
+    # below this block spells out the rule the code broke:
+    # "``cells`` is positional and must carry an empty string in that slot
+    # rather than shortening the list". Measured on
+    # ``columns=[A, "", C]`` / ``cells=["a1","b1","c1"]``:
+    #
+    #     before: columns [A, C]           cells ["a1", "b1"]
+    #             -> b1 filed under column C, and c1 gone entirely
+    #     after:  columns [A, "", C]        cells ["a1", "b1", "c1"]
+    #
+    # That is not a missing column, it is a MISLABELLED one plus silent data
+    # loss, and it is invisible downstream because nothing warns about it.
+    # The blank header is announced instead, so the reader knows which column
+    # they are looking at.
+    raw_columns = [c for c in (parsed.get("columns") or [])
+                   if isinstance(c, dict)]
+    for i, col in enumerate(raw_columns):
         label = s(col.get("label") or col.get("name") or "").strip()
-        if not label:
-            continue
         try:
             index = int(col.get("index"))
         except (TypeError, ValueError):
             index = i
+        if not label:
+            warnings.append(
+                f"column {index} has no readable header; kept at its position "
+                f"so the row cells stay aligned with the figure")
         out["columns"].append({"index": index, "label": label})
 
     width = len(out["columns"])
@@ -6137,7 +6271,10 @@ def normalize_generic_table_result(parsed: dict[str, Any]) -> dict[str, Any]:
         out["confidence"] = 0.0
 
     _carry_extras(parsed, ("columns", "rows", "legend", "notes",
-                           "confidence"), out)
+                           "confidence", "_warnings", "warnings"), out)
+    if warnings:
+        # FIX-2026-10-17 (P1-4 + P3-4): ``_warnings`` like every other mode.
+        out["_warnings"] = warnings
     return out
 
 

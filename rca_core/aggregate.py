@@ -115,13 +115,31 @@ _QUALIFIER_PATTERNS = [
 ]
 
 
-def _extract_qualifiers(s: str) -> frozenset:
-    """Return the set of open nomenclature qualifiers present in ``s``."""
+def _extract_qualifiers(s: Any) -> frozenset:
+    """Return the set of open nomenclature qualifiers present in ``s``.
+
+    RCA-2026-10-17 (P3-1): the value is stringified before the patterns run.
+    A model can and does emit a NON-STRING where a name is expected — a bare
+    number, a bool, a nested object — and ``pattern.search(123)`` raises
+    ``TypeError: expected string or bytes-like object``, which aborted the
+    ENTIRE merge (call sites: the primary-list dedup key and the named-list
+    label). js/aggregate.js already guarded this with ``re.exec(String(s))``,
+    so the browser survived what crashed the desktop build: a parity break on
+    malformed input, not a modelling difference.
+
+    Stringifying only affects the SEARCH. A container (dict / list / set /
+    tuple) still contributes nothing usable to the dedup key — its ``str()``
+    contains no ``sp.`` / ``cf.`` / ``aff.`` marker — so the existing "a
+    structurally impossible id does not vote" behaviour is preserved, and the
+    caller's own ``_norm``-based emptiness guard is what actually rejects such
+    rows.
+    """
     if not s:
         return frozenset()
+    text = s if isinstance(s, str) else str(s)
     quals = set()
     for pattern, name in _QUALIFIER_PATTERNS:
-        m = pattern.search(s)
+        m = pattern.search(text)
         if not m:
             continue
         if '\\1' in name:
@@ -308,13 +326,35 @@ _NO_MERGE = object()
 def _merge_scalar_field(values):
     """_mode for plain str / int / float / bool values.
 
-    Non-empty values are coerced to str so Counter works uniformly. None,
-    empty strings, and structurally non-primitive values are skipped.
-    Booleans are kept as-is (not stringified) so that mode of [F,F,F]
-    returns the bool False, not the string 'False'.
+    RCA-2026-10-17 (P3-3): the merged value keeps its NATIVE type whenever the
+    runs agree on a type, and only degrades to str when they genuinely
+    disagree. Vote keys are still `_str_for_merge` strings — that is what makes
+    ``1`` and ``1.0`` one candidate instead of two — but the value RETURNED is
+    the representative object, not its key.
+
+    Before this, the key was returned directly, so a field that was numeric in
+    every run came back as text: occurrence-schema ``columns[].index`` merged
+    ``0``/``1`` into ``"0"``/``"1"``, and `_merge_field_across_runs([3.0, 3.0])``
+    answered ``'3'``. The type survived the merge for BOOLS (see the `bools`
+    pool below) but not for numbers, which is inconsistent and contradicted
+    this function's own sibling ``_mode`` — that one already returned the
+    representative and kept an int index an int. A numeric column that turns
+    into text on the second run is invisible in the merged JSON and surfaces
+    later as a string-typed cell in the XLSX.
+
+    The str fallback is kept deliberately for the MIXED case: with one run
+    emitting ``"8"`` and another ``8`` there is no single honest type, and text
+    is the only representation both sides agree on. js/aggregate.js's
+    mergeScalarField coerces unconditionally and must be changed in step — until
+    it is, that case is a known one-sided divergence.
     """
     strs: list[str] = []
     bools: list[bool] = []
+    # Vote pool for non-bool scalars, carrying each candidate's ORIGINAL value
+    # so the winner can be returned with the type it arrived as.
+    votes: list[tuple[str, Any]] = []
+    saw_text = False
+    saw_number = False
     for v in values:
         if v is None:
             continue
@@ -322,11 +362,25 @@ def _merge_scalar_field(values):
             bools.append(v)
         elif isinstance(v, (str, int, float)):
             s = _str_for_merge(v).strip()
-            if s:
-                strs.append(s)
-    # Prefer the mode of strings; fall back to bool mode if no strings.
+            if not s:
+                continue
+            if isinstance(v, str):
+                saw_text = True
+            else:
+                saw_number = True
+            strs.append(s)
+            votes.append((s, v))
+    # Prefer the mode of the scalar pool; fall back to bool mode if it is empty.
     if strs:
-        return _mode(strs)
+        winning = _mode(strs)
+        if saw_text and saw_number:
+            # Type disagreement across runs: text is the only safe answer.
+            return winning
+        # Consistent type: hand back the original value, not its vote key.
+        for key, original in votes:
+            if key == winning:
+                return original
+        return winning
     if bools:
         # Mode of bools, converted back to the original bool type: the mode of
         # [F,F,F] must be the bool False, not the string 'False'.
@@ -1021,6 +1075,9 @@ def _merge_primary_list(runs, schema, n):
                 continue
             # B-1 fix: include open-nomenclature qualifiers (sp./cf./aff./?)
             # in the dedup key so "Genus sp." and "Genus" stay separate.
+            # RCA-2026-10-17 (P3-1): no str() coercion here on purpose — the
+            # raw value is what the species-restoration block below compares
+            # against, and _extract_qualifiers now tolerates non-str itself.
             species_val = it.get("species", "") or ""
             id_norm = tuple(_norm(it.get(k)) for k in schema.primary_id_keys)
             # Mirror JS: skip a row only when ALL id fields are empty
@@ -1115,7 +1172,13 @@ def _merge_primary_list(runs, schema, n):
                 species_mode_norm = _norm(species_mode)
                 species_counter: dict[str, int] = {}
                 for g in group:
-                    sp_val = (g.get("species") or "").strip()
+                    # RCA-2026-10-17 (P3-1): the same `.strip()` that raised
+                    # AttributeError on a non-string `species`. `str()` here is
+                    # safe for the block's purpose: it only counts which RAW
+                    # spelling normalises to the mode, and `_norm()` already
+                    # stringifies for the comparison one line below, so the
+                    # counting key is the same key on both sides.
+                    sp_val = str(g.get("species") or "").strip()
                     if not sp_val:
                         continue
                     if _norm(sp_val) == species_mode_norm:
@@ -1608,9 +1671,24 @@ def merge_results(
     # For columnar-section: group by (id, group) and mode-merge all fields.
     if sch.primary_list_key == "species_ranges":
         # Range-chart sections: keyed by name, formations list-merged.
+        #
+        # RCA-2026-10-17 (P3-2): per-run dedup, matching what _merge_primary_list
+        # has always done (see the `seen_in_run` comment there). A single run
+        # that emits the same section twice is a model hiccup, and counting it
+        # twice made `agreement_count` EXCEED the number of runs: two runs
+        # reporting S1 where run A listed it twice merged to "3/2", a
+        # self-contradictory string that any consumer filtering on
+        # `agreement_count <= runs` would reject — and species rows, merged by
+        # the same engine in the same call, could never produce one.
+        # ``sec_groups[key]`` stays a LIST OF RUNS' OBSERVATIONS so the
+        # formations union below still sees every row a run printed; the
+        # per-run dedup only decides how many RUNS are counted in the
+        # agreement, which is what "agreement" means.
         sec_groups = {}
         sec_order = []
+        sec_run_count: dict[str, int] = {}
         for r in runs:
+            sec_seen_in_run = set()
             for sec in r.get("sections") or []:
                 if not isinstance(sec, dict):
                     continue
@@ -1618,7 +1696,11 @@ def merge_results(
                 if key not in sec_groups:
                     sec_groups[key] = []
                     sec_order.append(key)
+                    sec_run_count[key] = 0
                 sec_groups[key].append(sec)
+                if key not in sec_seen_in_run:
+                    sec_seen_in_run.add(key)
+                    sec_run_count[key] += 1
         merged_sections = []
         for key in sec_order:
             group = sec_groups[key]
@@ -1641,8 +1723,8 @@ def merge_results(
                     [g.get("formation_thickness_m", "") for g in group]
                 ),
                 "coordinates": _mode([g.get("coordinates", "") for g in group]),
-                "agreement_count": len(group),
-                "agreement": f"{len(group)}/{n}",
+                "agreement_count": sec_run_count[key],
+                "agreement": f"{sec_run_count[key]}/{n}",
             })
         out["sections"] = merged_sections
         if "runs" not in out:

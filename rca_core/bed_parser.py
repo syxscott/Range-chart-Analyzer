@@ -187,6 +187,120 @@ _ANY_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
 _BARE_DECIMAL_RE = re.compile(r"^\d+\.\d+$")
 _LETTER_PREFIX_RE = re.compile(r"^[A-Za-z]{1,4}[-_. ]?\d")
 
+# RCA-2026-10-17 (P2-2): an en-dash/em-dash between two NUMBERS is a range,
+# not a position label. "23-25" used to fall through to the "last number" rule
+# and answered 25 — the top of the interval — so a two-endpoint comparison asked
+# "is 25 above 23?" and answered yes, manufacturing an inversion out of a
+# single cell. Deliberately anchored on an ASCII HYPHEN only: a hyphen is
+# ambiguous in this domain ("B1 4C", "zone-3" are labels; "23-25" is a range),
+# but an en/em dash always separates the ends of an interval. The two-spelling
+# ASCII case is handled separately by _is_range_label, which knows about the
+# "Bed" / "A" markers a chart prints.
+_DASHED_NUMERIC_RANGE_RE = re.compile(r"\d+(?:\.\d+)?\s*[–—]\s*\d+(?:\.\d+)?")
+
+# ...and the ASCII-hyphen range. AUDIT-2026-10-17 (adversarial pass): the
+# first version of this pattern let a hyphen-separated LETTER run sit between
+# the two numbers, which matched "87 B1-4C" — a composite well/interval
+# identifier printed on radiolarian well logs, and one of the two label styles
+# the AUDIT-2026-10-15 work was written for. It answered None for it, where
+# the pre-fix code answered 4, so the fix silently disabled the exporter's
+# `range_base_le_range_top` check for that whole figure class.
+#
+# A genuine ASCII range has its two numbers adjacent, optionally separated by
+# ONE marker word that is the same on both sides or absent ("23-25",
+# "Bed 7-11", "Bed 7-Bed 11"). "87 B1-4C" is not that: the "B1" is an
+# identifier of its own between the numbers, so the hyphen is a SEPARATOR
+# inside one label rather than the middle of an interval. The pattern below
+# therefore forbids extra letters on the left side and allows only a marker
+# word (not an arbitrary letter run) on the right.
+#
+# The second pattern is the lettered-sample form ("A1-A5"), which IS a range
+# and is written the same way a well identifier is. The two are told apart by
+# WHERE the hyphen falls: a range has the SAME prefix on both sides ("A1-A5"),
+# while a composite identifier puts a different one in the middle ("87 B1-4C").
+_ASCII_RANGE_RE = re.compile(
+    r"\b\d+(?:\.\d+)?\s*-\s*"                       # 23-  /  Bed 7-
+    r"(?:bed|beds|sample|specimen)?\s*"             # optional marker
+    r"\d+(?:\.\d+)?\b",                             # 25 / 11
+    re.IGNORECASE,
+)
+
+#: The lettered-sample range ("A1-A5", "B3-B7"): same letter+number on BOTH
+#: sides of the hyphen. The shared prefix is what separates it from a
+#: composite identifier, where the middle piece differs from the outer one.
+_LETTERED_RANGE_RE = re.compile(
+    r"\b([A-Za-z])-?(\d+)\s*-\s*\1-?(\d+)\b",       # A1-A5, A1 - A5
+)
+
+# RCA-2026-10-17 (P2-2): words that legitimately introduce a sample/bed
+# POSITION. Anything else that appears as a word in the label means the number
+# belongs to something that is not the sample's place in the section — "zone
+# Z1" numbers the ZONE, "Fig. 4" numbers a FIGURE. Reading those as ordinals
+# compares two unrelated counters, so `label_ordinal`'s own docstring already
+# promised None for "zone Z1" and the implementation simply never honoured it.
+#
+# Only words of two letters or more are inspected, so single-letter sample
+# prefixes ("A1", "B1 4C") are untouched — they are the whole point of the
+# letter-prefixed style this function exists to read.
+#
+# AUDIT-2026-10-17 (adversarial pass): the first version of this set was
+# exactly the position words and nothing else, so any OTHER word killed the
+# label — including the well and institute identifiers a published log prints
+# in the same cell as the sample number:
+#
+#     "87 JED 8"        -> None   (JED is a well name)   was 8
+#     "CAASP-84-20/15"  -> None   (CAASP is an institute) was 15
+#
+# Both are real radiolarian-figure label styles and both are on the critical
+# path for the exporter's endpoint check, so the test is inverted: a label is
+# only refused when it carries a word from the KNOWN-semantics list below.
+# Anything unrecognised is treated as an identifier — the conservative
+# direction, because a missed check reports nothing while a wrong ordinal
+# invents an inversion.
+_SAMPLE_PREFIX_WORDS = frozenset({
+    "sample", "samples", "bed", "beds", "specimen", "specimens",
+})
+
+#: Words that assert the number belongs to something OTHER than the sample's
+#: position. Kept deliberately short and closed: adding to it makes more real
+#: labels unreadable, and an unlisted word is assumed to be an identifier.
+_NON_POSITION_WORDS = frozenset({
+    "zone", "zones", "zonation", "biozone", "biozones",
+    "fig", "figs", "figure", "table", "plate", "plates",
+    "section", "sections", "sect",
+    "formation", "formations", "fm", "fmts",
+    "stage", "stages",
+})
+
+_WORD_RE = re.compile(r"[A-Za-z]{2,}")
+
+
+def _has_foreign_semantic_word(s: str) -> bool:
+    """True when ``s`` names something other than the sample it numbers.
+
+    Only the CLOSED list of known non-position words counts. An unrecognised
+    word is an identifier — a well name, an institute code, an operator — and
+    treating those as "the number means something else" made real labels
+    unreadable (see ``_NON_POSITION_WORDS``).
+    """
+    return any(
+        w.lower() in _NON_POSITION_WORDS for w in _WORD_RE.findall(s)
+    )
+
+
+def _is_range_label(s: str) -> bool:
+    """True when the label prints an INTERVAL rather than one position.
+
+    "23-25", "23 – 25", "Bed 7-Bed 11" and "A1-A5" all name a span; the far
+    end is not where the sample sits, so reading it as the sample's ordinal
+    turns one cell into a spurious inversion report.
+    """
+    return bool(
+        _DASHED_NUMERIC_RANGE_RE.search(s)
+        or _ASCII_RANGE_RE.search(s)
+        or _LETTERED_RANGE_RE.search(s)
+    )
+
 
 def label_ordinal(value: Any) -> Optional[int]:
     """The position number a sample/bed label carries, or None.
@@ -202,12 +316,25 @@ def label_ordinal(value: Any) -> Optional[int]:
         "607 m"          -> None     a DEPTH, not an ordinal
         "1.7 Ma"         -> None     an AGE carries a unit
         "" / "zone Z1"   -> None     nothing to read
+        "23-25"          -> None     a RANGE has no single position
 
     Depth-like values are refused on purpose. ``"607 m"`` is monotonic but its
     unit is spelled out, and a figure may print depth on one axis and a bed
     index on another; comparing across the two would manufacture inversions out
     of nothing. The caller needs "can I check this?", and for a bare
     ``NNN <unit>`` the honest answer is no.
+
+    RCA-2026-10-17 (P2-2): two more shapes are refused for the same reason.
+    A label naming a FOREIGN object — "zone Z1" counts zones, "Fig. 4" counts
+    figures — carries a number that is not the sample's place in the section, so
+    cross-checking it against a model-assigned index compares two unrelated
+    counters. And a numeric RANGE ("23-25", "23–25", "23—25") has no single
+    position at all: reading its far end answered 25 for the cell above and made
+    every such row look inverted. The docstring already promised None for
+    "zone Z1"; the implementation now honours it.
+
+    Callers MUST read None as "cannot check", never as "not inverted" — that is
+    the whole contract of this function and it is unchanged.
     """
     if value is None:
         return None
@@ -235,6 +362,16 @@ def label_ordinal(value: Any) -> Optional[int]:
 
     # A trailing unit means an age or a thickness, never a position label.
     if _LABEL_TRAILING_UNIT_RE.search(s):
+        return None
+    # RCA-2026-10-17 (P2-2): a foreign semantic word means the number belongs to
+    # something other than this sample's position ("zone Z1" -> the zone,
+    # "Fig. 4" -> the figure). Answering 1 / 4 there invented an ordinal.
+    if _has_foreign_semantic_word(s):
+        return None
+    # RCA-2026-10-17 (P2-2): a numeric range is not a position. Checked before
+    # the "last number" rule, which would otherwise answer the far endpoint and
+    # turn every ranged cell into a reported inversion.
+    if _is_range_label(s):
         return None
     if _BARE_DECIMAL_RE.match(s):
         return int(float(s))
@@ -265,6 +402,15 @@ def ordinal_kind(value: Any) -> Optional[str]:
     ``"letter"`` (A1, Sample 3), ``"number"`` (Bed 23, 23c, 4) or None. Lax on
     purpose — its job is to stop an age being compared against a sample index,
     not to police spelling.
+
+    RCA-2026-10-17 (P2-2): a label the strict bed parser already understands
+    is a NUMBER kind, full stop. "Bed 23" used to be classified "letter"
+    because the ``\\b[A-Za-z]{3,}\\b`` word test matched the word "Bed" and ran
+    before any numeric check — so a bed endpoint and a letter-prefixed sample
+    endpoint were placed in different families and never cross-checked, and the
+    docstring's own example was wrong. "23c" happened to be right only because
+    it has no word to match. Running the parser first also keeps "A1" and
+    "Sample 3" in the letter family, which is what they are.
     """
     if value is None:
         return None
@@ -273,6 +419,11 @@ def ordinal_kind(value: Any) -> Optional[str]:
         return None
     if _LABEL_TRAILING_UNIT_RE.search(s):
         return None
+    # Known bed spellings first: "Bed 23" / "23c" are numbers, whatever words
+    # they happen to contain. "A1" is not accepted by parse_bed, so the
+    # letter-prefix test below still owns it.
+    if parse_bed(s) is not None:
+        return "number"
     if _LETTER_PREFIX_RE.match(s) or re.search(r"\b[A-Za-z]{3,}\b", s):
         return "letter"
     if re.search(r"\d", s):
