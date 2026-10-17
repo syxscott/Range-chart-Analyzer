@@ -521,6 +521,90 @@ def labels_agree_with_geometry(labels: Dict[str, Any],
     return None
 
 
+def _norm_name(value: Any) -> str:
+    import re as _re
+    return _re.sub(r"[^a-z0-9]+", "", _text(value).casefold())
+
+
+#: A class legend is a handful of entries. Beyond this, the list is not a legend
+#: any more -- one held-out run returned 13 entries for a figure with 3 codes,
+#: and shipping that as `legend` puts thirteen rows in the exported table.
+LEGEND_MAX_ENTRIES = 8
+
+
+def legend_is_plausible(legend: Sequence[Dict[str, Any]]) -> Optional[str]:
+    """None when the legend looks like a legend, else why it does not."""
+    entries = [x for x in (legend or []) if isinstance(x, dict)]
+    if not entries:
+        return "empty"
+    if len(entries) > LEGEND_MAX_ENTRIES:
+        return f"{len(entries)} entries > {LEGEND_MAX_ENTRIES}"
+    codes = [_text(x.get("code"))[:1] for x in entries]
+    if any(not c for c in codes):
+        return "an entry has no code"
+    seen = set()
+    for c in codes:
+        if c in seen:
+            return f"duplicate code {c!r}"
+        seen.add(c)
+    return None
+
+
+def labels_are_internally_consistent(labels: Dict[str, Any],
+                                     filled: FilledCells) -> Optional[str]:
+    """None when the labels cannot be a faithful transcription of THIS lattice.
+
+    Counting rows is necessary but not sufficient. A held-out run on a
+    JPEG-compressed copy returned the right NUMBER of rows -- 22, matching the
+    geometry, so the count guard passed -- and then collapsed them onto four
+    distinct names because the reader had degraded. The result carried 93
+    occurrences, 93 codes, zero blanks, and every cell attached to the wrong
+    taxon, stamped `grid_cells`.
+
+    Two facts about the figure make that detectable without a human:
+
+      * every row geometry found ink in must have a name, because the ink is
+        what proves the row exists and therefore carries a label;
+      * two DIFFERENT printed rows do not normally carry the same name, so a
+        collision between two inked rows means the transcription is unreliable.
+
+    Both hold for a real taxon axis. Refusing is strictly better than emitting a
+    table that looks complete and names the wrong organisms.
+    """
+    rows = [r for r in (labels.get("rows") or []) if isinstance(r, dict)]
+    cols = [c for c in (labels.get("columns") or []) if isinstance(c, dict)]
+    inked_rows = sorted({r for (r, _c) in filled.cells})
+    inked_cols = sorted({c for (_r, c) in filled.cells})
+
+    for r in inked_rows:
+        if r >= len(rows):
+            return f"row {r} has ink but no label entry"
+        if not _text(_pick(rows[r], "taxon", "name")):
+            return f"row {r} has ink but a blank taxon name"
+    for c in inked_cols:
+        if c >= len(cols):
+            return f"column {c} has ink but no label entry"
+        if not _text(_pick(cols[c], "label", "name", "site")):
+            return f"column {c} has ink but a blank label"
+
+    seen_rows: Dict[str, int] = {}
+    for r in inked_rows:
+        name = _norm_name(_pick(rows[r], "taxon", "name"))
+        if name in seen_rows:
+            return (f"rows {seen_rows[name]} and {r} both read "
+                    f"{_text(_pick(rows[r], 'taxon', 'name'))!r}")
+        seen_rows[name] = r
+
+    seen_cols: Dict[str, int] = {}
+    for c in inked_cols:
+        name = _norm_name(_pick(cols[c], "label", "name", "site"))
+        if name in seen_cols:
+            return (f"columns {seen_cols[name]} and {c} both read "
+                    f"{_text(_pick(cols[c], 'label', 'name', 'site'))!r}")
+        seen_cols[name] = c
+    return None
+
+
 def render_label_image(image_b64: str,
                        scale: int = LABEL_SCALE) -> Optional[str]:
     """Upscale the whole figure for the label call, within a pixel budget.
@@ -620,10 +704,13 @@ def extract_matrix_two_stage(
     # The legend is a few words in a corner of a busy figure, and it shares
     # that call with 22 taxon names and 18 rotated headers. It came back EMPTY
     # in one run of three, which silently emptied the class column of every
-    # exported row. Asking again costs one call and only when it came back
-    # empty, so the common case pays nothing.
-    if not legend_codes(labels.get("legend") or []):
-        log.info("matrix: legend empty on the label call; asking again")
+    # exported row; and on a downscaled copy it came back with THIRTEEN entries
+    # for a three-code figure. Both are the same failure -- an implausible list
+    # accepted without a check -- so the trigger is plausibility, not emptiness.
+    # One focused retry, only when the first list cannot be a legend.
+    if legend_is_plausible(labels.get("legend") or []) is not None:
+        log.info("matrix: legend implausible (%s); asking again",
+                 legend_is_plausible(labels.get("legend") or []))
         ltext, ltrunc, _lerr = call_model(
             LEGEND_SYSTEM_PROMPT, label_img,
             "Read the class legend of this figure.", max_tokens)
@@ -631,13 +718,27 @@ def extract_matrix_two_stage(
             extra = safe_json_loads(ltext) or {}
             found = [x for x in (extra.get("legend") or [])
                      if isinstance(x, dict)]
-            if found:
+            if legend_is_plausible(found) is None:
                 labels["legend"] = found
                 log.info("matrix: legend recovered (%d entries)", len(found))
+            else:
+                log.info("matrix: legend still implausible (%d entries); "
+                         "keeping the first read",
+                         len(labels.get("legend") or []))
+        if legend_is_plausible(labels.get("legend") or []) is not None:
+            # An implausible legend is worse than none: 13 rows in the exported
+            # table are 10 rows of invention. Drop it rather than ship it, and
+            # say why.
+            log.info("matrix: dropping an implausible legend")
+            labels["legend"] = []
 
     mismatch = labels_agree_with_geometry(labels, filled)
     if mismatch:
         log.info("matrix: %s; falling back to single pass", mismatch)
+        return None
+    inconsistent = labels_are_internally_consistent(labels, filled)
+    if inconsistent:
+        log.info("matrix: %s; falling back to single pass", inconsistent)
         return None
 
     # ---- stage 2b: the cell codes ---------------------------------------

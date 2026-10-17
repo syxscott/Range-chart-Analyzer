@@ -513,6 +513,86 @@ class TestTwoStage:
         assert extract_matrix_two_stage(img, call) is not None
         assert seen["legend_calls"] == 0
 
+    def test_an_implausible_legend_is_retried_then_dropped(self):
+        """13 entries for a 3-code figure is 10 rows of invention.
+
+        The retry trigger is PLAUSIBILITY, not emptiness: an empty legend and a
+        junk legend are the same failure and get the same treatment.
+        """
+        from rca_core.matrix import LEGEND_MAX_ENTRIES, legend_is_plausible
+        assert legend_is_plausible([]) is not None
+        assert legend_is_plausible(
+            [{"code": "C", "class": "c"}] * 3) is not None      # duplicate
+        assert legend_is_plausible(
+            [{"class": "no code"}]) is not None                   # no code
+        assert legend_is_plausible(
+            [{"code": c, "class": c} for c in "ABCDEFGHI"]) is not None
+        assert legend_is_plausible(
+            [{"code": c, "class": c} for c in "ACR"]) is None
+        assert LEGEND_MAX_ENTRIES >= 3
+
+        img, filled, labels, answers = self._fixture()
+        junk = dict(labels)
+        junk["legend"] = [{"code": c, "class": c} for c in
+                          "ABCDEFGHIJKLM"]
+        seen = {"legend_calls": 0}
+
+        def call(system, image_b64, user, max_tokens):
+            if "CLASS LEGEND" in system:
+                seen["legend_calls"] += 1
+                return json.dumps(junk), False, ""
+            if "axis labels" in system:
+                return json.dumps(junk), False, ""
+            return json.dumps({"cells": [{"id": cap, "letter": v}
+                                         for cap, v in answers[0]]}), False, ""
+
+        out = extract_matrix_two_stage(img, call)
+        assert seen["legend_calls"] == 1, "an implausible legend must be retried"
+        assert out is not None
+        assert out["legend"] == [], "a still-implausible legend must be dropped"
+
+    def test_a_collapsed_label_run_falls_back(self):
+        """The failure a count guard cannot see.
+
+        One held-out run returned the RIGHT NUMBER of rows -- 22, matching the
+        geometry -- and collapsed them onto four distinct names. 93
+        occurrences, 93 codes, zero blanks, every cell on the wrong taxon,
+        stamped `grid_cells`. Two printed rows do not share a name, so the
+        collision is detectable locally.
+        """
+        from rca_core.matrix import labels_are_internally_consistent
+        img = _ruled_matrix(marks=_MARKS)
+        filled = detect_filled_cells(img)
+        rows_inked = len({r for r, _ in filled.cells})
+        labels = _labels(filled.n_rows, filled.n_cols)
+        assert labels_are_internally_consistent(labels, filled) is None
+
+        collapsed = dict(labels)
+        collapsed["rows"] = [{"taxon": "Genus0 species", "authority": "A"}
+                             for _ in labels["rows"]]
+        reason = labels_are_internally_consistent(collapsed, filled)
+        assert reason and "both read" in reason
+
+        blanks = dict(labels)
+        blanks["rows"] = [dict(r, taxon="") if i == 0 else r
+                          for i, r in enumerate(labels["rows"])]
+        assert labels_are_internally_consistent(blanks, filled) is not None
+
+    def test_two_inked_rows_sharing_a_label_abort_the_whole_run(self,
+                                                                monkeypatch):
+        img, filled, labels, answers = self._fixture()
+        collapsed = dict(labels)
+        collapsed["rows"] = [{"taxon": "Genus0 species", "authority": "A"}
+                             for _ in labels["rows"]]
+
+        def call(system, image_b64, user, max_tokens):
+            if "axis labels" in system:
+                return json.dumps(collapsed), False, ""
+            return json.dumps({"cells": [{"id": cap, "letter": v}
+                                         for cap, v in answers[0]]}), False, ""
+
+        assert extract_matrix_two_stage(img, call) is None
+
     def test_a_transport_error_reaches_the_caller(self):
         """Deliberately NOT swallowed.
 

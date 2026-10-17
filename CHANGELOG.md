@@ -47,6 +47,22 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A label call that returned the right COUNT but the wrong CONTENT was being
+  accepted and stamped `grid_cells`.** Held out on JPEG-degraded copies, one run
+  produced 93 occurrences, 93 codes, zero blanks and `grid_cells` — and attached
+  every cell to the wrong taxon, because the reader had collapsed 22 printed
+  names onto 4. The axis-alignment guard compares counts, and the counts
+  matched, so it had nothing to object to.
+  `labels_are_internally_consistent` now adds the two facts a real taxon axis
+  guarantees and a degraded transcription breaks: every row geometry found ink
+  in must have a name, and two DIFFERENT printed rows do not share one. Either
+  violation falls back.
+- **An implausible legend was shipped verbatim.** The same held-out run returned
+  13 legend entries for a 3-code figure, and 13 rows in the exported table are
+  10 rows of invention. The retry trigger was "the legend is empty"; it is now
+  "the legend cannot be a legend" — too many entries, an entry with no code, or
+  a duplicated code — and a list that is still implausible afterwards is dropped
+  rather than exported.
 - **Two payload keys the two-stage path emitted were silently dropped by the
   normalizer, making complete-looking runs report nothing.** `taxon_rows` is the
   RESULT's key name but the normalizer builds it from `parsed["rows"]`, so the
@@ -73,14 +89,43 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   correlation strips) are explicitly excluded from `rows`.
 - **An empty legend emptied the class column of every exported row.** The legend
   is a few words in a corner of a busy figure and shared that call with 22 taxon
-  names and 18 rotated headers; it came back empty in one run of three. It is
-  now re-asked once, with a dedicated prompt, only when it came back empty.
+  names and 18 rotated headers; it came back empty in one run of three. It is now
+  re-asked once, with a dedicated prompt, when the first read is implausible.
+  *Extended after held-out testing — see the 13-entry legend above: emptiness was
+  only one of the two ways this goes wrong.*
 - **Two tests in `test_occurrence_strategy_defaults_2026_10_16.py` never ran.**
   Both took a `self` parameter, so pytest treated them as fixtures and ERRORed
   at setup; their assertions had been unenforced since the file was written.
 - **`log` was used in `extractor.py` without ever being bound.** Inside the
   `grid_read` fallback handler, so a handled transport failure would have
   raised `NameError` — the one thing that handler exists to prevent.
+
+### Held-out results (2026-10-17)
+
+Scored on pixels the path had never seen, with "which cells contain ink"
+recomputed locally on each image so the ground truth follows the input.
+
+| variant | geometric cells | `grid_read` | occurrences | distinct taxa | blank codes | `single_pass` |
+|---|---|---|---|---|---|---|
+| pristine | 93 | `grid_cells` | 93 | 22 | 0 | 73 |
+| JPEG q60 | 93 | `grid_cells` | 93 | 22 | 0 | 73 |
+| JPEG q40 | 93 | `grid_cells` | 93 | 22 | 0 | 60 |
+| downscale 55% | 93 | `grid_cells` | 93 | 22 | 0 | 57 |
+| faded toner | 93 | `grid_cells` | 93 | 22 | 0 | 75 |
+| sensor speckle | 93 | `grid_cells` | 93 | 22 | 0 | 63 |
+| skew 1.2° | — | **detector refused** | — | — | — | — |
+| skew + JPEG + speckle | — | **detector refused** | — | — | — | — |
+
+Six non-matrix figures (SEM plate, outcrop photographs, a biographical page, two
+range charts) produced **no fabricated cells at all** — all six declined through
+the empty-response gate, and `grid_read` behaved identically to `single_pass` on
+every one.
+
+**Known limit, stated rather than buried:** `detect_grid` finds axis-parallel
+rules only. A 1.2° skew — within what a flatbed scan produces routinely — makes
+it decline, and the run falls back to `single_pass`. The module already has a
+`deskew` stage that is not wired into this path; until it is, the honest answer
+for a skewed page is the older, caveated one.
 
 ## [0.1.1] — 2026-10-16
 
