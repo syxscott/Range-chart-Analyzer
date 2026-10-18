@@ -394,9 +394,21 @@ class _ProvenanceFetchWorker(QThread):
             # this is a local loopback call to our own server process.
             conn = http.client.HTTPConnection("127.0.0.1", self._port,
                                               timeout=8)
-            conn.request("GET", self._path, headers={
+            headers = {
                 "X-RCA-Client": "range-chart-analyzer",
-            })
+            }
+            # API-REVIEW-2026-10-18: server.py answers this endpoint with 403
+            # unless the request also carries RCA_PROVENANCE_TOKEN when that
+            # env var is configured (the `--host 0.0.0.0` LAN-deployment case).
+            # The GUI only ever sent X-RCA-Client, so an operator who set the
+            # token on the server side got a 403 whose message blamed the
+            # client header. Read the SAME env var the server reads and send
+            # it only when non-empty (an empty header would compare unequal and
+            # turn a working loopback setup into a 403).
+            token = (os.environ.get("RCA_PROVENANCE_TOKEN") or "").strip()
+            if token:
+                headers["X-Provenance-Token"] = token
+            conn.request("GET", self._path, headers=headers)
             resp = conn.getresponse()
             body = resp.read()
             self.done.emit(int(resp.status), body, "")
@@ -611,7 +623,7 @@ class HistoryDetailDialog(QDialog):
         # the fetch handler can disable/re-enable the button, and init the
         # in-flight worker slot.
         self._prov_worker = None
-        self.btn_prov = PushButton("Export Provenance (PROV-O JSON-LD)")
+        self.btn_prov = PushButton(self._t("history.detail.provenance"))
         self.btn_prov.setToolTip(self._t("history.detail.provenance"))
         self.btn_prov.clicked.connect(self._on_export_provenance)
         footer.addWidget(self.btn_prov)
@@ -687,14 +699,17 @@ class HistoryDetailDialog(QDialog):
         from qfluentwidgets import InfoBar, InfoBarPosition
         self.btn_prov.setEnabled(True)
         if error:
+            # F-23 (UI-REVIEW-2026-10-17): all six error strings in this
+            # handler were hardcoded English while the sibling noServer
+            # branch went through i18n — same button, two languages.
             InfoBar.error(
-                "", f"Failed to fetch provenance: {error}",
+                "", self._t("history.detail.provenance.fetchFailed").format(error=error),
                 parent=self, position=InfoBarPosition.TOP, duration=5000,
             )
             return
         if status == 404:
             InfoBar.error(
-                "", "Record not found",
+                "", self._t("history.detail.provenance.notFound"),
                 parent=self, position=InfoBarPosition.TOP, duration=4000,
             )
             return
@@ -702,19 +717,19 @@ class HistoryDetailDialog(QDialog):
             # Hardened server requires the X-RCA-Client header; getting
             # here means the client/server headers drifted apart.
             InfoBar.error(
-                "", "Server rejected the request (missing client header)",
+                "", self._t("history.detail.provenance.forbidden"),
                 parent=self, position=InfoBarPosition.TOP, duration=4000,
             )
             return
         if status >= 500:
             InfoBar.error(
-                "", "Provenance generation failed on server",
+                "", self._t("history.detail.provenance.serverError"),
                 parent=self, position=InfoBarPosition.TOP, duration=4000,
             )
             return
         if status != 200:
             InfoBar.error(
-                "", f"Server error {status}",
+                "", self._t("history.detail.provenance.httpError").format(status=status),
                 parent=self, position=InfoBarPosition.TOP, duration=4000,
             )
             return
@@ -724,7 +739,7 @@ class HistoryDetailDialog(QDialog):
             json.loads(body.decode("utf-8"))
         except Exception:
             InfoBar.error(
-                "", "Server returned invalid JSON",
+                "", self._t("history.detail.provenance.badJson"),
                 parent=self, position=InfoBarPosition.TOP, duration=4000,
             )
             return

@@ -12,6 +12,7 @@ thread crashes Qt). All LLM / merge / i18n logic is reused from rca_core.
 from __future__ import annotations
 
 import base64  # AUDIT-2026-09-27 [item 2.4]: see _show_history_thumbnail
+import functools  # UX-2026-10-18: _xlsx_available is lru_cached (see its docstring)
 import logging
 import os
 import sys
@@ -57,8 +58,13 @@ from qfluentwidgets import (
 
 from rca_core import (
     Translator, build_table_export, get_configs_for_result, load_image_b64,
-    to_csv, to_tsv, extract, merge_results, ProviderStore,
+    to_csv, to_tsv, extract, merge_results, ProviderStore, result_to_json,
 )
+# FIX-2026-10-17 (X-06): GUI extractions previously never produced the
+# evidence-chain audit report — only server.py called
+# build_extraction_report, so desktop users had no coverage / empty-table
+# / truncation evidence and Web clients that read data.report got nothing.
+from rca_core.report import build_extraction_report
 from rca_core.aggregate import COLUMNAR_SECTION_SCHEMA, RANGE_CHART_SCHEMA, SCHEMA_BY_MODE
 from rca_core.extractor import (
     DEFAULT_ENDPOINT, DEFAULT_MAX_TOKENS, DEFAULT_MAX_EDGE, DEFAULT_MODEL,
@@ -392,6 +398,122 @@ def _collect_extraction_futures(futures, budget, *, should_cancel=None,
     return results, False
 
 
+class _Heartbeat:
+    """1 Hz "still working, here is how long" ticker for the SINGLE-RUN path.
+
+    UX-2026-10-18 (流畅性 A8). ExtractWorker.run() blocks inside one
+    ``extract()`` call for the multi-minute worst case (EXTRACT_TIMEOUT_SEC=120
+    x retries=3), so the status line needs a heartbeat or the window reads as
+    hung. The multi-run path already had one (``_run_multi``'s ``_on_batch``);
+    this is the same fix for the path that had none.
+
+    WHY THIS LIVES ON THE GUI THREAD — the first attempt did not, and it was
+    DEAD CODE. It created a QTimer inside ``ExtractWorker.run()`` and emitted
+    from ``timeout``. MEASURED with real Qt (PyQt6 6.7.1, offscreen — the same
+    Qt6 C++ core, and QTimer lives in QtCore, so this transfers to PySide6):
+
+        QTimer created inside QThread.run()   -> 0 ticks over 1.2 s
+        threading.Timer (self-re-arming)      -> 5 ticks
+        QTimer constructed on the GUI thread  -> 5 ticks
+
+    The reason is structural, not a configuration mistake: ``app.exec()`` runs
+    on the GUI thread only, and a QTimer is driven BY an event loop. A
+    QThread that overrides ``run()`` has no inner event loop (the comment at
+    the top of this file says as much about why ``quit()`` is a no-op on it),
+    so nothing ever dispatched the timer. The zero was measured, not assumed.
+
+    Two candidate fixes were measured (both tick, so tick count does not
+    choose between them):
+      (a) ``threading.Timer`` inside the QThread, re-arming itself;
+      (b) this — a QTimer owned by the GUI thread.
+    (b) is chosen because the tick then runs on the same thread as
+    ``_on_progress`` and ``_on_result``. Emitting a QThread's signal from a
+    third thread (what (a) does) is correct but leaves the ordering of
+    "tick vs. result" unconstrained by anything but timing: the stop is a
+    ``cancel()``, and ``cancel()`` cannot cancel a callback already in
+    flight. With (b) the GUI event loop serialises the two, so the label can
+    never be left showing "Analyzing" after the result has landed.
+
+    The worker therefore does NOTHING for the heartbeat — it does not even
+    build one. Start and stop are both driven from the GUI thread, off the
+    ``analyzing`` stage and the result/close handlers.
+
+    Payload format matches ``_run_multi``'s exactly —
+    ``analyzing:{n}/{runs}:{elapsed}s`` — so ``_on_progress`` parses both
+    through its single ``startswith("analyzing:")`` branch and no new i18n
+    placeholder scheme is introduced (the seconds are concatenated onto an
+    existing translated string, per this module's established convention).
+
+    ``elapsed`` is an int on purpose: the GUI branch interpolates the tail
+    verbatim, and a float would render "1.7s" where the rest shows whole
+    seconds.
+
+    Degradation is deliberate: if QTimer cannot be constructed (slim Qt build,
+    headless harness) this becomes a silent no-op. A missing progress tick
+    must never be able to fail a run that would otherwise have succeeded.
+    """
+
+    def __init__(self, emit, interval_ms: int = 1000) -> None:
+        # MUST be constructed on the GUI thread — see the class docstring.
+        self._emit = emit
+        self._t0 = time.perf_counter()
+        self._timer = None
+        try:
+            from PySide6.QtCore import QTimer as _QTimer
+            self._timer = _QTimer()
+            self._timer.setInterval(interval_ms)
+            self._timer.timeout.connect(self._tick)
+            self._timer.start()
+        except Exception:
+            # No Qt available: run without a heartbeat rather than fail.
+            self._timer = None
+
+    def _tick(self) -> None:
+        elapsed = int(time.perf_counter() - self._t0)
+        try:
+            self._emit(f"analyzing:1/1:{elapsed}s")
+        except Exception:
+            # A dead receiver must not raise out of a Qt slot; Qt would turn
+            # that into a process-level abort under PySide6.
+            pass
+
+    def stop(self) -> None:
+        """Stop ticking. Idempotent, and safe after a failed construction."""
+        t = self._timer
+        if t is None:
+            return
+        self._timer = None
+        try:
+            t.stop()
+            t.timeout.disconnect(self._tick)
+        except Exception:
+            pass
+
+
+def _write_xlsx_worker(result: dict, path: str, translate) -> None:
+    """Run ``to_xlsx(result, file_or_path=path, translate=translate)``.
+
+    UX-2026-10-18 (流畅性): the body of the XLSX export, split out of the
+    button slot so it can be handed to a worker thread AND exercised by a
+    plain-Python test that never imports PySide6.
+
+    MEASURED on the GUI thread before this split: 552 ms at 1000 rows and
+    772 ms at 5000 rows — and only +220 ms across a 5x row increase, so the
+    bulk is openpyxl's fixed per-workbook cost (workbook, stylesheet, shared
+    string pool), not per-row work. That means it froze the window at EVERY
+    table size, not just large ones. The CSV/TSV sibling path measures 30 ms
+    at 5000 rows, which is below the perceptual threshold, so it stays
+    synchronous on purpose: a thread there would cost more in complexity
+    than it saves.
+
+    Deliberately a plain function, not a method on the page: it touches no
+    widget and reads no page state, so it is safe to call from any thread
+    and needs no Qt import to test.
+    """
+    from rca_core import to_xlsx
+    to_xlsx(result, file_or_path=path, translate=translate)
+
+
 class ExtractWorker(QThread):
     """Runs extract() N times concurrently, merges, emits the result.
 
@@ -506,6 +628,34 @@ class ExtractWorker(QThread):
                 # urllib request (see request_cancel). Attach the resolved
                 # mode so history persistence records the real chart kind
                 # instead of the raw "auto" dropdown value (gui.py parity).
+                #
+                # UX-2026-10-18 (流畅性 A8): this path used to emit exactly
+                # ONE stage and then go silent until extract() returned.
+                # MEASURED worst case: timeout_sec defaults to 120
+                # (EXTRACT_TIMEOUT_SEC) and retries to 3, so a rate-limited
+                # or unreachable provider could hold the window on a single
+                # unchanged "Analyzing" label for ~6 minutes. The multi-run
+                # path below already solved this with a 1 Hz elapsed
+                # heartbeat (_on_batch); this is the same fix for the path
+                # that had none.
+                #
+                # The timer lives on the WORKER's event loop, not the GUI's.
+                # A QTimer created here is parented to nothing and fires on
+                # the thread that owns this QThread, so it keeps ticking
+                # after run() returns unless it is explicitly stopped --
+                # which would leave an orphan timer emitting into a finished
+                # worker for the lifetime of the window. The finally below is
+                # load-bearing, not hygiene: it covers the extract() raising,
+                # which is the case that actually happens (see the
+                # AUDIT-2026-09-27 [item 1.1] note on unguarded regions).
+                #
+                # UX-2026-10-18 (流畅性 A8): the heartbeat is NOT started here.
+                # A QTimer built on this thread never fires (measured: 0 ticks
+                # over 1.2 s — see _Heartbeat's docstring), and a
+                # threading.Timer would emit from a third thread. ExtractPage
+                # starts and stops the ticker on the GUI thread instead, off
+                # this "analyzing" stage and its own result handler. So the
+                # only thing left to do here is the blocking call itself.
                 result = extract(mode=mode, **params)
                 try:
                     result._mode = mode
@@ -1227,6 +1377,18 @@ class ExtractPage(ScrollArea):
         self.lbl_dirty = CaptionLabel("")
         self.lbl_dirty.setStyleSheet("color:#f59e0b;")
         edit_row.addWidget(self.lbl_dirty)
+        # FIX-2026-10-17 (X-03): per-table CSV export + TSV copy. Tkinter
+        # (gui.py) and the Web client have had these since the start; the
+        # Fluent GUI — the DEFAULT entry point via run.bat — only offered
+        # whole-result JSON / XLSX, so a user who just wanted "the biozones
+        # table as CSV" had to switch to another client. These act on the
+        # ACTIVE pivot tab (self._active_table_id), matching the Web UX.
+        self.btn_table_csv = PushButton(FIF.SAVE_AS, self._t("export.csv"))
+        self.btn_table_csv.clicked.connect(self._export_table_csv)
+        edit_row.addWidget(self.btn_table_csv)
+        self.btn_table_tsv = PushButton(self._t("export.tsv"))
+        self.btn_table_tsv.clicked.connect(self._copy_table_tsv)
+        edit_row.addWidget(self.btn_table_tsv)
         self.btn_apply_edits = PrimaryPushButton(FIF.SAVE, self._t("edit.apply"))
         self.btn_apply_edits.clicked.connect(self._on_apply_edits)
         edit_row.addWidget(self.btn_apply_edits)
@@ -1624,6 +1786,14 @@ class ExtractPage(ScrollArea):
         The button therefore disables itself and says it is waiting, instead
         of leaving the user clicking a control that cannot act yet.
         """
+        # UX-2026-10-18 (流畅性 A8): the elapsed ticker stops here. A cancel
+        # is cooperative, so the worker keeps blocking on its in-flight
+        # request and would otherwise keep the counter climbing while the
+        # label already says "Cancelling" — two contradictory sources of
+        # truth on one line. _on_worker_result would stop it too, but only
+        # once the request finally returns, which is the very wait the user
+        # is watching.
+        self._stop_heartbeat()
         w = self._worker
         if w is None or not w.isRunning():
             return
@@ -1695,10 +1865,27 @@ class ExtractPage(ScrollArea):
         # Exports: a result to export AND an image the app is actually armed
         # with (B-15) AND not mid-run.
         armed = bool(self.result) and self.has_pending_image() and not self.busy
+        # UX-2026-10-18 (流畅性): an in-flight XLSX export also greys the whole
+        # export strip. Two workers writing the same table at once is the
+        # failure this prevents, and it has to live HERE rather than as a
+        # manual setEnabled(False) in the button slot: _update_result_actions
+        # is re-run by every progress tick and every busy flip, so a manual
+        # disable would be undone by the next one. Deriving from state inside
+        # the single gate is the only version that survives.
+        if getattr(self, "_xlsx_worker", None) is not None:
+            armed = False
+        # X-03: the per-table CSV/TSV buttons live in the edit row but act
+        # on exports, so they take the export gate (a result + armed image +
+        # not busy). Left out of the row-edit loop, they'd stay enabled over
+        # a zero-row result and silently open a dialog that exports nothing.
+        self.btn_table_csv.setEnabled(armed)
+        self.btn_table_tsv.setEnabled(armed)
         self.btn_export.setEnabled(armed)
         self.btn_export_xlsx.setEnabled(armed and self._xlsx_available())
 
-    def _xlsx_available(self) -> bool:
+    @staticmethod
+    @functools.lru_cache(maxsize=1)
+    def _xlsx_available() -> bool:
         """Whether XLSX export can actually run, for a tooltip / disabled state.
 
         AUDIT-2026-09-27 [item 1.7] (B-07): the button was never gated, and
@@ -1708,6 +1895,19 @@ class ExtractPage(ScrollArea):
         missing. So the user walked through a save dialog, typed a filename,
         confirmed, and only then learned it could not work. Ask the exporter
         instead of guessing.
+
+        UX-2026-10-18 (流畅性): this runs inside ``_update_result_actions()``,
+        which the gate calls on every result render AND on every busy-state
+        flip — so the very first result render paid a cold ``import openpyxl``
+        on the UI thread. MEASURED: 376 ms of frozen window on first render,
+        then ~0 (the module is cached by sys.modules, but the import
+        STATEMENT still re-runs the lookup). ``functools.lru_cache`` makes the
+        whole probe run exactly once per process; the answer cannot change
+        while the app runs (a missing openpyxl does not become present, and
+        an installed one does not vanish), so caching is safe. The decorated
+        function keeps its zero-arg call shape, so both existing call sites
+        (``self._xlsx_available()``) work unchanged — a lru_cache on a method
+        would key on ``self`` and leak, hence the staticmethod.
         """
         try:
             import openpyxl  # noqa: F401
@@ -1904,6 +2104,13 @@ class ExtractPage(ScrollArea):
         # addressed.
         self.busy = True
         self._set_busy(True)
+        # UX-2026-10-18 (流畅性 A8): clear any ticker left over from a
+        # previous run. Every normal exit path stops it, but a superseded
+        # worker's result is DROPPED by the stale-generation guard in
+        # _on_worker_result (before its _stop_heartbeat call), so without
+        # this a cancelled-then-restarted extraction could keep two tickers
+        # alive and race each other's label writes.
+        self._stop_heartbeat()
         # FIX (stale-result guard): bump the generation so any result from a
         # previously-launched worker is dropped. The launch-time gen rides on
         # the worker (`ExtractWorker.gen`) and the receiving slot re-checks it
@@ -1952,6 +2159,15 @@ class ExtractPage(ScrollArea):
             log.debug("dropping stale extract result (gen %s != %s)",
                       gen, getattr(self, "_extract_gen", 0))
             return
+        # UX-2026-10-18 (流畅性 A8): stop the GUI-thread heartbeat before the
+        # result renders. It is done HERE, on the queued GUI-thread slot,
+        # rather than in the worker's `finally` — the ticker lives on this
+        # thread, and this is the only place that is guaranteed to run after
+        # the worker finished regardless of how it finished (success, raise,
+        # or cancel). The stale branch above returns before this, and that is
+        # correct: a superseded worker's ticker was already stopped and
+        # replaced by _start_heartbeat when the new extraction began.
+        self._stop_heartbeat()
         self._on_result(result)
 
     def _on_progress(self, text):
@@ -1963,12 +2179,73 @@ class ExtractPage(ScrollArea):
             "thinking":    "status.thinking",
             "parsing":     "status.parsing",
         }
-        if text in STAGE_KEYS:
+        # UX-2026-10-18 (流畅性 A3): "retrying:{next}/{retries}:{backoff}s"
+        # is emitted by call_llm_api_with_retry before each backoff sleep.
+        # Without a branch here it falls through to the generic
+        # status.loading below and the attempt count AND the wait are both
+        # discarded -- the event would be emitted and then thrown away,
+        # leaving A3 with no user-visible effect at all. Handled as its own
+        # branch (rather than folded into the analyzing: case below) because
+        # "2/3:1.1s" and "1/1:42s" mean different things to the operator:
+        # one is "this failed, waiting, then trying again", the other is
+        # "still working on the only attempt".
+        #
+        # The wait seconds are appended to the existing translated string,
+        # matching the convention the analyzing: branch already established
+        # for parameterised progress -- no new placeholder scheme.
+        if text.startswith("retrying:"):
+            try:
+                attempt, secs = text.split(":", 1)[1].rsplit(":", 1)
+                detail = "%s (%s)" % (attempt, secs)
+            except ValueError:
+                # Malformed payload: show the raw token rather than nothing,
+                # so a future format change degrades instead of going blank.
+                detail = text.split(":", 1)[-1]
+            self.lbl_status.setText(self._t("status.retrying") + " " + detail)
+        elif text == "analyzing":
+            # UX-2026-10-18 (流畅性 A8): the single-run path emits exactly this
+            # one stage and then blocks, so this is where the GUI-thread
+            # heartbeat starts. It lives here rather than on the worker
+            # because a QTimer on the QThread never fires (measured 0 ticks);
+            # see _Heartbeat.
+            self._start_heartbeat()
+            self.lbl_status.setText(self._t("status.loading"))
+        elif text in STAGE_KEYS:
             self.lbl_status.setText(self._t(STAGE_KEYS[text]))
         elif text.startswith("analyzing:"):
             self.lbl_status.setText(self._t("status.loading") + " (" + text.split(":", 1)[1] + ")")
         else:
             self.lbl_status.setText(self._t("status.loading"))
+
+    def _start_heartbeat(self) -> None:
+        """GUI thread: (re)start the single-run elapsed ticker.
+
+        Guarded so a repeated "analyzing" cannot stack timers — the multi-run
+        path also emits that stage once per batch, and this method is on the
+        shared _on_progress handler.
+        """
+        self._stop_heartbeat()
+        self._heartbeat = _Heartbeat(self._heartbeat_tick)
+
+    def _stop_heartbeat(self) -> None:
+        """GUI thread: stop the ticker and drop it. Idempotent."""
+        hb = getattr(self, "_heartbeat", None)
+        if hb is None:
+            return
+        self._heartbeat = None
+        try:
+            hb.stop()
+        except Exception:
+            log.exception("failed to stop the extraction heartbeat")
+
+    def _heartbeat_tick(self, stage: str) -> None:
+        """GUI thread: render one elapsed tick.
+
+        Routed back through _on_progress rather than writing the label here,
+        so the ticker and the worker's own progress events share ONE code path
+        and one set of i18n rules.
+        """
+        self._on_progress(stage)
 
     def _on_result(self, result):
         self.busy = False
@@ -1993,11 +2270,33 @@ class ExtractPage(ScrollArea):
             return
         self.result = result.data
         self.raw_text = result.raw
-        # Sprint B (REVIEW-2026-09-04): a fresh extraction replaces whatever
-        # history record was loaded into the page. Clear the id NOW (before
-        # persistence below) so a later "Apply Edits" updates/creates a
-        # record for THIS extraction instead of silently overwriting the
-        # record the user had merely been viewing (e.g. #42).
+        # FIX-2026-10-17 (X-06): attach the evidence-chain audit report
+        # (mode decision, truncation, per-table row counts, empty-table
+        # reasons, ICS version) exactly as server.py does for its API
+        # clients. Before this, GUI extractions never carried `report`, so
+        # users had no coverage / empty-table / truncation evidence beyond
+        # the single confidence number, and exports lacked the audit
+        # artifact the Web/server path produces. `report` is Pure and
+        # total (never raises); the try keeps the render path safe anyway.
+        try:
+            report = build_extraction_report(
+                data=self.result,
+                mode=getattr(result, "_mode", None) or self._current_mode(),
+                mode_used=getattr(result, "mode_used", "") or None,
+                mode_source=getattr(result, "mode_source", "") or None,
+                truncated=getattr(result, "truncated", False),
+                warning=getattr(result, "warning", "") or "",
+                image_sha256=getattr(result, "image_sha256", "") or "",
+                request_meta=getattr(result, "request_meta", None) or {},
+                runs=int((self.result or {}).get("runs", 1) or 1),
+                # ExtractPage has no own Translator; the window's holds the
+                # active UI language (self._t == win._t by construction).
+                lang=getattr(getattr(self.win, "tr", None), "lang", "") or "",
+            )
+            if isinstance(self.result, dict):
+                self.result["report"] = report
+        except Exception:
+            log.exception("build_extraction_report failed (best-effort)")
         self._loaded_history_id = None
         # UI-REVIEW-2026-09-05: a fresh result enables export / row edits.
         self._update_result_actions()
@@ -2711,7 +3010,7 @@ class ExtractPage(ScrollArea):
                     return False
             except Exception as exc:
                 InfoBar.error(
-                    "", f"保存历史记录失败: {exc}",
+                    "", self._t("edit.historySaveFailed").format(error=exc),
                     parent=self.win,
                     position=InfoBarPosition.TOP, duration=5000,
                 )
@@ -2736,7 +3035,7 @@ class ExtractPage(ScrollArea):
                 return False
         except Exception as exc:
             InfoBar.error(
-                "", f"保存历史记录失败: {exc}",
+                "", self._t("edit.historySaveFailed").format(error=exc),
                 parent=self.win,
                 position=InfoBarPosition.TOP, duration=5000,
             )
@@ -2874,6 +3173,70 @@ class ExtractPage(ScrollArea):
             return "zonation_chart_"
         return "range_chart_"
 
+    def _export_table_csv(self) -> None:
+        """FIX-2026-10-17 (X-03): export the ACTIVE table as CSV.
+
+        Mirrors the Tkinter per-table export (gui.py `_export_csv`): the
+        headers/rows come from the kernel's ``build_table_export`` (same
+        column set as the XLSX writer), serialized by ``to_csv``. Acts on
+        the active pivot tab; a missing table (shouldn't happen while the
+        edit row is visible, but a stale enabled state can land here) is
+        reported instead of silently doing nothing.
+        """
+        cfg = self._current_cfg()
+        table = self._current_table()
+        if cfg is None or table is None:
+            InfoBar.warning(
+                "", self._t("export.noTable"), parent=self.win,
+                position=InfoBarPosition.TOP, duration=4000,
+            )
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, self._t("dialog.saveCsv"),
+            self._export_prefix() + cfg["id"] + ".csv",
+            "CSV (*.csv)")
+        if not path:
+            return
+        try:
+            headers, rows = build_table_export(self.result, cfg["id"], self._t)
+            text = to_csv(headers, rows)
+            # BUGFIX (2026-10-18 self-review): to_csv() prepends U+FEFF
+            # itself and utf-8-sig adds another one on write — two BOMs,
+            # and Excel renders the second as a stray "\ufeff" inside the
+            # first header cell (exactly what gui.py's _export_csv strips
+            # the inline BOM for at its REVIEW-2026-09-20 note). Strip the
+            # inline BOM, let the encoding own the single BOM.
+            if text.startswith("\ufeff"):
+                text = text[1:]
+            with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                f.write(text)
+            InfoBar.success("", self._t("status.saved"), parent=self.win,
+                            position=InfoBarPosition.TOP)
+        except Exception as exc:
+            InfoBar.error("", str(exc), parent=self.win,
+                          position=InfoBarPosition.TOP, duration=5000)
+
+    def _copy_table_tsv(self) -> None:
+        """FIX-2026-10-17 (X-03): copy the ACTIVE table as TSV to the
+        clipboard (paste straight into Excel / Google Sheets), mirroring
+        the Tkinter `_copy_table` and the Web `data-copy` button."""
+        cfg = self._current_cfg()
+        if cfg is None:
+            InfoBar.warning(
+                "", self._t("export.noTable"), parent=self.win,
+                position=InfoBarPosition.TOP, duration=4000,
+            )
+            return
+        try:
+            headers, rows = build_table_export(self.result, cfg["id"], self._t)
+            text = to_tsv(headers, rows)
+            QApplication.clipboard().setText(text)
+            InfoBar.success("", self._t("status.copied"), parent=self.win,
+                            position=InfoBarPosition.TOP, duration=2000)
+        except Exception as exc:
+            InfoBar.error("", str(exc), parent=self.win,
+                          position=InfoBarPosition.TOP, duration=5000)
+
     def _export_xlsx(self) -> None:
         if not self.result:
             return
@@ -2892,23 +3255,102 @@ class ExtractPage(ScrollArea):
                 parent=self.win, position=InfoBarPosition.TOP, duration=5000,
             )
             return
-        from rca_core import to_xlsx as _to_xlsx
+        # UX-2026-10-18 (流畅性): re-entrancy guard. Two exports running at
+        # once would have two threads writing to two files while the button
+        # state below only models one; the mirror of the _conn_worker guard
+        # in SettingsPage._on_test_connection.
+        if getattr(self, "_xlsx_worker", None) is not None:
+            return
+        # QFileDialog MUST stay on the GUI thread — it is a modal widget and
+        # Qt requires it to be created and driven from the GUI thread. Only
+        # the serialisation moves off, which is where the 772 ms lives. The
+        # order (gate -> dialog -> serialise) is unchanged.
         path, _ = QFileDialog.getSaveFileName(
             self, self._t("export.xlsx"), self._export_prefix() + "result.xlsx",
             "Excel (*.xlsx)")
         if not path:
             return
-        try:
-            _to_xlsx(self.result, file_or_path=path, translate=self._t)
+        # The worker gets the TRANSLATOR, not this page's `self._t`. `self.tr`
+        # is shared mutable GUI state and `retranslate()` swaps its language
+        # mid-flight; resolving translations on the worker thread would race
+        # that. The exporter needs a callable it can invoke per label, and
+        # Translator.t() only reads a dict, so handing over the Translator
+        # object is safe and keeps every string in one language.
+        tr = self.tr
+        result = self.result
+        from PySide6.QtCore import QThread as _QThread
+
+        class _XlsxWorker(_QThread):
+            # (worker, ok, error) — carrying the worker lets the handler be
+            # this page's BOUND method, which Qt gives a queued connection so
+            # it runs on the GUI thread. A lambda would be a DIRECT
+            # connection and would touch widgets from the worker thread.
+            done = Signal(object, bool, object)
+
+            def __init__(self, parent=None):
+                super().__init__(parent)
+
+            def run(self):
+                # Never let an exception escape run(): under PySide6 that can
+                # abort the process, and a silently dead button is worse than
+                # a reported failure.
+                try:
+                    _write_xlsx_worker(result, path, tr.t)
+                except Exception as exc:
+                    log.exception("XLSX export failed")
+                    self.done.emit(self, False, exc)
+                else:
+                    self.done.emit(self, True, None)
+
+        w = _XlsxWorker()
+        self._xlsx_worker = w
+        w.done.connect(self._on_xlsx_done)
+        w.finished.connect(self._on_xlsx_thread_finished)
+        _park_orphaned_worker(w)
+        # Grey the export strip for the duration. The authoritative disable
+        # lives in _update_result_actions (it derives from _xlsx_worker), and
+        # this call is what re-derives it now that the worker exists — it
+        # must come AFTER the assignment above or the gate still sees None.
+        self._update_result_actions()
+        w.start()
+
+    def _on_xlsx_done(self, worker, ok: bool, err) -> None:
+        """GUI thread: report the outcome. Never touch widgets elsewhere."""
+        if ok:
             InfoBar.success(
                 "", self._t("export.xlsxDone"), parent=self.win,
                 position=InfoBarPosition.TOP, duration=2000,
             )
-        except Exception as exc:
+        else:
             InfoBar.error(
-                "", str(exc), parent=self.win,
+                "", str(err), parent=self.win,
                 position=InfoBarPosition.TOP, duration=5000,
             )
+
+    def _on_xlsx_thread_finished(self) -> None:
+        """GUI thread: restore the buttons and drop the strong reference.
+
+        `finished` is NOT disconnected in closeEvent (only `done` is), because
+        _park_orphaned_worker hangs its own cleanup off `finished` — dropping
+        that connection would stop the parked wrapper from ever being
+        deleteLater()'d. So this handler can still fire after the page has
+        been torn down, and every line here is therefore defensive.
+        """
+        try:
+            self._forget_xlsx_worker()
+        except Exception:
+            log.exception("failed to release the XLSX worker reference")
+        try:
+            self._update_result_actions()
+        except Exception:
+            # A destroyed page raises here; that is expected during teardown
+            # and must not escape a Qt slot.
+            pass
+
+    def _forget_xlsx_worker(self, worker=None) -> None:
+        cur = getattr(self, "_xlsx_worker", None)
+        if worker is None or cur is worker:
+            self._xlsx_worker = None
 
     def _export_json(self):
         if not self.result:
@@ -2939,10 +3381,30 @@ class ExtractPage(ScrollArea):
             "JSON (*.json)")
         if not path:
             return
-        payload = {
-            "source_file": os.path.basename(self.image_path) if self.image_path else None,
-            "result": self.result,
-        }
+        # FIX-2026-10-17 (X-02): go through the kernel serializer instead of
+        # a local json.dump. Two defects came from this being hand-written:
+        #
+        #   1. FIELD DRIFT — the Web client (js/app.js:2047) writes
+        #      {extracted_at, source_file, result} while this wrote only
+        #      {source_file, result}. `extracted_at` is the only record of
+        #      WHEN the extraction ran, and a desktop user comparing two
+        #      exports had no way to tell them apart.
+        #   2. NON-STANDARD JSON — `result_to_json` runs `_strip_nonfinite` +
+        #      `allow_nan=False`, so a NaN/Inf anywhere in the result (the
+        #      extractor can legitimately produce one for `confidence`)
+        #      becomes `null`. This local `json.dump` emitted the bare
+        #      literals instead. Measured: the file the desktop app writes
+        #      was REJECTED by a strict parser while the Web app's identical
+        #      result parsed fine — i.e. the JSON we hand to collaborators
+        #      was unusable on the most common platform for consuming it.
+        #
+        # `result_to_json` returns a string, so the temp-file + replace dance
+        # the old code did is preserved by writing that string instead.
+        text = result_to_json(
+            self.result,
+            os.path.basename(self.image_path) if self.image_path else None,
+            time.strftime("%Y-%m-%dT%H:%M:%S"),
+        )
         # REVIEW-2026-09-10: this branch had no error handling at all (unlike
         # the tree branch above and _export_xlsx) — a windowed app has no
         # console, so a locked/read-only target meant "nothing happens". It
@@ -2952,7 +3414,7 @@ class ExtractPage(ScrollArea):
         try:
             tmp_path = path + ".tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
+                f.write(text)
                 f.flush()
                 try:
                     os.fsync(f.fileno())
@@ -2993,6 +3455,11 @@ class ExtractPage(ScrollArea):
         self.btn_add_row.setText(self._t("edit.addRow"))
         self.btn_del_row.setText(self._t("edit.deleteRow"))
         self.btn_discard.setText(self._t("edit.discard"))
+        # FIX-2026-10-17 (X-03): the per-table export buttons ride the same
+        # retranslate pass (they were missing here on first addition — caught
+        # in the 2026-10-18 self-review).
+        self.btn_table_csv.setText(self._t("export.csv"))
+        self.btn_table_tsv.setText(self._t("export.tsv"))
         self.btn_apply_edits.setText(self._t("edit.apply"))
         if not self.result:
             self.lbl_status.setText(self._t("status.ready"))
@@ -4113,6 +4580,16 @@ class RangeChartFluentWindow(FluentWindow):
             return done
 
         try:
+            # UX-2026-10-18 (流畅性 A8): stop the extraction heartbeat FIRST.
+            # It is a GUI-thread QTimer, so unlike the workers below it is
+            # not protected by the park mechanism — if it were still running
+            # when the window is torn down, its next tick would call
+            # _on_progress on a half-destroyed page. It is cheap and
+            # idempotent, so doing it unconditionally is correct.
+            try:
+                self.extract_page._stop_heartbeat()
+            except Exception:
+                log.exception("failed to stop the extraction heartbeat on close")
             w = getattr(self.extract_page, "_worker", None)
             if w is not None:
                 try:
@@ -4158,6 +4635,27 @@ class RangeChartFluentWindow(FluentWindow):
                     _park_orphaned_worker(sw)
         except Exception:
             pass
+        # Same deal for the XLSX export worker (UX-2026-10-18). It cannot be
+        # cancelled — openpyxl offers no interruption point — so the only
+        # safe handling is the same as the Settings probe: disconnect the UI
+        # callbacks, wait briefly, and park it so the wrapper outlives the
+        # thread. Without this block a window closed during a ~0.8 s export
+        # would let the GC collect a RUNNING QThread, which Qt6 turns into
+        # qFatal("Destroyed while thread is still running") — a hard process
+        # abort, and the most likely way a user loses work in this window.
+        try:
+            xw = getattr(self.extract_page, "_xlsx_worker", None)
+            if xw is not None:
+                try:
+                    xw.done.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+                if xw.isRunning():
+                    _wait(xw, 500)
+                if xw.isRunning():
+                    _park_orphaned_worker(xw)
+        except Exception:
+            pass
         # Same deal for the providers page's connection-test workers.
         # _test_workers is a dict[worker, card] (changed from a single
         # _test_worker by the H1 freeze fix) — clean up every live one.
@@ -4195,6 +4693,24 @@ class RangeChartFluentWindow(FluentWindow):
 
 
 def main():
+    # FIX-2026-10-17 (F-14): declare the scaling policy before the QApplication
+    # exists — Qt reads it at construction, so setting it later is a no-op.
+    #
+    # Qt6 already scales, but by DEFAULT it ROUNDS the scale factor to a whole
+    # device pixel. On a 150% display that turns a 100px column into 150 device
+    # px by resampling, which is what makes fractional-scaled Qt apps look
+    # soft. PassThrough keeps the exact ratio and lets the compositor do the
+    # scaling. main.py also sets QT_ENABLE_HIGHDPI_SCALING before importing us;
+    # this is the app-side half and both are needed — the env var covers the
+    # Qt version behaviour, this covers the rounding.
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    except Exception:  # noqa: BLE001 - older Qt / unusual build: default is fine
+        pass
+
     app = QApplication.instance() or QApplication(sys.argv)
     setTheme(Theme.AUTO)
     setThemeColor("#2563eb")

@@ -58,17 +58,16 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rca_core import (  # noqa: E402
-    TABLE_CONFIGS,
     Translator,
     build_table_export,
     extract,
     get_configs_for_result,
     load_image_b64,
+    result_to_json,
     to_csv,
     to_tsv,
 )
 from rca_core.aggregate import (
-    COLUMNAR_SECTION_SCHEMA,
     RANGE_CHART_SCHEMA,
     SCHEMA_BY_MODE,
     merge_results,
@@ -428,39 +427,6 @@ class RangeChartApp:
     ``ACTIVE`` list kept every dismissed toast alive until the process ended.
     """
 
-    def _bind_entry_focus_animation(self, entry):
-        """Bind focus-in / focus-out events to give a vscode-like focus ring
-        on ttK.Entry widgets (which do not natively support focus styling in
-        ttk without re-styling the whole theme)."""
-        def on_focus_in(_e):
-            try:
-                entry.configure(highlightthickness=2,
-                                highlightbackground=COLORS["border_focus"])
-            except Exception:
-                pass
-        def on_focus_out(_e):
-            try:
-                entry.configure(highlightthickness=1,
-                                highlightbackground=COLORS["border"])
-            except Exception:
-                pass
-        entry.bind("<FocusIn>", on_focus_in)
-        entry.bind("<FocusOut>", on_focus_out)
-    def _bind_button_hover(self, button, kind="primary"):
-        """Add smooth cc-switch-style hover / pressed feedback to a button.
-
-        Themed ttk buttons swap their style name on Enter / Leave so the
-        engine re-renders with the right palette. The hover style bumping
-        is deliberately small so the UI doesn't feel jumpy.
-        """
-        hover = self._style_for(kind, "hover")
-        default = self._style_for(kind, "default")
-        # Bind pre-computed style objects (not lambdas calling _style_for at
-        # event-time, which would crash because ttk.Button.configure(style=...)
-        # expects a string not a function reference).
-        button.bind("<Enter>", lambda _e, b=button, s=hover: b.configure(style=s))
-        button.bind("<Leave>", lambda _e, b=button, s=default: b.configure(style=s))
-
     @staticmethod
     def _style_for(kind, state):
         """Return a ttk style name for a button kind + state."""
@@ -472,17 +438,6 @@ class RangeChartApp:
         if kind == "secondary":
             return "TButton"
         return "Tertiary.TButton"
-    def _bind_group_hover(self, frame):
-        """Give a settings-group frame a subtle primary-tinted border on hover."""
-        off_color = frame.cget("highlightbackground") if frame.cget("highlightbackground") else COLORS["card_border"]
-        on_color = COLORS["primary"]
-        frame.bind("<Enter>",
-                   lambda _e, f=frame, c=on_color:
-                   f.configure(highlightbackground=c, highlightthickness=1))
-        frame.bind("<Leave>",
-                   lambda _e, f=frame, c=off_color:
-                   f.configure(highlightbackground=c,
-                               highlightthickness=1 if f.cget("bg") == COLORS["primary_soft"] else 0))
     def _bind_dirty_traces(self):
         """Watch the settings vars; if user changes a value, mark dirty."""
         def _w(name):
@@ -569,6 +524,9 @@ class RangeChartApp:
         self._build_style()
         self._build_ui()
         self.retranslate()
+        # FIX-2026-10-17 (F-18): at construction there is no result yet, so
+        # the export button starts disabled — see _update_export_enabled.
+        self._update_export_enabled()
         # Global Ctrl+V to paste a screenshot from the OS clipboard.
         self.root.bind("<Control-v>", self._paste_from_clipboard, add="+")
         self.root.after(120, self._poll_queue)
@@ -661,6 +619,23 @@ class RangeChartApp:
                 background=[("pressed", COLORS["row_alt"]), ("active", COLORS["row_hover"]),
                             ("disabled", COLORS["field_disabled"])],
                 foreground=[("disabled", COLORS["muted"])],
+            )
+
+            # --- link button (API-REVIEW-2026-10-18): opens a preset's
+            # doc / key page. An underlined, borderless, left-aligned
+            # button; named explicitly so ttk doesn't silently fall back
+            # to the default chrome. The color is `accent` (the palette's
+            # designated link blue), NOT `primary` — the latter is the
+            # near-black slate used for filled buttons, and #0f172a on the
+            # white card is body text, not a link. ---
+            style.configure("Link.TButton", padding=(0, 3),
+                            background=COLORS["card"], foreground=COLORS["accent"],
+                            relief="flat", anchor="w", borderwidth=0)
+            style.map(
+                "Link.TButton",
+                background=[("active", COLORS["card"]), ("pressed", COLORS["card"])],
+                foreground=[("active", COLORS["accent_hover"]),
+                            ("pressed", COLORS["accent_hover"])],
             )
 
             # --- inputs: subtle border, navy focus ring, disabled state ---
@@ -1177,6 +1152,15 @@ class RangeChartApp:
         self.btn_export_json = self._reg(ttk.Button(top, text="", command=self._export_json),
                                          "text", "action.exportJson")
         self.btn_export_json.pack(side="right")
+        # FIX-2026-10-17 (F-18): this button used to be clickable ALWAYS, and
+        # `_export_json`'s `if not self.result: return` answered a click on an
+        # empty result with NOTHING — no dialog, no status line, no state
+        # change. The Web client shows a toast and the Fluent app disables
+        # its export buttons; this was the only front-end where the click
+        # just vanished. The button now reflects result presence directly
+        # (see _update_export_enabled), which says more than a dialog
+        #_after_ a dead click ever could.
+        self.btn_export_json.configure(state="disabled")
 
         # Results notebook. Tab content is rebuilt dynamically by
         # `_render_result` based on the active result shape (range-chart
@@ -1269,10 +1253,6 @@ class RangeChartApp:
         self._refresh_conf()
         if not self.var_status.get():
             self.var_status.set(self._t("status.ready"))
-
-    def _on_lang_change(self):
-        self.tr.set_lang(self.var_lang.get())
-        self.retranslate()
 
     def _on_lang_change_combo(self, _event=None):
         display = self.cmb_lang.get().strip()
@@ -1385,6 +1365,17 @@ class RangeChartApp:
         self.image_b64 = b64
         self.media_type = mime
         self._img_dims = (w, h, resized)
+        # FIX-2026-10-17 (F-06): picking a new image used to leave the
+        # PREVIOUS extraction in place, so the preview showed B while the
+        # tables (and the JSON export's source_file field!) still described
+        # A — the Web client's handleFile and the Fluent app both clear on
+        # pick; this was the last front-end that kept stale results visible
+        # across an image change. Clearing here also re-disables the export
+        # button via _update_export_enabled, so the stale result can no
+        # longer be exported under the new file's name.
+        self.result = None
+        self.raw_text = ""
+        self._update_export_enabled()
         self._refresh_imginfo()
         self._render_preview(path)
 
@@ -1458,6 +1449,12 @@ class RangeChartApp:
         self.image_b64 = b64
         self.media_type = mime
         self._img_dims = (w, h, resized)
+        # FIX-2026-10-17 (F-06): same stale-result clearing as _choose_image —
+        # a pasted screenshot is a new image and must not keep the previous
+        # extraction (or its export button) alive underneath it.
+        self.result = None
+        self.raw_text = ""
+        self._update_export_enabled()
         self._refresh_imginfo()
         self._render_preview(tmp_path)
         self.var_status.set(self._t("image.pasted"))
@@ -1708,22 +1705,54 @@ class RangeChartApp:
         thread.start()
 
     def _run_connection_test(self, provider: LlmProvider, token: int):
+        # FIX-2026-10-17 (F-08): nothing here used to catch anything. A
+        # provider thread that raised (DNS failure inside a sandbox, an
+        # unreachable proxy raising before the HTTP layer, any unexpected
+        # error in test_llm_connection) died silently, the callback never
+        # ran, `self._testing_id` kept the provider's id FOREVER, and the
+        # provider's "Testing…" spinner never cleared — the test button for
+        # that provider was dead until restart (the early-return at the top
+        # of _test_provider_connection sees _testing_id == provider.id and
+        # refuses to start a new test).
+        #
+        # F-09, same block: `res.error_key or "err.http"` mislabelled the
+        # non-HTTP failures. A TokenError IS the auth layer saying so, and a
+        # socket timeout never saw an HTTP response at all; both were
+        # reported as err.http. The connection result carries its status
+        # code, so the key is chosen from it now.
         from rca_core.llm import test_llm_connection
-        res = test_llm_connection(provider, timeout_sec=8)
-        if res.ok:
-            text = "✓  " + str(res.latency_ms) + " ms"
-            if res.models_sample:
-                text += "  ·  " + ", ".join(res.models_sample[:3])
-            fg = COLORS["success"]
-            bg = COLORS["success_soft"]
-        else:
-            err_key = res.error_key or "err.http"
-            err_text = self._t(err_key)
-            text = "✗  " + err_text
-            if res.status:
-                text += "  (HTTP " + str(res.status) + ")"
+        try:
+            res = test_llm_connection(provider, timeout_sec=8)
+        except Exception as exc:
+            log.exception("connection test thread raised for %s", provider.id)
+            res = None
+            text = "✗  " + self._t("err.http") + " (" + exc.__class__.__name__ + ")"
             fg = COLORS["danger"]
             bg = "#fef2f2"
+        else:
+            if res.ok:
+                text = "✓  " + str(res.latency_ms) + " ms"
+                if res.models_sample:
+                    text += "  ·  " + ", ".join(res.models_sample[:3])
+                fg = COLORS["success"]
+                bg = COLORS["success_soft"]
+            else:
+                # F-09: classify from the status before falling back to the
+                # generic key. 401/403 are auth; a None status with a
+                # timeout-flavoured message is the socket giving up; only a
+                # real HTTP answer earns err.http.
+                if getattr(res, "status", None) in (401, 403):
+                    err_key = "err.auth"
+                elif getattr(res, "status", None) is None:
+                    err_key = "err.timeout"
+                else:
+                    err_key = res.error_key or "err.http"
+                err_text = self._t(err_key)
+                text = "✗  " + err_text
+                if res.status:
+                    text += "  (HTTP " + str(res.status) + ")"
+                fg = COLORS["danger"]
+                bg = "#fef2f2"
 
         def _apply():
             # Sprint B: stale-result guard — only the NEWEST test may
@@ -1769,6 +1798,17 @@ class RangeChartApp:
             iw, ih = img.size
             if iw <= 0 or ih <= 0:
                 return
+            # F-15 (UI-REVIEW-2026-10-17): for very large JPEGs, draft()
+            # hints the decoder to decode at a reduced resolution first —
+            # much faster and far less memory than LANCZOS-resizing the
+            # full-resolution image. It is a no-op for non-JPEG formats,
+            # and img.size must be re-read afterwards because the decoder
+            # may return a smaller image.
+            try:
+                img.draft("RGB", (cw * 2, ch * 2))
+            except Exception:  # pragma: no cover — decoder-specific
+                pass
+            iw, ih = img.size
             scale = min(cw / iw, ch / ih)
             new_size = (max(1, int(iw * scale)), max(1, int(ih * scale)))
             img = img.resize(new_size, Image.LANCZOS)
@@ -1784,6 +1824,20 @@ class RangeChartApp:
         self.busy = busy
         self.btn_extract.config(state="disabled" if busy else "normal",
                                 text=self._t("action.extracting") if busy else self._t("action.extract"))
+        # FIX-2026-10-17 (F-06): while an extraction is in flight the image
+        # inputs stayed LIVE. Pick B mid-run and _on_result wrote the result
+        # of A under B's filename in history — the audit trail recorded the
+        # wrong image. The extract button was already gated here; the three
+        # ways to change what is being extracted now gate with it.
+        for _btn in (self.btn_choose, self.btn_paste):
+            try:
+                _btn.config(state="disabled" if busy else "normal")
+            except tk.TclError:
+                pass
+        try:
+            self.txt_caption.config(state="disabled" if busy else "normal")
+        except tk.TclError:
+            pass
         if busy:
             self.progress.pack(side="right")
             self.progress.start(12)
@@ -1858,6 +1912,15 @@ class RangeChartApp:
             messagebox.showwarning("Range Chart Analyzer", f"Invalid endpoint: {why}")
             self._set_busy(False)
             return
+        # FIX-2026-10-17 (F-07): freeze the provider THIS run actually uses.
+        # History writing reads self._active_provider, which current_provider()
+        # refreshes from disk every call — so a provider switch DURING a run
+        # (now possible to notice since F-06 gates the image inputs; the
+        # provider list was never gated and stays editable in the wizard)
+        # made the saved record name the WRONG credentials for the request
+        # that had actually gone out. The audit trail is only an audit trail
+        # if it describes what ran, not what is selected now.
+        self._run_provider = provider
         self._set_busy(True)
         params = {
             "api_key": self.var_key.get().strip(),
@@ -2020,6 +2083,22 @@ class RangeChartApp:
         else:
             self._poll_after_id = None
 
+    def _update_export_enabled(self) -> None:
+        """Grey the JSON export out while there is no result to export.
+
+        FIX-2026-10-17 (F-18). The Web client toasts and the Fluent app
+        disables its buttons; this app's export button sat there clickable
+        and `_export_json`'s early return ate the click silently. Called
+        from the three places `self.result` changes: construction (disabled),
+        `_on_result` (enabled on success), and the image reset that clears
+        the previous extraction.
+        """
+        try:
+            self.btn_export_json.configure(
+                state="normal" if self.result else "disabled")
+        except Exception:  # noqa: BLE001 - a dead widget must not break teardown
+            pass
+
     def _on_result(self, result):
         self._set_busy(False)
         if not result.ok:
@@ -2027,6 +2106,7 @@ class RangeChartApp:
             if result.status:
                 msg += f" (HTTP {result.status})"
             self.var_status.set(msg)
+            self._update_export_enabled()
             # H7: prefer the upstream error body when present (it carries the
             # real 5xx reason the server returned); fall back to the model's
             # raw text otherwise.
@@ -2038,7 +2118,31 @@ class RangeChartApp:
             return
         self.result = result.data
         self.raw_text = result.raw
+        # FIX-2026-10-17 (X-06): attach the evidence-chain audit report, same
+        # as server.py and the Fluent GUI do. Before this, Tkinter extractions
+        # never carried `report`, so exports lacked the coverage / empty-table
+        # / truncation evidence the Web and Fluent paths produce. Pure and
+        # total (never raises); the try keeps the render path safe anyway.
+        try:
+            from rca_core.report import build_extraction_report
+            report = build_extraction_report(
+                data=self.result,
+                mode=getattr(result, "_mode", None) or self._resolved_mode(),
+                mode_used=getattr(result, "mode_used", "") or None,
+                mode_source=getattr(result, "mode_source", "") or None,
+                truncated=bool(getattr(result, "truncated", False)),
+                warning=getattr(result, "warning", "") or "",
+                image_sha256=getattr(result, "image_sha256", "") or "",
+                request_meta=getattr(result, "request_meta", None) or {},
+                runs=int((self.result or {}).get("runs", 1) or 1),
+                lang=self.tr.lang,
+            )
+            if isinstance(self.result, dict):
+                self.result["report"] = report
+        except Exception:
+            log.exception("build_extraction_report failed (best-effort)")
         self._render_result()
+        self._update_export_enabled()
         status = self._t("status.done")
         if result.partial_failures:
             # M2: explicit "N of M runs failed" so the operator can tell a
@@ -2046,10 +2150,22 @@ class RangeChartApp:
             pf = result.partial_failures
             total_runs = int((self.result or {}).get("runs", 0) or 0)
             total_runs = max(pf + 1, total_runs)
-            status += f" - {pf} run(s) failed (only {total_runs - pf}/{total_runs} succeeded)"
+            status += " " + self._t("results.partialFailures").format(
+                failed=pf, ok=total_runs - pf, total=total_runs)
         elif result.truncated:
             status += " - " + self._t("err.truncated")
         self.var_status.set(status)
+        # FIX-2026-10-17 (X-05): surface chimera_warnings. The kernel emits
+        # them (aggregate.py), the Fluent app shows an InfoBar, the Web
+        # client shows a banner — this app said NOTHING, so a merged row
+        # that no single run observed reached the user's export silently.
+        # The status line is this app's toast: it already carries the
+        # partial-failure note, so the chimera count appends to it.
+        _chimera = (self.result or {}).get("chimera_warnings") or []
+        if _chimera:
+            status += " · " + self._t("results.chimera_warning").replace(
+                "{n}", str(len(_chimera)))
+            self.var_status.set(status)
         # Phase J fix: persist the audit trail. Previously gui.py did
         # NOT write any HistoryRecord, so Tkinter users lost every
         # extraction to the void. Mirror the gui_fluent path: image
@@ -2245,15 +2361,24 @@ class RangeChartApp:
         )
         if not path:
             return
-        payload = {
-            "source_file": os.path.basename(self.image_path) if self.image_path else None,
-            "result": self.result,
-        }
+        # FIX-2026-10-17 (X-02): serialize through the kernel instead of a
+        # local json.dump. Two measured consequences of the hand-rolled
+        # version: the payload lacked `extracted_at` (so a desktop export
+        # could not be told apart from another one), and — worse — a NaN/Inf
+        # `confidence` was written as a BARE NaN/Infinity literal, which is
+        # not valid JSON: the same result exported from the browser parsed
+        # fine while ours was rejected. `result_to_json` sanitizes to null
+        # and writes the same field set as the Web client.
+        text = result_to_json(
+            self.result,
+            os.path.basename(self.image_path) if self.image_path else None,
+            time.strftime("%Y-%m-%dT%H:%M:%S"),
+        )
         # REVIEW-2026-09-10: same treatment as _export_csv above.
         try:
             tmp_path = path + ".tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
+                f.write(text)
             os.replace(tmp_path, path)
             self.var_status.set(self._t("status.saved"))
         except OSError as exc:
@@ -2364,9 +2489,12 @@ class RangeChartApp:
                 image_thumbnail=self._maybe_thumbnail(),
                 image_width=int(self._img_dims[0] if hasattr(self, "_img_dims") and self._img_dims and self._img_dims[0] else 0) or 0,
                 image_height=int(self._img_dims[1] if hasattr(self, "_img_dims") and self._img_dims and len(self._img_dims) > 1 and self._img_dims[1] else 0) or 0,
-                provider_id=(self._active_provider.id if getattr(self, "_active_provider", None) else "") or "",
-                provider_name=(self._active_provider.name if getattr(self, "_active_provider", None) else "") or "",
-                model=(self._active_provider.model if getattr(self, "_active_provider", None) else "") or "",
+                # FIX-2026-10-17 (F-07): describe the provider THIS run used
+                # (frozen in _on_extract), not whatever is selected now —
+                # see the _run_provider note there.
+                provider_id=(self._run_provider.id if getattr(self, "_run_provider", None) else "") or "",
+                provider_name=(self._run_provider.name if getattr(self, "_run_provider", None) else "") or "",
+                model=(self._run_provider.model if getattr(self, "_run_provider", None) else "") or "",
                 # Sprint B (REVIEW-2026-09-04): store the mode RESOLVED BY
                 # THE WORKER (attached to the result by _worker) and fall
                 # back to shape-based resolution — never the raw "auto"
@@ -2706,8 +2834,53 @@ class ProviderWizard:
         model_combo = ttk.Combobox(form, textvariable=self.var_model)
         model_combo.pack(fill="x", pady=(0, 8))
 
+        # API-REVIEW-2026-10-18 (cc-switch comparison): publish the preset's
+        # own documentation / key page / backup endpoints. These three
+        # ProviderPreset fields had no reader anywhere in the project, so a
+        # preset that names them was indistinguishable from one that doesn't
+        # and the backup hosts (Qiniu, SiliconFlow each publish two) were
+        # invisible — an operator whose relay moved had to go find the new
+        # host by hand. Mirrors the Fluent wizard's hint row.
+        self._render_preset_links(form, preset)
+
         # Footer button.
         self.btn_primary.config(text=self._t("settings.save"))
+
+    def _render_preset_links(self, parent, preset) -> None:
+        """Doc / API-key / backup-endpoint affordances for a picked preset.
+
+        Clicking opens the URL with the platform's default handler. A
+        preset with no metadata renders nothing (the common case: most
+        presets carry only a doc_url at most).
+        """
+        import webbrowser
+
+        def _link(label: str, url: str) -> None:
+            if not url:
+                return
+            btn = ttk.Button(parent, text=label, style="Link.TButton")
+            btn.pack(anchor="w", pady=(0, 4))
+            btn.configure(command=lambda u=url: webbrowser.open(u))
+
+        if preset is not None:
+            alternates = [c for c in (preset.endpoint_candidates or [])
+                          if c != preset.endpoint]
+            if alternates:
+                ttk.Label(
+                    parent,
+                    text=self._t("wizard.presetAltEndpoints").format(
+                        urls=", ".join(alternates)),
+                    style="WizardHint.TLabel", wraplength=520,
+                ).pack(anchor="w", pady=(0, 6))
+            if preset.api_key_hint and preset.api_key_hint != "API Key":
+                ttk.Label(
+                    parent,
+                    text=self._t("wizard.presetKeyHint").format(
+                        hint=preset.api_key_hint),
+                    style="WizardHint.TLabel", wraplength=520,
+                ).pack(anchor="w", pady=(0, 6))
+            _link(self._t("wizard.presetDocs"), preset.doc_url)
+            _link(self._t("wizard.presetGetKey"), preset.api_key_url)
 
     def _on_primary(self):
         # Only the details step has a meaningful primary action; presets step does nothing.
@@ -2723,10 +2896,35 @@ class ProviderWizard:
             fmt = ApiFormat.ANTHROPIC
         if not name or not endpoint:
             return
+        # API-REVIEW-2026-10-18: "https://" strips to "https:" — non-empty,
+        # so the blank check passed and a hostless endpoint was saved, then
+        # failed at every use with err.badEndpoint ("missing host"). Require
+        # a host at save time (mirrors the Fluent wizard's gate).
+        from urllib.parse import urlparse as _urlparse
+        if not _urlparse(endpoint).netloc:
+            messagebox.showwarning(
+                "Range Chart Analyzer",
+                self._t("wizard.endpointNoHost"),
+                parent=self.win,
+            )
+            return
 
+        # API-REVIEW-2026-10-18 (cc-switch comparison): a preset is a
+        # COMPLETE template — carry its extra_headers into the saved
+        # provider instead of dropping them. The Tk form has no headers
+        # field, so the preset is the only source; deep-copy so later
+        # edits to the preset table can't alias into saved providers.
+        # (Current presets ship none — forward-proofing.)
+        import copy as _copy
+        extra_headers = (
+            _copy.deepcopy(dict(self.selected_preset.extra_headers))
+            if (self.selected_preset is not None and self.selected_preset.extra_headers)
+            else {}
+        )
         provider = LlmProvider(
             name=name, api_format=fmt, endpoint=endpoint,
             api_key=api_key, model=model,
+            extra_headers=extra_headers,
         )
         self.store.add(provider)
         self.store.set_current(provider.id)
@@ -2736,13 +2934,32 @@ class ProviderWizard:
     def _set_current(self, provider_id: str):
         self.store.set_current(provider_id)
         self._render_provider_list()
-        if self.on_close:
-            self.on_close()
+        # FIX-2026-10-17 (F-04): this used to call self.on_close() — the same
+        # callback "Cancel" uses — so clicking "Set current" DESTROYED the
+        # wizard. A user who wanted to switch providers and then edit another
+        # one had to reopen the wizard for every single switch. Switching is
+        # not closing; stay open.
 
     def _delete_provider(self, provider_id: str):
         # Clear stale test state so a fresh test can be started immediately.
         if getattr(self, "_testing_id", None) == provider_id:
             self._testing_id = None
+        # FIX-2026-10-17 (F-03): this used to remove() unconditionally, with
+        # NO confirmation, and then call on_close() — the same callback
+        # "Cancel" uses — so one mis-click on the delete button both erased
+        # a configured endpoint + API key permanently AND closed the window
+        # before the user could even see what happened. Every other
+        # destructive action in this app asks first (history delete, clear
+        # all, discard edits); this one now does too. Message mirrors the
+        # Fluent page's providers.deleteConfirmHint, including the
+        # provider's name so a multi-provider list is unambiguous.
+        provider = next(
+            (p for p in self.store.providers if p.id == provider_id), None)
+        name = provider.name if provider else provider_id
+        if not messagebox.askyesno(
+                "Range Chart Analyzer",
+                self._t("providers.deleteConfirmHint").format(name=name)):
+            return
         self.store.remove(provider_id)
         self._render_provider_list()
         if self.on_close:

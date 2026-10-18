@@ -1268,7 +1268,7 @@ function rcaVizToken(name, fallback) {
 function rcaVizBarColor(bar) {
   if (!bar || !bar.placeable) return rcaVizToken('--text-light', '#78716c');
   if (bar.placed_by === 'geometry') return rcaVizToken('--primary-color', '#2563eb');
-  if (bar.placed_by === 'bed') return rcaVizToken('--success-color', '#10b981');
+  if (bar.placed_by === 'bed') return rcaVizToken('--success-color', '#059669');
   if (bar.placed_by === 'age') return rcaVizToken('--info-color', '#6366f1');
   return rcaVizToken('--secondary-color', '#6b7280');
 }

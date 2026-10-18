@@ -19,6 +19,7 @@ import io
 import logging
 import os
 import time
+from datetime import datetime
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -546,9 +547,29 @@ class HistoryPage(ScrollArea):
                 # History record holds a single result (not multiple runs),
                 # the full multi-table export is available via result_to_json.
                 # Change extension to .json and export everything.
+                #
+                # FIX-2026-10-17 (X-01): this call used to be
+                # `result_to_json(rec.result)` — one argument for a function
+                # whose `source_file`/`timestamp` were REQUIRED — so the
+                # whole branch raised TypeError, the surrounding
+                # `except Exception` turned it into an InfoBar with Python's
+                # English signature in it, and NOT ONE BYTE was ever written.
+                # The signature now defaults both, and the history record's
+                # own fields fill them in: the exported file carries the
+                # same `extracted_at`/`source_file` pair the Web client
+                # writes, instead of a bare result.
                 json_path = path.rsplit(".", 1)[0] + ".json"
                 with open(json_path, "w", encoding="utf-8") as f:
-                    f.write(result_to_json(rec.result))
+                    f.write(result_to_json(
+                        rec.result,
+                        rec.source_file or None,
+                        # HistoryRecord.timestamp is a Unix float; the payload
+                        # field is ISO-8601 everywhere else (Web client,
+                        # kernel default), so convert rather than leak a raw
+                        # epoch number into a hand-edited file.
+                        datetime.fromtimestamp(rec.timestamp).isoformat(
+                            timespec="seconds") if rec.timestamp else None,
+                    ))
                 path = json_path  # so InfoBar reports the correct name
                 # M4 fix (REVIEW-2026-11-07): localized message that
                 # explicitly says the user's .csv pick was saved as .json

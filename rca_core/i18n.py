@@ -9,6 +9,31 @@ TRANSLATIONS = {
 }
 
 TRANSLATIONS["zh"] = {
+    # FIX-2026-10-17 (X-08): the partial-failure note in
+    # gui.py._on_result was an f-string hardcoded in English;
+    # a Japanese or English user extracting with runs>1 read a
+    # status line in the wrong language whenever a run failed.
+    "results.partialFailures": '- {failed} 轮失败（仅 {ok}/{total} 轮成功）',
+    # FIX-2026-10-17 (F-09): a 401/403 from a provider used to be
+    # reported as err.http — the same string a 500 gets — so a user
+    # with a revoked key was told 'server error, retry' when the
+    # correct advice is 'the key is wrong'. Classified in
+    # gui.py's connection test by status code.
+    "err.auth": '鉴权失败：API Key 无效或已过期。',
+    # FIX-2026-10-17 (F-02): deleting a provider used to be a
+    # bare store.remove()+save() with NO confirmation — the only
+    # destructive action in the whole providers page that did not
+    # ask. Sibling dialogs (history delete, clear-all) have asked
+    # via MessageBox since REVIEW-2026-09-20; this page drifted.
+    "providers.deleteConfirm": '确定删除这个提供商？',
+    "providers.deleteConfirmHint": '「{name}」的端点与 API Key 将被一并移除，且不可恢复。',
+    # FIX-2026-10-17 (F-22): the failure path used a hardcoded
+    # Chinese f-string, so an English or Japanese user saw it in a
+    # language they cannot read — and this branch only ever fires
+    # when something HAS gone wrong, i.e. exactly when the message
+    # matters most. The sibling branch 4 lines up already used
+    # self._t("edit.historyMissing"); these two had drifted.
+    "edit.historySaveFailed": "保存历史记录失败：{error}",
     "history.filter.zonation": "生物带",
     # FE-BORROW-2026-09-20 (domain U): mirror of the browser catalog in
     # js/i18n.js — a11y strings (theme / language labels, theme button
@@ -164,6 +189,14 @@ TRANSLATIONS["zh"] = {
     "status.uploading": "正在上传图像……",
     "status.thinking": "正在分析图像，请稍候……",
     "status.parsing": "正在解析结果……",
+    # UX-2026-10-18 (流畅性 A3): emitted by call_llm_api_with_retry before
+    # each backoff sleep, and suffixed by _on_progress with
+    # " {next}/{retries} ({seconds})" — e.g. "请求受限，正在重试… 2/3 (1.1s)".
+    # The counts are CONCATENATED, not placeholders, matching the existing
+    # convention for the parameterised "analyzing:" progress string, so no
+    # placeholder-scheme change is needed and nothing here has to agree
+    # across languages beyond the three-locale key being present.
+    "status.retrying": "请求受限，正在重试…",
     "status.phyloParsing": "正在解析系统发育树……",
     "status.confidence": "整体置信度",
     "status.copied": "已复制到剪贴板",
@@ -360,6 +393,14 @@ TRANSLATIONS["zh"] = {
     "wizard.fieldEndpoint": "端点（基础 URL）",
     "wizard.apiKeyField": "API Key 字段",
     "wizard.extraHeaders": "额外请求头 (JSON)",
+    # API-REVIEW-2026-10-18: hostless endpoint gate (e.g. "https://" saved).
+    "wizard.endpointNoHost": "端点缺少主机名——请填写完整的基础 URL（例如 https://api.example.com）",
+    # Preset metadata affordances (cc-switch comparison): these publish the
+    # ProviderPreset fields that used to have no reader anywhere.
+    "wizard.presetAltEndpoints": "备用端点：{urls}",
+    "wizard.presetKeyHint": "Key 格式：{hint}",
+    "wizard.presetDocs": "查看该提供商的文档",
+    "wizard.presetGetKey": "前往获取 API Key",
     "settings.testing": "测试中…",
     "provider.noEndpoint": "未配置端点",
     "provider.searchPlaceholder": "搜索提供商名称或地址...",
@@ -403,6 +444,15 @@ TRANSLATIONS["zh"] = {
     "history.detail.close": "关闭",
     "history.detail.provenance": "导出溯源 (PROV-O JSON-LD)",
     "history.detail.provenance.noServer": "本地服务未运行——请先启动「python server.py」再导出溯源文档",
+    # F-23 (UI-REVIEW-2026-10-17): provenance error paths were hardcoded
+    # English; the sibling noServer branch right above already went through
+    # i18n. All seven strings below (button + 6 error messages) are trilingual.
+    "history.detail.provenance.fetchFailed": "获取溯源文档失败：{error}",
+    "history.detail.provenance.notFound": "历史记录不存在（服务器返回 404）。",
+    "history.detail.provenance.forbidden": "服务器拒绝了请求（缺少客户端标识头），请更新程序后重试。",
+    "history.detail.provenance.serverError": "服务器生成溯源文档失败，请稍后重试。",
+    "history.detail.provenance.httpError": "服务器错误（HTTP {status}）。",
+    "history.detail.provenance.badJson": "服务器返回的内容不是有效的 JSON。",
     "history.confirmDelete": "确定删除这条记录？",
     # M4 fix (REVIEW-2026-11-07): the History CSV export actually saves a
     # full multi-table JSON (a single record holds one result, not runs);
@@ -466,6 +516,8 @@ TRANSLATIONS["zh"] = {
     "export.json": "导出 JSON",
     "export.csv": "导出 CSV",
     "export.tsv": "复制 TSV",
+    # FIX-2026-10-17 (X-03): Fluent per-table export actions.
+    "export.noTable": "没有可导出的表格——请先完成一次提取",
     "export.all": "导出全部",
     "export.xlsxDone": "XLSX 已导出",
     "export.xlsxMissingOpenpyxl": "XLSX 导出需要 openpyxl，请先安装：pip install openpyxl",
@@ -559,6 +611,31 @@ TRANSLATIONS["zh"] = {
 }
 
 TRANSLATIONS["en"] = {
+    # FIX-2026-10-17 (X-08): the partial-failure note in
+    # gui.py._on_result was an f-string hardcoded in English;
+    # a Japanese or English user extracting with runs>1 read a
+    # status line in the wrong language whenever a run failed.
+    "results.partialFailures": '- {failed} run(s) failed (only {ok}/{total} succeeded)',
+    # FIX-2026-10-17 (F-09): a 401/403 from a provider used to be
+    # reported as err.http — the same string a 500 gets — so a user
+    # with a revoked key was told 'server error, retry' when the
+    # correct advice is 'the key is wrong'. Classified in
+    # gui.py's connection test by status code.
+    "err.auth": 'Authentication failed: the API key is invalid or expired.',
+    # FIX-2026-10-17 (F-02): deleting a provider used to be a
+    # bare store.remove()+save() with NO confirmation — the only
+    # destructive action in the whole providers page that did not
+    # ask. Sibling dialogs (history delete, clear-all) have asked
+    # via MessageBox since REVIEW-2026-09-20; this page drifted.
+    "providers.deleteConfirm": 'Delete this provider?',
+    "providers.deleteConfirmHint": 'The endpoint and API key of “{name}” will be removed together. This cannot be undone.',
+    # FIX-2026-10-17 (F-22): the failure path used a hardcoded
+    # Chinese f-string, so an English or Japanese user saw it in a
+    # language they cannot read — and this branch only ever fires
+    # when something HAS gone wrong, i.e. exactly when the message
+    # matters most. The sibling branch 4 lines up already used
+    # self._t("edit.historyMissing"); these two had drifted.
+    "edit.historySaveFailed": "Could not save the history record: {error}",
     "history.filter.zonation": "Zonation",
     # FE-BORROW-2026-09-20 (domain U): see the zh block comment.
     "a11y.skipToContent": "Skip to main content",
@@ -693,6 +770,8 @@ TRANSLATIONS["en"] = {
     "status.uploading": "Uploading image...",
     "status.thinking": "Analyzing image...",
     "status.parsing": "Parsing result...",
+    # See the zh entry above: suffixed with " {next}/{retries} ({seconds})".
+    "status.retrying": "Rate limited, retrying...",
     "status.phyloParsing": "Parsing phylogenetic tree...",
     "status.confidence": "Overall confidence",
     "status.copied": "Copied to clipboard",
@@ -849,6 +928,7 @@ TRANSLATIONS["en"] = {
     "export.json": "Export JSON",
     "export.csv": "Export CSV",
     "export.tsv": "Copy TSV",
+    "export.noTable": "No table to export — run an extraction first",
     "export.all": "Export all",
     "export.xlsxDone": "XLSX exported",
     "export.xlsxMissingOpenpyxl": "XLSX export requires openpyxl. Install with: pip install openpyxl",
@@ -877,6 +957,11 @@ TRANSLATIONS["en"] = {
     "wizard.fieldEndpoint": "Endpoint (base URL)",
     "wizard.apiKeyField": "API Key Field",
     "wizard.extraHeaders": "Extra Headers (JSON)",
+    "wizard.endpointNoHost": "The endpoint has no hostname — enter a full base URL (e.g. https://api.example.com)",
+    "wizard.presetAltEndpoints": "Backup endpoints: {urls}",
+    "wizard.presetKeyHint": "Key format: {hint}",
+    "wizard.presetDocs": "Open this provider's documentation",
+    "wizard.presetGetKey": "Get an API key",
     "settings.testing": "Testing...",
     "provider.noEndpoint": "Not configured",
     "provider.searchPlaceholder": "Search providers by name or URL...",
@@ -928,6 +1013,12 @@ TRANSLATIONS["en"] = {
     "history.detail.close": "Close",
     "history.detail.provenance": "Export Provenance (PROV-O JSON-LD)",
     "history.detail.provenance.noServer": "Local server is not running — start \"python server.py\" first, then export the provenance document",
+    "history.detail.provenance.fetchFailed": "Failed to fetch provenance: {error}",
+    "history.detail.provenance.notFound": "Record not found (server returned 404).",
+    "history.detail.provenance.forbidden": "The server rejected the request (missing client header). Please update the app and retry.",
+    "history.detail.provenance.serverError": "Provenance generation failed on the server. Please retry later.",
+    "history.detail.provenance.httpError": "Server error (HTTP {status}).",
+    "history.detail.provenance.badJson": "The server response is not valid JSON.",
     "history.confirmDelete": "Delete this record?",
     # M4 fix (REVIEW-2026-11-07): see zh entry — localized + explicit
     # about the .csv → .json extension swap.
@@ -1066,6 +1157,31 @@ TRANSLATIONS["en"] = {
 }
 
 TRANSLATIONS["ja"] = {
+    # FIX-2026-10-17 (X-08): the partial-failure note in
+    # gui.py._on_result was an f-string hardcoded in English;
+    # a Japanese or English user extracting with runs>1 read a
+    # status line in the wrong language whenever a run failed.
+    "results.partialFailures": '- {failed}回失敗（{ok}/{total}回のみ成功）',
+    # FIX-2026-10-17 (F-09): a 401/403 from a provider used to be
+    # reported as err.http — the same string a 500 gets — so a user
+    # with a revoked key was told 'server error, retry' when the
+    # correct advice is 'the key is wrong'. Classified in
+    # gui.py's connection test by status code.
+    "err.auth": '認証に失敗しました：APIキーが無効か期限切れです。',
+    # FIX-2026-10-17 (F-02): deleting a provider used to be a
+    # bare store.remove()+save() with NO confirmation — the only
+    # destructive action in the whole providers page that did not
+    # ask. Sibling dialogs (history delete, clear-all) have asked
+    # via MessageBox since REVIEW-2026-09-20; this page drifted.
+    "providers.deleteConfirm": 'このプロバイダーを削除しますか？',
+    "providers.deleteConfirmHint": '「{name}」のエンドポイントとAPIキーは一緒に削除され、元に戻せません。',
+    # FIX-2026-10-17 (F-22): the failure path used a hardcoded
+    # Chinese f-string, so an English or Japanese user saw it in a
+    # language they cannot read — and this branch only ever fires
+    # when something HAS gone wrong, i.e. exactly when the message
+    # matters most. The sibling branch 4 lines up already used
+    # self._t("edit.historyMissing"); these two had drifted.
+    "edit.historySaveFailed": "履歴レコードを保存できませんでした: {error}",
     "history.filter.zonation": "帯区分",
     # FE-BORROW-2026-09-20 (domain U): see the zh block comment.
     "a11y.skipToContent": "メインコンテンツへスキップ",
@@ -1199,6 +1315,8 @@ TRANSLATIONS["ja"] = {
     "status.uploading": "画像をアップロード中……",
     "status.thinking": "画像を分析中……",
     "status.parsing": "結果を解析中……",
+    # See the zh entry above: suffixed with " {next}/{retries} ({seconds})".
+    "status.retrying": "レート制限中です。再試行中……",
     "status.phyloParsing": "系統樹を解析中……",
     "status.confidence": "全体の信頼度",
     "status.copied": "クリップボードにコピーしました",
@@ -1357,6 +1475,7 @@ TRANSLATIONS["ja"] = {
     "export.json": "JSON 出力",
     "export.csv": "CSV 出力",
     "export.tsv": "TSV をコピー",
+    "export.noTable": "エクスポートできる表がありません——先に抽出を実行してください",
     "export.all": "すべて出力",
     "export.xlsxDone": "XLSX を出力しました",
     "export.xlsxMissingOpenpyxl": "XLSX 出力には openpyxl が必要です。pip install openpyxl でインストールしてください。",
@@ -1385,6 +1504,11 @@ TRANSLATIONS["ja"] = {
     "wizard.fieldEndpoint": "エンドポイント（ベース URL）",
     "wizard.apiKeyField": "API鍵フィールド",
     "wizard.extraHeaders": "追加ヘッダー (JSON)",
+    "wizard.endpointNoHost": "エンドポイントにホスト名がありません——完全なベース URL を入力してください（例：https://api.example.com）",
+    "wizard.presetAltEndpoints": "バックアップエンドポイント：{urls}",
+    "wizard.presetKeyHint": "キーの形式：{hint}",
+    "wizard.presetDocs": "このプロバイダーのドキュメントを開く",
+    "wizard.presetGetKey": "API キーを取得する",
     "settings.testing": "テスト中…",
     "provider.noEndpoint": "未設定",
     "provider.searchPlaceholder": "プロバイダー名またはURLで検索...",
@@ -1436,6 +1560,12 @@ TRANSLATIONS["ja"] = {
     "history.detail.close": "閉じる",
     "history.detail.provenance": " Provenanceをエクスポート (PROV-O JSON-LD)",
     "history.detail.provenance.noServer": "ローカルサーバーが起動していません——「python server.py」を起動してからエクスポートしてください",
+    "history.detail.provenance.fetchFailed": "Provenanceドキュメントの取得に失敗しました：{error}",
+    "history.detail.provenance.notFound": "履歴記録が存在しません（サーバーが404を返しました）。",
+    "history.detail.provenance.forbidden": "サーバーがリクエストを拒否しました（クライアントヘッダーが不足）。アプリを更新して再試行してください。",
+    "history.detail.provenance.serverError": "サーバー側でProvenance生成に失敗しました。しばらくしてから再試行してください。",
+    "history.detail.provenance.httpError": "サーバーエラー（HTTP {status}）。",
+    "history.detail.provenance.badJson": "サーバーの応答が有効なJSONではありません。",
     "history.confirmDelete": "この記録を削除しますか？",
     # M4 fix (REVIEW-2026-11-07): see zh entry — localized + explicit
     # about the .csv → .json extension swap.

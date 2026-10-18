@@ -53,6 +53,8 @@ const RCA_I18N = {
     'settings.remember.hint': '密钥仅保存在当前会话（sessionStorage），关闭标签页即清除；勾选「记住」仅在本会话内保留密钥。',
     'settings.mode': '连接模式',
     'settings.mode.hint': '自动：由本地服务器打开时走后端（避免 CORS），否则浏览器直连。',
+    // API-REVIEW-2026-10-18: direct transport speaks Anthropic Messages only.
+    'settings.mode.hintDirect': '浏览器直连使用 Anthropic Messages 格式（x-api-key + /v1/messages）。OpenAI / Gemini 格式的服务请改用「经本地后端」或桌面端。',
     'settings.mode.auto': '自动',
     'settings.mode.backend': '经本地后端（推荐，避免 CORS）',
     'settings.mode.direct': '浏览器直连 / 代理',
@@ -180,6 +182,9 @@ const RCA_I18N = {
     'results.copy': '复制',
     'results.copyTsv': '复制 (TSV)',
     'results.downloadCsv': '下载 CSV',
+    // A4 (UX-2026-10-18): shown on a table long enough that scrolling it
+    // costs more than exporting it. {n} rows, {threshold} the cut-off.
+    'results.tableTooLong': '共 {n} 行（超过 {threshold} 行）——上方的「复制 TSV / 下载 CSV」包含全部行，无需逐页滚动。',
     'results.copied': '已复制到剪贴板',
     'results.noRows': '（此项无数据）',
     'results.rawToggle': '查看模型原始返回',
@@ -396,6 +401,11 @@ const RCA_I18N = {
     'reason_code.abbreviated': '标签为缩写或截断名，无法唯一还原',
     'reason_code.low_confidence': '该行存在被丢弃或相互矛盾的证据，可信度低',
     'reason_code.out_of_scope': '该单元超出本次请求的范围（岩性、年代或非生物要素）',
+
+    // WEB-02 (UI-REVIEW-2026-10-17): the viz panel heading + interaction
+    // hint used to be hardcoded Chinese in index.html; now i18n keys.
+    'viz.heading': '延限—层位联动图',
+    'viz.hint': '悬停画布行＝高亮表格行 · 点击＝固定聚焦 · 再点/Esc＝取消 · ↑↓＝键盘移动 · Enter＝固定',
   },
 };
 
@@ -449,6 +459,7 @@ RCA_I18N.en = {
   'settings.remember.hint': 'The key is kept only in the current session (sessionStorage) and is cleared when the tab is closed; checking "Remember" only keeps the key within this session.',
   'settings.mode': 'Connection mode',
   'settings.mode.hint': 'Auto: use the backend when opened via the local server (avoids CORS), otherwise call the browser directly.',
+  'settings.mode.hintDirect': 'Direct browser calls speak Anthropic Messages only (x-api-key + /v1/messages). For OpenAI / Gemini format services, switch to "Via local backend" or use a desktop app.',
   'settings.mode.auto': 'Auto',
   'settings.mode.backend': 'Via local backend (recommended, avoids CORS)',
   'settings.mode.direct': 'Direct browser / proxy',
@@ -574,6 +585,7 @@ RCA_I18N.en = {
   'results.copy': 'Copy',
   'results.copyTsv': 'Copy (TSV)',
   'results.downloadCsv': 'Download CSV',
+  'results.tableTooLong': '{n} rows (over the {threshold}-row mark) — the Copy TSV / Download CSV buttons above cover every row, so there is no need to scroll through it.',
   'results.copied': 'Copied to clipboard',
   'results.noRows': '(no data for this section)',
   'results.rawToggle': 'View raw model response',
@@ -762,6 +774,10 @@ RCA_I18N.en = {
   'reason_code.abbreviated': 'The label is an abbreviated or truncated name that cannot be uniquely restored',
   'reason_code.low_confidence': 'Low confidence: this row carries dropped or conflicting evidence',
   'reason_code.out_of_scope': 'The unit is outside the requested scope (lithology, age or non-biotic element)',
+
+  // WEB-02: viz panel heading + interaction hint (were hardcoded Chinese).
+  'viz.heading': 'Range–Section Link Chart',
+  'viz.hint': 'Hover a bar = highlight its table row · Click = pin focus · Click again/Esc = unpin · ↑↓ = keyboard move · Enter = pin',
 };
 
 RCA_I18N.ja = {
@@ -813,6 +829,7 @@ RCA_I18N.ja = {
   'settings.remember.hint': 'キーは現在のセッション（sessionStorage）にのみ保存され、タブを閉じると削除されます。「記憶する」にチェックしてもキーはこのセッション内にのみ保持されます。',
   'settings.mode': '接続モード',
   'settings.mode.hint': '自動：ローカルサーバー経由で開いた場合はバックエンドを使用（CORS 回避）、それ以外はブラウザから直接呼び出します。',
+  'settings.mode.hintDirect': 'ブラウザ直接呼び出しは Anthropic Messages 形式のみ対応（x-api-key + /v1/messages）。OpenAI / Gemini 形式のサービスは「ローカルバックエンド経由」またはデスクトップアプリをご利用ください。',
   'settings.mode.auto': '自動',
   'settings.mode.backend': 'ローカルバックエンド経由（推奨・CORS 回避）',
   'settings.mode.direct': 'ブラウザ直接 / プロキシ',
@@ -938,6 +955,7 @@ RCA_I18N.ja = {
   'results.copy': 'コピー',
   'results.copyTsv': 'コピー (TSV)',
   'results.downloadCsv': 'CSV をダウンロード',
+  'results.tableTooLong': '全 {n} 行（{threshold} 行超）— 上部の「TSV をコピー / CSV をダウンロード」で全行をコピーできます。スクロールする必要はありません。',
   'results.copied': 'クリップボードにコピーしました',
   'results.noRows': '（この項目にデータなし）',
   'results.rawToggle': 'モデルの生応答を表示',
@@ -1120,6 +1138,10 @@ RCA_I18N.ja = {
   'reason_code.abbreviated': 'ラベルは略記または切断された名称で、一意に復元できない',
   'reason_code.low_confidence': '低信頼度：この行には欠落または矛盾する証拠がある',
   'reason_code.out_of_scope': 'このユニットは今回の要求範囲外（岩性、年代または非生物要素）',
+
+  // WEB-02: viz panel heading + interaction hint (were hardcoded Chinese).
+  'viz.heading': 'レンジ—層序連動図',
+  'viz.hint': 'バーにホバー＝表の行をハイライト · クリック＝フォーカス固定 · 再クリック/Esc＝解除 · ↑↓＝キーボード移動 · Enter＝固定',
 };
 
 // ==================== i18n runtime ====================

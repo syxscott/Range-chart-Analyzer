@@ -1010,6 +1010,34 @@ function rcaRowCellsFor(cfg, item) {
 const RCA_NONFINITE_TEXT = ['nan', 'inf', '-inf', '+inf', '-nan',
   'infinity', '-infinity'];
 
+// WEB-04 (UX-2026-10-18): at or above this row count a table gets
+// `data-rca-big="1"`, which css/app-ux.css turns into
+// `content-visibility: auto` on the <tr>s (NOT the <td>s — a contained
+// cell stops contributing to its column's preferred width and the columns
+// visibly shift as you scroll; on the row the drift measures 0.0 px).
+//
+// The threshold is a judgement call from the measured curve, and the curve
+// is the reason it exists rather than applying the rule unconditionally:
+//     rows    parse+layout+paint
+//       100          85 ms      <- already imperceptible
+//       500         296 ms
+//      5000        1926 ms      <- 583 ms with containment
+// Below a few hundred rows the containment bookkeeping (and the
+// scrollbar's initial-extent estimate) costs more than the layout it
+// saves, and small results are what a typical chart yields — so they keep
+// byte-identical markup and the existing tests stay untouched.
+const RCA_VIRTUAL_ROW_THRESHOLD = 600;
+
+// A4 (UX-2026-10-18): row count at which a table is called out as "long"
+// so the operator is told the CSV/TSV buttons above cover every row,
+// instead of discovering that after scrolling. Deliberately HIGHER than
+// RCA_VIRTUAL_ROW_THRESHOLD: containment is a rendering optimization we
+// want on as early as it pays, whereas a hint is a piece of UI the user has
+// to read and dismiss mentally — it should only appear when the scroll
+// really is worth avoiding. 1000 rows is roughly where dragging the
+// scrollbar stops being quicker than exporting.
+const RCA_LONG_TABLE_HINT_ROWS = 1000;
+
 // FE-FIX-2026-09-21 (audit item 13): the GRAMMAR of Python's `str(float)`
 // (exporter.py:867 `text = str(value)`). JS's `String()` and Python's
 // `repr(float)` agree on the shortest round-trip DIGITS but disagree on when
@@ -1334,6 +1362,25 @@ function rcaRenderResults(data, rawText, opts) {
       parts.push('<button type="button" class="btn btn-secondary btn-small" data-copy="' + safeId + '">' + rcaEsc(t('results.copyTsv')) + '</button>');
       parts.push('<button type="button" class="btn btn-secondary btn-small" data-csv="' + safeId + '">' + rcaEsc(t('results.downloadCsv')) + '</button>');
       parts.push('</div>');
+      // A4 (UX-2026-10-18): tell the operator the table is long BEFORE they
+      // discover it by scrolling. Measured with this repo's own fixtures:
+      // the export buttons sit at the very TOP of a 5000-row section, so
+      // the "just export the whole thing" escape hatch is invisible until
+      // you have already dragged a scrollbar through 5000 rows. The hint
+      // carries the export affordance with it.
+      //
+      // It must be an announcement, not a gate: exports read the model, not
+      // the DOM (rcaRowsForTable → data[tableId]), so every row is still
+      // exportable no matter what is painted — which is exactly why this is
+      // wording and not a truncation.
+      if (rows.length >= RCA_LONG_TABLE_HINT_ROWS) {
+        parts.push('<p class="table-length-hint">'
+          + rcaEsc(t('results.tableTooLong', {
+            n: rows.length,
+            threshold: RCA_LONG_TABLE_HINT_ROWS,
+          }))
+          + '</p>');
+      }
     }
     parts.push('</div>');
 
@@ -1356,11 +1403,28 @@ function rcaRenderResults(data, rawText, opts) {
     // cell navigation, so we keep the markup native rather than bolting a
     // role="grid" roving-tabindex widget onto read-only data.
     const tblLabel = rcaEscAttr(t(cfg.titleKey) + ' (' + rows.length + ')');
+    // WEB-04 (UX-2026-10-18): mark a table as "large" so css/app-ux.css can
+    // apply `content-visibility: auto` to its rows. HONEST STATUS: the rule
+    // is active (computed style confirms it) but has NO measurable speed
+    // benefit on current Chrome — Chrome does not size-contain internal
+    // table boxes, so nothing is skipped (see the css/app-ux.css WEB-04
+    // comment for the full evidence, including the AX-tree proof). Kept as
+    // defensive styling with two hard requirements:
+    //   - the attribute goes on the <table>, and the CSS rule on the <tr>,
+    //     NEVER on a <td>: a contained cell stops contributing to its
+    //     column's preferred width, and the measured drift when that
+    //     happens is up to ~267 px;
+    //   - the threshold exists so small results (the common case) keep
+    //     byte-identical markup — they were already fast (~85 ms at 100
+    //     rows) and unchanged markup keeps the DOM-stub tests untouched.
+    const isBig = rows.length >= RCA_VIRTUAL_ROW_THRESHOLD;
     // The scroll container is the J/K focus context (`tabindex="0"` only in
     // edit mode — the read-only renderer must not gain a tab stop).
     parts.push('<div class="table-wrap"'
       + (editOn ? ' tabindex="0" data-table-nav="' + safeId + '"' : '')
-      + '><table class="data-table" aria-label="' + tblLabel + '"><thead><tr>');
+      + '><table class="data-table"'
+      + (isBig ? ' data-rca-big="1"' : '')
+      + ' aria-label="' + tblLabel + '"><thead><tr>');
     if (editOn) {
       parts.push('<th scope="col" class="rca-col-select"><input type="checkbox" class="rca-select-all"'
         + ' data-select-all="' + safeId + '"'
@@ -1614,44 +1678,64 @@ if (typeof globalThis !== 'undefined') globalThis.rcaRenderNameIssues = rcaRende
 // so tests_edit_history.js fails the moment a key lands in js/i18n.js only in
 // one locale.
 const RCA_EDIT_STRINGS = {
-  'edit.addRow': { zh: '新增行', en: 'Add row' },
+  'edit.addRow': { zh: '新增行', en: 'Add row', ja: '行を追加' },
   'edit.addRowHint': { zh: '在表尾追加一行空白记录（可撤销）',
-    en: 'Append a blank row at the end of the table (undoable)' },
-  'edit.exportSelected': { zh: '导出所选', en: 'Export selected' },
-  'edit.deleteSelected': { zh: '删除所选', en: 'Delete selected' },
-  'edit.clearSelection': { zh: '清除选择', en: 'Clear selection' },
-  'edit.locate': { zh: '定位', en: 'Locate' },
-  'edit.locateColumn': { zh: '操作', en: 'Actions' },
-  'edit.locateHint': { zh: '在图表中定位该行', en: 'Locate this row in the chart' },
-  'edit.selectAll': { zh: '选择全部行', en: 'Select all rows' },
-  'edit.selectRow': { zh: '选择行', en: 'Select row' },
-  'edit.selectedCount': { zh: '已选 {n} 行', en: '{n} row(s) selected' },
-  'edit.cellNotNumber': { zh: '此列需要数值：{value}', en: 'A number is required: {value}' },
-  'edit.cellNotYesNo': { zh: '此列只接受 Y / N：{value}', en: 'Only Y / N accepted: {value}' },
-  'edit.badStage': { zh: '不是 ICS 阶名：{value}', en: 'Not an ICS stage name: {value}' },
+    en: 'Append a blank row at the end of the table (undoable)',
+    ja: '表の末尾に空の行を 1 行追加します（元に戻せます）' },
+  'edit.exportSelected': { zh: '导出所选', en: 'Export selected', ja: '選択範囲を書き出す' },
+  'edit.deleteSelected': { zh: '删除所选', en: 'Delete selected', ja: '選択範囲を削除' },
+  'edit.clearSelection': { zh: '清除选择', en: 'Clear selection', ja: '選択を解除' },
+  'edit.locate': { zh: '定位', en: 'Locate', ja: '位置特定' },
+  'edit.locateColumn': { zh: '操作', en: 'Actions', ja: '操作' },
+  'edit.locateHint': { zh: '在图表中定位该行', en: 'Locate this row in the chart', ja: 'この行を図上で特定します' },
+  'edit.selectAll': { zh: '选择全部行', en: 'Select all rows', ja: 'すべての行を選択' },
+  'edit.selectRow': { zh: '选择行', en: 'Select row', ja: '行を選択' },
+  'edit.selectedCount': { zh: '已选 {n} 行', en: '{n} row(s) selected', ja: '{n} 行を選択中' },
+  'edit.cellNotNumber': { zh: '此列需要数值：{value}', en: 'A number is required: {value}',
+    ja: 'この列には数値が必要です: {value}' },
+  'edit.cellNotYesNo': { zh: '此列只接受 Y / N：{value}', en: 'Only Y / N accepted: {value}',
+    ja: 'この列は Y / N のみ受け付けます: {value}' },
+  'edit.badStage': { zh: '不是 ICS 阶名：{value}', en: 'Not an ICS stage name: {value}',
+    ja: 'ICS の階名ではありません: {value}' },
   'edit.rangeInverted': { zh: '延限倒置：顶 {top} 不得老于底 {base}',
-    en: 'Range inverted: top {top} is older than base {base}' },
+    en: 'Range inverted: top {top} is older than base {base}',
+    ja: '延限が逆です: 上端 {top} が下端 {base} より古くてはいけません' },
   'edit.ageInverted': { zh: '年龄倒置：顶 {top} Ma 应小于等于底 {base} Ma',
-    en: 'Age inverted: top {top} Ma must not exceed base {base} Ma' },
+    en: 'Age inverted: top {top} Ma must not exceed base {base} Ma',
+    ja: '年代が逆です: 上端 {top} Ma は下端 {base} Ma 以下にしてください' },
   'edit.idxInverted': { zh: '层号倒置：顶 {top} 应大于等于底 {base}',
-    en: 'Bed order inverted: top {top} must be >= base {base}' },
-  'edit.undo': { zh: '撤销', en: 'Undo' },
-  'edit.redo': { zh: '重做', en: 'Redo' },
-  'edit.editsPending': { zh: '{n} 处未保存的修改', en: '{n} unsaved edit(s)' },
-  'edit.rowsDeleted': { zh: '已删除 {n} 行', en: 'Deleted {n} row(s)' },
-  'edit.noViz': { zh: '暂无联动图表可定位', en: 'No linked chart to locate in' },
+    en: 'Bed order inverted: top {top} must be >= base {base}',
+    ja: '層序が逆です: 上端 {top} は下端 {base} 以上である必要があります' },
+  'edit.undo': { zh: '撤销', en: 'Undo', ja: '元に戻す' },
+  'edit.redo': { zh: '重做', en: 'Redo', ja: 'やり直す' },
+  'edit.editsPending': { zh: '{n} 处未保存的修改', en: '{n} unsaved edit(s)',
+    ja: '未保存の変更が {n} 件あります' },
+  'edit.rowsDeleted': { zh: '已删除 {n} 行', en: 'Deleted {n} row(s)',
+    ja: '{n} 行を削除しました' },
+  'edit.noViz': { zh: '暂无联动图表可定位', en: 'No linked chart to locate in',
+    ja: '位置特定できる連動図がありません' },
   // FE-FIX-2026-09-22 (FE-AUDIT item 11): editCell's two guard failures used
   // to emit keys that existed in NO table — rcaEditT fell through to the
   // generic cellNotNumber text ("此列需要数值") for a missing row or a
-  // read-only column. Both keys now answer in zh+en (the ja locale keeps
-  // falling back to en — accepted residual).
-  'edit.notEditable': { zh: '此列只读，不可编辑', en: 'This column is read-only' },
+  // read-only column. Both keys now answer in zh+en+ja.
+  //
+  // WEB-03 (UI-REVIEW-2026-10-17): the `ja` locale used to fall back to
+  // English for ALL 28 keys, and `rcaEditAnnounce` pushes these very strings
+  // into a live region — so a Japanese user was told "A number is
+  // required: abc" in a screen reader. The residual noted here is CLOSED:
+  // every key in this table now carries all three locales, and
+  // tests_ui_fixes_2026_10_17_web.js asserts the three key sets are
+  // identical (a missing `ja` fails the suite, it does not degrade).
+  'edit.notEditable': { zh: '此列只读，不可编辑', en: 'This column is read-only',
+    ja: 'この列は読み取り専用で編集できません' },
   'edit.noRow': { zh: '找不到对应的行（数据可能已刷新）',
-    en: 'Row not found (the data may have been refreshed)' },
+    en: 'Row not found (the data may have been refreshed)',
+    ja: '該当する行が見つかりません（データが更新された可能性があります）' },
   // FE-FIX-2026-09-22 (FE-AUDIT item 2): refusal reason announced when an
   // addRow lands on a scalar-list table despite the hidden button.
   'edit.addRowScalar': { zh: '纯文本列表暂不支持新增行（请直接编辑已有行）',
-    en: 'Adding rows is not supported for plain text lists (edit existing rows instead)' },
+    en: 'Adding rows is not supported for plain text lists (edit existing rows instead)',
+    ja: 'プレーンテキストのリストには行を追加できません（既存の行を編集してください）' },
 };
 const RCA_EDIT_I18N_KEYS = Object.keys(RCA_EDIT_STRINGS);
 
@@ -3521,6 +3605,13 @@ function rcaEditCommitCell(cell, textOverride) {
   if (RCA_EDIT_DOM.editing && RCA_EDIT_DOM.editing.cell === cell) {
     RCA_EDIT_DOM.editing = null;
   }
+  // WEB-01 (UI-REVIEW-2026-10-17): a language switch made while this cell
+  // was being edited deferred the result-panel retranslate (app.js arms
+  // state._pendingRetranslate). The edit just ended — run the deferred
+  // retranslate so the panel doesn't stay in the old language forever.
+  if (typeof rcaConsumePendingRetranslate === 'function') {
+    rcaConsumePendingRetranslate();
+  }
   return res;
 }
 
@@ -3541,6 +3632,12 @@ function rcaEditRevertCell(cell) {
   RCA_EDIT_DOM.editing = null;
   if (typeof cell.blur === 'function') cell.blur();
   RCA_EDIT_DOM.reverting = false;
+  // WEB-01 (UI-REVIEW-2026-10-17): same deferred-retranslate drain as the
+  // commit path — Esc must also release a language switch that was parked
+  // while the cell was being edited.
+  if (typeof rcaConsumePendingRetranslate === 'function') {
+    rcaConsumePendingRetranslate();
+  }
   return true;
 }
 
@@ -4031,6 +4128,13 @@ function rcaEditOnFocusOut(ev) {
   const rec = RCA_EDIT_DOM.editing;
   if (rec && rec.cell === cell && rcaEditText(cell) === rec.text0) {
     RCA_EDIT_DOM.editing = null;
+    // WEB-01 self-review (2026-10-18): a no-op blur also ends the edit —
+    // drain a retranslate that a language switch parked while the caret sat
+    // in this cell, or the panel waits for a commit that may never come
+    // (visit-then-click-away is enough to hit this).
+    if (typeof rcaConsumePendingRetranslate === 'function') {
+      rcaConsumePendingRetranslate();
+    }
     return;
   }
   rcaEditCommitCell(cell);

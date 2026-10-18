@@ -7,6 +7,49 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-10-18
+
+### Changed
+
+- **Fluency pass (UX-2026-10-18).** Full report in
+  `docs/UX-SMOOTHNESS-2026-10-18.md`. Every number below was measured on
+  this machine before and after; two of the planned "optimizations" were
+  rejected because measurement said the benefit was not there.
+
+  | area | change | measured |
+  |---|---|---|
+  | `gui_fluent.py` | `_xlsx_available()` is `lru_cache`d — it runs inside `_update_result_actions()`, which re-runs on every progress tick, and its cold body is `import openpyxl` | first result render froze the UI thread **351.6 ms → 0.002 ms** |
+  | `rca_core/llm.py` + `gui_fluent.py` | transient-failure retries now announce themselves: `retrying:{n}/{retries}:{backoff}s` is emitted before every backoff sleep and rendered as "请求受限，正在重试… 2/3 (1.1s)" | the retry chain used to be silent; nothing else changed (backoff itself is 1.0–2.0 s and stays untouched) |
+  | `gui_fluent.py` | single-run extractions emit a 1 Hz `analyzing:1/1:{elapsed}s` heartbeat | the single-run path used to go silent between `analyzing` and the result — worst case ~6 min with no feedback. **The heartbeat timer lives on the GUI thread**: a QTimer created inside `QThread.run()` never fires (no event loop on that thread — measured 0 ticks); the first implementation of this very change shipped that bug and was caught by `tests/qt_thread_probe.py` |
+  | `gui_fluent.py` | XLSX export runs on a QThread (`_write_xlsx_worker`, gate-driven button state, `closeEvent` parks the worker) | `to_xlsx` costs **552–772 ms** at 1000–5000 rows — that whole time the window was frozen; CSV/TSV (30 ms) stay synchronous on purpose |
+  | `gui_fluent_providers.py` | removed four `store.save()` calls that duplicated the save each CRUD method already performs internally | one "add provider" wrote providers.json **three times**; at 60 providers each write is 70–84 ms of fsync+rename on the UI thread |
+  | `js/table.js` + `css/app-ux.css` | tables ≥ 600 rows (`RCA_VIRTUAL_ROW_THRESHOLD`) get `data-rca-big="1"` → `content-visibility: auto` on the rows; tables ≥ 1000 rows (`RCA_LONG_TABLE_HINT_ROWS`) also say so next to the export buttons | honest status: the containment rule **hits** (computed style confirms it) but has **no measurable speed benefit on current Chrome** — Chrome does not size-contain internal table boxes, so nothing is skipped (AX-tree proof: 5000/5000 rows still exposed to assistive tech with the rule on). Kept as defensive styling with the `<tr>`-never-`<td>` scoping enforced by tests; a `<td>` placement measurably shifts columns by up to **267 px** |
+
+  New tests: `tests_frontend_perf.js` (43 assertions incl. an AX-tree
+  mechanism check and a `<td>` negative control; `--quick` skips only the
+  5000-row cases and says so), a `browser-perf` CI job, and two Qt runtime
+  probes (`tests/qt_thread_probe.py`, `tests/qt_export_gate_probe.py`) that
+  require PyQt6/PySide6 and verify thread-model behaviour stubs cannot see.
+
+  Rejected after measurement, deliberately: model-izing the Qt table
+  (full pipeline is ~50 ms at 5000 rows, not the 149 ms a component-only
+  benchmark suggested), making CSV/TSV export async (30 ms — imperceptible),
+  and deferring `Database()` creation (30 ms cold, 6 ms warm).
+
+### Fixed
+
+- **Fluent GUI / XLSX export**: the export body is extracted to a module-level
+  function; during the fluency pass an earlier edit had left it **called but
+  never defined** — every "Export Excel" click would have raised `NameError`
+  inside the worker and surfaced only as an InfoBar "export failed"
+  (`tests/test_unbound_names.py` caught it).
+
+## [0.1.1] — 2026-10-16
+
+- Cut the one-file exe by 16.4% (323.5 → 270.6 MB) with no loss of function:
+  DevTools debug payloads and OpenCV video-IO decoders dropped, audited by
+  `scripts/audit_exclude_imports.py` / `audit_exclude_suite.py`.
+
 ### Fixed
 
 - **Full-code review of 2026-10-17: six P1 defects, all measured and fixed.**

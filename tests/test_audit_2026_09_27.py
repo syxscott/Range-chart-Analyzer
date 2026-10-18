@@ -2574,20 +2574,23 @@ class TestEveryErrorKeyTheServerEmitsIsRenderable:
                 assert m.group(1).strip(), f"{key}[{loc}] is empty"
 
     def test_the_gate_is_not_narrower_than_the_emitter(self):
-        # err.methodNotAllowed is emitted by the server but is NOT in
-        # RCA_KNOWN_ERROR_KEYS. That is safe today (the gate substitutes a
-        # fallback), and it is asserted as a fact rather than left to be
-        # rediscovered -- if it ever lands in the gate, the string is already
-        # in the catalogue (the test above), so nothing breaks.
+        # err.methodNotAllowed is emitted by the server (the HEAD-405 branch).
+        # It was ABSENT from RCA_KNOWN_ERROR_KEYS, so rcaKnownErrorKey()
+        # discarded it and the user saw a generic err.http instead of the
+        # 405 text that was sitting in the catalogue all along. API-REVIEW-
+        # 2026-10-18 closed that gap; the key is now whitelisted and the
+        # gate comment in minimax.js records why. The remaining assertion
+        # still does its real job: the gate may never be NARROWER than what
+        # the backend emits (a key the gate drops is a key the UI degrades).
         import re
         minimax = (REPO / "js" / "minimax.js").read_text(encoding="utf-8")
         m = re.search(r"RCA_KNOWN_ERROR_KEYS\s*=\s*new Set\(\[(.*?)\]\)",
                       minimax, re.S)
         assert m, "RCA_KNOWN_ERROR_KEYS not found -- the gate was renamed?"
         gate = set(re.findall(r"'([A-Za-z0-9_.\-]+)'", m.group(1)))
-        assert "err.methodNotAllowed" not in gate, (
-            "it is now whitelisted; the string exists, so this is fine -- but "
-            "the gate comment in minimax.js should say so")
+        assert "err.methodNotAllowed" in gate, (
+            "it was whitelisted on 2026-10-18; if it left the gate again, the "
+            "405 message degrades to err.http")
         assert set(_js_error_gate()) == gate, (
             "RCA_KNOWN_ERROR_KEYS changed; update _js_error_gate() from the "
             f"source: gate-only={sorted(gate - set(_js_error_gate()))} "

@@ -42,22 +42,35 @@
 // and drive `undo()` / `redo()` / `handleKey()` without a browser.
 
 // ---- i18n: use the editor's table when it is loaded, else bilingual --------
+// WEB-03 (UI-REVIEW-2026-10-17): the catalogue had `zh` and `en` only, so a
+// Japanese user heard every undo/redo announcement in English. These are
+// pushed into the same live region as the editor's validation messages, which
+// is the one place a screen-reader user cannot skim past. The `ja` block is a
+// full peer, not a partial — tests_ui_fixes_2026_10_17_web.js asserts the key
+// sets are equal, so a missing key fails the suite instead of degrading.
 const RCA_HISTORY_STRINGS = {
-  'edit.undo': { zh: '撤销', en: 'Undo' },
-  'edit.redo': { zh: '重做', en: 'Redo' },
-  'edit.undoCell': { zh: '撤销单元格 {row}/{col}', en: 'Undo cell {row}/{col}' },
-  'edit.redoCell': { zh: '重做单元格 {row}/{col}', en: 'Redo cell {row}/{col}' },
-  'edit.undoRowDelete': { zh: '恢复第 {row} 行', en: 'Restore row {row}' },
-  'edit.redoRowDelete': { zh: '删除第 {row} 行', en: 'Delete row {row}' },
-  'edit.undoRowAdd': { zh: '移除新增的第 {row} 行', en: 'Remove added row {row}' },
-  'edit.redoRowAdd': { zh: '重新加入第 {row} 行', en: 'Re-add row {row}' },
-  'edit.historyEmpty': { zh: '没有可撤销的修改', en: 'Nothing to undo' },
-  'edit.historyEnd': { zh: '没有可重做的修改', en: 'Nothing to redo' },
+  'edit.undo': { zh: '撤销', en: 'Undo', ja: '元に戻す' },
+  'edit.redo': { zh: '重做', en: 'Redo', ja: 'やり直す' },
+  'edit.undoCell': { zh: '撤销单元格 {row}/{col}', en: 'Undo cell {row}/{col}',
+    ja: 'セル {row}/{col} の変更を元に戻します' },
+  'edit.redoCell': { zh: '重做单元格 {row}/{col}', en: 'Redo cell {row}/{col}',
+    ja: 'セル {row}/{col} の変更をやり直します' },
+  'edit.undoRowDelete': { zh: '恢复第 {row} 行', en: 'Restore row {row}',
+    ja: '{row} 行を復元します' },
+  'edit.redoRowDelete': { zh: '删除第 {row} 行', en: 'Delete row {row}',
+    ja: '{row} 行を削除します' },
+  'edit.undoRowAdd': { zh: '移除新增的第 {row} 行', en: 'Remove added row {row}',
+    ja: '追加した {row} 行を削除します' },
+  'edit.redoRowAdd': { zh: '重新加入第 {row} 行', en: 'Re-add row {row}',
+    ja: '{row} 行を再度追加します' },
+  'edit.historyEmpty': { zh: '没有可撤销的修改', en: 'Nothing to undo', ja: '元に戻す変更はありません' },
+  'edit.historyEnd': { zh: '没有可重做的修改', en: 'Nothing to redo', ja: 'やり直す変更はありません' },
   // FE-FIX-2026-09-21: audit item 5 — a deterministic apply failure (the
   // action's table/row no longer exists) must be announced too, distinct
   // from the empty-stack case; the entry is also popped (see undo/redo).
   'edit.historyFailed': { zh: '过期的修改记录已移出历史栈（目标表或行已不存在）',
-    en: 'Stale history entry removed (its table or row no longer exists)' },
+    en: 'Stale history entry removed (its table or row no longer exists)',
+    ja: '古い変更履歴を削除しました（対象の表または行がすでに存在しません）' },
 };
 
 function rcaHistoryT(key, params) {
@@ -68,8 +81,15 @@ function rcaHistoryT(key, params) {
     if (viaEditor && viaEditor.indexOf('[?') !== 0 && viaEditor !== key) return rcaHistoryFill(viaEditor, params);
   }
   const entry = RCA_HISTORY_STRINGS[key];
-  let s = entry ? (rcaHistoryLang() === 'zh' ? entry.zh : entry.en) : key;
-  if (entry && rcaHistoryLang() !== 'zh' && !entry.en) s = entry.zh;
+  // WEB-03: this used to be a two-way `lang === 'zh' ? zh : en` ternary, which
+  // answered English for EVERY non-zh locale — so adding a `ja` block alone
+  // would have been dead code. Locale-first with an en/zh fallback chain now,
+  // mirroring rcaEditT's lookup in js/table.js.
+  const lang = rcaHistoryLang();
+  let s = key;
+  if (entry) {
+    s = entry[lang] || entry.en || entry.zh || key;
+  }
   return rcaHistoryFill(s, params);
 }
 

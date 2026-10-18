@@ -3143,9 +3143,17 @@ const RCA_KNOWN_ERROR_KEYS = new Set([
   'err.badMode', 'err.badRequest', 'err.bodyTooLarge', 'err.classify',
   'err.empty', 'err.exportFailed', 'err.extract', 'err.forbidden', 'err.http',
   'err.imageDecode', 'err.imageInvalidBase64', 'err.imageRead',
-  'err.imageTooLarge', 'err.mode', 'err.network', 'err.noEndpoint',
+  'err.imageTooLarge', 'err.methodNotAllowed', 'err.mode', 'err.network',
+  'err.noEndpoint',
   'err.noImage', 'err.noKey', 'err.parse', 'err.rateLimit', 'err.serverBusy',
   'err.timeout', 'err.truncated',
+  // API-REVIEW-2026-10-18: err.methodNotAllowed was MISSING from this gate
+  // while server.py emitted it on the HEAD-405 branch — and its trilingual
+  // text was already in js/i18n.js. rcaKnownErrorKey() therefore discarded it
+  // and the user got a generic err.http instead of "method not allowed".
+  // The gate must never be narrower than the emitter; the audit test
+  // (test_audit_2026_09_27.py::test_the_gate_is_not_narrower_than_the_emitter)
+  // is what caught this and pins it closed.
   // Produced by this JS transport only (never lifted from a body, but listed
   // so rcaKnownErrorKey() stays the single gate for every surfaced key).
   'err.cancelled', 'err.csrfFetch', 'err.fileTooBig', 'err.networkBackend',

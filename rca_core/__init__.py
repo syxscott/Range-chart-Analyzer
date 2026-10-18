@@ -20,7 +20,7 @@ Layered data flow:
 
 from __future__ import annotations
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 # 2026-10-16: this read "2.0.0" while the project shipped 0.1.0. It is not
 # cosmetic — `exporter._package_version()` stamps it into the header of every
 # CSV/TSV/JSON/XLSX exchange file, so every export claimed to come from a

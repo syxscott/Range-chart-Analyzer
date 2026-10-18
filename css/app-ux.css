@@ -218,7 +218,10 @@ table.data-table tbody th[scope="row"]:first-child {
         --border-color: #e7e5e4; --border-strong: #d6d3d1;
         --primary-color: #2563eb; --primary-hover: #1d4ed8; --primary-soft: #eff6ff;
         --primary-dark: #1e3a8a; --primary-active: #2563eb;
-        --success-color: #10b981; --success-soft: #d1fae5;
+        /* WEB-05: print surface mirrors the light tokens; keep in sync with
+           style.css :root (--success-color is emerald-600 since the WCAG
+           1.4.11 pass, not emerald-400). */
+        --success-color: #059669; --success-soft: #d1fae5;
         --warning-color: #b45309; --warning-soft: #fef3c7;
         --danger-color: #dc2626; --danger-soft: #fee2e2;
         --info-color: #6366f1; --info-soft: #e0e7ff;
@@ -278,4 +281,93 @@ table.data-table tbody th[scope="row"]:first-child {
     #viz-host { max-height: none !important; overflow: visible !important; }
 
     a[href]::after { content: ""; }  /* no URL spam after every link */
+}
+
+/* ==================== WEB-04: large-table rendering cost ============
+   UX-2026-10-18 (流畅性). HONEST STATUS: this rule is ACTIVE but has NO
+   measurable performance benefit on current Chrome. Keep it as defensive
+   styling, not as an optimization.
+
+   What was measured (three independent campaigns, real Chrome, this
+   repo's own fixtures):
+   - The rule HITS: computed `content-visibility: auto`,
+     `contain-intrinsic-size: auto 36px`, row height resolves to the
+     declared token.
+   - The BENEFIT does not exist: A/B (same fixture, only
+     `data-rca-big` differs, interleaved medians) FCP 488 -> 480 ms
+     (1.02x); scroll frames 0.0 ms on both arms. An earlier "3.3x"
+     report was a measurement artifact — its "baseline" mixed a
+     first-layout pass into every frame and could not be reproduced by
+     two later campaigns.
+   - WHY: Chrome does not apply size containment to internal table boxes
+     (table-row / table-cell). The decisive evidence is the accessibility
+     tree: with containment ON, all 5000 off-screen rows are still
+     exposed to assistive tech (AX nodes identical with the rule off) —
+     nothing is being skipped. A <div> control under the same probe
+     skips cleanly (0 of 300 exposed), so the method itself works.
+
+   THE COLUMN-WIDTH TRAP (this part is real and is why the rule must
+   stay scoped to <tr>, never <td>): `content-visibility` on a <td>
+   size-contains that cell, so its contents stop contributing to the
+   column's preferred width. Measured: moving the rule to <td> shifts
+   column widths by up to ~267 px. On <tr> the drift is exactly 0 px —
+   which is trivially true while nothing is skipped, but it stays 0 px
+   if containment ever engages on rows, so the scoping is the part
+   worth defending.
+
+   IF A FUTURE BROWSER STARTS SKIPPING <tr> ROWS: the perf number in the
+   comment above finally becomes real, and tests_frontend_perf.js's
+   AX-tree assertion (section 7) turns red on purpose. Before
+   celebrating that, know the cost: skipped rows are NOT exposed to
+   assistive technology. Screen-reader users would lose access to every
+   off-screen row. That accessibility trade-off is inherent to
+   content-visibility and must be decided deliberately, not inherited
+   from a browser update.
+
+   Scope: applied only when the renderer marks a large table, via
+   `[data-rca-big="1"]` on the <table>. Below the threshold (600 rows,
+   js/table.js RCA_VIRTUAL_ROW_THRESHOLD) small results keep byte-identical
+   markup — they were already fast (100 rows ≈ 85 ms), and unchanged
+   markup keeps the existing DOM-stub tests untouched. */
+
+/* The row must be a box. `display: table-row` is the initial value, but
+   stating it keeps the containment valid even if a later rule changes the
+   row's display (e.g. a responsive card layout). */
+table.data-table tbody tr {
+    display: table-row;
+}
+
+/* Large tables only (the threshold lives in js/table.js as
+   RCA_VIRTUAL_ROW_THRESHOLD; the attribute is set by the renderer, and it
+   is about how much DATA there is, not about the viewport size).
+
+   The row height is declared HERE, not on every row, and that scoping is
+   load-bearing rather than tidiness: `other_fossils` deliberately carries
+   `cell-wrapping` so long free-text taxa read as wrapped paragraphs
+   (js/table.js sets it on the `cell-wrapping` class). A fixed row height
+   on those rows would clip them. Only a contained table — where every row
+   is a single-line data row — may assume a uniform height. */
+table.data-table[data-rca-big="1"] tbody tr {
+    --rca-row-h: 2.25rem;
+    height: var(--rca-row-h);
+    /* `auto` is essential: with `visible` the element's intrinsic size is
+       still used for layout and the containment buys nothing. */
+    content-visibility: auto;
+    /* A FIXED <length>, not `auto <length>`: the spec calls combining
+       `auto` with a remembered size a containment conflict, which
+       silently disables the optimization. A fixed length still gives the
+       scrollbar a correct initial extent. */
+    contain-intrinsic-size: var(--rca-row-h);
+}
+
+/* ==================== A4: long-table notice ===========================
+   UX-2026-10-18 (流畅性). Sits under the section head, next to the
+   Copy-TSV / Download-CSV buttons it points at, so it reads as part of
+   that action row rather than as a warning banner competing with the
+   extraction alerts. Muted by design: it is orientation, not an error. */
+.table-length-hint {
+    margin: 6px 0 0;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    color: var(--text-muted, #64748b);
 }

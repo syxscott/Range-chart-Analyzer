@@ -97,7 +97,7 @@
     position: absolute;
     top: 2px;
     right: 3px;
-    font-size: 8px;
+    font-size: 0.5rem;
     line-height: 1;
     color: var(--warning-color);
 }
@@ -154,7 +154,7 @@
     min-height: 1.2em;
     margin: 6px 2px 0;
     color: var(--text-muted);
-    font-size: 12.5px;
+    font-size: 0.78125rem;
 }
 
 .rca-edit-status:not(:empty)::before {
@@ -203,7 +203,7 @@ tr[data-row].rca-row-selected > th {
     border-radius: var(--radius);
     background: var(--bg-white);
     box-shadow: var(--shadow-md);
-    font-size: 13px;
+    font-size: 0.8125rem;
 }
 
 :root[data-theme="dark"] .rca-selection-bar {
@@ -261,7 +261,7 @@ tr[data-row].rca-row-selected > th {
 .rca-locate-btn {
     opacity: 0;
     padding: 1px 7px;
-    font-size: 11.5px;
+    font-size: 0.71875rem;
     line-height: 1.5;
 }
 
@@ -387,7 +387,7 @@ tr.rca-row-lowconf.rca-row-active > th[scope="row"] {
 }
 
 .rca-addrow-btn {
-    font-size: 12px;
+    font-size: 0.75rem;
 }
 
 /* ---- undo / redo toolbar buttons (index.html wires [data-rca-undo]) ----- */
@@ -403,7 +403,7 @@ tr.rca-row-lowconf.rca-row-active > th[scope="row"] {
 [data-rca-redo]::before {
     /* The label is text; the glyph is the redundant cue that survives a
        colour-blind or high-contrast display. */
-    font-size: 13px;
+    font-size: 0.8125rem;
     margin-right: 4px;
 }
 

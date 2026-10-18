@@ -854,6 +854,19 @@ class ProviderStore:
         if self.providers and not any(p.id == self.current_id for p in self.providers):
             self.current_id = self.providers[0].id
             self.providers[0].is_current = True
+        # API-REVIEW-2026-10-18: the file is user-editable, so is_current is
+        # an untrusted flag — a hand-edited providers.json can carry several
+        # True flags. get_current() disambiguates via the AND condition, but
+        # the card grid highlights on the raw flag (ProviderCard(prov,
+        # prov.is_current)), so two providers would both render as active.
+        # Normalise here: exactly the current_id entry keeps the flag.
+        seen_current = False
+        for p in self.providers:
+            if p.id == self.current_id and not seen_current:
+                p.is_current = True
+                seen_current = True
+            else:
+                p.is_current = False
         return self
 
     def save(self) -> None:
@@ -2166,6 +2179,44 @@ def call_llm_api_with_retry(
         last = (text, truncated, status, err_body, usage)
         if is_final:
             return last
+        # UX-2026-10-18 (流畅性 A3): announce the wait BEFORE sleeping.
+        #
+        # The retry chain used to be completely invisible: each attempt ended
+        # with a bare time.sleep() and the GUI's status line froze on whatever
+        # stage the last attempt reported (typically "submitting") for the
+        # whole backoff, then again for the whole next request. Measured on
+        # the real path (headers=None, so Retry-After is unreachable and the
+        # delay comes from the jittered exponential curve): worst case over
+        # three attempts is ~4.3 s of silence, and the 120 s per-attempt
+        # timeout in llm.call_llm_api sits in front of it -- so a rate-limited
+        # extraction could sit for minutes between two visible status changes
+        # and read as a hung UI.
+        #
+        # The seconds are the load-bearing part of the payload: "retrying" on
+        # its own tells the operator nothing about how long they are in for,
+        # which is the actual question during a wait. The format reuses the
+        # "analyzing:{n}/{runs}:{elapsed}s" shape _run_multi already emits
+        # (gui_fluent.py) so _on_progress parses it with the same split(":")
+        # branch and no new placeholder scheme is introduced.
+        #
+        # Not emitted when is_final (above returns first): there is no next
+        # attempt then, and promising one is exactly the AUDIT-2026-09-27 P2
+        # defect this file already repaired once for err_body.
+        #
+        # Routed through the local `progress_callback` wrapper defined above,
+        # NOT the caller's original: that wrapper exists so a UI callback that
+        # raises (widget torn down mid-extraction) cannot abort the call, and
+        # a new event type must inherit that protection rather than bypass it.
+        #
+        # The `is not None` guard is required, not defensive padding: the
+        # wrapper is only DEFINED when the caller passed a callback, so with
+        # progress_callback=None the name still resolves to the parameter
+        # (None) and calling it unconditionally would raise TypeError on
+        # every retry -- turning a recoverable 429 into a crash. Every other
+        # call site in this module guards the same way (llm.py:1207, 1438).
+        if progress_callback is not None:
+            progress_callback(
+                f"retrying:{attempt + 2}/{retries}:{backoff:.1f}s")
         time.sleep(backoff)
     return last
 

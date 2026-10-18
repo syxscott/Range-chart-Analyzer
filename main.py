@@ -28,6 +28,55 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
+def _declare_dpi_awareness() -> None:
+    """Set the process DPI awareness BEFORE any toolkit creates a window.
+
+    FIX-2026-10-17 (F-14). Nothing in this repository ever declared a DPI
+    policy, so the awareness level was whatever the OS handed us. Measured on
+    Windows before this line existed: ``GetThreadDpiAwarenessContext``
+    returned 24592 (the 0x6000 context range) rather than -1/0, and Tcl
+    derived ``tk scaling`` = 1.334 by itself — 96/72, i.e. Tcl GUESSING from
+    the primary monitor. On this machine (100% scaling) that guess happens to
+    be right; at 125%, or on two monitors with different scaling, it is not,
+    and the layout shifts.
+
+    Two mechanisms, because the two toolkits need different ones:
+
+      * Qt6 scales automatically, but only when told how to ROUND the scale
+        factor. ``PassThrough`` keeps a 150% display at exactly 150% instead
+        of rounding to a device pixel, which is what makes fractional scaling
+        blurry. This must be set BEFORE the QApplication exists, hence here.
+      * Tk has no such notion and never had one, so the only lever is the
+        process awareness the Win32 API exposes. Tk picks up the real DPI from
+        it and computes a correct scaling factor.
+
+    Both calls are best-effort: on Windows 8.1 and earlier the per-monitor-v2
+    entry point does not exist, and a non-Windows host has neither. Failing
+    to declare DPI awareness is not a reason to refuse to start — it is
+    strictly better than the status quo, where nothing was declared at all.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        # PER_MONITOR_AWARE_V2 = -4. Available since Windows 10 1703; it is
+        # the only value that also rescales non-client areas (title bar,
+        # window borders), which is why it is preferred over -2 (per-monitor).
+        try:
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(-4)
+            return
+        except (AttributeError, OSError):
+            pass
+        # Windows 8.1 path: the older shim takes a PROCESS_* constant.
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except (AttributeError, OSError):
+            pass
+    except Exception:  # noqa: BLE001 - never block startup on this
+        pass
+
+
 def launch_gui() -> int:
     try:
         import tkinter  # noqa: F401
@@ -38,6 +87,7 @@ def launch_gui() -> int:
             file=sys.stderr,
         )
         return 1
+    _declare_dpi_awareness()
     import gui
 
     gui.main()
@@ -103,6 +153,12 @@ def launch_fluent() -> int:
     # prints its real traceback before falling back, because staying usable
     # still beats crashing on a user's machine.
     try:
+        # Must precede the QApplication import in gui_fluent: Qt reads
+        # QT_ENABLE_HIGHDPI_SCALING / the rounding policy at QApplication
+        # construction time, and setting it afterwards has no effect.
+        # See _declare_dpi_awareness() for the measured "before" state.
+        os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+        _declare_dpi_awareness()
         import gui_fluent
     except ImportError as exc:
         print(

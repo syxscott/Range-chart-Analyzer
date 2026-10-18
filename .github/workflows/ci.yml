@@ -29,6 +29,19 @@ jobs:
           # tests/test_enhance.py used to error the whole collection
           # run when it was missing (CI red since 2026-08-19).
           pip install cryptography keyring openpyxl Pillow
+          # FIX-2026-10-17: numpy was missing here, and the failure it caused
+          # was INVISIBLE locally. rca_core/grid.py documents "DEPENDENCIES:
+          # numpy + Pillow only", and tests/test_grid.py falls back to a
+          # synthetic ruled table when _figtest/ is absent (it is gitignored,
+          # so CI always takes that path; dev machines with a corpus do not).
+          # detect_grid wraps its whole body in `except Exception: return
+          # None`, so on CI the `import numpy` inside raised ImportError and
+          # every geometry test errored with "the ruled source table must
+          # produce a geometry" — while every dev machine (Anaconda) ships
+          # numpy and stayed green. The tests could not catch it locally
+          # because locally the real figure exists and numpy is installed;
+          # both halves of that blind spot are environment, not code.
+          pip install numpy
           # AUDIT-2026-09-27: PySide6 + qfluentwidgets are intentionally NOT
           # installed here. The desktop GUI's behavioural suites are Qt-gated
           # and would add ~200MB and several minutes to every matrix entry;
@@ -248,3 +261,60 @@ jobs:
           _scratch_home="$(mktemp -d)"
           HOME="$_scratch_home" python tests_onboarding.py
           rm -rf "$_scratch_home"
+
+  # UX-2026-10-18 (WEB-04): the browser performance / containment regression
+  # suite. It is a SEPARATE JOB on purpose.
+  #
+  #   * It needs a real browser engine. Every other Node suite in this repo
+  #     runs against a hand-written DOM stub (tests_frontend.js:66
+  #     buildContext(), tests_edit_history.js:1042 fillDom()) -- a stub has no
+  #     CSS engine, no layout engine and no box model, so it cannot observe
+  #     column drift, row clipping, print layout or containment at all. That
+  #     blind spot is why 3654 assertions could stay green while the 5000-row
+  #     result panel froze the main thread for 1.07 s and while a containment
+  #     change clipped every wrapped cell in the panel.
+  #
+  #   * It must not slow the Python matrix. The matrix job runs twice (3.10,
+  #     3.12) and every one of those entries would otherwise pay for a
+  #     ~150 MB browser download plus a browser launch, to test something only
+  #     one of them could fail. One dedicated job, no matrix.
+  #
+  #   * The repo has NO package.json (node_modules/ is gitignored), so this
+  #     job installs playwright itself rather than expecting it to be there.
+  #     That also pins the browser version HERE instead of inheriting it from
+  #     an unpinned local install.
+  #
+  # The suite exits non-zero on failure and does NOT use continue-on-error: a
+  # performance gate that can go red without blocking anything is not a gate.
+  # If it ever needs to be advisory, the honest form is `continue-on-error:
+  # true` ON THE JOB plus a visible note -- never a silent skip inside the
+  # test.
+  browser-perf:
+    name: browser perf / containment regression (node + chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install playwright + chromium
+        run: |
+          # No package.json in the repo, so install into the workspace and
+          # point NODE_PATH at it (the suite resolves playwright through
+          # NODE_PATH first, then ./node_modules, then cwd/node_modules).
+          npm install --no-save --no-package-lock playwright@1.62.1
+          npx playwright install --with-deps chromium
+
+      - name: Run tests_frontend_perf.js
+        env:
+          NODE_PATH: ${{ github.workspace }}/node_modules
+        run: |
+          # Full run, not --quick: the 5000-row cases are the ones that carry
+          # the column-drift and print-layout assertions, and --quick skips
+          # exactly those. A quick-mode CI run would be a green run that
+          # tested almost nothing.
+          node tests_frontend_perf.js

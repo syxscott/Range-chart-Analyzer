@@ -1619,16 +1619,28 @@ check('i18n-every-key-answers', EDIT_KEYS.every((k) => {
   const s = S.rcaEditT(k);
   return typeof s === 'string' && s.length > 0 && s.indexOf('[?') !== 0;
 }), 'no editor string may reach the user as [?key]');
-check('i18n-keys-bilingual', Object.keys(S.RCA_EDIT_STRINGS).every((k) => S.RCA_EDIT_STRINGS[k].zh
-  && S.RCA_EDIT_STRINGS[k].en) && Object.keys(S.RCA_HISTORY_STRINGS).every((k) => S.RCA_HISTORY_STRINGS[k].zh
-  && S.RCA_HISTORY_STRINGS[k].en));
+check('i18n-keys-trilingual', Object.keys(S.RCA_EDIT_STRINGS).every((k) => S.RCA_EDIT_STRINGS[k].zh
+  && S.RCA_EDIT_STRINGS[k].en && S.RCA_EDIT_STRINGS[k].ja) && Object.keys(S.RCA_HISTORY_STRINGS).every((k) => S.RCA_HISTORY_STRINGS[k].zh
+  && S.RCA_HISTORY_STRINGS[k].en && S.RCA_HISTORY_STRINGS[k].ja),
+'WEB-03 (UI-REVIEW-2026-10-17): every editor/history string must answer in all three locales — rcaEditAnnounce pushes them into a live region');
 check('i18n-key-list-exported', S.RCA_EDIT_I18N_KEYS.length >= 15,
   'domain U lifts these into js/i18n.js');
 S.rcaSetLang('en');
 check('i18n-english-fallback', S.rcaEditT('edit.addRow') === 'Add row', S.rcaEditT('edit.addRow'));
 S.rcaSetLang('ja');
+// WEB-03: this assertion USED to be `=== 'Add row'`, named
+// "unknown-locale-falls-back-to-en" — it pinned the very defect WEB-03
+// closes. `ja` is not an unknown locale (js/i18n.js ships it); the temporary
+// table was, and its missing `ja` block silently degraded every button label
+// and validation message to English. Changed to pin the fix.
+check('i18n-japanese-now-localized', S.rcaEditT('edit.addRow') === '行を追加',
+  S.rcaEditT('edit.addRow'));
+// The fallback itself is still real and still load-bearing — it is just no
+// longer reached BY JA. A genuinely absent locale must land on English.
+S.__run('RCA_LANG = "fr"');
 check('i18n-unknown-locale-falls-back-to-en', S.rcaEditT('edit.addRow') === 'Add row',
-  'js/i18n.js has a ja locale, the temporary table does not');
+  'a locale absent from the table must fall back to en, not leak [?key]');
+S.__run('RCA_LANG = "ja"');
 S.rcaSetLang('zh');
 check('i18n-chinese-fallback', S.rcaEditT('edit.addRow') === '新增行', S.rcaEditT('edit.addRow'));
 check('i18n-params-substituted', S.rcaEditT('edit.selectedCount', { n: 3 }).indexOf('3') !== -1

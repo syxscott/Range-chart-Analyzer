@@ -483,13 +483,26 @@
   // user is in backend transport mode.
   function syncFooterRuntime() {
     const el = $('footer-runtime');
-    if (!el) return;
     const mode = rcaResolveMode();
-    const i18nKey = mode === 'backend' ? 'footer.backend' : 'footer.clientSide';
-    // Use the data-i18n attribute so rcaApplyI18n re-translates it on
-    // language switch instead of getting frozen in the current language.
-    el.setAttribute('data-i18n', i18nKey);
-    el.textContent = t(i18nKey);
+    if (el) {
+      const i18nKey = mode === 'backend' ? 'footer.backend' : 'footer.clientSide';
+      // Use the data-i18n attribute so rcaApplyI18n re-translates it on
+      // language switch instead of getting frozen in the current language.
+      el.setAttribute('data-i18n', i18nKey);
+      el.textContent = t(i18nKey);
+    }
+    // API-REVIEW-2026-10-18 (cc-switch comparison): the direct transport
+    // speaks Anthropic Messages ONLY — there is no api_format selector on
+    // the web client, so an OpenAI/Gemini-format service silently 401s/404s.
+    // Swap the mode hint text when direct is the resolved transport so the
+    // limitation is stated where the user sets it, not buried in docs.
+    const hint = $('conn-mode-hint');
+    if (hint) {
+      const hintKey = mode === 'direct'
+        ? 'settings.mode.hintDirect' : 'settings.mode.hint';
+      hint.setAttribute('data-i18n', hintKey);
+      hint.textContent = t(hintKey);
+    }
   }
 
   // Sprint B (REVIEW-2026-09-04): `silent` suppresses the "settings saved"
@@ -1922,6 +1935,14 @@
       // Unsaved edit in flight: swap only the static page chrome (which
       // rcaApplyI18n already did in switchLang) and leave the result panel
       // in the previous language until the next render.
+      // WEB-01 (UI-REVIEW-2026-10-17): "until the next render" used to mean
+      // "never" — after the edit committed, nothing re-triggered the
+      // retranslate, so the panel stayed in the old language for the rest of
+      // the session. Arm a pending flag instead; rcaEditCommitCell /
+      // rcaEditRevertCell (js/table.js) clear the focus and call
+      // rcaConsumePendingRetranslate() so the panel catches up right after
+      // the edit ends.
+      state._pendingRetranslate = true;
       return;
     }
     if (!state._resultTexts) {
@@ -1996,6 +2017,23 @@
     }
     state._resultTexts = _rcaResultTextNodes(content);
     state._resultAttrs = _rcaAttrNodes(content, null, true);
+  }
+
+  // WEB-01 (UI-REVIEW-2026-10-17): called by js/table.js after a cell edit
+  // commits or reverts. If a language switch was deferred because the caret
+  // was inside a contenteditable cell, catch the result panel up now — the
+  // edit is over, focus has moved, and the deferred retranslate is safe.
+  // Plain globals across the two files (no ES modules), so this is exported
+  // via globalThis below; table.js guards with typeof, keeping both files
+  // load-order independent.
+  function rcaConsumePendingRetranslate() {
+    if (state._pendingRetranslate) {
+      state._pendingRetranslate = false;
+      rcaRetranslateResult();
+    }
+  }
+  if (typeof globalThis !== 'undefined') {
+    globalThis.rcaConsumePendingRetranslate = rcaConsumePendingRetranslate;
   }
 
   // ---- result action buttons (event delegation) ----

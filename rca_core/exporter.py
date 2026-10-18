@@ -2171,7 +2171,30 @@ def _strip_nonfinite(obj: Any) -> Any:
     return obj
 
 
-def result_to_json(data: dict[str, Any], source_file: str | None, timestamp: str | None) -> str:
+def result_to_json(data: dict[str, Any],
+                   source_file: str | None = None,
+                   timestamp: str | None = None) -> str:
+    """Serialize one extraction result as the canonical JSON payload.
+
+    FIX-2026-10-17 (X-01/X-02): `source_file` and `timestamp` used to be
+    REQUIRED positional arguments, and the one non-test caller that passed a
+    single argument — `gui_fluent_pages.py`'s history CSV→JSON fallback —
+    raised TypeError, was caught by its own broad `except`, and showed the
+    user Python's English signature as an error message. The three
+    front-ends each hand-rolled `json.dump` instead, which is how the
+    payloads drifted: the Web client wrote `extracted_at`, the desktop apps
+    did not, and neither desktop app got this function's non-finite
+    sanitizing (measured: a NaN `confidence` serialized by `gui_fluent.py`
+    was REJECTED by a strict parser while the identical result exported from
+    the browser parsed fine).
+
+    Defaulting both arguments makes the single-argument call valid WITHOUT
+    making the fields optional in the PAYLOAD — they are still always
+    written, just as `null` when unknown. That is the contract the Web
+    client already follows. Desktop callers SHOULD still pass both (and now
+    do); the defaults exist so that a caller in a hurry degrades to an
+    anonymous payload instead of an error dialog written in Python.
+    """
     payload = {
         "extracted_at": timestamp,
         "source_file": source_file,

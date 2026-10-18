@@ -39,9 +39,10 @@ from PySide6.QtWidgets import (
 # until now) is the branch the card's own border uses.
 from qfluentwidgets import (
     CardWidget, ComboBox, FluentIcon as FIF, InfoBar, InfoBarPosition,
-    LineEdit, PasswordLineEdit, PillPushButton, PrimaryPushButton, PushButton,
-    ScrollArea, SearchLineEdit, StrongBodyLabel, BodyLabel, CaptionLabel,
-    TitleLabel, ToolButton, TransparentToolButton, isDarkTheme, qconfig,
+    LineEdit, MessageBox, PasswordLineEdit, PillPushButton, PrimaryPushButton,
+    PushButton, ScrollArea, SearchLineEdit, StrongBodyLabel, BodyLabel,
+    CaptionLabel, TitleLabel, ToolButton, TransparentToolButton, isDarkTheme,
+    qconfig,
 )
 
 from rca_core import (
@@ -50,6 +51,27 @@ from rca_core import (
 from rca_core.extractor import DEFAULT_ENDPOINT, DEFAULT_MODEL
 from rca_core.llm import test_llm_connection
 from rca_core.ssrf import validate_endpoint as _validate_endpoint
+
+
+class _NoPreset:
+    """Sentinel for "no preset applies" (editing an existing provider).
+
+    API-REVIEW-2026-10-18: ProviderPreset carries doc_url / api_key_url /
+    endpoint_candidates, and _apply_preset_meta needs one argument rather
+    than a branch at every call site. A duck-typed stub keeps the module
+    importable without PySide6 (the tests exercise the helper directly).
+    """
+
+    name = ""
+    endpoint = ""
+    extra_headers: dict = {}
+    doc_url = ""
+    api_key_url = ""
+    api_key_hint = "API Key"
+    endpoint_candidates: list = []
+
+
+_NO_PRESET = _NoPreset()
 
 
 def _icon_char(name: str) -> str:
@@ -577,13 +599,15 @@ class ProviderWizard(QDialog):
         self._ipt_key.setPlaceholderText("sk-…")
         fl.addWidget(self._ipt_key, r, 0, 1, 2); r += 1
 
-        # API Key field name selector (cc-switch alignment)
-        lbl = BodyLabel(self._t("wizard.apiKeyField"))
-        fl.addWidget(lbl, r, 0, 1, 2); r += 1
-        self._cmb_key_field = ComboBox()
-        self._cmb_key_field.addItems(["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"])
-        self._cmb_key_field.setCurrentIndex(0)
-        fl.addWidget(self._cmb_key_field, r, 0, 1, 2); r += 1
+        # F-05 (REVIEW-2026-10-17): the "API Key field" combo
+        # (ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY) was REMOVED, along
+        # with its label. It was pure decoration: nothing in `_on_ok` ever
+        # read `_cmb_key_field`, and `LlmProvider` (rca_core/llm.py) has no
+        # field for it — so a user who switched it to ANTHROPIC_API_KEY got a
+        # silently unchanged request header and no error. Adding the field
+        # to the core dataclass instead would have been a schema change that
+        # all three front-ends would have to understand, which costs far more
+        # than the one dropdown was worth.
 
         lbl = BodyLabel(self._t("settings.model"))
         fl.addWidget(lbl, r, 0, 1, 2); r += 1
@@ -596,6 +620,24 @@ class ProviderWizard(QDialog):
         self._ipt_extra_headers = LineEdit()
         self._ipt_extra_headers.setPlaceholderText('{"X-Custom-Header": "value"}')
         fl.addWidget(self._ipt_extra_headers, r, 0, 1, 2); r += 1
+
+        # API-REVIEW-2026-10-18 (cc-switch comparison): ProviderPreset
+        # carries doc_url / api_key_url / endpoint_candidates, and until
+        # now NOTHING read them — a preset that names its own documentation
+        # and key page was indistinguishable from one that doesn't, and the
+        # backup endpoints (Qiniu publishes two, SiliconFlow two) were
+        # invisible, so an operator whose relay moved had to go find the new
+        # host by hand. One hint row, hidden until a preset is picked.
+        self.lbl_preset_hint = CaptionLabel("")
+        self.lbl_preset_hint.setWordWrap(True)
+        self.lbl_preset_hint.setVisible(False)
+        fl.addWidget(self.lbl_preset_hint, r, 0, 1, 2); r += 1
+        self.lnk_preset = PushButton(FIF.LINK, "")
+        self.lnk_preset.setVisible(False)
+        fl.addWidget(self.lnk_preset, r, 0, 1, 2); r += 1
+        self.lnk_preset_key = PushButton(FIF.LINK, "")
+        self.lnk_preset_key.setVisible(False)
+        fl.addWidget(self.lnk_preset_key, r, 0, 1, 2); r += 1
 
         fl.setColumnStretch(1, 1)
         self._form.setVisible(False)
@@ -683,15 +725,33 @@ class ProviderWizard(QDialog):
             "PushButton{background:#f1f5f9;border:1px dashed #94a3b8;color:#64748b;text-align:left;padding-left:12px}"
             "PushButton:hover{color:#0f172a;border-color:#2563eb}"
         )
-        custom.clicked.connect(self._show_form)
+        # API-REVIEW-2026-10-18: picking "Custom" after a preset must drop
+        # that preset's doc/key/backup row — otherwise the custom form still
+        # advertises the previously-picked provider's endpoints.
+        custom.clicked.connect(lambda _=False: self._show_custom_form())
         self._grid.addWidget(custom, r, c)
+
+    def _show_custom_form(self) -> None:
+        self._preset = None
+        self._apply_preset_meta(_NO_PRESET)
+        self._show_form()
 
     def _pick_preset(self, preset):
         self._ipt_name.setText(preset.name)
         self._cmb_fmt.setCurrentText(preset.api_format.value)
         self._ipt_endpoint.setText(preset.endpoint)
         self._ipt_model.setText(preset.model)
+        # API-REVIEW-2026-10-18 (cc-switch comparison): a preset is a
+        # COMPLETE provider template — its extra_headers are part of the
+        # wire contract (e.g. a gateway demanding X-Use-Url-Key). Dropping
+        # them here meant the saved provider silently diverged from the
+        # preset the user clicked. Current presets ship none, so this is
+        # forward-proofing; the field stays user-editable afterwards.
+        import json
+        self._ipt_extra_headers.setText(
+            json.dumps(preset.extra_headers) if preset.extra_headers else "")
         self._preset = preset
+        self._apply_preset_meta(preset)
         self._show_form()
 
     def _show_form(self):
@@ -704,6 +764,45 @@ class ProviderWizard(QDialog):
         # where __init__ already set the provider-specific "Configure [Name]" title).
         if not self._existing:
             self.setWindowTitle(self._t("wizard.configure"))
+
+    # API-REVIEW-2026-10-18: publish the preset's doc / key / backup-endpoint
+    # metadata. Split out of _pick_preset so an EDIT of an existing provider
+    # (which has no preset) hides the row rather than showing a stale one.
+    def _apply_preset_meta(self, preset) -> None:
+        hint = getattr(self, "lbl_preset_hint", None)
+        lnk = getattr(self, "lnk_preset", None)
+        lnk_key = getattr(self, "lnk_preset_key", None)
+        if hint is None:
+            return
+        candidates = list(getattr(preset, "endpoint_candidates", None) or [])
+        # The preset's own endpoint is candidates[0]'s sibling — list the
+        # ALTERNATES only, so the hint reads "also try …" and not the value
+        # already sitting in the field.
+        alternates = [c for c in candidates if c != preset.endpoint]
+        parts = []
+        if alternates:
+            parts.append(self._t("wizard.presetAltEndpoints").format(
+                urls=", ".join(alternates)))
+        if getattr(preset, "api_key_hint", "") and \
+                preset.api_key_hint != "API Key":
+            parts.append(self._t("wizard.presetKeyHint").format(
+                hint=preset.api_key_hint))
+        hint.setText(" · ".join(parts))
+        hint.setVisible(bool(parts))
+
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        def _wire(button, url):
+            if not url:
+                button.setVisible(False)
+                return
+            button.setVisible(True)
+            button.clicked.connect(
+                lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
+
+        _wire(lnk, getattr(preset, "doc_url", ""))
+        _wire(lnk_key, getattr(preset, "api_key_url", ""))
 
     def _prefill(self, existing: LlmProvider):
         self._ipt_name.setText(existing.name)
@@ -721,6 +820,12 @@ class ProviderWizard(QDialog):
                 self._ipt_extra_headers.setText(json.dumps(existing.extra_headers))
             except Exception:
                 pass
+        # API-REVIEW-2026-10-18: editing an existing provider has no preset,
+        # so hide the doc/key/backup row — otherwise the wizard that opened
+        # on preset A and then picked "Edit" on provider B would still
+        # advertise A's docs and backup endpoints.
+        self._preset = None
+        self._apply_preset_meta(_NO_PRESET)
         self._show_form()
 
     def _parse_extra_headers(self) -> tuple[dict, str | None]:
@@ -753,8 +858,26 @@ class ProviderWizard(QDialog):
                 missing.append(self._t("wizard.fieldName"))
             if not endpoint:
                 missing.append(self._t("wizard.fieldEndpoint"))
-            msg = self._tr.t("wizard.fillRequired") + ", ".join(missing)
+            # F-01 (REVIEW-2026-10-17): this used to read `self._tr.t(...)`,
+            # but ProviderWizard.__init__ only ever assigns `self._t` — there
+            # is no `_tr` on this class, so leaving the name or endpoint blank
+            # raised AttributeError inside the clicked-slot and the wizard
+            # became unsavable. Translator.t() takes the key alone, so the
+            # `{reason}` variant below is interpolated with .format().
+            msg = self._t("wizard.fillRequired") + ", ".join(missing)
             InfoBar.warning("", msg, parent=self, position=InfoBarPosition.TOP)
+            return
+        # API-REVIEW-2026-10-18: "https://" (the custom-provider placeholder)
+        # strips to "https:" — non-empty, so the blank check passed and a
+        # hostless endpoint was saved, then failed at every use with
+        # err.badEndpoint ("missing host"). Require a host at save time; the
+        # SSRF guard stays as the second line of defence.
+        from urllib.parse import urlparse as _urlparse
+        if not _urlparse(endpoint).netloc:
+            InfoBar.warning(
+                "", self._t("wizard.endpointNoHost"),
+                parent=self, position=InfoBarPosition.TOP,
+            )
             return
         try:
             fmt = ApiFormat(self._cmb_fmt.currentText())
@@ -767,7 +890,7 @@ class ProviderWizard(QDialog):
             # silent. The previous version just discarded the input.
             InfoBar.warning(
                 "",
-                self._tr.t("wizard.extraHeadersIgnored", {"reason": headers_err}),
+                self._t("wizard.extraHeadersIgnored").format(reason=headers_err),
                 parent=self,
                 position=InfoBarPosition.TOP,
             )
@@ -1055,9 +1178,17 @@ class ProvidersPage(ScrollArea):
             if wiz.exec() and wiz.created_provider:
                 store = self._load_store()
                 if store:
-                    store.add(wiz.created_provider)
-                    store.set_current(wiz.created_provider.id)
-                    store.save()
+                    store.add(wiz.created_provider)     # saves internally
+                    store.set_current(wiz.created_provider.id)   # and again
+                    # UX-2026-10-18: the explicit save() that used to sit
+                    # here was a THIRD write of the same file — add() and
+                    # set_current() each persist on their own. Measured with
+                    # 60 providers (the state a long-time user reaches):
+                    # save() costs 70-84 ms because it fsyncs and renames,
+                    # so one wizard confirmation used to pay that ~200 ms
+                    # on the UI thread to produce one identical file. The
+                    # state on disk is already correct after the two calls
+                    # above; nothing is lost by dropping the third write.
                     self.win.invalidate_provider_cache()
                     self._refresh()
                     self._sync_settings_page()
@@ -1067,8 +1198,10 @@ class ProvidersPage(ScrollArea):
     def _set_current(self, pid):
         store = self._load_store()
         if store:
+            # UX-2026-10-18: set_current() persists on its own; the save()
+            # that used to follow wrote the identical file a second time
+            # (70-84 ms of fsync+rename at 60 providers, on the UI thread).
             store.set_current(pid)
-            store.save()
             self.win.invalidate_provider_cache()
             self._refresh()
             self._sync_settings_page()
@@ -1095,19 +1228,38 @@ class ProvidersPage(ScrollArea):
                     position=InfoBarPosition.TOP,
                 )
                 return
-            store.save()
+            # UX-2026-10-18: update() persists internally — the save() that
+            # used to follow wrote the identical file again.
             self.win.invalidate_provider_cache()
             self._refresh()
             self._sync_settings_page()
 
     def _delete(self, pid):
         store = self._load_store()
-        if store:
-            store.remove(pid)
-            store.save()
-            self.win.invalidate_provider_cache()
-            self._refresh()
-            self._sync_settings_page()
+        if not store:
+            return
+        # FIX-2026-10-17 (F-02): this used to be a bare remove()+save() with
+        # no confirmation. It is the one destructive action on this page —
+        # the endpoint AND the stored API key go together and there is no
+        # undo — while its siblings (history delete, history clear-all) have
+        # asked via MessageBox since REVIEW-2026-09-20. This page just
+        # drifted. The name is resolved BEFORE the dialog so a cancelled
+        # dialog does not even touch the store.
+        provider = next((p for p in store.providers if p.id == pid), None)
+        name = provider.name if provider else pid
+        confirm = MessageBox(
+            self._t("providers.deleteConfirm"),
+            self._t("providers.deleteConfirmHint").format(name=name),
+            self.win,
+        )
+        if not confirm.exec():
+            return
+        store.remove(pid)
+        # UX-2026-10-18: remove() persists internally — the explicit save()
+        # was a second identical write of the same file.
+        self.win.invalidate_provider_cache()
+        self._refresh()
+        self._sync_settings_page()
 
     def _sync_settings_page(self) -> None:
         """Push the freshly-changed active provider into the Settings page.
@@ -1359,8 +1511,9 @@ class ProvidersPage(ScrollArea):
                 target = cur or card.provider
                 target.consecutive_failures = new_streak
                 if store:
+                    # UX-2026-10-18: update() persists internally; the extra
+                    # save() wrote the same file again.
                     store.update(target)
-                    store.save()
             except Exception as exc:
                 print(f"[rca] persist health streak failed: {exc}")
         self.lbl_test.setText(txt)

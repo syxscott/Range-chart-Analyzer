@@ -13,7 +13,13 @@
        in both themes so the active state passes. */
     --primary-active: #2563eb;
 
-    --success-color: #10b981;
+    /* WEB-05 (UI-REVIEW-2026-10-17): #10b981 on white measured 2.54:1 —
+       below the WCAG 1.4.11 3:1 non-text floor. It is the fill of the
+       "remember API key" switch's ON state (.ios-switch) and the stroke of
+       the high-confidence ring, i.e. state indicators, not decoration.
+       emerald-600 keeps the same hue family at 3.77:1 on white; the dark
+       theme keeps #10b981 (6.46:1 on #221f1d) and is unaffected. */
+    --success-color: #059669;
     --success-soft:  #d1fae5;
     --warning-color: #b45309;  /* amber-700: ~4.7:1 on white (was #f59e0b ≈ 2.9:1, failed WCAG AA) */
     --warning-soft:  #fef3c7;
@@ -253,7 +259,7 @@
     .form-grid { grid-template-columns: 1fr; }
     /* The header h1 can also wrap awkwardly — keep the page chrome
        honest on narrow viewports. */
-    .header-content h1 { font-size: 18px; }
+    .header-content h1 { font-size: 1.125rem; }
     .header-actions { gap: 6px; }
 }
 
@@ -264,13 +270,22 @@ html, body {
     height: 100%;
 }
 
+/* WEB-06 (UI-REVIEW-2026-10-17): every font-size is now rem-based; this
+   1rem = 16px anchor on the root keeps that contract explicit and gives
+   the browser "text size" (root font size) preference a single knob that
+   scales the whole UI. Deliberately NOT a px value on html: that would
+   defeat the user preference this pass exists to support. */
+html {
+    font-size: 100%;
+}
+
 body {
     font-family: var(--font-sans);
     background: var(--bg-page);
     color: var(--text-base);
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
-    font-size: 14px;
+    font-size: 0.875rem;
 }
 
 a { color: var(--primary-color); text-decoration: none; }
@@ -300,8 +315,10 @@ a:hover { text-decoration: underline; }
     display: flex;
     align-items: center;
     gap: 10px;
-    /* Phase A: fluid hero with modular scale + tighter tracking. */
-    font-size: clamp(22px, 4vw, 32px);
+    /* Phase A: fluid hero with modular scale + tighter tracking.
+       WEB-06 (UI-REVIEW-2026-10-17): rem-based clamps so the browser
+       "text size" preference scales the hero too (22px = 1.375rem). */
+    font-size: clamp(1.375rem, 4vw, 2rem);
     font-weight: 700;
     letter-spacing: var(--tracking-tight);
     /* UI-Demo: subtle gradient text. Even in dark mode the gradient stays
@@ -387,7 +404,7 @@ a:hover { text-decoration: underline; }
 }
 .card h2 {
     /* Phase A: tighter, slightly larger h2. */
-    font-size: 16px;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--text-dark);
     letter-spacing: var(--tracking-tight);
@@ -416,13 +433,13 @@ a:hover { text-decoration: underline; }
 .form-row { min-width: 0; }
 label.field-label {
     display: block;
-    font-size: 12.5px;
+    font-size: 0.78125rem;
     font-weight: 600;
     color: var(--text-base);
     margin-bottom: 5px;
 }
 .field-hint {
-    font-size: 11.5px;
+    font-size: 0.71875rem;
     color: var(--text-light);
     margin-top: 4px;
 }
@@ -431,7 +448,7 @@ input[type="text"], input[type="password"], input[type="number"], select, textar
     padding: 9px 12px;
     border: 1px solid var(--border-strong);
     border-radius: var(--radius);
-    font-size: 13.5px;
+    font-size: 0.84375rem;
     font-family: inherit;
     color: var(--text-dark);
     background: var(--bg-white);
@@ -469,7 +486,7 @@ textarea { resize: vertical; min-height: 64px; }
     border: none;
     background: var(--bg-lighter);
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 0.6875rem;
     padding: 4px 9px;
     border-radius: var(--radius-sm);
     cursor: pointer;
@@ -481,7 +498,7 @@ textarea { resize: vertical; min-height: 64px; }
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 13px;
+    font-size: 0.8125rem;
     color: var(--text-base);
 }
 .checkbox-row input { width: auto; }
@@ -495,7 +512,7 @@ textarea { resize: vertical; min-height: 64px; }
     padding: 10px 18px;
     border: 1px solid transparent;
     border-radius: var(--radius);
-    font-size: 13.5px;
+    font-size: 0.84375rem;
     font-weight: 600;
     font-family: inherit;
     cursor: pointer;
@@ -532,8 +549,8 @@ textarea { resize: vertical; min-height: 64px; }
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme]) .btn-secondary:not(:disabled):hover { background: rgba(255,255,255,0.07); }
 }
-.btn-small { padding: 6px 12px; font-size: 12px; }
-.btn-lg { padding: 12px 26px; font-size: 15px; }
+.btn-small { padding: 6px 12px; font-size: 0.75rem; }
+.btn-lg { padding: 12px 26px; font-size: 0.9375rem; }
 
 /* ==================== Upload / dropzone ==================== */
 .dropzone {
@@ -552,8 +569,8 @@ textarea { resize: vertical; min-height: 64px; }
     color: var(--primary-dark);
 }
 .dropzone svg { color: var(--primary-light); margin-bottom: 10px; }
-.dropzone .dz-title { font-size: 15px; font-weight: 600; color: var(--text-base); margin-bottom: 4px; }
-.dropzone .dz-hint { font-size: 12px; }
+.dropzone .dz-title { font-size: 0.9375rem; font-weight: 600; color: var(--text-base); margin-bottom: 4px; }
+.dropzone .dz-hint { font-size: 0.75rem; }
 
 .preview-wrap {
     margin-top: 16px;
@@ -572,7 +589,7 @@ textarea { resize: vertical; min-height: 64px; }
     background: var(--bg-lighter);
 }
 .preview-meta {
-    font-size: 12.5px;
+    font-size: 0.78125rem;
     color: var(--text-muted);
     display: flex;
     flex-direction: column;
@@ -649,7 +666,7 @@ textarea { resize: vertical; min-height: 64px; }
     /* Phase B: in dark mode primary is a lighter blue (#60a5fa) so white
        text fails WCAG AA — same rule as .btn-primary below. */
     color: #fff;
-    font-size: 13px;
+    font-size: 0.8125rem;
     font-weight: 600;
     text-decoration: none;
 }
@@ -968,7 +985,7 @@ button.btn.btn-primary:not(:disabled):active {
 .confidence-ring .num {
     font-variant-numeric: tabular-nums;
     font-weight: 650;
-    font-size: 12px;
+    font-size: 0.75rem;
     color: var(--text-base);
     grid-area: 1 / 1;
 }
@@ -982,7 +999,7 @@ button.btn.btn-primary:not(:disabled):active {
    margin-left is intentionally omitted: .rt-left's flex gap (12px) already
    provides the spacing. */
 .rt-left .label {
-    font-size: 11px;
+    font-size: 0.6875rem;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: var(--tracking-wide);
@@ -995,7 +1012,7 @@ button.btn.btn-primary:not(:disabled):active {
     gap: 4px;
     padding: 4px 10px;
     border-radius: 999px;
-    font-size: 12px;
+    font-size: 0.75rem;
     font-weight: 600;
     margin-left: 10px;
     cursor: help;
@@ -1006,7 +1023,7 @@ button.btn.btn-primary:not(:disabled):active {
 }
 .quality-badge .qb-num { font-variant-numeric: tabular-nums; }
 .quality-badge .qb-grade {
-    font-size: 11px;
+    font-size: 0.6875rem;
     font-weight: 700;
     padding: 0 4px;
     border-radius: 4px;
@@ -1029,7 +1046,7 @@ button.btn.btn-primary:not(:disabled):active {
 .alert {
     padding: 12px 16px;
     border-radius: var(--radius);
-    font-size: 13px;
+    font-size: 0.8125rem;
     margin-bottom: 16px;
     display: flex;
     align-items: flex-start;
@@ -1042,7 +1059,7 @@ button.btn.btn-primary:not(:disabled):active {
 .alert-success { background: var(--success-soft); color: #065f46; }
 .alert pre {
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: 0.71875rem;
     white-space: pre-wrap;
     word-break: break-word;
     margin-top: 8px;
@@ -1100,7 +1117,7 @@ button.btn.btn-primary:not(:disabled):active {
     gap: 4px;
     padding: 3px 10px;
     border-radius: 999px;
-    font-size: 11.5px;
+    font-size: 0.71875rem;
     font-weight: 600;
 }
 .badge-success { background: var(--success-soft); color: #065f46; }
@@ -1120,7 +1137,7 @@ button.btn.btn-primary:not(:disabled):active {
     margin-bottom: 12px;
 }
 .result-section-head h3 {
-    font-size: 15px;
+    font-size: 0.9375rem;
     font-weight: 650;
     color: var(--text-dark);
     display: flex;
@@ -1128,7 +1145,7 @@ button.btn.btn-primary:not(:disabled):active {
     gap: 8px;
 }
 .result-count {
-    font-size: 12px;
+    font-size: 0.75rem;
     color: var(--text-muted);
     font-weight: 500;
 }
@@ -1160,7 +1177,7 @@ button.btn.btn-primary:not(:disabled):active {
 table.data-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 13px;
+    font-size: 0.8125rem;
 }
 table.data-table thead th {
     /* FIX-8: backdrop-filter is GPU-heavy in dark mode.
@@ -1277,7 +1294,7 @@ table.data-table tbody tr:hover th[scope="row"] { background: var(--primary-soft
 .cell-num {
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
-    font-size: 12.5px;
+    font-size: 0.78125rem;
 }
 /* Phase C: agreement pill - color encodes consensus quality. */
 .pill {
@@ -1285,7 +1302,7 @@ table.data-table tbody tr:hover th[scope="row"] { background: var(--primary-soft
     align-items: center;
     padding: 1px 8px;
     border-radius: 999px;
-    font-size: 11.5px;
+    font-size: 0.71875rem;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
     letter-spacing: var(--tracking-tight);
@@ -1300,7 +1317,7 @@ table.data-table tbody tr:hover th[scope="row"] { background: var(--primary-soft
     color: var(--text-light);
 }
 .empty-state svg { color: var(--border-strong); margin-bottom: 12px; }
-.empty-state p { font-size: 14px; }
+.empty-state p { font-size: 0.875rem; }
 
 /* toolbar above results */
 .results-toolbar {
@@ -1362,7 +1379,7 @@ table.data-table tbody tr:hover th[scope="row"] { background: var(--primary-soft
 .footer {
     text-align: center;
     color: var(--text-light);
-    font-size: 12px;
+    font-size: 0.75rem;
     padding: 24px 0 0;
 }
 
@@ -1377,7 +1394,7 @@ table.data-table tbody tr:hover th[scope="row"] { background: var(--primary-soft
     padding: 8px 12px;
     border: 1px dashed var(--border-color);
     border-radius: 8px;
-    font-size: 12.5px;
+    font-size: 0.78125rem;
     color: var(--text-muted);
 }
 .names-verify .names-issue {
@@ -1394,7 +1411,7 @@ table.data-table tbody tr:hover th[scope="row"] { background: var(--primary-soft
     display: inline-block;
     padding: 3px 10px;
     border-radius: 999px;
-    font-size: 12px;
+    font-size: 0.75rem;
     border: 1px solid var(--border-color);
     background: var(--bg-lighter);
     color: var(--text-muted);

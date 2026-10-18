@@ -22,9 +22,10 @@ Measured over 33 (headers, rows) pairs. What the measurement found:
         string; js/export.js adds it in the download wrapper (needsBom, for
         csv/tsv mimes), so a downloaded file carries it either way. The EFFECTIVE
         contract is asserted, not the location.
-      - Python's csv.writer ends the last record with CRLF and the JS join does
-        not. Both are valid RFC 4180, and changing the browser's bytes is a
-        product decision rather than a mirror fix, so it is pinned as measured.
+      - ~~Python's csv.writer ends the last record with CRLF and the JS join does
+        not.~~ RESOLVED by X-09 (UI-REVIEW-2026-10-17): rcaToCsv now appends the
+        terminator to the last line too, so the engines are byte-identical apart
+        from the BOM location.
   * The remaining differences are the str()/String() family that
     rca_core/extractor._stringify_scalar and js/minimax.js#rcaStringifyScalar
     already carry (integral float, exponent padding, and a Python bool repr);
@@ -91,7 +92,7 @@ vm.runInContext(fs.readFileSync(EXPORT_JS, 'utf8'), ctx, { filename: 'js/export.
 for (const fn of ['rcaToCsv', 'rcaToTsv', 'rcaDownload']) {
   if (typeof ctx[fn] !== 'function') { console.error('ENV BROKEN: ' + fn); process.exit(3); }
 }
-if (ctx.rcaToCsv(['a'], [['1']]) !== 'a\r\n1') {
+if (ctx.rcaToCsv(['a'], [['1']]) !== 'a\r\n1\r\n') {
   console.error('ENV BROKEN: rcaToCsv canonical case: '
                 + JSON.stringify(ctx.rcaToCsv(['a'], [['1']])));
   process.exit(3);
@@ -149,13 +150,20 @@ def _is_inert(cell: str) -> bool:
 
 class TestCsvRenderingParity:
     def test_byte_identical_apart_from_the_two_pinned_differences(self, js):
-        """Everything except the BOM and the trailing terminator must match."""
+        """Everything except the BOM must match.
+
+        X-09 (UI-REVIEW-2026-10-17): the trailing-terminator difference was
+        RESOLVED -- rcaToCsv now appends CRLF to the last line too, matching
+        Python's csv.writer(lineterminator="\\r\\n"). Only the BOM location
+        stays pinned (Python carries it in the string; the browser adds it
+        in the download wrapper).
+        """
         mismatched = []
         for (cid, headers, rows), j in zip(CASES, js["out"]):
             py = to_csv(headers, [list(r) for r in rows])
             assert py.startswith(BOM), f"{cid}: python to_csv lost its BOM"
             body = py[len(BOM):]
-            js_body = j["csv"] + "\r\n"      # the pinned terminator difference
+            js_body = j["csv"]
             if body != js_body:
                 mismatched.append((cid, body, js_body))
         assert not mismatched, "\n".join(
@@ -218,12 +226,14 @@ class TestPinnedCosmeticDifferences:
     """Recorded so a change to either is visible, not to make it fail."""
 
     def test_the_csv_trailing_terminator_as_measured(self, js):
+        """X-09 (UI-REVIEW-2026-10-17): the pinned terminator difference was
+        RESOLVED, not re-pinned -- rcaToCsv now ends with CRLF exactly like
+        Python's to_csv. Both engines must agree byte-for-byte now."""
         py = to_csv(["a"], [["1"]])
         js_csv = js["out"][0]["csv"]
         assert py.endswith("\r\n"), "python to_csv no longer ends with CRLF"
-        assert not js_csv.endswith("\r\n"), (
-            "the browser CSV now ends with CRLF too -- the pinned difference is "
-            "resolved, so update this test and the module docstring")
+        assert js_csv.endswith("\r\n"), (
+            "the browser CSV lost its trailing CRLF -- X-09 regressed")
 
     def test_the_pinned_tsv_differences_are_still_exactly_these(self, js):
         # The str()/String() family reaches the exporter because it is handed

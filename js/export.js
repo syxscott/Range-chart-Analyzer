@@ -48,13 +48,28 @@ function rcaCsvCell(value) {
 }
 
 // Build a CSV string from headers + rows (array of arrays).
+//
+// X-09 (UI-REVIEW-2026-10-17, parity): every line carries its CRLF
+// terminator, INCLUDING the last one. Python's to_csv uses
+// csv.writer(lineterminator="\r\n"), which appends the terminator after
+// every row, so the browser used to emit 2 fewer bytes for the same chart
+// (measured: 119 vs 121 on the 6-line fixture) and `diff` / `sha256sum`
+// between the two engines' exports reported a difference that was not in
+// the data. RFC 4180 permits a missing final terminator, but "permitted"
+// is not "identical", and the whole point of this function is to be a
+// mirror. `rcaToTsv` below deliberately does NOT get the same treatment:
+// Python's to_tsv joins with "\n" and has no trailing terminator either,
+// so it is already at parity.
+//
+// BOM note: rcaDownload prepends it, Python's to_csv carries it inline —
+// unchanged here, test_export_render_parity.py covers that split.
 function rcaToCsv(headers, rows) {
   const lines = [];
   lines.push(headers.map(rcaCsvCell).join(','));
   for (const row of rows) {
     lines.push(row.map(rcaCsvCell).join(','));
   }
-  return lines.join('\r\n');
+  return lines.map((l) => l + '\r\n').join('');
 }
 
 // Build a TSV string (tabs). Newlines/tabs inside cells are collapsed to spaces
