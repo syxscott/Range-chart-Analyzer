@@ -44,7 +44,28 @@ if ROOT not in sys.path:
 
 from rca_core.aggregate import _merge_scalar_field  # noqa: E402
 
-NODE = r"C:/Users/Administrator/.workbuddy/binaries/node/versions/22.22.2-6/node.exe"
+# CI-PORTABILITY (2026-10-18): this used to hard-code one developer's
+# WorkBuddy-managed node path, which made the whole test error on any other
+# machine — including CI, where the "FileNotFoundError" looked like a broken
+# checkout rather than what it was. Resolve node the way every other
+# consumer in this repo does: PATH first, then the well-known install
+# locations. Skipped (with a loud reason) when no node exists at all —
+# a machine without node cannot run a JS-engine comparison, and failing it
+# there would tell the next person nothing they can act on.
+import shutil  # noqa: E402
+
+NODE = shutil.which("node")
+if NODE is None:
+    for _candidate in (
+        r"C:/Program Files/nodejs/node.exe",
+        r"C:/Program Files (x86)/nodejs/node.exe",
+    ):
+        if os.path.isfile(_candidate):
+            NODE = _candidate
+            break
+if NODE is None:
+    pytest.skip("no node executable on PATH — cannot compare against the "
+                "JS engine", allow_module_level=True)
 
 #: Every case here is invisible to the differential harness. Keep it that way:
 #: if one becomes expressible as a fixture (because the merged value becomes
