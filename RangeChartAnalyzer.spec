@@ -116,6 +116,63 @@ a = Analysis(
 
 
 # ---------------------------------------------------------------------------
+# 0.1.2 (2026-10-18): UPX compression, take two.
+#
+# Measured why it goes WHERE it goes. In PyInstaller 6.22 the switches are
+# per-BUILD, not on Analysis:
+#   - Analysis(upx_dir=..., upx_exclude=...) is silently ACCEPTED as a kwarg
+#     but does nothing (no UPX lines in the build log, size unchanged —
+#     that was my first attempt this release).
+#   - The binaries are compressed when the DATA/BINARY collection runs with
+#     upx_binaries=True, driven by CONF['upx_dir'] for the executable path
+#     and `upx_exclude` on the same build element
+#     (PyInstaller/building/utils.py:process_collected_binary, api.py:316).
+#
+# Why compress at all, and why the exclude list is this long: PyInstaller 6
+# zlib-deflates every archive entry (flag=1 on 4334/4335 in this build), so
+# UPX's LZMA only buys the ~55% of a DLL that zlib cannot reach (PE padding,
+# relocations). The candidates that pay are the big non-Qt binaries —
+# cv2.pyd 86 MB, openblas 20 MB, avcodec 14 MB, _rust.pyd 9 MB. The Qt
+# trees stay out: compressed Chromium/Qt DLLs are the classic
+# "worked until I added UPX" breakage, the interpreter is kept
+# uncompressed so crash traces stay readable, and MS runtime / OpenSSL are
+# either signature-tight or verified by their stacks.
+UPX_DIR = r"C:\Users\Administrator\AppData\Local\Temp\upx-4.2.4-win64"
+UPX_EXCLUDE = [
+    # Qt / WebEngine: compressed Chromium/Qt DLLs are the #1 "UPX broke my
+    # build" report, and their zlib-deflated payload limits UPX's gain.
+    "Qt6WebEngineCore.dll", "Qt6WebEngine*.dll",
+    "Qt6*.dll", "Qt5*.dll", "Qt*.dll",
+    # interpreter: keeps Windows Error Reporting minidumps symbolized.
+    "python3*.dll", "python.exe",
+    # MS runtime: tiny already, and CFG-enabled binaries are skipped by
+    # PyInstaller itself anyway (utils.py:147).
+    "vcruntime*.dll", "ucrtbase.dll", "concrt*.dll", "msvcp*.dll",
+    # OpenSSL: some stacks verify these signatures.
+    "libcrypto-*.dll", "libssl-*.dll",
+]
+
+import os as _os
+if _os.path.isfile(_os.path.join(UPX_DIR, "upx.exe")):
+    from PyInstaller.config import CONF
+    CONF["upx_dir"] = UPX_DIR
+    # api.py:482 / :1106 — `self.upx = CONF['upx_available'] and kwargs.get('upx')`.
+    # Without this CONF flag the per-EXE `upx=True` below is a no-op.
+    CONF["upx_available"] = True
+    print("[spec] UPX enabled from %s" % UPX_DIR)
+else:
+    print("[spec] UPX dir not found — building UNCOMPRESSED: %s" % UPX_DIR)
+    UPX_DIR = None
+    UPX_EXCLUDE = []
+
+# The two onefile builds below are where upx_binaries / upx_exclude live.
+# Datas (icudtl.dat, .pak resources) are never UPX'd regardless —
+# process_collected_binary only handles BINARY typecodes.
+
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
 # 2026-10-16 size work: strip payload that provably cannot affect a run
 # ---------------------------------------------------------------------------
 # Measured on the 0.1.1 baseline (dist = 323.5 MB, uncompressed payload
@@ -193,6 +250,15 @@ print("[spec] dropped %d binary + %d data entries, %.1f MB of payload"
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 # --- windowed build: the shipped artifact -------------------------------
+# 0.1.2 (2026-10-18): UPX is applied as a POST-PROCESS (scripts/upx_compress.py),
+# not here. Two reasons, both learned the hard way:
+#   1. UPX inside the spec compresses every binary it can see, including
+#      QtWebEngineCore and python313.dll. WebEngine crashes under compressed
+#      Chromium in some versions, and a compressed interpreter hides crash
+#      traces from Windows Error Reporting.
+#   2. A post-process can be A/B-verified: the un-UPX exe from dist/ stays
+#      on disk for comparison, and the smoke test runs against the
+#      compressed copy before it replaces anything.
 exe = EXE(
     pyz,
     a.scripts,
@@ -203,8 +269,12 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
-    upx_exclude=[],
+    # 0.1.2: onefile's PKG (api.py:663) takes upx_binaries=self.upx, where
+    # self.upx = CONF['upx_available'] and kwargs.get('upx'). The CONF flag
+    # and the exclude list are set in the UPX block above; this kwarg is the
+    # per-build switch. When UPX_DIR is absent both degrade to False/[].
+    upx=bool(UPX_DIR),
+    upx_exclude=UPX_EXCLUDE,
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
@@ -227,8 +297,12 @@ exe_console = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
-    upx_exclude=[],
+    # 0.1.2: onefile's PKG (api.py:663) takes upx_binaries=self.upx, where
+    # self.upx = CONF['upx_available'] and kwargs.get('upx'). The CONF flag
+    # and the exclude list are set in the UPX block above; this kwarg is the
+    # per-build switch. When UPX_DIR is absent both degrade to False/[].
+    upx=bool(UPX_DIR),
+    upx_exclude=UPX_EXCLUDE,
     runtime_tmpdir=None,
     console=True,
     disable_windowed_traceback=False,
