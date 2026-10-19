@@ -16,6 +16,13 @@ const RCA_CONFIG = {
   // as one JSON record per filled cell; at 4000 the last rows were simply cut
   // off. Must stay equal to DEFAULT_MAX_TOKENS in rca_core/extractor.py.
   defaultMaxTokens: 16000,
+  // REVIEW-2026-10-19: reasoning effort levels (MiniMax M3.1 family). The
+  // wire shape is `output_config: {effort: ...}` on the Anthropic-compatible
+  // endpoint -- NOT `thinking: {budget_tokens: N}`, which is not in M3.1's
+  // documented vocabulary. Must stay equal to REASONING_EFFORT_LEVELS in
+  // rca_core/llm.py.
+  reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+  defaultEffort: '',
   // M5: explicit bounds for max_tokens clamp — defends against typos.
   minMaxTokens: 1,
   maxMaxTokens: 32000,
@@ -54,6 +61,14 @@ const RCA_STORE = {
   // which is how a renamed/removed store key slips past a grep for
   // `RCA_STORE.`. Every namespaced key now goes through this table.
   maxTokens: 'rca.maxTokens',
+  // REVIEW-2026-10-19: reasoning effort for the MiniMax M3.1 family.
+  // M3.1 ALWAYS thinks and its effort level DEFAULTS TO "max"; thinking tokens
+  // consume max_tokens, so on a dense figure the thinking alone outgrew the
+  // budget and the call never answered (measured: read timeout at 90 s, 2 of
+  // 2 runs, while the same call on M3 -- thinking off by default -- answered
+  // in 6.5-13.1 s). "low" answered the same call in 28.3 s.
+  // Empty string means "send nothing", which is right for every other model.
+  effort: 'rca.effort',
   proxy: 'rca.proxy',
   mode: 'rca.mode',
   maxEdge: 'rca.maxEdge',

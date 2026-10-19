@@ -80,6 +80,36 @@ class ApiFormat(str, Enum):
 
 
 # ---------------------------------------------------------------------------
+# Reasoning effort
+# ---------------------------------------------------------------------------
+
+#: The reasoning-effort levels MiniMax's M3.1 family accepts, weakest first.
+#:
+#: Measured on the reference figure's label call (2026-10-19): ``low`` 28.3 s
+#: with a complete answer, ``high`` 48.3 s with a complete answer, and the
+#: DEFAULT (``max``) never answered inside 90 s. The value is the level NAME,
+#: not a token budget -- there is no "off": M3.1 always thinks.
+REASONING_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+
+def normalize_reasoning_effort(value: object) -> str:
+    """Return a usable effort level, or ``""`` for "send nothing".
+
+    A provider record is user-editable JSON, so this field can hold anything.
+    Sending an unknown level upstream risks a 400 that would take the whole
+    extraction down, and a typo must never turn into a request. An
+    unrecognised value is therefore DROPPED, not passed through -- the
+    request then behaves exactly as it did before this field existed, which
+    is the safe failure: the model applies its own default and the run
+    succeeds or fails for its own reasons.
+    """
+    if not isinstance(value, str):
+        return ""
+    v = value.strip().lower()
+    return v if v in REASONING_EFFORT_LEVELS else ""
+
+
+# ---------------------------------------------------------------------------
 # Provider dataclass
 # ---------------------------------------------------------------------------
 
@@ -113,6 +143,30 @@ class LlmProvider:
     model: str = ""
     extra_headers: dict[str, str] = field(default_factory=dict)
     extra_body: dict[str, Any] = field(default_factory=dict)
+    # REVIEW-2026-10-19: reasoning effort for the MiniMax M3.1 family.
+    #
+    # MiniMax's M3.1 ALWAYS thinks and its effort level DEFAULTS TO ``max``;
+    # thinking tokens are billed against and CONSUME ``max_tokens``. Measured
+    # on the reference figure (777x543, 22x18, 93 filled cells):
+    #
+    #   MiniMax-M3          (thinking off by default)  label call 6.5-13.1 s
+    #   MiniMax-M3.1-Flash (effort=max, the default) label call TIMED OUT at
+    #                     90 s, 2 of 2
+    #   MiniMax-M3.1-Flash (effort=low)               label call 28.3 s, and
+    #                     the answer was complete (22 rows / 18 columns / 3
+    #                     legend entries)
+    #
+    # The failure mode is not obvious from the outside: with max_tokens=2000
+    # the call returned HTTP 200 in 23.3 s with stop_reason=max_tokens and an
+    # EMPTY body, because the thinking had eaten the whole budget before the
+    # model wrote a single character of the answer. Raising max_tokens does
+    # not help (the thinking is unbounded), and lowering the effort does.
+    #
+    # The shape is ``output_config: {"effort": ...}`` on the Anthropic-
+    # compatible endpoint -- NOT ``thinking: {budget_tokens: N}``, which is
+    # not in M3.1's documented vocabulary. Empty string means "send nothing"
+    # and is the right default for every other provider and for M3 itself.
+    reasoning_effort: str = ""
     is_current: bool = False
     created_at: float = 0.0
     sort_index: int = 0
@@ -1428,6 +1482,20 @@ def _call_anthropic(
             }
         ],
     }
+    # REVIEW-2026-10-19: reasoning effort, BEFORE ``extra_body`` so a user
+    # who put ``output_config`` in extra_body by hand still wins -- extra_body
+    # is the documented escape hatch and must keep the last word.
+    #
+    # Anthropic-compatible only. The OpenAI-compatible endpoint of the same
+    # vendor takes a different spelling of this knob and it has NOT been
+    # measured here, so guessing a second shape would risk a 400 on a request
+    # that used to work. An effort set on a non-Anthropic provider is
+    # therefore ignored, not sent.
+    if provider.api_format == ApiFormat.ANTHROPIC:
+        _effort = normalize_reasoning_effort(
+            getattr(provider, "reasoning_effort", ""))
+        if _effort:
+            body["output_config"] = {"effort": _effort}
     body.update(provider.extra_body or {})
     headers = {
         "x-api-key": provider.api_key,
@@ -1849,6 +1917,13 @@ def call_llm_api(
                 **({"temperature": temperature} if temperature is not None else {}),
                 **({"seed": seed} if seed is not None else {}),
             },
+            # REVIEW-2026-10-19: this copy rebuilt the provider from a fixed
+            # field list, so a provider that carried a reasoning effort LOST
+            # it whenever the caller passed a temperature or a seed -- and
+            # M3.1 then silently reverted to effort=max, which is the
+            # configuration that times out. The field has to travel with
+            # the copy.
+            reasoning_effort=provider.reasoning_effort,
             id=provider.id,
         )
     dispatch = {

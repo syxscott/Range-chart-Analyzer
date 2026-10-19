@@ -3722,6 +3722,11 @@ async function extractRangeChart(opts) {
     baseUrl,
     model,
     maxTokens,
+    // REVIEW-2026-10-19: reasoning effort. MiniMax's M3.1 always thinks and
+    // defaults to effort=max, and thinking tokens consume max_tokens -- on a
+    // dense figure the thinking alone outgrew the budget and the call never
+    // answered. "low" answered the same call in 28.3 s.
+    effort,
     proxyUrl,
     dataUrl,
     mediaType,
@@ -3888,6 +3893,15 @@ async function extractRangeChart(opts) {
           ],
         }],
       };
+      // REVIEW-2026-10-19: the classification call is the SAME model, and
+      // its budget is only 500 tokens -- which the thinking of an M3.1 at
+      // effort=max would eat completely, leaving an empty classification and
+      // a silently mis-detected chart type. The effort applies here too.
+      if (effort && typeof RCA_CONFIG !== 'undefined'
+          && RCA_CONFIG.reasoningEffortLevels
+          && RCA_CONFIG.reasoningEffortLevels.indexOf(effort) >= 0) {
+        clsBody.output_config = { effort: effort };
+      }
       const clsResp = await fetch(url, {
         method: 'POST',
         headers: {
@@ -3988,6 +4002,21 @@ async function extractRangeChart(opts) {
       },
     ],
   };
+  // REVIEW-2026-10-19: reasoning effort -> `output_config.effort`.
+  //
+  // The shape is MiniMax's, not Anthropic's: on the Anthropic-compatible
+  // endpoint M3.1 takes `output_config: {effort: ...}`, while
+  // `thinking: {budget_tokens: N}` is NOT in M3.1's documented vocabulary and
+  // M3.1 always thinks anyway (it cannot be switched off).
+  //
+  // An unrecognised level is DROPPED rather than forwarded: this value comes
+  // from localStorage, so a stale or hand-edited entry must not turn into a
+  // request the endpoint answers with a 400.
+  if (effort && typeof RCA_CONFIG !== 'undefined'
+      && RCA_CONFIG.reasoningEffortLevels
+      && RCA_CONFIG.reasoningEffortLevels.indexOf(effort) >= 0) {
+    body.output_config = { effort: effort };
+  }
 
   // FE-FIX-2026-09-22 (item 2): controller / timer / cancel wiring now live
   // BEFORE the auto-mode classification block (single shared owner of both

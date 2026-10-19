@@ -51,18 +51,36 @@ class TestCallBudget:
         assert _calls_for(n_cells) + 1 <= SERVER_MAX_ATTEMPTS
 
     def test_the_worst_case_wall_clock_fits_the_server_budget(self):
-        """Calls x attempts per call x the per-call ceiling must fit.
+        """The path's own budget + the fallback's worst case must fit.
 
-        The server's budget is `timeout_sec * 6 + 25` s. This path makes
-        SEVERAL calls, so without a per-call ceiling a hung call could spend the
-        whole budget on its own and the request would be abandoned with no data
-        -- where the single-pass path, one call, would have answered.
+        REVIEW-2026-10-19: the path is bounded in SECONDS, not in calls. It
+        makes four calls and each of them may retry, and the two failure
+        kinds cost different amounts -- a 429/529 comes back in about a
+        second and may be ridden out, while a read timeout costs the whole
+        per-call ceiling. A deadline expresses that; an attempt count cannot.
+
+        The fallback to the single-pass path still has to fit afterwards, so
+        the path's share has to scale with the caller's timeout: a fixed
+        number would either starve a short-timeout run or overrun a long one.
         """
-        from rca_core.extractor import TRANSPORT_ATTEMPTS
-        worst = _calls_for(372) * TRANSPORT_ATTEMPTS * M.MATRIX_CALL_TIMEOUT_SEC
-        assert worst <= 120 * SERVER_MAX_ATTEMPTS + 25, (
-            "the two-stage path's worst case must fit inside the server's "
-            "wall-clock budget")
+        from rca_core.extractor import TRANSPORT_TIMEOUT_ATTEMPTS
+        for timeout_sec in (30, 60, 120, 300):
+            server_budget = timeout_sec * SERVER_MAX_ATTEMPTS + 25
+            fallback = TRANSPORT_TIMEOUT_ATTEMPTS * timeout_sec
+            path = M.matrix_path_budget_sec(timeout_sec)
+            assert path + fallback <= server_budget, (
+                "the two-stage path plus its fallback must fit inside the "
+                "server's wall-clock budget at timeout_sec=%s" % timeout_sec)
+
+    def test_a_single_call_cannot_outlive_the_path_budget(self):
+        assert M.MATRIX_CALL_TIMEOUT_SEC <= M.matrix_path_budget_sec(30), \
+            "a per-call ceiling above the whole-path budget would make the " \
+            "budget meaningless"
+
+    def test_the_path_budget_scales_with_the_timeout(self):
+        assert (M.matrix_path_budget_sec(120)
+                < M.matrix_path_budget_sec(300)), \
+            "a longer per-request timeout may buy a longer path budget"
 
     def test_the_sheet_grows_so_the_call_count_stays_bounded(self):
         """A bigger matrix must not mean more calls."""

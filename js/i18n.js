@@ -42,6 +42,11 @@ const RCA_I18N = {
     'settings.endpoint.hint': 'Anthropic 兼容端点。一般无需修改。',
     'settings.model': '模型 (Model)',
     'settings.model.hint': '默认 MiniMax-M3。',
+    // REVIEW-2026-10-19: 推理强度。MiniMax M3.1 始终开启思考且默认 effort=max，
+    // 思考 token 计入 max_tokens，密集图上会把预算吃光导致读超时。
+    'settings.effort': '推理强度 (effort)',
+    'settings.effort.default': '默认（不发送）',
+    'settings.effort.hint': 'MiniMax M3.1 默认 max，思考会吃满 max_tokens；密集图建议选 low。',
     'settings.maxTokens': '最大输出 Token',
     'settings.maxTokens.hint': '种属很多的大图可调高，避免结果被截断。',
   'settings.enhance': '图像增强',
@@ -448,6 +453,11 @@ RCA_I18N.en = {
   'settings.endpoint.hint': 'Anthropic-compatible endpoint. Usually no need to change.',
   'settings.model': 'Model',
   'settings.model.hint': 'Defaults to MiniMax-M3.',
+  // REVIEW-2026-10-19: reasoning effort (MiniMax M3.1 always thinks and
+  // defaults to effort=max, which eats max_tokens on a dense figure).
+  'settings.effort': 'Reasoning effort',
+  'settings.effort.default': 'Default (not sent)',
+  'settings.effort.hint': 'MiniMax M3.1 defaults to max, and the thinking consumes max_tokens; pick low for dense figures.',
   'settings.maxTokens': 'Max output tokens',
   'settings.maxTokens.hint': 'Increase for large charts with many species to avoid truncation.',
   'settings.enhance': 'Image enhancement',
@@ -818,6 +828,11 @@ RCA_I18N.ja = {
   'settings.endpoint.hint': 'Anthropic 互換エンドポイント。通常は変更不要です。',
   'settings.model': 'モデル',
   'settings.model.hint': '既定は MiniMax-M3。',
+  // REVIEW-2026-10-19: 推論強度 (MiniMax M3.1 は常に思考し既定は effort=max、
+  // 思考トークンが max_tokens を消費するため密な図では応答が返らない)。
+  'settings.effort': '推論の強度 (effort)',
+  'settings.effort.default': '既定（送信しない）',
+  'settings.effort.hint': 'MiniMax M3.1 の既定は max で思考が max_tokens を消費します。密な図では low を推奨。',
   'settings.maxTokens': '最大出力トークン',
   'settings.maxTokens.hint': '種が多い大きな図では値を上げ、結果の途切れを防ぎます。',
   'settings.enhance': '画像強調',

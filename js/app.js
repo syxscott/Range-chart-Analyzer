@@ -441,6 +441,11 @@
     $('endpoint').value = rcaStoreGet(RCA_STORE.endpoint, RCA_CONFIG.defaultEndpoint);
     $('model').value = rcaStoreGet(RCA_STORE.model, RCA_CONFIG.defaultModel);
     $('max-tokens').value = rcaStoreGet(RCA_STORE.maxTokens, String(RCA_CONFIG.defaultMaxTokens));
+    // REVIEW-2026-10-19: reasoning effort (MiniMax M3.1 family). Empty means
+    // "send nothing", which is the right default for every other model.
+    if ($('effort')) {
+      $('effort').value = rcaStoreGet(RCA_STORE.effort, RCA_CONFIG.defaultEffort);
+    }
     $('proxy').value = rcaStoreGet(RCA_STORE.proxy, '');
     $('conn-mode').value = rcaStoreGet(RCA_STORE.mode, 'auto');
     $('max-edge').value = rcaStoreGet(RCA_STORE.maxEdge, String(RCA_CONFIG.maxImageEdge));
@@ -519,6 +524,10 @@
       [RCA_STORE.endpoint, rcaStoreSet(RCA_STORE.endpoint, $('endpoint').value.trim() || RCA_CONFIG.defaultEndpoint)],
       [RCA_STORE.model, rcaStoreSet(RCA_STORE.model, $('model').value.trim() || RCA_CONFIG.defaultModel)],
       [RCA_STORE.maxTokens, rcaStoreSet(RCA_STORE.maxTokens, $('max-tokens').value.trim() || String(RCA_CONFIG.defaultMaxTokens))],
+      // REVIEW-2026-10-19: the effort is persisted with the rest of the
+      // settings, so a reload does not silently drop back to the model
+      // default (effort=max for M3.1, i.e. the configuration that times out).
+      [RCA_STORE.effort, rcaStoreSet(RCA_STORE.effort, ($('effort') ? $('effort').value : ''))],
       [RCA_STORE.proxy, rcaStoreSet(RCA_STORE.proxy, $('proxy').value.trim())],
       [RCA_STORE.mode, rcaStoreSet(RCA_STORE.mode, $('conn-mode').value)],
       [RCA_STORE.maxEdge, rcaStoreSet(RCA_STORE.maxEdge, $('max-edge').value.trim() || String(RCA_CONFIG.maxImageEdge))],
@@ -1369,6 +1378,8 @@
         baseUrl: $('endpoint').value.trim() || RCA_CONFIG.defaultEndpoint,
         model: $('model').value.trim() || RCA_CONFIG.defaultModel,
         maxTokens,
+        // REVIEW-2026-10-19: reasoning effort for the direct transport.
+        effort: ($('effort') ? $('effort').value : ''),
         proxyUrl: $('proxy').value.trim(),
         mode: chartMode,
         transport: connMode,

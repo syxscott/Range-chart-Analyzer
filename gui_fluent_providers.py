@@ -49,7 +49,7 @@ from rca_core import (
     PROVIDER_PRESETS, ApiFormat, LlmProvider, ProviderStore, Translator,
 )
 from rca_core.extractor import DEFAULT_ENDPOINT, DEFAULT_MODEL
-from rca_core.llm import test_llm_connection
+from rca_core.llm import REASONING_EFFORT_LEVELS, test_llm_connection
 from rca_core.ssrf import validate_endpoint as _validate_endpoint
 
 
@@ -614,6 +614,31 @@ class ProviderWizard(QDialog):
         self._ipt_model = LineEdit()
         fl.addWidget(self._ipt_model, r, 0, 1, 2); r += 1
 
+        # REVIEW-2026-10-19: reasoning effort.
+        #
+        # MiniMax's M3.1 family always thinks and its effort level DEFAULTS TO
+        # ``max``; thinking tokens consume max_tokens, so on a dense figure
+        # the thinking alone outgrew the budget and the call never answered
+        # (measured: read timeout at 90 s, 2 of 2 runs, while the same call on
+        # M3 -- whose thinking is off by default -- answered in 6.5-13.1 s).
+        # ``low`` answered the same call in 28.3 s with a complete reading.
+        #
+        # This is a FIELD and not a hand-written extra_body blob on purpose:
+        # the wizard rebuilds the provider from a fixed field list, so
+        # anything smuggled into extra_body would be silently dropped the
+        # moment the user edited this provider, and the product would revert
+        # to the timing-out configuration with nothing on screen to say why.
+        lbl = BodyLabel(self._t("wizard.fieldEffort"))
+        fl.addWidget(lbl, r, 0, 1, 2); r += 1
+        self._cmb_effort = ComboBox()
+        # The combo shows a localized "default" row, so the VALUES are kept in
+        # a parallel list -- an index into a translated label list would break
+        # the moment the wording changed.
+        self._effort_values = [""] + list(REASONING_EFFORT_LEVELS)
+        self._cmb_effort.addItems([self._t("wizard.effortDefault")]
+                                  + list(REASONING_EFFORT_LEVELS))
+        fl.addWidget(self._cmb_effort, r, 0, 1, 2); r += 1
+
         # Extra headers field
         lbl = BodyLabel(self._t("wizard.extraHeaders"))
         fl.addWidget(lbl, r, 0, 1, 2); r += 1
@@ -820,6 +845,16 @@ class ProviderWizard(QDialog):
                 self._ipt_extra_headers.setText(json.dumps(existing.extra_headers))
             except Exception:
                 pass
+        # REVIEW-2026-10-19: carry the stored reasoning effort into the combo.
+        # Without this, editing a provider would silently reset the effort to
+        # "default" -- i.e. back to effort=max for M3.1, i.e. back to the
+        # configuration that times out on a dense figure.
+        if getattr(existing, "reasoning_effort", ""):
+            try:
+                self._cmb_effort.setCurrentIndex(
+                    self._effort_values.index(existing.reasoning_effort))
+            except ValueError:
+                pass
         # API-REVIEW-2026-10-18: editing an existing provider has no preset,
         # so hide the doc/key/backup row — otherwise the wizard that opened
         # on preset A and then picked "Edit" on provider B would still
@@ -902,6 +937,10 @@ class ProviderWizard(QDialog):
             api_key=self._ipt_key.text().strip(),
             model=self._ipt_model.text().strip(),
             extra_headers=extra_headers,
+            # REVIEW-2026-10-19: the effort is a real field of the record,
+            # not a free-form blob, so it survives an edit of this provider.
+            reasoning_effort=self._effort_values[
+                max(0, self._cmb_effort.currentIndex())],
             created_at=self._edit_created_at,       # same reasoning
             # Preserve is_current on edit. The wizard rebuilds the provider
             # from scratch and the LlmProvider default is False, which would

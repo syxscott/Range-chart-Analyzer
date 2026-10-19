@@ -2908,7 +2908,11 @@ _error_from_status_with_body = _error_from_status
 # Exceptions are deliberately NOT caught here: the modes already guard the
 # call and report ``call_llm_api failed: <Type>`` in ``warning`` (see
 # tests/test_extraction.py::TestExtractRangeChartNeverRaises).
-TRANSPORT_ATTEMPTS = 2                  # 1 normal call + 1 retry
+TRANSPORT_ATTEMPTS = 4                  # 1 normal call + 3 retries
+#: How many calls a NETWORK-level failure (status None -- a read timeout, a
+#: reset connection) is allowed. Deliberately smaller than
+#: ``TRANSPORT_ATTEMPTS``: see the note above the two constants.
+TRANSPORT_TIMEOUT_ATTEMPTS = 2         # 1 normal call + 1 retry
 TRANSPORT_BASE_BACKOFF_SEC = 0.8
 # Same transient set as llm._RETRYABLE_STATUS: 400/401/403 are client/auth
 # mistakes that a retry can only make worse (and that burn quota).
@@ -2923,8 +2927,29 @@ TRANSPORT_BASE_BACKOFF_SEC = 0.8
 _RETRYABLE_TRANSPORT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504,
                                          529})
 
+# REVIEW-2026-10-19: the two failure kinds cost wildly different amounts of
+# the server's single-run budget, and one retry count for both was wrong for
+# each of them.
+#
+#   * A 429/529/503 is FAST: the upstream said "busy, come back" in about a
+#     second. Measured on MiniMax-M3.1-Flash at a congested tier, the
+#     reference figure's three-run regression lost 31 of 93 cells to bare
+#     529s (precision/recall 0.333 and 0.667) and a third run failed
+#     outright -- one retry is simply not enough for a busy tier, and
+#     retrying a 1-second answer is nearly free.
+#   * A read TIMEOUT costs the whole per-call timeout, and the two-stage path
+#     already budgets four calls against the server's 745 s.
+#
+# So: a server that ANSWERED gets more tries, a network-level failure keeps
+# the old count. The worst case is unchanged -- at most two timeouts per
+# call, four calls, 2 x 90 s each = 720 s < 745 s -- while the cheap
+# failures now get three extra shots.
+#
+# The attempt counter is therefore split in two: ``calls`` counts every
+# request, and a network failure is judged against the SMALLER budget.
 
-def _call_llm(**kwargs):
+
+def _call_llm(*, time_budget_sec: float | None = None, **kwargs):
     """``call_llm_api`` with one bounded retry on transient transport errors.
 
     Returns the same 5-tuple. The LAST attempt's status is what is returned,
@@ -2933,20 +2958,59 @@ def _call_llm(**kwargs):
     ``error_body`` gains the ``[transport retry ...]`` annotation that
     ``call_llm_api_with_retry`` already uses. Non-transient answers (2xx, 4xx
     other than the above) never cost an extra request.
+
+    ``time_budget_sec`` caps the wall clock THIS call may spend, retries
+    included. It exists because an attempt count cannot express the two
+    failure kinds: a 429/529 costs about a second and may be retried as often
+    as the budget allows, while a read timeout costs the whole per-call
+    ceiling. The check is made BEFORE each retry, against the call's own
+    timeout, so the chain stops exactly when one more attempt would not fit.
     """
     attempts = TRANSPORT_ATTEMPTS
     try:
         attempts = max(1, int(attempts))
     except (TypeError, ValueError):
-        attempts = 2
+        attempts = 4
+    timeout_attempts = TRANSPORT_TIMEOUT_ATTEMPTS
+    try:
+        timeout_attempts = max(1, int(timeout_attempts))
+    except (TypeError, ValueError):
+        timeout_attempts = 2
+    # The per-call ceiling, used to decide whether one more attempt fits in
+    # the caller's budget.
+    try:
+        per_call_timeout = float(kwargs.get("timeout_sec") or 0)
+    except (TypeError, ValueError):
+        per_call_timeout = 0.0
+    t_start = time.monotonic()
     notes: list[str] = []
     result = call_llm_api(**kwargs)
-    for attempt in range(attempts - 1):
+    calls = 1
+    attempt = 0
+    while True:
         text, _truncated, status, _err_body, _usage = result
         if text is not None:
             break
         if status is not None and status not in _RETRYABLE_TRANSPORT_STATUS:
             break
+        # REVIEW-2026-10-19: a server that ANSWERED (429/529/503...) gets the
+        # full attempt budget, because that answer came back in about a
+        # second; a network-level failure gets the smaller one, because it
+        # already cost the whole per-call timeout.
+        if status is None:
+            if calls >= timeout_attempts:
+                break
+            max_retries = timeout_attempts - 1
+        else:
+            if calls >= attempts:
+                break
+            max_retries = attempts - 1
+        # The budget is the outer bound: even a cheap failure is not retried
+        # when the caller's remaining time cannot cover one more attempt.
+        if time_budget_sec is not None:
+            spent = time.monotonic() - t_start
+            if spent + per_call_timeout > time_budget_sec:
+                break
         try:
             from . import error_utils
             delay = error_utils.get_retry_delay(
@@ -2955,10 +3019,12 @@ def _call_llm(**kwargs):
             )
         except Exception:
             delay = TRANSPORT_BASE_BACKOFF_SEC
-        notes.append(f"[transport retry {attempt + 1}/{attempts - 1}"
+        notes.append(f"[transport retry {attempt + 1}/{max_retries}"
                      f" after {delay:.1f}s: HTTP {status if status is not None else 'network'}]")
         time.sleep(delay)
         result = call_llm_api(**kwargs)
+        calls += 1
+        attempt += 1
     if notes:
         text, truncated, status, err_body, usage = result
         annotated = err_body
@@ -5540,7 +5606,31 @@ def extract_occurrence_matrix(
         _grid_raws: list[dict[str, Any]] = []
         try:
             from .matrix import (MATRIX_CALL_TIMEOUT_SEC,
-                                extract_matrix_two_stage, guess_media_type)
+                                extract_matrix_two_stage, guess_media_type,
+                                matrix_path_budget_sec)
+
+            # REVIEW-2026-10-19: this path gets its OWN wall-clock budget.
+            #
+            # The server's single-run budget is `timeout_sec * 6 + 25` s and
+            # its meaning is "at most six outbound attempts' worth of wall
+            # clock". This path spends FOUR calls (one for the labels, one per
+            # contact sheet), and each of them may retry -- so counting calls
+            # is no longer enough, and the arithmetic has to be done in
+            # seconds.
+            #
+            # A budget does that job better than an attempt count, because the
+            # two failure kinds cost wildly different amounts: a 429/529 comes
+            # back in about a second and can be retried as often as the
+            # budget allows, while a read timeout costs the whole per-call
+            # ceiling. A deadline therefore lets the cheap failures be
+            # retried freely and stops the expensive ones exactly when they
+            # would start to threaten the run.
+            #
+            # The number is a budget, not a target: the measured runs take
+            # 35-57 s, and the fallback to the single-pass path still has to
+            # fit afterwards (its own two attempts at the full timeout are
+            # 240 s, and 360 + 240 = 600 s stays inside the server's 745 s).
+            _grid_deadline = time.monotonic() + matrix_path_budget_sec(timeout_sec)
 
             def _grid_read_call(system_prompt, img_b64, user_text, mt):
                 # FIX-2026-10-17 (P2-3): declare the media type the BYTES
@@ -5558,14 +5648,22 @@ def extract_occurrence_matrix(
                 # geometry miss. Magic-number detection costs a few bytes and
                 # cannot be wrong about a file the module itself produced.
                 #
-                # REVIEW-2026-10-19: the per-call timeout is CAPPED. The
-                # server's single-run budget is `timeout_sec * 6 + 25` s, and
-                # this path spends one call on the labels plus one per contact
-                # sheet, so several calls at the full timeout would eat the
-                # whole budget and the request would be abandoned with no data
-                # at all. Measured, the calls themselves take 5-45 s -- 90 s is
-                # a generous ceiling, and a hung call can no longer spend more
-                # than its share of the budget.
+                # REVIEW-2026-10-19: the per-call timeout is CAPPED, and so is
+                # the call's share of the path budget. The server's single-run
+                # budget is `timeout_sec * 6 + 25` s, and this path spends one
+                # call on the labels plus one per contact sheet, so several
+                # calls at the full timeout would eat the whole budget and the
+                # request would be abandoned with no data at all. Measured, the
+                # calls themselves take 5-45 s -- 90 s is a generous ceiling,
+                # and a hung call can no longer spend more than its share of
+                # the budget.
+                _remaining = _grid_deadline - time.monotonic()
+                if _remaining <= 1:
+                    return None, False, (
+                        "[matrix] the path budget was exhausted before this "
+                        "call; the single-pass fallback will answer instead")
+                _call_timeout = int(min(timeout_sec, MATRIX_CALL_TIMEOUT_SEC,
+                                        _remaining))
                 raw, trunc, _status, err_body, usage = _call_llm(
                     provider=p,
                     system_prompt=system_prompt,
@@ -5573,7 +5671,8 @@ def extract_occurrence_matrix(
                     media_type=guess_media_type(img_b64),
                     user_text=user_text,
                     max_tokens=mt,
-                    timeout_sec=min(timeout_sec, MATRIX_CALL_TIMEOUT_SEC),
+                    timeout_sec=_call_timeout,
+                    time_budget_sec=_remaining,
                     capture_error_body=True,
                     progress_callback=progress_callback,
                 )
@@ -6450,7 +6549,8 @@ def classify_chart_image(
     # any cache trouble just falls through to the network call.
     ckey = None
     try:
-        from .cache import get_cache, stable_extra_body, stable_extra_headers
+        from .cache import (get_cache, stable_extra_body, stable_extra_headers,
+                            stable_reasoning_effort)
         from .prompt import prompt_version_for_mode as _pvm
         _cache = get_cache()
         ckey = _cache.make_key(
@@ -6474,6 +6574,12 @@ def classify_chart_image(
             # extra_body MUST NOT share a cache entry".
             extra_headers=stable_extra_headers(p),
             extra_body=stable_extra_body(p),
+            # REVIEW-2026-10-19: the effort changes the request shape the
+            # same way extra_body does -- it picks the model's reasoning
+            # depth, and on MiniMax's M3.1 it decides whether the call
+            # answers at all -- so it must not share a cache entry with a
+            # different one. The same rule the comment above states.
+            reasoning_effort=stable_reasoning_effort(p),
             prompt_version=_pvm("chart_classify"),
             mode="chart_classify",
             image_b64=image_b64,

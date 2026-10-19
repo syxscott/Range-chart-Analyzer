@@ -115,6 +115,25 @@ def stable_extra_body(prov_obj) -> list:
     )
 
 
+def stable_reasoning_effort(prov_obj) -> str:
+    """The provider's reasoning effort, as a cache-key field.
+
+    REVIEW-2026-10-19: the effort changes the LLM request shape exactly the
+    way ``extra_body`` does -- it picks the model's reasoning depth, and on
+    MiniMax's M3.1 it decides whether the call answers at all (effort=max
+    times out on a dense figure, effort=low answers in 28.3 s). Two requests
+    with different efforts MUST NOT share a cache entry, by the same rule the
+    module's own docstring states for ``extra_body``: a cached result is a
+    result for ONE request, not for the image.
+
+    It was left out of the key, so a user who switched the effort got the
+    previous effort's answer back and had no way to tell.
+    """
+    if not prov_obj:
+        return ""
+    return str(getattr(prov_obj, "reasoning_effort", "") or "")
+
+
 def _rowid_for(conn: sqlite3.Connection, key: str) -> int | None:
     cur = conn.execute("SELECT id FROM extract_cache WHERE k = ?", (key,))
     row = cur.fetchone()

@@ -7,7 +7,63 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A provider can now say how hard the model should think.** MiniMax's M3.1
+  family ALWAYS thinks, and its effort level DEFAULTS TO `max`; the thinking
+  tokens are billed against and consume `max_tokens`. Measured on the
+  reference figure's label call:
+
+  | model | effort | label call |
+  |---|---|---|
+  | `MiniMax-M3` | thinking off by default | 6.5–13.1 s, answered |
+  | `MiniMax-M3.1-Flash` | `max` (the default) | read TIMEOUT at 90 s, 2 of 2 |
+  | `MiniMax-M3.1-Flash` | `low` | 28.3 s, answered 22 rows / 18 columns / 3 legend |
+  | `MiniMax-M3.1-Flash` | `high` | 48.3 s, answered 22 rows / 18 columns / 3 legend |
+
+  The failure is invisible from the outside: with `max_tokens=2000` the call
+  returned HTTP 200 in 23.3 s with `stop_reason=max_tokens` and an EMPTY
+  body, because the thinking had eaten the whole budget before the model
+  wrote a character of the answer. Raising `max_tokens` does not help — the
+  thinking is unbounded — and lowering the effort does.
+
+  `LlmProvider.reasoning_effort` is a first-class field (persisted with the
+  record, editable in the provider wizard, mirrored by the browser client)
+  and goes on the wire as `output_config: {effort: ...}` on the
+  Anthropic-compatible endpoint. `thinking: {budget_tokens: N}` is NOT in
+  M3.1's documented vocabulary and is never sent. An unrecognised level is
+  dropped rather than forwarded, so a hand-edited record cannot turn into a
+  request the endpoint answers with a 400. The field is deliberately not an
+  `extra_body` blob: the provider wizard REBUILDS the record from a fixed
+  field list, so anything smuggled into `extra_body` is silently dropped the
+  moment the user edits that provider — and the product would revert to the
+  timing-out configuration with nothing on screen to explain why.
+
+  The effort is also part of the **cache key**, by the same rule the cache
+  module already states for `extra_body`: a cached result is a result for ONE
+  request, not for the image. It was left out at first, so a user who
+  switched the effort got the previous effort's answer back with no way to
+  tell.
+
 ### Fixed
+
+- **A busy tier and a dead socket did not cost the same, and were retried the
+  same number of times.** The transport wrapper gave both exactly one retry.
+  A 429/529 comes back in about a second, while a read timeout has already
+  cost the whole per-call ceiling. Measured on `MiniMax-M3.1-Flash` at a
+  congested tier, the reference figure's three-run regression lost 31 of 93
+  cells to bare 529s (precision/recall 0.333 and 0.667) and a third run
+  failed outright — one retry is not enough for a busy tier. A server that
+  ANSWERED now gets up to four attempts; a network-level failure keeps two.
+- **The two-stage path's wall clock was bounded by a call COUNT, which stopped
+  being true once each call could retry.** The server's single-run budget is
+  `timeout_sec * 6 + 25` s and its meaning is "at most six attempts' worth of
+  seconds", but the path makes four calls of its own. The path now carries its
+  own deadline, and the retry chain checks it before every attempt — so cheap
+  congestion is ridden out and the expensive failure is stopped exactly when
+  it would threaten the run. The path's share scales with the caller's
+  timeout, because a fixed number would starve a short-timeout run and
+  overrun a long one.
 
 - **A cell-reading failure was invisible: a truncated contact sheet was never
   recognised as one.** The cell call bound its truncation flag to one name and

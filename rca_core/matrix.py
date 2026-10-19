@@ -156,6 +156,53 @@ MAX_SHEET_CALLS = 3
 #: so 90 s is a generous ceiling and a real hang is caught early.
 MATRIX_CALL_TIMEOUT_SEC = 90
 
+#: Wall-clock budget for the WHOLE two-stage path, retries included.
+#:
+#: REVIEW-2026-10-19: the per-call ceiling above is not enough on its own.
+#: This path makes four calls (labels + up to three sheets) and each of them
+#: may retry, so counting calls no longer bounds the wall clock -- and the
+#: server's budget is a wall-clock guard (`timeout_sec * 6 + 25` s, whose
+#: meaning is "at most six attempts' worth of seconds").
+#:
+#: A deadline is the right shape for this, because the failure kinds cost
+#: wildly different amounts: a 429/529 comes back in about a second and may
+#: be retried as often as the budget allows, while a read timeout costs the
+#: whole per-call ceiling. With a budget the cheap congestion is ridden out
+#: and the expensive failure is stopped exactly when it would threaten the
+#: run.
+#:
+#: The number is a budget, not a target: the measured runs take 35-57 s, and
+#: the fallback to the single-pass path still has to fit afterwards (its two
+#: attempts at the full timeout are 240 s, and 420 + 240 = 660 s stays inside
+#: the server's 745 s).
+MATRIX_PATH_BUDGET_SEC = 420
+
+#: How much of that budget the path may use per unit of the caller's own
+#: per-request timeout. Three attempts' worth: the path makes four calls, so
+#: at the default 120 s timeout it gets 360 s, and the fallback still fits.
+MATRIX_PATH_BUDGET_PER_TIMEOUT = 3
+
+
+def matrix_path_budget_sec(timeout_sec: int) -> int:
+    """The two-stage path's wall-clock budget for a run with this timeout.
+
+    The server's single-run budget is ``timeout_sec * 6 + 25`` s and this path
+    is only one of its consumers -- the single-pass fallback still has to fit
+    afterwards -- so the path's own share has to SCALE with the caller's
+    timeout rather than being a fixed number. A fixed 420 s would eat a
+    30 s-timeout run's entire budget; a fixed share of 3 would overrun a
+    120 s-timeout run's budget once the fallback is added.
+
+    The floor keeps a tiny timeout from starving the path of the time it
+    needs for its own four calls.
+    """
+    try:
+        t = int(timeout_sec)
+    except (TypeError, ValueError):
+        t = 120
+    return int(max(60, min(MATRIX_PATH_BUDGET_SEC,
+                           t * MATRIX_PATH_BUDGET_PER_TIMEOUT)))
+
 #: Tiles per row on a sheet.
 SHEET_PER_ROW = 8
 

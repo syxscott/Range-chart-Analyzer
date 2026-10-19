@@ -392,6 +392,10 @@ TRANSLATIONS["zh"] = {
     "wizard.fieldFormat": "API 格式",
     "wizard.fieldEndpoint": "端点（基础 URL）",
     "wizard.apiKeyField": "API Key 字段",
+    # REVIEW-2026-10-19: reasoning effort. MiniMax 的 M3.1 默认 effort=max，
+    # 思考 token 计入 max_tokens，密集图上会把预算吃光导致读超时。
+    "wizard.fieldEffort": "推理强度 (effort)",
+    "wizard.effortDefault": "默认（不发送）",
     "wizard.extraHeaders": "额外请求头 (JSON)",
     # API-REVIEW-2026-10-18: hostless endpoint gate (e.g. "https://" saved).
     "wizard.endpointNoHost": "端点缺少主机名——请填写完整的基础 URL（例如 https://api.example.com）",
@@ -956,6 +960,10 @@ TRANSLATIONS["en"] = {
     "wizard.fieldFormat": "API Format",
     "wizard.fieldEndpoint": "Endpoint (base URL)",
     "wizard.apiKeyField": "API Key Field",
+    # REVIEW-2026-10-19: reasoning effort (MiniMax M3.1 defaults to max, and
+    # thinking tokens eat max_tokens -- a dense figure then never answers).
+    "wizard.fieldEffort": "Reasoning effort",
+    "wizard.effortDefault": "Default (not sent)",
     "wizard.extraHeaders": "Extra Headers (JSON)",
     "wizard.endpointNoHost": "The endpoint has no hostname — enter a full base URL (e.g. https://api.example.com)",
     "wizard.presetAltEndpoints": "Backup endpoints: {urls}",
@@ -1503,6 +1511,10 @@ TRANSLATIONS["ja"] = {
     "wizard.fieldFormat": "APIフォーマット",
     "wizard.fieldEndpoint": "エンドポイント（ベース URL）",
     "wizard.apiKeyField": "API鍵フィールド",
+    # REVIEW-2026-10-19: 推論強度 (MiniMax M3.1 の既定は max、思考トークンが
+    # max_tokens を消費するため密な図では応答が終わらない)。
+    "wizard.fieldEffort": "推論の強度 (effort)",
+    "wizard.effortDefault": "既定（送信しない）",
     "wizard.extraHeaders": "追加ヘッダー (JSON)",
     "wizard.endpointNoHost": "エンドポイントにホスト名がありません——完全なベース URL を入力してください（例：https://api.example.com）",
     "wizard.presetAltEndpoints": "バックアップエンドポイント：{urls}",

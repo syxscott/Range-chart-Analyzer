@@ -5187,6 +5187,147 @@ function test_a_null_in_a_string_list_is_not_a_row() {
 }
 trackAsync('fe-f9-null-not-a-row', test_a_null_in_a_string_list_is_not_a_row());
 
+// ---- REVIEW-2026-10-19: reasoning effort (MiniMax M3.1) ----
+//
+// MiniMax's M3.1 ALWAYS thinks and its effort level DEFAULTS TO max, and the
+// thinking tokens are billed against and CONSUME max_tokens. Measured on the
+// reference figure's label call: M3 (thinking off by default) answered in
+// 6.5-13.1 s, M3.1-Flash at the default effort timed out at 90 s twice, and
+// M3.1-Flash at effort=low answered in 28.3 s with a complete reading.
+//
+// The wire shape is MiniMax's `output_config: {effort: ...}` -- NOT
+// Anthropic's `thinking: {budget_tokens: N}`, which is not in M3.1's
+// documented vocabulary. Mirror of rca_core/llm.py.
+
+function _directBodyWithEffort(effort) {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  let captured = null;
+  ctx.fetch = async (u, opts) => {
+    captured = opts;
+    return { ok: true, json: async () => ({
+      content: [{ type: 'text', text: JSON.stringify({
+        sections: [], species_ranges: [], biozones: [], other_fossils: [],
+        confidence: 0,
+      })}],
+    }), text: async () => '' };
+  };
+  const o = {
+    dataUrl: 'data:image/png;base64,QUFB',
+    mode: 'range_chart',
+    baseUrl: 'https://example.com',
+    model: 'MiniMax-M3.1-Flash',
+    maxTokens: 100,
+  };
+  if (effort !== undefined) o.effort = effort;
+  return ctx.extractRangeChart(o).then(() => {
+    return captured && captured.body ? JSON.parse(captured.body) : null;
+  });
+}
+
+function test_effort_low_reaches_the_wire() {
+  return _directBodyWithEffort('low').then((body) => {
+    check('effort-low-is-sent-as-output_config',
+      !!body && body.output_config
+      && body.output_config.effort === 'low',
+      body && body.output_config);
+  });
+}
+trackAsync('effort-low-reaches-the-wire', test_effort_low_reaches_the_wire());
+
+function test_effort_absent_is_not_sent() {
+  return _directBodyWithEffort(undefined).then((body) => {
+    check('effort-absent-sends-nothing',
+      !!body && body.output_config === undefined, body && body.output_config);
+  });
+}
+trackAsync('effort-absent-is-not-sent', test_effort_absent_is_not_sent());
+
+function test_effort_unknown_is_dropped() {
+  // The value comes from localStorage, so a stale or hand-edited entry must
+  // not turn into a request the endpoint answers with a 400.
+  return _directBodyWithEffort('turbo').then((body) => {
+    check('effort-unknown-is-dropped',
+      !!body && body.output_config === undefined, body && body.output_config);
+  });
+}
+trackAsync('effort-unknown-is-dropped', test_effort_unknown_is_dropped());
+
+function test_effort_is_never_sent_as_budget_tokens() {
+  return _directBodyWithEffort('low').then((body) => {
+    check('effort-never-uses-thinking-budget-tokens',
+      !!body && body.thinking === undefined, body && body.thinking);
+  });
+}
+trackAsync('effort-is-never-budget-tokens', test_effort_is_never_sent_as_budget_tokens());
+
+// The classification round-trip is the SAME model with a 500-token budget --
+// which the thinking of an M3.1 at effort=max would eat completely, leaving
+// an empty classification and a silently mis-detected chart type.
+function test_effort_reaches_the_classification_call() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const bodies = [];
+  ctx.fetch = async (u, opts) => {
+    bodies.push(JSON.parse(opts.body));
+    return { ok: true, json: async () => ({
+      content: [{ type: 'text', text: JSON.stringify({
+        chart_type: 'range_chart', confidence: 0.9,
+      })}],
+    }), text: async () => '' };
+  };
+  return ctx.extractRangeChart({
+    dataUrl: 'data:image/png;base64,QUFB',
+    mode: 'auto',
+    baseUrl: 'https://example.com',
+    model: 'MiniMax-M3.1-Flash', maxTokens: 100,
+    effort: 'low',
+  }).then(() => {
+    const cls = bodies.find((b) => b.max_tokens === 500);
+    check('effort-reaches-the-classification-call',
+      !!cls && cls.output_config && cls.output_config.effort === 'low',
+      cls && cls.output_config);
+  });
+}
+trackAsync('effort-reaches-classification', test_effort_reaches_the_classification_call());
+
+function test_effort_setting_is_persisted() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const el = ctx.document.getElementById('effort');
+  check('effort-control-exists', !!el);
+  if (!el) return;
+  el.value = 'medium';
+  ctx.saveSettings && ctx.saveSettings(true);
+  const stored = ctx.localStorage.getItem('rca.effort');
+  check('effort-setting-is-persisted', stored === 'medium', stored);
+  el.value = '';
+  ctx.saveSettings && ctx.saveSettings(true);
+  // rcaStoreSet REMOVES the key for an empty value, so "cleared" is the key
+  // being absent -- which is exactly the "no effort configured" state.
+  const cleared = ctx.localStorage.getItem('rca.effort');
+  check('effort-setting-can-be-cleared',
+    cleared === null || cleared === '', cleared);
+}
+trackAsync('effort-setting-is-persisted', test_effort_setting_is_persisted());
+
+function test_effort_i18n_keys_exist_in_every_locale() {
+  const src = fs.readFileSync(path.join(__dirname, 'js', 'i18n.js'), 'utf8');
+  for (const key of ['settings.effort', 'settings.effort.default',
+                     'settings.effort.hint']) {
+    const n = (src.match(new RegExp("'" + key.replace(/\./g, '\\.') + "'\\s*:", 'g')) || []).length;
+    check('effort-i18n-key-present-in-all-locales:' + key, n === 3, n);
+  }
+  // The desktop wizard has its own two keys.
+  const pySrc = fs.readFileSync(
+    path.join(__dirname, 'rca_core', 'i18n.py'), 'utf8');
+  for (const key of ['wizard.fieldEffort', 'wizard.effortDefault']) {
+    const n = (pySrc.match(new RegExp('"' + key.replace(/\./g, '\\.') + '"\\s*:', 'g')) || []).length;
+    check('effort-wizard-i18n-key-present-in-all-locales:' + key, n === 3, n);
+  }
+}
+trackAsync('effort-i18n-keys-exist', test_effort_i18n_keys_exist_in_every_locale());
+
 // Drain every registered async test before printing the summary. A fixed
 // timeout is not enough: assertions that resolve later would run after
 // process.exit() and be silently dropped, reporting a green run over checks

@@ -66,12 +66,16 @@ class Provider:
     """The three attributes a provider object exposes to the key builders."""
 
     def __init__(self, endpoint="https://api.example.com", model="m1",
-                 fmt="anthropic", headers=None, body=None):
+                 fmt="anthropic", headers=None, body=None, effort=""):
         self.endpoint = endpoint
         self.model = model
         self.api_format = _Fmt(fmt)
         self.extra_headers = headers if headers is not None else {}
         self.extra_body = body if body is not None else {}
+        # REVIEW-2026-10-19: the reasoning effort is part of the key too -- it
+        # changes the request shape the same way extra_body does, and on
+        # MiniMax's M3.1 it decides whether the call answers at all.
+        self.reasoning_effort = effort
 
 
 A = Provider(headers={"Authorization": "Bearer KEY-A"},
@@ -116,6 +120,7 @@ _CLASSIFY_VALUES = {
     "api_format": lambda p: p.api_format.value,
     "extra_headers": lambda p: cache_mod.stable_extra_headers(p),
     "extra_body": lambda p: cache_mod.stable_extra_body(p),
+    "reasoning_effort": lambda p: cache_mod.stable_reasoning_effort(p),
     "prompt_version": lambda p: "v3",
     "mode": lambda p: "chart_classify",
     "image_b64": lambda p: "A" * 400,
@@ -162,6 +167,18 @@ def test_an_identical_provider_still_hits():
         headers={"Authorization": "Bearer KEY-A"}, body={"routing": "eu"}))
 
 
+def test_changing_only_the_reasoning_effort_is_enough():
+    """A cached result is a result for ONE request, not for the image.
+
+    The effort changes the request shape the same way extra_body does, so
+    the same rule applies: two efforts must not share a cache entry.
+    """
+    a = _classify_key(Provider(effort="low"))
+    b = _classify_key(Provider(effort="high"))
+    assert a != b
+    assert a != _classify_key(Provider())
+
+
 # --- the bound, stated so the severity is not oversold ------------------
 
 
@@ -195,7 +212,12 @@ def test_no_cache_key_site_omits_the_identity_fields():
     fields = _key_field_sets()
     for label, present in fields.items():
         assert present, f"no make_key() call site found in {label}"
-        for required in ("extra_headers", "extra_body"):
+        # REVIEW-2026-10-19: the reasoning effort belongs here too. It changes
+        # the request shape the same way extra_body does -- it picks the
+        # model's reasoning depth, and on MiniMax's M3.1 it decides whether
+        # the call answers at all -- so a key that omits it serves the
+        # previous effort's answer.
+        for required in ("extra_headers", "extra_body", "reasoning_effort"):
             assert required in present, (
                 f"a cache key in {label}.py omits {required}: {sorted(present)}"
             )
@@ -213,6 +235,12 @@ def test_the_helpers_live_next_to_make_key():
     )
     assert hasattr(cache_mod, "stable_extra_body"), (
         "stable_extra_body must live in rca_core.cache, beside make_key"
+    )
+    # REVIEW-2026-10-19: the reasoning-effort helper joins them for the same
+    # reason -- extractor.py and server.py both need it, and a second copy
+    # would drift.
+    assert hasattr(cache_mod, "stable_reasoning_effort"), (
+        "stable_reasoning_effort must live in rca_core.cache, beside make_key"
     )
     src = EXTRACTOR.read_text(encoding="utf-8")
     assert "stable_extra_headers" in src, (

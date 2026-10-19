@@ -2837,6 +2837,13 @@ class Handler(BaseHTTPRequestHandler):
         # next key builder will look.
         from rca_core.cache import stable_extra_body as _stable_extra_body
         from rca_core.cache import stable_extra_headers as _stable_extra_headers
+        # REVIEW-2026-10-19: the reasoning effort changes the request shape
+        # the same way extra_body does -- it picks the model's reasoning
+        # depth, and on MiniMax's M3.1 it decides whether the call answers at
+        # all -- so it belongs in the cache key too. Without it a user who
+        # switched the effort got the previous effort's answer back.
+        from rca_core.cache import (
+            stable_reasoning_effort as _stable_reasoning_effort)
 
         # Name grounding (rca_core/grounding.py) costs one extra model call per
         # extraction, so it is opt-out rather than opt-in. Defaulting it OFF
@@ -2884,6 +2891,7 @@ class Handler(BaseHTTPRequestHandler):
                             api_format=prov.api_format.value if prov else "",
                             extra_headers=_stable_extra_headers(prov),
                             extra_body=_stable_extra_body(prov),
+                            reasoning_effort=_stable_reasoning_effort(prov),
                             prompt_version=prompt_version_for_cache_key(mode),
                             max_tokens=common["max_tokens"],
                             chart_lang=common["chart_lang"],
@@ -3172,6 +3180,7 @@ class Handler(BaseHTTPRequestHandler):
                         api_format=prov.api_format.value if prov else "",
                         extra_headers=_stable_extra_headers(prov),
                         extra_body=_stable_extra_body(prov),
+                        reasoning_effort=_stable_reasoning_effort(prov),
                         prompt_version=prompt_version_for_cache_key(mode),
                         max_tokens=common["max_tokens"],
                         chart_lang=common["chart_lang"],

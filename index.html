@@ -117,6 +117,21 @@
                         <input type="text" id="model" spellcheck="false">
                         <p class="field-hint" data-i18n="settings.model.hint">默认 MiniMax-M3。</p>
                     </div>
+                    <!-- REVIEW-2026-10-19: reasoning effort. MiniMax 的 M3.1 始终开启
+                         思考且默认 effort=max，思考 token 计入 max_tokens，密集图上
+                         会把预算吃光导致读超时。M3.1 选 low 档可在 28.3s 内正常返回。 -->
+                    <div class="form-row">
+                        <label class="field-label" for="effort" data-i18n="settings.effort">推理强度 (effort)</label>
+                        <select id="effort">
+                            <option value="" data-i18n="settings.effort.default">默认（不发送）</option>
+                            <option value="low">low</option>
+                            <option value="medium">medium</option>
+                            <option value="high">high</option>
+                            <option value="xhigh">xhigh</option>
+                            <option value="max">max</option>
+                        </select>
+                        <p class="field-hint" data-i18n="settings.effort.hint">MiniMax M3.1 默认 max，思考会吃满 max_tokens；密集图建议选 low。</p>
+                    </div>
                     <div class="form-row">
                         <label class="field-label" for="max-tokens" data-i18n="settings.maxTokens">最大输出 Token</label>
                         <div class="range-row">
