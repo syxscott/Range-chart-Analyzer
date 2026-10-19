@@ -7,6 +7,96 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A cell-reading failure was invisible: a truncated contact sheet was never
+  recognised as one.** The cell call bound its truncation flag to one name and
+  the guard tested another — the LABEL call's, always False by then. Measured
+  with two sheets and the second cut off mid-array: the run returned
+  `ok=True` with `cell_status: "grid_cells"`, 31 of 53 cells carrying a code,
+  **22 blank**, and not one "cell sheet unusable" line in the log. The run
+  looked verified while two fifths of its cells were empty. The tiles of an
+  unusable sheet are still real cells, so they are now recorded with an empty
+  code — dropping them would turn a read failure into a false absence, which
+  the 2026-10-17 P1 already ruled out.
+- **A colour-coded matrix read as an empty table.** The ink test measured
+  LUMINANCE, so a yellow cell (luminance 215) and a pale pink one (209) were
+  both "not ink" — a matrix that encodes abundance by colour produced no
+  occurrences at all. A colour test was added, and the contact sheet is now
+  cropped from the original colour image instead of the greyscale one, so the
+  reader can tell a red class from a blue one.
+- **The colour test then marked every cell of a colour-cast page as filled.**
+  The first version used an absolute chroma threshold, and a yellowed book page
+  (chroma 50) exceeded it — a 5-mark table became 64 filled cells, and because
+  the cell prompt forbids an empty answer, the reader then had to invent a
+  letter for all 59 empty ones. The test is now RELATIVE to the page's own
+  chroma, so a cast on the paper cancels out.
+- **A ruled line wider than the inset made every empty cell read as filled.**
+  The 4px inset assumed a 2px rule; a 5px rule (1.25pt at 300dpi) or a
+  blurred scan leaves a sliver of the line inside the cell, and a MEAN counts
+  that sliver as a mark — 52 of 64 cells read as filled on an 8×8 table with 5
+  real marks. The test now measures the MIDDLE of the cell, away from the
+  borders, which separates them at any rule width. Re-measured on the
+  reference figure: marked cells bottom out at 0.133 and empty ones at 0.000,
+  so the existing 0.08 threshold still sits inside the window.
+- **The two-stage path threw away the token usage and the model replies of
+  every call it made.** The result reported `usage: {}` and `raw: ""` for a run
+  that issued two or three billed calls, so the server's token totals
+  under-reported the new default by 2–3× and the audit trail stored no model
+  reply for those runs at all. Usage is now accumulated and the replies are
+  stored as one JSON document.
+- **The `cells` strategy claimed geometric verification it never performed.**
+  It puts the measured spans in the PROMPT and lets the model place the cells;
+  nothing checks where it put them. But it was stamped `grid_cells`, and that
+  is exactly the string the normalizer's verified-geometry discriminator keys
+  off — so the model's blank-cell padding was kept as occurrences (3 padding
+  rows in, 5 occurrences out, where `single_pass` and `gated` gave 2). It now
+  carries its own status, `grid_guided`: the geometry was guided, not verified.
+- **A partially-read run was titled "Occurrences" (verified).** The plain title
+  now also requires that every cell carries a code or a class, on both the
+  exporter and the browser side.
+- **The reader's code was never checked against the legend it was given.** The
+  legend codes went into the prompt and nothing validated the answer, so a
+  figure defining A/C/R could come back with "X" — and the label prompt in the
+  same module TEACHES the model to write "?" for an illegible character. Such a
+  code now counts as unread rather than reaching the table as a class the
+  figure never defines.
+- **A legitimate figure could be rejected.** The label guard required that no
+  two inked rows or columns share a name, which a matrix listing one locality
+  twice fails. It now measures a COLLAPSE — 22 printed rows collapsing onto 4
+  names is 18% distinct and is rejected; one repeat is not.
+- **`INK_LEVEL` was written out as a literal in `matrix.py`** while
+  `grid.py` owns it, so tuning the threshold in one place would silently leave
+  the other measuring a different thing.
+- **`HEAD /health` answered 403 while `GET /health` answered 200.** `/health`
+  was the one GET route missing from the HEAD mirror, so an uptime probe using
+  the cheap form reported the server as forbidden. RFC 9110 §9.3.2 requires
+  HEAD to be identical to GET minus the content.
+- **Ctrl+C did not stop the server while an extraction was in flight.** Three
+  things were missing on the way out: `server_close()` was never called, so the
+  listening socket stayed bound and kept accepting connections; `shutdown()`
+  does not touch the request threads, and `concurrent.futures`' atexit hook
+  JOINS the pool's workers — so the process waited for the extraction, up to
+  745 s at the default timeout, with the port still accepting connections
+  throughout; and `daemon_threads = True` looks like it would prevent that but
+  is inert, because `process_request` is overridden.
+- **The history row cap's documented safeguard never existed.** "Shed the
+  thumbnail first, and only delete a row when the table is still over the cap" —
+  but shedding a BLOB cannot change the ROW COUNT, and the predicate was the
+  row count, so it was the same statement as the condition that entered it and
+  was always true. The rows it stripped were exactly the rows that were then
+  deleted. The cap is a RETENTION cap and the documentation now says so.
+  *The retention policy itself is unchanged: the 2026-09-27 P1 was fixed by
+  raising the default from 500 to 5000, and a policy that keeps stripped rows
+  forever would trade the audit trail's bound for the database's — that is a
+  decision to make deliberately, not as a side effect of a review.*
+- **HTTP 529 was not retried.** 529 is the "overloaded" answer — MiniMax
+  returns `overloaded_error` with it, meaning the tier is busy. It was absent
+  from the retryable set, so a transient congestion blip became a failed
+  extraction. On the two-stage path's four sequential calls the per-call rate
+  compounds into the run's rate, which is why `MiniMax-M3.1-Flash` failed
+  every run of one measurement while answering 7 of 8 single requests.
+
 ## [0.1.2] — 2026-10-18
 
 ### Changed

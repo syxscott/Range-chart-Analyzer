@@ -4460,6 +4460,27 @@ function test_occurrence_title_follows_cell_status() {
   check('f2-grid-cells-claims-verified',
         occTitleFor({ ...base, cell_status: 'grid_cells' }) === 'sec.occurrences',
         String(occTitleFor({ ...base, cell_status: 'grid_cells' })));
+  // REVIEW-2026-10-19: `grid_cells` alone is not enough. The two-stage path
+  // records a cell it could not read with an empty code (the cell EXISTS -- the
+  // ink test found it -- but the reader did not name it), and a run with one
+  // unusable contact sheet out of three came back stamped `grid_cells` with 31
+  // of 93 cells unread. The plain title on such a sheet is an over-claim, so
+  // it now also requires every cell to carry a code or a class. Mirrored in
+  // rca_core/exporter.py; the two must agree.
+  check('f2-unread-cell-caveats-the-title',
+        occTitleFor({ ...base, cell_status: 'grid_cells',
+                      occurrences: [{ taxon: 'A', site: 'S1', code: 'A', class: 'abundant' },
+                                    { taxon: 'B', site: 'S2', code: '', class: '' }] })
+          === 'sec.occurrencesUnverified',
+        String(occTitleFor({ ...base, cell_status: 'grid_cells',
+                             occurrences: [{ taxon: 'A', site: 'S1', code: 'A', class: 'abundant' },
+                                           { taxon: 'B', site: 'S2', code: '', class: '' }] })));
+  check('f2-a-code-without-a-class-still-claims-verified',
+        occTitleFor({ ...base, cell_status: 'grid_cells',
+                      occurrences: [{ taxon: 'A', site: 'S1', code: 'A', class: '' }] })
+          === 'sec.occurrences',
+        String(occTitleFor({ ...base, cell_status: 'grid_cells',
+                             occurrences: [{ taxon: 'A', site: 'S1', code: 'A', class: '' }] })));
   check('f2-single-pass-is-caveated',
         occTitleFor({ ...base, cell_status: 'single_pass_unverified' })
           === 'sec.occurrencesUnverified');

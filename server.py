@@ -2246,6 +2246,17 @@ class Handler(BaseHTTPRequestHandler):
                 "error_body": "HEAD is not supported on this endpoint",
             }, head_only=True)
             return
+        if _path.rstrip("/") == "/health":
+            # REVIEW-2026-10-19: /health was the ONE GET route missing from this
+            # mirror, so `HEAD /health` fell through to _serve_static(), where
+            # "health" is not a whitelisted static entry and the request was
+            # refused with 403 -- while `GET /health` answered 200. RFC 9110
+            # §9.3.2 requires HEAD to be identical to GET minus the content, and
+            # an uptime probe using the cheap form (curl -I) reported the
+            # server as forbidden while the same URL answered healthy.
+            self._send_json(200, {"ok": True, "service": "range-chart-analyzer"},
+                            head_only=True)
+            return
         self._serve_static(head_only=True)
 
     def _serve_static(self, *, head_only: bool) -> None:
@@ -3559,7 +3570,56 @@ def main() -> None:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down.")
-        httpd.shutdown()
+        # REVIEW-2026-10-19: three things were missing on the way out, and
+        # together they made Ctrl+C look broken:
+        #
+        #   1. `server_close()` was never called, so the LISTENING SOCKET stayed
+        #      bound and kept accepting connections while the process was
+        #      winding down. Measured: the port still accepted TCP connections
+        #      after the server had printed "Shutting down".
+        #   2. `shutdown()` stops the accept loop but does not touch the
+        #      request threads. A handler waiting on an extraction is one of
+        #      the pool's workers, and `concurrent.futures.thread._python_exit`
+        #      JOINS those workers at interpreter exit. An extraction's budget
+        #      is `timeout_sec * 6 + 25` s -- 745 s at the default 120 -- so the
+        #      console sat there for up to twelve minutes. Measured: 34 s to
+        #      exit with a 40 s stub extraction, against 4 s with none in
+        #      flight.
+        #   3. `daemon_threads = True` looks like it would prevent that, but
+        #      `process_request` is overridden and submits to the executor, so
+        #      `ThreadingMixIn.process_request` -- the only reader of
+        #      `daemon_threads` -- never runs. The flag is inert.
+        #
+        # The fix is to stop waiting for work the user has just cancelled:
+        # release the socket, cancel what has not started, and leave without
+        # the atexit join. Nothing in this project registers an atexit handler
+        # (checked), and the history database commits per row, so there is no
+        # pending state to lose.
+        try:
+            httpd.shutdown()
+        except Exception:
+            pass
+        try:
+            httpd.server_close()
+        except Exception:
+            pass
+        executor = getattr(httpd, "_executor", None)
+        if executor is not None:
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:            # Python < 3.9 has no cancel_futures
+                try:
+                    executor.shutdown(wait=False)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os._exit(0)
 
 
 class _BoundedThreadingHTTPServer(ThreadingHTTPServer):

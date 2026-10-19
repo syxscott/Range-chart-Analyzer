@@ -1479,6 +1479,49 @@ def _truncation_warning(usage: dict[str, Any] | None, max_tokens: int) -> str:
     )
 
 
+def _merge_usage(blocks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Sum the token usage of several model calls into one block.
+
+    The server adds `input_tokens` / `output_tokens` across the runs of a
+    multi-run batch to report what a batch cost, so a path that makes more than
+    one call has to report the SUM. Reporting only the last call under-bills
+    the run; reporting none at all under-bills it by the whole two-stage
+    sequence, which is what the first version of the grid_read path did.
+    """
+    out: dict[str, Any] = {}
+    for block in blocks or []:
+        if not isinstance(block, dict):
+            continue
+        for key, value in block.items():
+            if key == "estimated":
+                out[key] = bool(out.get(key)) or bool(value)
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                out[key] = value
+                continue
+            out[key] = (out.get(key) or 0) + value
+    return out
+
+
+def _grid_read_raw(raws: list[dict[str, Any]]) -> str:
+    """The model replies of a two-stage run, as one JSON document.
+
+    The audit trail stores `result.raw` so a researcher can go back to the
+    exact model reply later. A two-stage run produced SEVERAL replies, and
+    storing none of them (the first version stored "") left the new default's
+    runs unreparseable. A wrapper object is used rather than a concatenation
+    so the stored text is still valid JSON: the single-call paths store the
+    model's bare JSON, and nothing in the codebase re-parses `result.raw`
+    automatically, so a clearly-labelled object is both lossless and readable.
+    """
+    if not raws:
+        return ""
+    try:
+        return json.dumps({"grid_read": raws}, ensure_ascii=False)
+    except Exception:
+        return ""
+
+
 def _ok_result(*, p: LlmProvider, mode_key: str, data: dict[str, Any],
                raw_text: str, truncated: bool, usage: dict[str, Any] | None,
                latency_ms: int, image_sha256: str, max_tokens: int,
@@ -2869,7 +2912,16 @@ TRANSPORT_ATTEMPTS = 2                  # 1 normal call + 1 retry
 TRANSPORT_BASE_BACKOFF_SEC = 0.8
 # Same transient set as llm._RETRYABLE_STATUS: 400/401/403 are client/auth
 # mistakes that a retry can only make worse (and that burn quota).
-_RETRYABLE_TRANSPORT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+#
+# REVIEW-2026-10-19: 529 was missing here too, and this is the wrapper the
+# extractor actually uses -- the one the occurrence-matrix path calls. 529 is
+# the "overloaded" answer (MiniMax returns `overloaded_error` with it), so a
+# congested tier became a failed extraction. On the two-stage path's several
+# sequential calls the per-call failure rate compounds into the run's rate:
+# MiniMax-M3.1-Flash answered 7 of 8 single requests and then failed every run
+# of a multi-call measurement, purely on 529s.
+_RETRYABLE_TRANSPORT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504,
+                                         529})
 
 
 def _call_llm(**kwargs):
@@ -5272,6 +5324,14 @@ OCCURRENCE_CELL_STATUSES = (
     # Cells were read against a locally detected grid, so every row's column
     # identity was checked against a pixel rectangle.
     "grid_cells",
+    # The model was GIVEN the measured lattice so it could place the cells
+    # better, but nothing checked where it put them: it is one call, like
+    # single_pass, with the spans in the prompt instead of a pixel ink test.
+    # It gets its own status because the difference from single_pass is real
+    # and the difference from grid_cells is also real -- claiming grid_cells
+    # here would let the normalizer keep the model's blank-cell padding as
+    # occurrences, on a path where no ink test ever ran.
+    "grid_guided",
     # The labels-only path was used and no cell reading was attempted at all.
     "not_attempted",
     # A cell reading was attempted and did not produce usable output.
@@ -5322,6 +5382,15 @@ OCCURRENCE_MIN_OUTPUT_TOKENS_BY_STRATEGY = {
 #   cells       - labels plus a cell pass grounded in locally detected grid
 #                 geometry, so every row's column identity was checked against
 #                 a pixel rectangle.
+#                 CORRECTED 2026-10-19: the check was never made. This path
+#                 puts the measured spans in the PROMPT and lets the model
+#                 place the cells; nothing verifies where it put them. It is
+#                 one call, like single_pass, and it gets its own status
+#                 ("grid_guided") rather than claiming "grid_cells", because
+#                 that claim is what the normalizer's verified-geometry
+#                 discriminator keys off -- and on this path no ink test ever
+#                 ran, so the model's blank-cell padding would have been kept
+#                 as occurrences.
 #   grid_read   - the two-stage path in `rca_core.matrix`: geometry locates
 #                 every filled cell, then the model reads each one from its own
 #                 magnified crop and reads the axis labels from the figure.
@@ -5354,7 +5423,7 @@ OCCURRENCE_DEFAULT_CELL_STRATEGY = "grid_read"
 OCCURRENCE_STATUS_BY_STRATEGY = {
     "single_pass": "single_pass_unverified",
     "gated": "not_attempted",
-    "cells": "grid_cells",
+    "cells": "grid_guided",
 }
 
 # Strategies that DECIDE their own status from which code path actually ran,
@@ -5460,8 +5529,18 @@ def extract_occurrence_matrix(
     # `grid_cells` for an answer that never had them verified.
     if cell_strategy == "grid_read":
         t0 = time.perf_counter()
+        # Every call this path makes is billed, and the server sums `usage`
+        # across a run to report cost. The two-stage path makes ONE label call
+        # plus one call per contact sheet, so the usage has to be COLLECTED as
+        # it happens -- the first version of this block hard-coded `usage={}`
+        # and `raw_text=""`, which under-reported the new default by 2-3x and
+        # left the audit trail with no model reply at all for the runs that
+        # produced two or three.
+        _grid_usage: list[dict[str, Any]] = []
+        _grid_raws: list[dict[str, Any]] = []
         try:
-            from .matrix import extract_matrix_two_stage, guess_media_type
+            from .matrix import (MATRIX_CALL_TIMEOUT_SEC,
+                                extract_matrix_two_stage, guess_media_type)
 
             def _grid_read_call(system_prompt, img_b64, user_text, mt):
                 # FIX-2026-10-17 (P2-3): declare the media type the BYTES
@@ -5478,17 +5557,34 @@ def extract_occurrence_matrix(
                 # log saying "grid_read failed" — indistinguishable from a
                 # geometry miss. Magic-number detection costs a few bytes and
                 # cannot be wrong about a file the module itself produced.
-                raw, trunc, _status, err_body, _u = _call_llm(
+                #
+                # REVIEW-2026-10-19: the per-call timeout is CAPPED. The
+                # server's single-run budget is `timeout_sec * 6 + 25` s, and
+                # this path spends one call on the labels plus one per contact
+                # sheet, so several calls at the full timeout would eat the
+                # whole budget and the request would be abandoned with no data
+                # at all. Measured, the calls themselves take 5-45 s -- 90 s is
+                # a generous ceiling, and a hung call can no longer spend more
+                # than its share of the budget.
+                raw, trunc, _status, err_body, usage = _call_llm(
                     provider=p,
                     system_prompt=system_prompt,
                     image_b64=img_b64,
                     media_type=guess_media_type(img_b64),
                     user_text=user_text,
                     max_tokens=mt,
-                    timeout_sec=timeout_sec,
+                    timeout_sec=min(timeout_sec, MATRIX_CALL_TIMEOUT_SEC),
                     capture_error_body=True,
                     progress_callback=progress_callback,
                 )
+                if usage:
+                    _grid_usage.append(usage)
+                if raw:
+                    _grid_raws.append({
+                        "call": ("labels" if "axis labels" in user_text
+                                 else "cells"),
+                        "text": raw,
+                    })
                 return raw, trunc, err_body
 
             two_stage = extract_matrix_two_stage(
@@ -5500,15 +5596,23 @@ def extract_occurrence_matrix(
         if two_stage is not None:
             latency_ms = int((time.perf_counter() - t0) * 1000)
             try:
+                # `grid_cells`, NOT the strategy table's entry for "cells".
+                # This path DID run a pixel ink test over every emitted cell,
+                # which is what that status means; the "cells" STRATEGY only
+                # puts the measured spans in the prompt and never checks
+                # anything, so it carries "grid_guided" instead.
+                from .matrix import CELL_STATUS_GRID
                 data = normalize_occurrence_matrix_result(
-                    two_stage, cell_status=OCCURRENCE_STATUS_BY_STRATEGY["cells"])
+                    two_stage, cell_status=CELL_STATUS_GRID)
             except Exception as exc:
                 log.warning("grid_read normalize failed, falling back: %s", exc)
                 two_stage = None
             else:
                 return _ok_result(
                     p=p, mode_key="occurrence_matrix", data=data,
-                    raw_text="", truncated=False, usage={},
+                    raw_text=_grid_read_raw(_grid_raws),
+                    truncated=False,
+                    usage=_merge_usage(_grid_usage),
                     latency_ms=latency_ms, image_sha256=image_sha256,
                     max_tokens=max_tokens, parsed=two_stage)
         cell_strategy = "single_pass"

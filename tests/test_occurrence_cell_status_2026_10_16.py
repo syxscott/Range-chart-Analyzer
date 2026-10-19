@@ -439,6 +439,33 @@ class TestExportTitle:
         assert self._title({"occurrences": [], "columns": []}) == \
             "sec.occurrencesUnverified"
 
+    def test_a_partially_read_run_gets_the_caveated_title(self):
+        """REVIEW-2026-10-19: `grid_cells` alone is not enough.
+
+        The two-stage path records a cell it could not read with an empty code
+        (the cell EXISTS -- the ink test found it -- but the reader did not
+        name it), and a run with one unusable contact sheet out of three came
+        back stamped `grid_cells` with 31 of 93 cells unread. "Occurrences" on
+        a sheet where a third of the cells have no code is an over-claim.
+        Mirrored in js/table.js; the two must agree.
+        """
+        assert self._title({
+            "cell_status": "grid_cells",
+            "columns": [],
+            "occurrences": [
+                {"taxon": "A", "site": "S1", "code": "C", "class": "common"},
+                {"taxon": "B", "site": "S2", "code": "", "class": ""},
+            ]}) == "sec.occurrencesUnverified"
+
+    def test_a_code_without_a_class_still_gets_the_plain_title(self):
+        """A missing CLASS is not a missing reading: the cell was read."""
+        assert self._title({
+            "cell_status": "grid_cells",
+            "columns": [],
+            "occurrences": [
+                {"taxon": "A", "site": "S1", "code": "C", "class": ""},
+            ]}) == "sec.occurrences"
+
     def test_the_table_count_is_unchanged(self):
         """The caveat rides the title on purpose. Adding a fourth table would
         break the pinned table count that _looks_occurrence_matrix asserts."""
@@ -524,8 +551,20 @@ class TestStrategyPrompts:
         assert "[1]=y177-194" in user
         assert "x7-315" in user, "the label band must be excluded by name"
         assert "0.97" in user
-        assert res.data["cell_status"] == "grid_cells", \
-            "geometry was supplied, so the status may claim verification"
+        # REVIEW-2026-10-19: this used to assert `grid_cells`, on the
+        # reasoning that "geometry was supplied, so the status may claim
+        # verification". Supplying the spans is not verification: the `cells`
+        # path puts them in the PROMPT and the model places the cells, and
+        # nothing checks where it put them. The claim was load-bearing --
+        # `grid_cells` is what the normalizer's verified-geometry
+        # discriminator keys off, and on this path the model's blank-cell
+        # padding was therefore KEPT as occurrences (3 padding rows in, 5
+        # occurrences out, where single_pass and gated gave 2). The status now
+        # says what actually happened: the geometry was GUIDED, not verified.
+        assert res.data["cell_status"] == "grid_guided", \
+            "the spans were given to the model; nothing checked the result"
+        assert res.data["cell_status"] != "grid_cells", \
+            "only a pixel ink test earns the plain title"
 
     def test_cells_says_it_verified_nothing_when_detection_fails(self,
                                                                   monkeypatch):

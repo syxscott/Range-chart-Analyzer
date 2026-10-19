@@ -557,13 +557,13 @@ class TestTwoStage:
         One held-out run returned the RIGHT NUMBER of rows -- 22, matching the
         geometry -- and collapsed them onto four distinct names. 93
         occurrences, 93 codes, zero blanks, every cell on the wrong taxon,
-        stamped `grid_cells`. Two printed rows do not share a name, so the
-        collision is detectable locally.
+        stamped `grid_cells`. What gives it away is not a collision but a
+        RATIO: 4 distinct names for 22 printed rows is 18%.
         """
-        from rca_core.matrix import labels_are_internally_consistent
+        from rca_core.matrix import (_allowed_duplicates,
+                                     labels_are_internally_consistent)
         img = _ruled_matrix(marks=_MARKS)
         filled = detect_filled_cells(img)
-        rows_inked = len({r for r, _ in filled.cells})
         labels = _labels(filled.n_rows, filled.n_cols)
         assert labels_are_internally_consistent(labels, filled) is None
 
@@ -571,12 +571,33 @@ class TestTwoStage:
         collapsed["rows"] = [{"taxon": "Genus0 species", "authority": "A"}
                              for _ in labels["rows"]]
         reason = labels_are_internally_consistent(collapsed, filled)
-        assert reason and "both read" in reason
+        assert reason and "distinct taxon names" in reason
 
         blanks = dict(labels)
         blanks["rows"] = [dict(r, taxon="") if i == 0 else r
                           for i, r in enumerate(labels["rows"])]
         assert labels_are_internally_consistent(blanks, filled) is not None
+
+        # a LEGAL repeat must not be rejected: one locality printed for two
+        # sections is a normal column axis, and rejecting it would push a good
+        # figure onto the single-pass path, which is a worse answer.
+        repeated = dict(labels)
+        repeated["columns"] = [dict(c) for c in labels["columns"]]
+        if len(repeated["columns"]) > 1:
+            repeated["columns"][1]["label"] = \
+                repeated["columns"][0]["label"]
+            assert labels_are_internally_consistent(repeated, filled) is None, (
+                "a repeated column label is legal and must not fail the guard")
+
+        # but a collapse on the COLUMN axis must still be caught
+        collapsed_cols = dict(labels)
+        collapsed_cols["columns"] = [
+            dict(c, label="SAME") for c in labels["columns"]]
+        assert labels_are_internally_consistent(collapsed_cols, filled) is not None
+        # the allowance scales with the axis, with a floor of one
+        assert _allowed_duplicates(4) == 1
+        assert _allowed_duplicates(22) == 4
+        assert _allowed_duplicates(1) == 1
 
     def test_two_inked_rows_sharing_a_label_abort_the_whole_run(self,
                                                                 monkeypatch):
@@ -592,6 +613,117 @@ class TestTwoStage:
                                          for cap, v in answers[0]]}), False, ""
 
         assert extract_matrix_two_stage(img, call) is None
+
+    def test_a_code_outside_the_legend_counts_as_unread(self):
+        """The closed vocabulary is enforced here, not by the model's goodwill.
+
+        The legend codes go into the PROMPT, but nothing checked the answer
+        against them. The LABEL prompt in the same module TEACHES the model to
+        write "?" for an illegible character, so an out-of-vocabulary answer is
+        likely rather than exotic -- and it would reach the table with no class
+        and no sign that it is undefined.
+        """
+        img = _ruled_matrix(marks=_MARKS)
+        filled = detect_filled_cells(img)
+        labels = _labels(filled.n_rows, filled.n_cols)
+        order = [f"R{r}-C{c}" for (r, c) in filled.cells]
+        state = {"n": 0}
+
+        def call(system, image_b64, user, max_tokens):
+            if "axis labels" in system:
+                return json.dumps(labels), False, ""
+            state["n"] += 1
+            # the second tile comes back with a code the legend never defined
+            answers = [{"id": cid, "letter": ("C" if i != 1 else "X")}
+                       for i, cid in enumerate(order)]
+            return json.dumps({"cells": answers}), False, ""
+
+        out = extract_matrix_two_stage(img, call, max_tokens=8000)
+        assert out is not None
+        occ = out["occurrences"]
+        blank = [o for o in occ if not o.get("code")]
+        assert len(blank) == 1, "the out-of-vocabulary code must become unread"
+        assert all(o.get("code") in ("A", "C", "R", "") for o in occ), \
+            "no code outside the legend may reach the table"
+
+    def test_an_unknown_code_is_kept_when_the_legend_is_empty(self):
+        """With no legend there is no vocabulary to check against."""
+        img = _ruled_matrix(marks=_MARKS)
+        filled = detect_filled_cells(img)
+        labels = _labels(filled.n_rows, filled.n_cols)
+        labels["legend"] = []
+        order = [f"R{r}-C{c}" for (r, c) in filled.cells]
+
+        def call(system, image_b64, user, max_tokens):
+            if "axis labels" in system:
+                return json.dumps(labels), False, ""
+            return json.dumps({"cells": [{"id": cid, "letter": "X"}
+                                         for cid in order]}), False, ""
+
+        out = extract_matrix_two_stage(img, call, max_tokens=8000)
+        assert out is not None
+        assert all(o.get("code") == "X" for o in out["occurrences"])
+
+    def test_a_truncated_sheet_is_detected_logged_and_kept(self):
+        """The stale-flag bug, and what the right behaviour is.
+
+        The cell call bound its truncation flag to one name and the guard
+        tested another -- the LABEL call's, always False by then. With two
+        sheets and the second cut off mid-array, the run returned ok with
+        cell_status "grid_cells", 31 of 53 cells carrying a code, 22 BLANK,
+        and not one "cell sheet unusable" line in the log.
+
+        The tiles of an unusable sheet are still real cells, so they are kept
+        with an empty code; dropping them would turn a read failure into a
+        false absence.
+        """
+        import logging
+
+        img = _ruled_matrix(n_rows=16, n_cols=8,
+                            marks=tuple((r, c) for r in range(16)
+                                        for c in range(8)
+                                        if (r + c) % 3 == 0))
+        filled = detect_filled_cells(img)
+        order = [f"R{r}-C{c}" for (r, c) in filled.cells]
+        assert len(order) > 31, "need more than one sheet for this test"
+        labels = _labels(filled.n_rows, filled.n_cols)
+        state = {"sheet": 0}
+
+        def call(system, image_b64, user, max_tokens):
+            if "axis labels" in system:
+                return json.dumps(labels), False, ""
+            state["sheet"] += 1
+            part = order[(state["sheet"] - 1) * 31:state["sheet"] * 31]
+            if state["sheet"] == 2:
+                return ('{"cells": [{"id": "%s", "letter": "C"}, {"id": "R1-C2"'
+                        % part[0], True, "")
+            return (json.dumps({"cells": [{"id": cid, "letter": "C"}
+                                          for cid in part]}), False, "")
+
+        class Capture(logging.Handler):
+            def __init__(self):
+                super().__init__()
+                self.records = []
+
+            def emit(self, record):
+                self.records.append(record.getMessage())
+
+        cap = Capture()
+        lg = logging.getLogger("rca_core.matrix")
+        lg.addHandler(cap)
+        lg.setLevel(logging.INFO)
+        try:
+            out = extract_matrix_two_stage(img, call, max_tokens=8000)
+        finally:
+            lg.removeHandler(cap)
+
+        assert out is not None
+        assert any("cell sheet unusable" in m for m in cap.records), (
+            "a truncated sheet must be reported, not absorbed")
+        occ = out["occurrences"]
+        assert len(occ) == len(filled.cells), (
+            "the unread cells still exist and must not be dropped")
+        assert any(not o.get("code") for o in occ)
 
     def test_a_transport_error_reaches_the_caller(self):
         """Deliberately NOT swallowed.

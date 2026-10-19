@@ -247,8 +247,23 @@ function rcaOccurrenceMatrixConfigs(data, multi) {
   // The default is the CAVEATED title. `cell_status` is absent on merged
   // results (merge_results drops scalar root keys it does not model) and on
   // every payload predating the field, and absence of proof is not proof.
+  //
+  // REVIEW-2026-10-19: `grid_cells` alone is not enough for the plain title.
+  // The two-stage path records a cell it could not read with an empty code
+  // (the cell EXISTS -- the ink test found it -- but the reader did not name
+  // it), and a run with one unusable contact sheet out of three came back
+  // stamped `grid_cells` with 31 of 93 cells unread. "Occurrences" on a sheet
+  // where two fifths of the cells have no code is an over-claim, so the plain
+  // title now also requires that every cell carries a code or a class.
+  // Mirrored in rca_core/exporter.py; the two must agree.
   const cellStatus = (data && data.cell_status) || '';
-  const occTitleKey = (cellStatus === 'grid_cells')
+  const occRows = (data && data.occurrences) || [];
+  const anyUnreadCell = occRows.some((o) => {
+    const code = (o && o.code != null ? String(o.code) : '').trim();
+    const klass = (o && o.class != null ? String(o.class) : '').trim();
+    return !code && !klass;
+  });
+  const occTitleKey = (cellStatus === 'grid_cells' && !anyUnreadCell)
     ? 'sec.occurrences' : 'sec.occurrencesUnverified';
 
   const configs = [

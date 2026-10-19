@@ -585,14 +585,43 @@ class HistoryStore:
             if n <= MAX_HISTORY_ROWS:
                 return
             excess = n - MAX_HISTORY_ROWS
-            # Step 1 - shed the size driver, keep the provenance.
+            # Step 1 - shed the size driver from the rows that are about to go.
+            #
+            # REVIEW-2026-10-19: this step USED to be documented as the
+            # safeguard that keeps the provenance ("shed the thumbnail first,
+            # and only delete a row when the table is still over the cap").
+            # It never was one. Step 1 clears a BLOB and cannot change the
+            # ROW COUNT, and step 2's predicate was the row count -- the same
+            # statement as the condition that entered it, so it was always
+            # true. The rows it stripped were exactly the rows that were then
+            # deleted, and their `raw_responses` and `record_edits` children
+            # cascaded away with them.
+            #
+            # The cap is a RETENTION cap, and that is the honest description:
+            # over the cap, the oldest rows go, and the provenance of those
+            # rows goes with them. The 2026-09-27 P1 that this code answers
+            # was fixed by raising the default from 500 (3.5 months of use) to
+            # 5000, not by the shedding. The shedding is kept because it
+            # shrinks the rows before they are written over, but it is no
+            # longer described as a protection it does not provide.
             self.db.execute(
                 "UPDATE history SET image_thumbnail = NULL WHERE id IN ("
                 "  SELECT id FROM history WHERE image_thumbnail IS NOT NULL"
                 "  ORDER BY timestamp ASC LIMIT ?)",
                 (excess,),
             )
-            # Step 2 - still over the hard cap? Then the rows really must go.
+            # Step 1b - the `raw_json` column duplicates what `raw_responses`
+            # already holds, so clearing it costs the audit trail nothing.
+            try:
+                self.db.execute(
+                    "UPDATE history SET raw_json = NULL WHERE id IN ("
+                    "  SELECT id FROM history WHERE raw_json IS NOT NULL"
+                    "  ORDER BY timestamp ASC LIMIT ?)",
+                    (excess,),
+                )
+            except Exception:
+                pass
+            # Step 2 - over the retention cap: the oldest rows really must go.
             remaining = self.count()
             if remaining > MAX_HISTORY_ROWS:
                 drop = remaining - MAX_HISTORY_ROWS

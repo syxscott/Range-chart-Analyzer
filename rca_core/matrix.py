@@ -77,7 +77,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from .grid import GridGeometry, detect_grid
+from .grid import INK_LEVEL, GridGeometry, detect_grid
 
 log = logging.getLogger(__name__)
 
@@ -93,11 +93,68 @@ INK_PAD = 4
 #: Mid-plateau of the 0.04-0.12 band over which the cell count is constant.
 INK_THRESHOLD = 0.08
 
+#: How much CHROMA (max(RGB) - min(RGB), 0-255) a cell must EXCEED THE PAGE's
+#: own chroma by, for the cell to count as marked.
+#:
+#: A cell painted a saturated colour can be brighter than the ink threshold and
+#: still be a mark: a yellow cell has luminance 215, a pale pink 209, a pale
+#: yellow 246 -- all above 200, so a luminance-only test calls them empty. That
+#: is not a corner case: an abundance matrix may be encoded by colour rather
+#: than by a letter, and then the whole table reads as empty.
+#:
+#: The test is RELATIVE to the page, and has to be. An absolute threshold is a
+#: P1 waiting to happen: a yellowed book page rendered (255,248,205) has a
+#: uniform chroma of 50, so an absolute cut at 45 declares the WHOLE page
+#: marked -- every empty cell becomes a tile the reader must give a letter to,
+#: and the exported table invents a code for each. Measured: a 5-mark table on
+#: such a page reported 64 filled cells, 59 of them false.
+#:
+#: Measured against a page's own chroma, the same page reports its 5 marks, and
+#: a clean white page still reports a pale yellow cell (chroma 55, well above
+#: the white page's 0). A tint so close to the paper that it cannot be told
+#: from it is, correctly, not reported.
+CHROMA_MARGIN = 45
+
 #: Magnification for the per-cell reading tiles. Decisive: see the table above.
 SHEET_SCALE = 8
 
-#: Tiles per sheet. Three calls for a 93-cell matrix.
+#: Tiles per sheet. The sheet SIZE is not what decides accuracy -- the
+#: MAGNIFICATION is. Measured through the real path on the reference figure,
+#: MiniMax-M3, two runs each:
+#:
+#:     31 tiles/sheet -> 3 sheets -> 4 calls -> precision 1.000
+#:     62 tiles/sheet -> 2 sheets -> 3 calls -> precision 1.000
+#:    124 tiles/sheet -> 1 sheet  -> 2 calls -> precision 1.000
+#:
+#: All three are perfect, so the sheet is made as large as the call budget
+#: allows rather than fixed at the smallest size that once worked.
 SHEET_CHUNK = 31
+
+#: The largest sheet worth building. 124 tiles at 8x is a 1094x1738 PNG, and
+#: measured at 1.000; beyond that the API's own image downscale starts eating
+#: the magnification, which is the thing that actually matters.
+SHEET_CHUNK_MAX = 124
+
+#: How many sheet calls the reader may make. The server's single-run budget is
+#: `timeout_sec * 6 + 25` s and it is derived from SIX attempts, so the
+#: two-stage path has to fit inside that: one label call, this many sheet
+#: calls, and one single-pass fallback.
+#:
+#: Without a bound the call count grew with the matrix -- 93 cells cost 4
+#: calls, 186 cost 7, 400 cost 14 -- and 7 sequential calls at the default
+#: 120 s each overrun the 745 s budget, so the request is abandoned with
+#: `err.timeout` and NO data at all, where the single-pass path (exactly one
+#: call) would have answered.
+MAX_SHEET_CALLS = 3
+
+#: Ceiling on ONE call of the two-stage path.
+#:
+#: The server's budget is a wall-clock guard over the whole run, and this path
+#: makes several calls, so each one is capped: a hung call can then spend at
+#: most its share of the budget instead of the whole of it. Measured, the calls
+#: take 5-45 s (MiniMax-M3 on the label image, and on a 31-tile sheet at 8x),
+#: so 90 s is a generous ceiling and a real hang is caught early.
+MATRIX_CALL_TIMEOUT_SEC = 90
 
 #: Tiles per row on a sheet.
 SHEET_PER_ROW = 8
@@ -165,7 +222,23 @@ def detect_filled_cells(
     gray = _gray_array(image_b64)
     if gray is None:
         return None
-    ink = gray < 200.0                     # INK_LEVEL from rca_core.grid
+    # INK_LEVEL is imported from rca_core.grid rather than written out again.
+    # A literal here would drift silently the first time somebody tuned the
+    # threshold in grid.py, and the two halves of the same measurement would
+    # then disagree about what "ink" means.
+    dark = gray < INK_LEVEL
+    rgb = _rgb_array(image_b64)
+    colour_marked = None
+    if rgb is not None:
+        # A cell can be MARKED without being DARK: a colour-coded matrix paints
+        # its cells, and a yellow cell is brighter than the ink threshold. The
+        # test is RELATIVE to the page's own chroma, because a page with a
+        # colour cast has a high chroma everywhere and an absolute threshold
+        # would call the whole page marked. See CHROMA_MARGIN.
+        chroma = (rgb.max(axis=2).astype(np.int16)
+                  - rgb.min(axis=2).astype(np.int16))
+        page_chroma = float(np.median(chroma))
+        colour_marked = chroma > (page_chroma + CHROMA_MARGIN)
     cells: List[Tuple[int, int]] = []
     for r, rspan in enumerate(geo.row_spans):
         ry0, ry1 = _inset(rspan, pad)
@@ -175,10 +248,47 @@ def detect_filled_cells(
             cx0, cx1 = _inset(cspan, pad)
             if cx1 <= cx0:
                 continue
-            window = ink[ry0:ry1, cx0:cx1]
-            if window.size and float(window.mean()) > threshold:
+            window = dark[ry0:ry1, cx0:cx1]
+            if not window.size:
+                continue
+            # Measure the MIDDLE of the interior, not the whole of it. A ruled
+            # line wider than the inset -- a 5px rule (1.25pt at 300dpi) or a
+            # blurred scan -- leaves a sliver of itself at the edge of the cell,
+            # and a MEAN counts that sliver as a mark: measured, 52 of 64 cells
+            # on an 8x8 table with 5 real marks read as filled, and the reader
+            # was then obliged to invent a letter for every empty one. The
+            # sliver lives at the edge and the glyph lives in the middle, so
+            # measuring the middle separates them at any rule width.
+            #
+            # Re-measured on the reference figure with this statistic: the
+            # marked cells bottom out at 0.133 and the empty ones top out at
+            # 0.000 (0.052 for the speckled variant), so the 0.08 threshold
+            # sits inside the window for every variant measured.
+            mid = _middle_band(window)
+            if float(mid.mean()) > threshold:
                 cells.append((r, c))
+                continue
+            if colour_marked is not None:
+                colour_window = _middle_band(colour_marked[ry0:ry1, cx0:cx1])
+                if colour_window.size and \
+                        float(colour_window.mean()) > threshold:
+                    cells.append((r, c))
     return FilledCells(geometry=geo, cells=tuple(cells))
+
+
+def _middle_band(window):
+    """The middle of a 2-D boolean window, with a quarter off each side.
+
+    The horizontal quarter is dropped too, so a VERTICAL rule sliver on the
+    left or right is dropped as well -- a wide rule is wide in both
+    directions.
+    """
+    h, w = window.shape[0], window.shape[1]
+    mh = int(h * 0.25)
+    mw = int(w * 0.25)
+    if h - 2 * mh <= 0 or w - 2 * mw <= 0:
+        return window
+    return window[mh:h - mh, mw:w - mw]
 
 
 #: Magic numbers for the two formats this module can hand to a model. Only the
@@ -261,6 +371,36 @@ def _gray_array(image_b64: str):
             im = Image.open(fh)
             im.load()
             return np.asarray(im.convert("L"), dtype=np.uint8)
+    except Exception:
+        return None
+
+
+def _rgb_array(image_b64: str):
+    """base64 image -> RGB array, or None when it cannot be read.
+
+    Needed because a cell can be MARKED by colour rather than by darkness, and
+    because a tile handed to the reader must keep that colour: greyscaling it
+    would leave the reader unable to tell a red class from a blue one.
+    """
+    try:
+        import io as _io
+
+        import numpy as np
+        from PIL import Image
+    except Exception:                                    # pragma: no cover
+        return None
+    payload = image_b64.strip()
+    if payload.lower().startswith("data:"):
+        payload = payload.split(",", 1)[-1]
+    try:
+        raw = base64.b64decode(payload)
+    except Exception:
+        return None
+    try:
+        with _io.BytesIO(raw) as fh:
+            im = Image.open(fh)
+            im.load()
+            return np.asarray(im.convert("RGB"), dtype=np.uint8)
     except Exception:
         return None
 
@@ -377,6 +517,17 @@ def render_cell_sheets(
         rgb = Image.fromarray(gray).convert("RGB")
     except Exception:                                    # pragma: no cover
         return None
+
+    # The tiles are cropped from the ORIGINAL colour image when one can be
+    # read, not from the greyscale array. A greyscale tile leaves the reader
+    # unable to tell a red class from a blue one, which is the whole content of
+    # a colour-coded matrix.
+    colour = _rgb_array(image_b64)
+    if colour is not None:
+        try:
+            rgb = Image.fromarray(colour)
+        except Exception:                                # pragma: no cover
+            rgb = Image.fromarray(gray).convert("RGB")
 
     geo = filled.geometry
     tiles: List[Tuple[str, Any, Tuple[int, int]]] = []
@@ -603,6 +754,21 @@ def _norm_name(value: Any) -> str:
 #: and shipping that as `legend` puts thirteen rows in the exported table.
 LEGEND_MAX_ENTRIES = 8
 
+#: How many duplicate names an axis may carry before the reading is treated as
+#: a collapse. The allowance is a SHARE of the axis, with a floor of one, so a
+#: small axis is not punished for a single legal repeat: on 4 inked columns,
+#: one repeat is 25%, and a fixed ratio threshold would have rejected a
+#: perfectly good figure. On 22 inked rows the same rule allows 4 repeats and
+#: still rejects the measured failure, where 22 printed rows collapsed onto 4
+#: names (18% distinct).
+LABEL_DUPLICATE_ALLOWANCE = 0.20
+LABEL_MIN_DUPLICATES_ALLOWED = 1
+
+
+def _allowed_duplicates(count: int) -> int:
+    return max(LABEL_MIN_DUPLICATES_ALLOWED,
+               int(count * LABEL_DUPLICATE_ALLOWANCE))
+
 
 def legend_is_plausible(legend: Sequence[Dict[str, Any]]) -> Optional[str]:
     """None when the legend looks like a legend, else why it does not."""
@@ -659,23 +825,37 @@ def labels_are_internally_consistent(labels: Dict[str, Any],
         if not _text(_pick(cols[c], "label", "name", "site")):
             return f"column {c} has ink but a blank label"
 
-    seen_rows: Dict[str, int] = {}
-    for r in inked_rows:
-        name = _norm_name(_pick(rows[r], "taxon", "name"))
-        if name in seen_rows:
-            return (f"rows {seen_rows[name]} and {r} both read "
-                    f"{_text(_pick(rows[r], 'taxon', 'name'))!r}")
-        seen_rows[name] = r
-
-    seen_cols: Dict[str, int] = {}
-    for c in inked_cols:
-        name = _norm_name(_pick(cols[c], "label", "name", "site"))
-        if name in seen_cols:
-            return (f"columns {seen_cols[name]} and {c} both read "
-                    f"{_text(_pick(cols[c], 'label', 'name', 'site'))!r}")
-        seen_cols[name] = c
+    # A COLLAPSE is what this has to catch, and a ratio catches it without
+    # banning a legal repeat.
+    #
+    # The pairwise rule this replaces ("no two inked rows may share a name")
+    # was too strict: a matrix may legitimately list one locality twice (two
+    # sections of the same well) or print the same taxon name on two rows.
+    # Measured: a figure with columns ['S00','S01','S02','S00','S04'] was
+    # rejected and the run fell back to the single-pass path, which is a
+    # strictly worse answer for a perfectly good figure.
+    #
+    # What actually distinguishes a collapse is that MANY names become FEW.
+    # The observed failure was 22 printed rows collapsing onto 4 names, i.e.
+    # 18% distinct. A tolerance of 20% duplicates still rejects that at 4/22
+    # and still accepts a couple of legal repeats.
+    if inked_rows:
+        distinct_rows = {_norm_name(_pick(rows[r], "taxon", "name"))
+                         for r in inked_rows}
+        allowed = _allowed_duplicates(len(inked_rows))
+        if len(distinct_rows) < len(inked_rows) - allowed:
+            return (f"only {len(distinct_rows)} distinct taxon names for "
+                    f"{len(inked_rows)} rows (at most {allowed} repeat(s) "
+                    f"allowed)")
+    if inked_cols:
+        distinct_cols = {_norm_name(_pick(cols[c], "label", "name", "site"))
+                         for c in inked_cols}
+        allowed = _allowed_duplicates(len(inked_cols))
+        if len(distinct_cols) < len(inked_cols) - allowed:
+            return (f"only {len(distinct_cols)} distinct column labels for "
+                    f"{len(inked_cols)} columns (at most {allowed} repeat(s) "
+                    f"allowed)")
     return None
-
 
 def render_label_image(image_b64: str,
                        scale: int = LABEL_SCALE) -> Optional[str]:
@@ -724,6 +904,7 @@ def extract_matrix_two_stage(
     call_model: ModelCall,
     max_tokens: int = 32000,
     confidence: float = 0.9,
+    sheet_chunk: int = 0,
 ) -> Optional[Dict[str, Any]]:
     """Two-stage extraction. ``None`` means "use the single-pass path instead".
 
@@ -814,8 +995,25 @@ def extract_matrix_two_stage(
         return None
 
     # ---- stage 2b: the cell codes ---------------------------------------
-    sheets = render_cell_sheets(image_b64, filled)
+    # The sheet is made as large as the call budget allows, because the sheet
+    # SIZE was measured not to affect accuracy while the number of calls it
+    # costs does affect the wall clock. `sheet_chunk` of 0 means "choose".
+    if not sheet_chunk:
+        n_cells = len(filled.cells)
+        sheet_chunk = min(SHEET_CHUNK_MAX,
+                          max(SHEET_CHUNK,
+                              -(-n_cells // MAX_SHEET_CALLS)))
+    sheets = render_cell_sheets(image_b64, filled, chunk=sheet_chunk)
     if not sheets:
+        return None
+    if len(sheets) > MAX_SHEET_CALLS:
+        # Too many cells to read inside the caller's wall-clock budget. Saying
+        # so and letting the single-pass path answer is strictly better than
+        # starting a sequence that will be cut off mid-way with nothing to
+        # show for it.
+        log.info("matrix: %d sheet(s) needed, over the %d allowed; "
+                 "falling back to single pass",
+                 len(sheets), MAX_SHEET_CALLS)
         return None
     codes = legend_codes(labels.get("legend") or [])
     cell_prompt = CELL_SYSTEM_PROMPT.replace(
@@ -823,14 +1021,29 @@ def extract_matrix_two_stage(
 
     cells: List[Dict[str, Any]] = []
     unanswered = 0
+    out_of_vocab = 0
     for sheet_b64, meta in sheets:
-        stext, struncated, serr = call_model(
+        stext, sheet_truncated, serr = call_model(
             cell_prompt, sheet_b64,
             f"Read all {len(meta)} tiles.", max_tokens)
-        if truncated or not stext:
+        # `sheet_truncated`, NOT `truncated`. The latter is the LABEL call's flag,
+        # still bound from line 760 and always False by now -- so a truncated
+        # sheet was never recognised as one. Measured: with two sheets and the
+        # second one cut off mid-array, the run returned ok with
+        # cell_status "grid_cells", 31 of 53 cells carrying a code, 22 BLANK,
+        # and not one "cell sheet unusable" line in the log. The run looked
+        # verified while two fifths of its cells were empty.
+        if sheet_truncated or not stext:
             unanswered += len(meta)
             log.info("matrix: cell sheet unusable (truncated=%s err=%s), %d tiles",
-                     truncated, serr, len(meta))
+                     sheet_truncated, serr, len(meta))
+            # The tiles of an unusable sheet are still REAL cells -- geometry
+            # found ink in them -- so they are recorded with an empty code
+            # rather than dropped. Dropping them would turn a read failure into
+            # a false absence, which is the outcome the 2026-10-17 review
+            # (P1-3) already ruled out for unread tiles.
+            for cap, (row, col) in meta:
+                cells.append({"row": row, "col": col, "code": ""})
             continue
         payload = safe_json_loads(stext) or {}
         by_id = {}
@@ -844,11 +1057,28 @@ def extract_matrix_two_stage(
             # A tile the model did not answer is recorded with an empty code
             # rather than dropped: the CELL EXISTS, and dropping it would turn a
             # read failure into a silently wrong absence.
-            cells.append({"row": row, "col": col, "code": by_id.get(cap, "")})
+            code = by_id.get(cap, "")
             if cap not in by_id:
                 unanswered += 1
+            elif codes and code and code.upper() not in codes:
+                # REVIEW-2026-10-19: the legend codes go into the PROMPT, but
+                # nothing checked the answer against them, so the closed
+                # vocabulary was enforced only by the model's cooperation. A
+                # figure whose legend defines A/C/R could come back with "X" or
+                # "?" on a tile -- and the LABEL prompt in this same file
+                # TEACHES the model to write "?" for an illegible character, so
+                # that answer is likely rather than exotic. Such a code reaches
+                # the result with no class (the class comes from the legend)
+                # and no sign that it is undefined. It is treated as unread
+                # instead: the cell exists, the symbol was not read.
+                out_of_vocab += 1
+                code = ""
+            cells.append({"row": row, "col": col, "code": code})
     if unanswered:
         log.warning("matrix: %d cell(s) got no answer from the reader", unanswered)
+    if out_of_vocab:
+        log.warning("matrix: %d cell(s) came back with a code outside the "
+                    "legend %s; treated as unread", out_of_vocab, codes)
     if not cells or unanswered >= len(cells):
         # Every tile came back unread. Emitting that would produce a table with
         # the right shape, the right row count and no data in any of it -- the

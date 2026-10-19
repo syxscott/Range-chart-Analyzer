@@ -2039,7 +2039,17 @@ def _annotate_image_tokens(usage: dict[str, Any], image_b64: str) -> None:
 # Status codes worth retrying (transient upstream errors).
 # 401/403/400 are authentication / client errors - retrying them is futile
 # and just wastes quota, so they're excluded.
-_RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+#
+# REVIEW-2026-10-19: 529 was missing, and it is the one that matters. 529 is
+# the "overloaded" answer -- MiniMax returns
+# `{"type":"error","error":{"type":"overloaded_error", ...}}` with it, meaning
+# "the tier is busy, come back". Measured on MiniMax-M3.1-Flash: 1 of 8
+# requests came back 529 while the model name was perfectly valid. Not
+# retrying it turned a transient congestion blip into a failed EXTRACTION, and
+# on the two-stage path -- four sequential calls -- the per-call rate compounds
+# into the run's rate: at 12% per-call failure, only about half the runs
+# finished. A 529 is the textbook "try again" answer.
+_RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504, 529}
 
 # Lazy import to avoid circular dependency and keep this module importable in isolation.
 def _get_error_utils():

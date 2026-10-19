@@ -1113,8 +1113,23 @@ def _occurrence_matrix_tables(data: dict[str, Any] | None) -> list[dict[str, Any
     # warning is the whole point: the measured single-pass run reads 43% of
     # cells correctly, and a sheet titled plain "Occurrences" gives a reader no
     # way to know that.
+    #
+    # REVIEW-2026-10-19: `grid_cells` alone is not enough for the plain title.
+    # The two-stage path records a cell it could not read with an empty code
+    # (the cell EXISTS -- the ink test found it -- but the reader did not name
+    # it), and a run with one unusable contact sheet out of three came back
+    # stamped `grid_cells` with 31 of 93 cells unread. "Occurrences" on a sheet
+    # where two fifths of the cells have no code is an over-claim, so the plain
+    # title now also requires that every cell carries a code or a class.
+    # Mirrored in js/table.js; the two must agree.
     cell_status = (data or {}).get("cell_status") or ""
-    occ_title_key = ("sec.occurrences" if cell_status == "grid_cells"
+    _occ_rows = (data or {}).get("occurrences") or []
+    _any_unread = any(
+        not (str(o.get("code") or "")).strip()
+        and not (str(o.get("class") or "")).strip()
+        for o in _occ_rows if isinstance(o, dict))
+    occ_title_key = ("sec.occurrences"
+                     if (cell_status == "grid_cells" and not _any_unread)
                      else "sec.occurrencesUnverified")
 
     occ_cols = ["col.taxon", "col.authority", "col.site", "col.code",
