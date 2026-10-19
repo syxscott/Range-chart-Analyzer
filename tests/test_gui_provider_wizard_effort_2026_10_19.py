@@ -12,6 +12,15 @@ measured: read timeout at 90 s, 2 of 2 runs, while effort=low answered in
 on the timing-out configuration with nothing on screen to explain why.
 
 The GUI needs a display, so this runs on Qt's offscreen platform.
+
+Qt-gated, like every other GUI suite here: PySide6 is deliberately NOT
+installed in the CI matrix job (AUDIT-2026-09-27 [item 0.4] -- ~200 MB of Qt
+plus a headless WebEngine setup does not belong on every Python version), and
+the ``qt`` job is the gate that actually protects the desktop GUI. The file
+name carries "gui" so the ``qt`` job's ``-k "gui or fluent ..."`` filter
+picks it up, and the module skips CLEANLY where Qt is absent -- an ERROR
+there takes the whole matrix job down with it, which is what the first
+version of this file did.
 """
 from __future__ import annotations
 
@@ -24,6 +33,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest                                                  # noqa: E402
 
 from rca_core.llm import LlmProvider, REASONING_EFFORT_LEVELS  # noqa: E402
+
+
+def _qt_available():
+    """The same gate the other GUI suites use (tests/test_fluent_ui_2026_09_05.py)."""
+    try:
+        import PySide6            # noqa: F401
+        import qfluentwidgets     # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+_requires_qt = pytest.mark.skipif(
+    not _qt_available(), reason="PySide6/qfluentwidgets unavailable")
 
 
 @pytest.fixture(scope="module")
@@ -49,6 +72,7 @@ def _wizard(qapp, existing):
     return w
 
 
+@_requires_qt
 def test_the_effort_is_shown_when_editing(qapp):
     w = _wizard(qapp, _existing("low"))
     try:
@@ -59,6 +83,7 @@ def test_the_effort_is_shown_when_editing(qapp):
         w.close()
 
 
+@_requires_qt
 def test_the_effort_survives_an_edit(qapp):
     """The rebuild must carry the field over."""
     w = _wizard(qapp, _existing("low"))
@@ -76,6 +101,7 @@ def test_the_effort_survives_an_edit(qapp):
         w.close()
 
 
+@_requires_qt
 def test_a_changed_effort_is_saved(qapp):
     w = _wizard(qapp, _existing("low"))
     try:
@@ -90,6 +116,7 @@ def test_a_changed_effort_is_saved(qapp):
         w.close()
 
 
+@_requires_qt
 def test_the_default_row_means_do_not_send(qapp):
     w = _wizard(qapp, _existing(""))
     try:
@@ -105,6 +132,7 @@ def test_the_default_row_means_do_not_send(qapp):
         w.close()
 
 
+@_requires_qt
 def test_every_documented_level_is_offered(qapp):
     w = _wizard(qapp, _existing(""))
     try:
