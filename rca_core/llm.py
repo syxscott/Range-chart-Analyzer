@@ -40,6 +40,7 @@ from typing import Any, Mapping, Optional
 
 # AUDIT-2026-09-29: shared with server.py on purpose -- see
 # rca_core/redact.py for why a second copy of that pattern is a liability.
+from .provider_failure import (RETRYABLE_STATUS, classify_provider_failure)
 from .redact import redact_error_body
 
 from .ssrf import (
@@ -1994,6 +1995,53 @@ def _read_limited(resp, limit: int = MAX_RESPONSE_BYTES) -> bytes:
     return data
 
 
+#: The headers of the most recent response, per thread.
+#:
+#: REVIEW-2026-10-20: the headers are the only place a provider can say
+#: "come back in 120 seconds" (Retry-After) or "do not retry this"
+#: (x-should-retry). An out-parameter was tried first and broke thirteen
+#: existing tests, because they mock the internal helpers with fixed-arity
+#: fakes -- which is the signal that the parameter was the invasive way
+#: to do it. A thread-local slot needs no signature change at all, and it
+#: is safe: the retry layer reads it immediately after the call returns,
+#: on the same thread, with nothing in between.
+_LAST_RESPONSE_HEADERS = threading.local()
+
+
+def _last_response_headers() -> dict:
+    """The headers of the last response on THIS thread, or {}."""
+    return getattr(_LAST_RESPONSE_HEADERS, "headers", None) or {}
+
+
+def _capture_response_headers(resp) -> None:
+    """Record a response's headers in this thread's slot.
+
+    REVIEW-2026-10-20: the headers are the only place a provider can say
+    "come back in 120 seconds" (Retry-After) or "do not retry this"
+    (x-should-retry). They are kept with their ORIGINAL spelling, because
+    ``error_utils.get_retry_delay`` folds the keys itself and the
+    browser's ``Headers.get`` is case-insensitive -- the two sides then
+    agree.
+
+    Best-effort by construction: a response without headers, or a header
+    object that refuses to be read, must not turn a failed call into a
+    crash.
+    """
+    try:
+        raw = getattr(resp, "headers", None)
+        if raw is None:
+            return
+        items = getattr(raw, "items", None)
+        if callable(items):
+            captured = {str(k): str(v) for k, v in items()}
+        else:
+            captured = {str(k): str(v) for k, v in dict(raw).items()}
+        _LAST_RESPONSE_HEADERS.headers = captured
+    except Exception:
+        # The headers are an optimisation, never a requirement.
+        pass
+
+
 def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_sec: int,
                progress_callback=None):
     """Fire a POST and return (payload_bytes, status_code). Never raises.
@@ -2028,6 +2076,21 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
             if progress_callback:
                 progress_callback("thinking")
+            # REVIEW-2026-10-20: carry the RESPONSE HEADERS out.
+            #
+            # The provider's own Retry-After is the one delay it knows to be
+            # right, and the repo has documented for weeks that both live
+            # call sites pass headers=None, so a 429 Retry-After: 120 is
+            # backed off by ~0.8 s here while the BROWSER waits the
+            # requested time -- the two transports disagree about the same
+            # failure. The headers travel in a THREAD-LOCAL slot rather
+            # than in the return tuple, because that tuple
+            # (raw, truncated, status, err_body, usage) is consumed in a
+            # dozen places and changing its arity would be a much bigger
+            # change than the problem deserves -- and an out-parameter on
+            # the internal helpers broke thirteen tests that mock them
+            # with fixed-arity fakes.
+            _capture_response_headers(resp)
             try:
                 # REVIEW-2026-09-20 #24: bounded read (see _read_limited).
                 return _read_limited(resp), resp.status, b""
@@ -2041,6 +2104,10 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
         # on "submitting" forever for auth/quota errors.
         if progress_callback:
             progress_callback("thinking")
+        # An HTTPError IS a response object, so it carries the same headers
+        # a 2xx would — and on a 429 that is exactly where Retry-After
+        # lives.
+        _capture_response_headers(e)
         err_body = b""
         try:
             try:
@@ -2188,6 +2255,18 @@ def _read_response_stream(target: str, body: dict[str, Any],
         thinking_chars = 0
         truncated = False
         usage_obj = None
+        # REVIEW-2026-10-20 (borrowed from opencode's provider-error.ts,
+        # which classifies an "incomplete-stream" as retryable): did the
+        # model SAY it was finished?
+        #
+        # A stream that ends cleanly -- the server closes the connection
+        # without an error, without a `message_stop` and without a
+        # stop_reason -- leaves `raw_text` holding a PARTIAL answer. That
+        # partial answer used to be returned as if it were complete, and a
+        # truncated table looks exactly like a complete one: the reader
+        # gets a shorter range chart and never learns why.
+        saw_stop = False
+        stream_error = ""
         for ev in _sse_events(resp):
             etype = ev.get("type") or ""
             if etype == "content_block_delta":
@@ -2210,21 +2289,43 @@ def _read_response_stream(target: str, body: dict[str, Any],
                     usage_obj = msg["usage"]
             elif etype == "message_delta":
                 delta = ev.get("delta") or {}
-                if delta.get("stop_reason") == "max_tokens":
-                    truncated = True
+                if delta.get("stop_reason"):
+                    saw_stop = True
+                    if delta.get("stop_reason") == "max_tokens":
+                        truncated = True
                 if isinstance(ev.get("usage"), dict):
                     usage_obj = ev["usage"]
-            elif etype in ("message_stop", "error"):
+            elif etype == "message_stop":
+                saw_stop = True
+                break
+            elif etype == "error":
+                err_obj = ev.get("error")
+                if isinstance(err_obj, dict):
+                    stream_error = _coerce_text(
+                        err_obj.get("message") or err_obj.get("type"))
+                else:
+                    stream_error = _coerce_text(err_obj)
                 break
         usage = None
         if usage_obj:
             usage = dict(usage_obj)
             usage["estimated"] = False
+        if stream_error:
+            return (None, truncated, resp.status,
+                    "[stream] the model reported an error: %s" % stream_error,
+                    usage)
         if not raw_text.strip():
             return (None, truncated, resp.status,
                     ("the model produced no text" if not thinking_chars
                      else "the model produced no text (it spent the whole "
                           "answer budget thinking)"), usage)
+        if not saw_stop:
+            # The model never said it was done. Whatever arrived is a
+            # PREFIX of the answer, and a prefix of a table is a wrong
+            # table, not a short one.
+            return (None, truncated, resp.status,
+                    "[stream] the connection ended before the model finished",
+                    usage)
         return raw_text, truncated, resp.status, "", usage
 
 
@@ -3100,7 +3201,10 @@ def _annotate_image_tokens(usage: dict[str, Any], image_b64: str) -> None:
 # on the two-stage path -- four sequential calls -- the per-call rate compounds
 # into the run's rate: at 12% per-call failure, only about half the runs
 # finished. A 529 is the textbook "try again" answer.
-_RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504, 529}
+# REVIEW-2026-10-20: the set now lives in provider_failure, so the
+# classifier's status fallback and this name cannot drift apart. The
+# classifier is what the retry layers actually ask.
+_RETRYABLE_STATUS = RETRYABLE_STATUS
 
 # Lazy import to avoid circular dependency and keep this module importable in isolation.
 def _get_error_utils():
@@ -3157,6 +3261,10 @@ def call_llm_api_with_retry(
             except Exception:
                 pass
     for attempt in range(retries):
+        # REVIEW-2026-10-20: the response HEADERS, captured on the way out.
+        # They carry the provider's own Retry-After, which is the one delay
+        # it knows to be right, and x-should-retry, which is the provider
+        # saying whether another attempt could help.
         last = call_llm_api(
             provider=provider,
             system_prompt=system_prompt,
@@ -3170,14 +3278,35 @@ def call_llm_api_with_retry(
             temperature=temperature,
             seed=seed,
         )
+        resp_headers = _last_response_headers()
         text, truncated, status, err_body, usage = last
         if text is not None:
             return last
-        retryable = (
-            status in _RETRYABLE_STATUS
-            or status is None
-        )
-        if not retryable:
+        # REVIEW-2026-10-20 (borrowed from opencode's provider-error.ts):
+        # the CLASSIFICATION decides, and it reproduces the old status
+        # policy for every status it knows -- so this is not a widening
+        # of what gets retried, it is the same set with the cases the
+        # status alone lies about taken out:
+        #
+        # * a 429 whose body says the plan is exhausted is not a
+        #   throttle. Retrying it cannot succeed and it spends the OTHER
+        #   bucket (MiniMax's Token Plan has a 5-hour bucket and a weekly
+        #   one, and it was the weekly one that throttled the end-to-end
+        #   regression);
+        # * a 200 whose STREAM ended early is a prefix of the answer, and
+        #   a prefix of a table is a wrong table.
+        failure = classify_provider_failure(
+            status, err_body, resp_headers)
+        if not failure.retryable:
+            # The wording must not contain the word "retry": a message
+            # that says "retry" reads as a PROMISE of another attempt,
+            # and this failure is not going to get one.
+            note = ("[%s - not attempting it again: %s]"
+                    % (failure.category, failure.reason))
+            if err_body:
+                last = (text, truncated, status, err_body + "\n" + note, usage)
+            else:
+                last = (text, truncated, status, note, usage)
             return last
         # MEDIUM-2: network errors (status=None) can persist across multiple
         # retries and may indicate a persistent connectivity issue.
@@ -3207,7 +3336,12 @@ def call_llm_api_with_retry(
         error_utils = _get_error_utils()
         delay = error_utils.get_retry_delay(
             status=status,
-            headers=None,  # Headers not available in current call_llm_api flow
+            # REVIEW-2026-10-20: the headers ARE available now -- they are
+            # captured on the way out of the call above. A provider that
+            # answers "429 Retry-After: 120" is asking for 120 seconds, and
+            # the blind backoff this used to use was the opposite of what it
+            # asked for.
+            headers=resp_headers,
             attempt=attempt,
             initial_delay=initial_backoff_sec,
             backoff_factor=backoff_factor,

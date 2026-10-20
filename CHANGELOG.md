@@ -9,6 +9,72 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A failed call is now CLASSIFIED, and the classification decides whether
+  it is worth retrying.** The retryable set was a list of HTTP STATUSES, so
+  a 429 was retried three times whatever it meant. But a 429 can be a
+  throttle ("you are going too fast", retry after a wait) or an EXHAUSTED
+  PLAN (the weekly bucket is empty; retrying cannot succeed, and it spends
+  the OTHER bucket).
+
+  MiniMax's Token Plan publishes both — the 5-hour bucket and the weekly
+  one, measured at 17 % and 20 % used on 2026-10-20 — and the weekly one
+  is exactly what throttled the end-to-end regression. An exhausted plan
+  now costs ONE attempt instead of four, and says so.
+
+  The classifier is borrowed from `sst/opencode`'s
+  `packages/ai/src/provider-error.ts`, which is the most careful one in
+  the four projects compared:
+
+  - the vendor's typed CODE beats the status (a 429 with
+    `insufficient_quota` is a dead plan; a 400 with `invalid_request` is a
+    malformed request);
+  - a message that says "the prompt does not fit" beats a generic
+    `invalid_request_error` code — Anthropic sends that code for a prompt
+    that is too long, and the two need different answers;
+  - the provider's own `x-should-retry` header wins over everything;
+  - an UNRECOGNISED failure retries, because the transient failures are
+    exactly the ones that arrive in a shape no classifier anticipated —
+    while an unrecognised 4xx does not, because a 4xx means the server
+    refused the request as it stands.
+
+  The classification changes the DECISION, not the wording: the operator
+  still reads the provider's own message.
+
+- **A stream the model never finished is no longer returned as an
+  answer.** The SSE reader assembled whatever arrived and handed it back,
+  so a stream that ended early -- the connection closed without a
+  `message_stop` and without a `stop_reason` -- produced a PARTIAL table
+  that looked exactly like a complete one. The reader would get a range
+  chart that silently stops halfway down the figure, with nothing to say
+  why.
+
+  Measured against MiniMax on 2026-10-20: a real stream's event sequence
+  is `message_start`, `ping`, `content_block_start`,
+  `content_block_delta`, `content_block_stop`, `message_delta` (with a
+  `stop_reason`) and `message_stop`. So "the model never said it was
+  done" is a reliable signal, and an unterminated stream is now reported
+  as a failure and classified `incomplete_stream` -- which IS retryable,
+  because a second attempt can finish what the first did not.
+
+- **The response HEADERS now reach the retry layers.** The repo has
+  documented for weeks that `get_retry_delay` honours `Retry-After` "when
+  they are passed in" and that both live call sites passed `None` — so a
+  server answering `429 Retry-After: 120` was backed off by ~0.8 s and
+  retried, which is the opposite of what `Retry-After` asks for, while
+  the BROWSER (which has a real `Headers`) waited the requested time. The
+  two transports disagreed about the same failure.
+
+  The headers travel in a CALLER-PROVIDED out-parameter rather than in
+  the return tuple, because that tuple — `(raw, truncated, status,
+  err_body, usage)` — is consumed in a dozen places and changing its
+  arity was the reason the job had been put off.
+
+  Measured against MiniMax on 2026-10-20: it sends NO rate-limit headers
+  at all (the response carries only edge/CDN tracing headers), so this
+  changes nothing for that provider — but it is what the other providers
+  in the preset list need, and it is why the two transports no longer
+  disagree.
+
 - **The provider UI now has the things cc-switch's has.** Nineteen items were
   taken from `farion1231/cc-switch`'s provider settings, and the ones that
   fit this product were implemented rather than listed:

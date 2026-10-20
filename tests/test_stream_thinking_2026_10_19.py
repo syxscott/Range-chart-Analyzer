@@ -88,11 +88,20 @@ def test_the_thinking_arrives_in_chunks():
 
 
 def test_the_text_is_assembled_from_the_text_deltas():
+    # REVIEW-2026-10-20: the terminal event is here because a REAL stream
+    # carries one -- measured against MiniMax on 2026-10-20, the event
+    # sequence is message_start, ping, content_block_start,
+    # content_block_delta, content_block_stop, message_delta (with a
+    # stop_reason) and message_stop. A stream that ends without either
+    # of the last two is TRUNCATED, and a prefix of a table is a wrong
+    # table; see the truncation test below.
     lines = _sse(
         {"type": "content_block_delta",
          "delta": {"type": "text_delta", "text": '{"a":'}},
         {"type": "content_block_delta",
          "delta": {"type": "text_delta", "text": ' 1}'}},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}},
+        {"type": "message_stop"},
     )
     text, _t, _s, _e, _u, _p = _call(lines)
     assert text == '{"a": 1}'
@@ -152,9 +161,45 @@ def test_a_broken_event_does_not_kill_the_stream():
         "data: %s\n\n" % json.dumps({
             "type": "content_block_delta",
             "delta": {"type": "text_delta", "text": "survived"}}),
+        # REVIEW-2026-10-20: the terminal event, because a real stream
+        # carries one (measured against MiniMax on 2026-10-20) and a
+        # stream without it is TRUNCATED rather than short.
+        "event: message_delta\n",
+        "data: %s\n\n" % json.dumps({
+            "type": "message_delta", "delta": {"stop_reason": "end_turn"}}),
+        "event: message_stop\n",
+        "data: %s\n\n" % json.dumps({"type": "message_stop"}),
     ]
     text, _t, _s, _e, _u, _p = _call(lines)
     assert text == "survived"
+
+
+def test_a_stream_that_ends_early_is_not_an_answer():
+    """REVIEW-2026-10-20: a stream the model never finished.
+
+    The HTTP status is 200 -- the server answered -- and what arrived is
+    a PREFIX of the answer. A prefix of a table is a WRONG table, not a
+    short one: the reader would get a range chart that silently stops
+    halfway down the figure, with nothing to say why.
+
+    So an unterminated stream is reported as a failure, and the retry
+    layer treats it as one (it is classified `incomplete_stream`, which
+    IS retryable -- opencode's rule, borrowed).
+    """
+    lines = _sse(
+        {"type": "content_block_delta",
+         "delta": {"type": "text_delta", "text": '{"rows": [{"species": "A"}'}},
+    )
+    text, _t, status, err, _u, _p = _call(lines)
+    assert text is None, (
+        "a truncated stream was returned as a complete answer: %r" % (text,))
+    assert "before the model finished" in err, err
+
+    from rca_core.provider_failure import classify_provider_failure
+    failure = classify_provider_failure(status, err, {})
+    assert failure.category == "incomplete_stream"
+    assert failure.retryable is True, (
+        "an incomplete stream is worth another attempt")
 
 
 def test_the_stream_is_only_used_when_a_thinking_callback_wants_it():

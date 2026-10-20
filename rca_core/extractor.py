@@ -61,7 +61,8 @@ except Exception:  # pragma: no cover - exercised only without Pillow
 
 from .image_hash import compute_image_sha256_from_b64
 from .json_utils import safe_json_loads
-from .llm import ApiFormat, LlmProvider, call_llm_api
+from .llm import ApiFormat, LlmProvider, call_llm_api, _last_response_headers
+from .provider_failure import RETRYABLE_STATUS, classify_provider_failure
 from .prompt import (
     ABUNDANCE_DIAGRAM_SYSTEM_PROMPT,
     CHART_LANG_HINT,
@@ -2966,8 +2967,13 @@ TRANSPORT_BASE_BACKOFF_SEC = 0.8
 # sequential calls the per-call failure rate compounds into the run's rate:
 # MiniMax-M3.1-Flash answered 7 of 8 single requests and then failed every run
 # of a multi-call measurement, purely on 529s.
-_RETRYABLE_TRANSPORT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504,
-                                         529})
+# REVIEW-2026-10-20: the set now lives in provider_failure, next to the
+# classifier that consumes it. The classifier's status fallback IS this
+# set, so the two can no longer drift -- and the transport layer below
+# asks the CLASSIFIER, which also knows the cases the status alone
+# lies about (a 429 that is really an exhausted plan, a 200 whose
+# stream ended early).
+_RETRYABLE_TRANSPORT_STATUS = RETRYABLE_STATUS
 
 # REVIEW-2026-10-19: the two failure kinds cost wildly different amounts of
 # the server's single-run budget, and one retry count for both was wrong for
@@ -3037,7 +3043,29 @@ def _call_llm(*, time_budget_sec: float | None = None,
         text, _truncated, status, _err_body, _usage = result
         if text is not None:
             break
-        if status is not None and status not in _RETRYABLE_TRANSPORT_STATUS:
+        # REVIEW-2026-10-20 (borrowed from opencode's provider-error.ts):
+        # the CLASSIFIER decides, and it reproduces the old status policy
+        # for every status it knows. Two cases the status alone got wrong:
+        #
+        # * a 429 whose body says the plan is exhausted. MiniMax's Token
+        #   Plan answers 429 both for "you are going too fast" (retry after
+        #   a wait) and for "the weekly bucket is empty" (retrying cannot
+        #   help, and it spends the 5-hour bucket). Retrying the second
+        #   kind four times is how a busy tier gets made worse;
+        # * a 200 whose STREAM ended early -- the model never said it was
+        #   done, so what arrived is a prefix of the answer, and a prefix
+        #   of a table is a wrong table.
+        try:
+            failure = classify_provider_failure(
+                status, _err_body, _last_response_headers())
+        except Exception:
+            failure = None
+        if failure is not None:
+            if not failure.retryable:
+                notes.append("[%s - not attempting it again: %s]"
+                             % (failure.category, failure.reason))
+                break
+        elif status is not None and status not in _RETRYABLE_TRANSPORT_STATUS:
             break
         # REVIEW-2026-10-19: a server that ANSWERED (429/529/503...) gets the
         # full attempt budget, because that answer came back in about a
@@ -3060,7 +3088,11 @@ def _call_llm(*, time_budget_sec: float | None = None,
         try:
             from . import error_utils
             delay = error_utils.get_retry_delay(
-                status=status, headers=None, attempt=attempt,
+                status=status,
+                # REVIEW-2026-10-20: the headers are available now, so a
+                # provider that answers "429 Retry-After: 120" is waited
+                # for the 120 seconds it asked for.
+                headers=_last_response_headers(), attempt=attempt,
                 initial_delay=TRANSPORT_BASE_BACKOFF_SEC,
             )
         except Exception:
