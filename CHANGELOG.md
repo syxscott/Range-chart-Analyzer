@@ -97,6 +97,31 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The front-end was never as thinly covered as the backlog said.** A note
+  claimed "about 4900 lines of thin coverage across `js/table.js`,
+  `js/export.js` and `js/ics_table.js`". Measured with Node's own V8
+  coverage — `scripts/js_coverage.py` — the front-end is at **99.9 %**:
+  23,251 of 23,267 lines, and every file within a rounding error of 100 %
+  (`table.js` 100.0 %, `app.js` 100.0 %, `minimax.js` 100.0 %,
+  `i18n.js` 99.9 %).
+
+  The old number came from measuring the wrong thing, and the two ways it
+  went wrong are worth keeping in the record:
+
+  * V8's coverage offsets are in UTF-16 CODE UNITS, not bytes.
+    `js/i18n.js` is 62,899 characters and 79,507 UTF-8 bytes, so a
+    byte-based line map puts every line after the first CJK block in the
+    wrong place. Measured that way, `i18n.js` came out 81.7 % covered and
+    `table.js` showed a 30-line hole in its export block — both
+    artefacts, in files that demonstrably run end to end.
+  * V8 reports block ranges inside functions, so a file's trailing
+    top-level export block produces no range of its own and would be
+    counted as "never executed" although the suites use the globals it
+    exports.
+
+  The script is left in the repository so the number can be re-checked
+  instead of re-argued.
+
 - **The provider store could be emptied with no way back.** A probe script
   emptied the live `providers.json` — five providers, two of them paid
   MiniMax keys — and the only way back was a backup somebody had taken by
