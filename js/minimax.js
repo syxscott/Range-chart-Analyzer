@@ -3902,6 +3902,18 @@ async function extractRangeChart(opts) {
           && RCA_CONFIG.reasoningEffortLevels.indexOf(effort) >= 0) {
         clsBody.output_config = { effort: effort };
       }
+      // REVIEW-2026-10-19: the classification call is the SAME model, and
+      // its budget is only 500 tokens -- which the thinking of an M3.1 at
+      // effort=max would eat completely, leaving an empty classification and
+      // a silently mis-detected chart type. The effort applies here too.
+      if (effort && typeof RCA_CONFIG !== 'undefined'
+          && typeof rcaReasoningWireValue === 'function') {
+        const clsWire = rcaReasoningWireValue(model, effort);
+        if (clsWire) {
+          clsBody.thinking = { type: 'adaptive' };
+          clsBody.output_config = { effort: clsWire };
+        }
+      }
       const clsResp = await fetch(url, {
         method: 'POST',
         headers: {
@@ -4002,20 +4014,24 @@ async function extractRangeChart(opts) {
       },
     ],
   };
-  // REVIEW-2026-10-19: reasoning effort -> `output_config.effort`.
+  // REVIEW-2026-10-19: the effort goes on the wire as the level's MAPPED
+  // value, which is not always the same string: the per-model map is what
+  // says which levels a provider accepts and what it calls them.
   //
-  // The shape is MiniMax's, not Anthropic's: on the Anthropic-compatible
-  // endpoint M3.1 takes `output_config: {effort: ...}`, while
-  // `thinking: {budget_tokens: N}` is NOT in M3.1's documented vocabulary and
-  // M3.1 always thinks anyway (it cannot be switched off).
+  // The shape is MiniMax's, not Anthropic's: `thinking: {type: adaptive}`
+  // PLUS `output_config: {effort: ...}`. `thinking: {budget_tokens: N}` is
+  // NOT in M3.1's documented vocabulary and is never sent.
   //
-  // An unrecognised level is DROPPED rather than forwarded: this value comes
-  // from localStorage, so a stale or hand-edited entry must not turn into a
-  // request the endpoint answers with a 400.
+  // The browser's direct transport speaks Anthropic Messages only (there is
+  // no api_format selector on the web client), so the Anthropic shape is
+  // the only one it can need.
   if (effort && typeof RCA_CONFIG !== 'undefined'
-      && RCA_CONFIG.reasoningEffortLevels
-      && RCA_CONFIG.reasoningEffortLevels.indexOf(effort) >= 0) {
-    body.output_config = { effort: effort };
+      && typeof rcaReasoningWireValue === 'function') {
+    const wire = rcaReasoningWireValue(model, effort);
+    if (wire) {
+      body.thinking = { type: 'adaptive' };
+      body.output_config = { effort: wire };
+    }
   }
 
   // FE-FIX-2026-09-22 (item 2): controller / timer / cancel wiring now live

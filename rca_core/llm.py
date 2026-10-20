@@ -83,23 +83,44 @@ class ApiFormat(str, Enum):
 # Reasoning effort
 # ---------------------------------------------------------------------------
 
-#: The reasoning-effort levels MiniMax's M3.1 family accepts, weakest first.
+#: The reasoning levels the UI offers, weakest first.
 #:
-#: Measured on the reference figure's label call (2026-10-19): ``low`` 28.3 s
-#: with a complete answer, ``high`` 48.3 s with a complete answer, and the
-#: DEFAULT (``max``) answered in 73.4 s and 102.4 s on two tries -- slow, not
-#: broken. The value is the level NAME, not a token budget -- there is no
-#: "off": M3.1 always thinks, and thinking tokens are billed against and
-#: consume ``max_tokens``.
+#: The SET is universal and the per-model map says which of them a given model
+#: accepts -- the shape cc-switch uses (src/config/piThinkingProfiles.ts).
+#: That shape is strictly more expressive than a per-model list of options,
+#: because it can say two things a list cannot:
+#:
+#:   * that a model accepts only SOME of the levels, and
+#:   * that a level's NAME on the wire differs from its name in the UI --
+#:     cc-switch's Gemini profile maps ``low`` to ``"LOW"`` and ``high`` to
+#:     ``"HIGH"``, and a per-model option list has no way to say that.
+#:
+#: ``default`` is ours rather than cc-switch's: it is the "let the provider
+#: decide" row, and minimax-code's catalogue puts it FIRST in M3.1-Flash's
+#: option list -- a level the user cannot see is a level the user cannot
+#: reason about.
+REASONING_LEVELS = ("default", "off", "on", "minimal", "low", "medium", "high",
+                    "xhigh", "max")
+
+#: The concrete effort names -- the levels that carry a DEPTH. ``default``,
+#: ``off`` and ``minimal`` are not depths: the first means "let the provider
+#: decide", the second "do not think" and the third "think a little". Kept as
+#: a public name because the GUI and the JS mirror both need the list of
+#: names a provider can carry.
 REASONING_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
 #: The "let the provider decide" level.
-#:
-#: It is a VISIBLE option, not an absence. minimax-code's catalog
-#: (packages/config/src/minimax-model-catalog.ts) puts ``"default"`` FIRST in
-#: M3.1-Flash's option list, and a level the user cannot see is a level the
-#: user cannot reason about.
 REASONING_DEFAULT = "default"
+
+#: The map value that means "this level is offered, but sends nothing".
+#:
+#: cc-switch's maps do not need this: every level there maps to a concrete
+#: wire value, and the levels it does not support are simply absent. We need
+#: it because MiniMax's catalogue has a "default" row, and the provider's own
+#: default is its MAXIMUM effort -- which is the configuration that times out
+#: on a dense figure -- so "default" must be distinguishable from every
+#: concrete level.
+REASONING_OMIT = ""
 
 #: How a model wants its thinking depth expressed on the wire.
 #:
@@ -127,31 +148,60 @@ class ReasoningProfile:
     of that runtime's ``resolveTuiEffortChoice``.
     """
 
-    #: The levels the user may pick, in the order they should be offered.
-    options: tuple[str, ...]
+    #: UI level -> the value that goes on the wire.
+    #:
+    #: A MISSING key means "this profile says nothing about that level"; a
+    #: ``None`` value means "the provider does NOT support it" and the level
+    #: is not offered. The distinction is deliberate, and it is cc-switch's.
+    map: Mapping[str, str | None]
     #: The level the model uses when the user has not chosen.
     default: str
     #: ``effort`` (a named level) or ``switch`` (thinking on / off).
     style: str
 
+    def levels(self) -> list[str]:
+        """The levels to OFFER, in the universal order.
+
+        A level whose wire value is ``None`` is not offered: showing a control
+        the provider would reject (or silently ignore) is worse than not
+        showing it.
+        """
+        return [lv for lv in REASONING_LEVELS
+                if lv in self.map and self.map[lv] is not None]
+
+    def wire_value(self, level: str) -> str | None:
+        """The wire value of ``level``, or ``None`` when it is unsupported."""
+        if level not in self.map:
+            return None
+        return self.map[level]
+
 
 #: The per-model reasoning catalogue.
 #:
-#: M3.1 takes the five named levels. M3 does NOT take an effort at all: its
-#: thinking is an on/off switch, and -- as minimax-code puts it -- "Responses
-#: effort values do not change thinking depth", so offering M3 an effort list
-#: would advertise a control that does nothing.
+#: M3.1 takes the five named levels, and "off"/"minimal" are NOT among them --
+#: M3.1 always thinks. M3 does NOT take an effort at all: its thinking is an
+#: on/off switch, and -- as minimax-code puts it -- "Responses effort values
+#: do not change thinking depth", so offering M3 an effort list would
+#: advertise a control that does nothing.
 REASONING_PROFILES: dict[str, ReasoningProfile] = {
     "MiniMax-M3.1-Flash": ReasoningProfile(
-        options=(REASONING_DEFAULT,) + REASONING_EFFORT_LEVELS,
+        map={
+            REASONING_DEFAULT: REASONING_OMIT,
+            "low": "low", "medium": "medium", "high": "high",
+            "xhigh": "xhigh", "max": "max",
+        },
         default=REASONING_DEFAULT,
         style=REASONING_STYLE_EFFORT),
     "MiniMax-M3.1-Flash-Preview": ReasoningProfile(
-        options=(REASONING_DEFAULT,) + REASONING_EFFORT_LEVELS,
+        map={
+            REASONING_DEFAULT: REASONING_OMIT,
+            "low": "low", "medium": "medium", "high": "high",
+            "xhigh": "xhigh", "max": "max",
+        },
         default=REASONING_DEFAULT,
         style=REASONING_STYLE_EFFORT),
     "MiniMax-M3": ReasoningProfile(
-        options=(REASONING_DEFAULT, "on", "off"),
+        map={REASONING_DEFAULT: REASONING_OMIT, "on": "on", "off": "off"},
         default=REASONING_DEFAULT,
         style=REASONING_STYLE_SWITCH),
 }
@@ -183,7 +233,7 @@ def reasoning_profile_for(model: object) -> ReasoningProfile | None:
 def reasoning_options_for(model: object) -> list[str]:
     """The levels the GUI may offer for ``model`` (empty when it takes none)."""
     profile = reasoning_profile_for(model)
-    return list(profile.options) if profile else []
+    return profile.levels() if profile else []
 
 
 def resolve_reasoning_choice(model: object, selected: object = None) -> str:
@@ -198,14 +248,13 @@ def resolve_reasoning_choice(model: object, selected: object = None) -> str:
     * without a default, an even-length list uses the HIGHER midpoint, so a
       two-choice on/off model stays enabled until the user says otherwise.
 
-    The returned value is a level NAME, and it is passed to the wire
-    verbatim -- minimax-code keeps the user's exact value and maps only its
-    internal transport key back to it, and so does this.
+    The returned value is a UI level NAME. What goes on the wire is that
+    level's MAPPED value, which may be a different string entirely.
     """
     profile = reasoning_profile_for(model)
     if profile is None:
         return ""
-    allowed = list(profile.options)
+    allowed = profile.levels()
     if isinstance(selected, str):
         trimmed = selected.strip()
         if trimmed and trimmed in allowed:
@@ -231,7 +280,7 @@ def normalize_reasoning_effort(value: object) -> str:
     if not isinstance(value, str):
         return ""
     v = value.strip().lower()
-    return v if v in REASONING_EFFORT_LEVELS else ""
+    return v if v in REASONING_LEVELS else ""
 
 
 def _reasoning_request_patch(provider: "LlmProvider",
@@ -251,9 +300,10 @@ def _reasoning_request_patch(provider: "LlmProvider",
     * ``openai-completions`` -- ``reasoning_effort: <level>`` at the top level.
     * ``openai-responses`` -- ``reasoning: {effort: <level>}``.
 
-    The user's value goes on the wire VERBATIM: minimax-code keeps the user's
-    exact choice and maps only its internal transport key back to it, and so
-    does this.
+    The user's LEVEL goes on the wire as the level's MAPPED value, which is
+    not always the same string: cc-switch maps Gemini's ``low`` to ``"LOW"``
+    and its ``high`` to ``"HIGH"``, and a provider that takes only some of
+    the levels says so with a ``None`` in its map.
 
     A model with no profile sends NOTHING. A level the model does not
     understand is a 400, and a provider that takes no reasoning control must
@@ -267,27 +317,32 @@ def _reasoning_request_patch(provider: "LlmProvider",
         getattr(provider, "reasoning_effort", "") or "")
     if not choice:
         return {}
+    wire = profile.wire_value(choice)
+    if wire is None:
+        # The level is not in the profile (or is mapped to None): sending
+        # it would be a guess, and a guess here is a 400.
+        return {}
     if profile.style == REASONING_STYLE_SWITCH:
         # M3's thinking is an on/off switch, not a depth: minimax-code puts
         # it in the wire as `thinking: {type: adaptive|disabled}` and notes
         # that "Responses effort values do not change thinking depth".
-        on = choice == "on"
+        on = wire == "on"
         if api_format == ApiFormat.ANTHROPIC:
             return {"thinking": {"type": "adaptive" if on else "disabled"}}
         if api_format == ApiFormat.OPENAI:
             return {"reasoning_effort": "high" if on else "none"}
         return {"reasoning": {"effort": "high" if on else "none"}}
-    if choice == REASONING_DEFAULT:
+    if wire == REASONING_OMIT:
         # "default" means "let the provider decide" -- so nothing is sent.
         # (For MiniMax's M3.1 the provider's own default is `max`, which is
         # the slow one; the GUI says so next to the option.)
         return {}
     if api_format == ApiFormat.ANTHROPIC:
         return {"thinking": {"type": "adaptive"},
-                "output_config": {"effort": choice}}
+                "output_config": {"effort": wire}}
     if api_format == ApiFormat.OPENAI:
-        return {"reasoning_effort": choice}
-    return {"reasoning": {"effort": choice}}
+        return {"reasoning_effort": wire}
+    return {"reasoning": {"effort": wire}}
 
 
 # ---------------------------------------------------------------------------
@@ -2737,6 +2792,57 @@ def _extract_models(payload: dict[str, Any], fmt: ApiFormat) -> list[str]:
             if name:
                 out.append(str(name))
     return out
+
+
+def list_models(provider: LlmProvider, timeout_sec: int = 15) -> list[str]:
+    """The model IDs the endpoint actually serves, best effort.
+
+    cc-switch's "自动获取模型": the user pastes a key and picks the model
+    from what the endpoint serves, instead of copying a slug off a web page.
+    A wrong model name is the commonest configuration mistake, and it fails
+    LATE -- at the first extraction, with a 404 or a 400, long after the
+    settings looked fine.
+
+    Returns an empty list when the endpoint has no listing route (many
+    Chinese relay services do not) or the key is wrong; the caller shows the
+    user what to type instead. Never raises.
+    """
+    if provider is None:
+        return []
+    try:
+        from .ssrf import validate_endpoint_local_ok
+        ok, _why = validate_endpoint_local_ok(provider.endpoint)
+        if not ok:
+            return []
+    except Exception:
+        pass
+    fmt = provider.api_format
+    base = _api_base(provider.endpoint)
+    if fmt == ApiFormat.GEMINI:
+        target = _gemini_path(base, "/v1beta/models")
+        headers = {"x-goog-api-key": provider.api_key,
+                   "x-api-key": provider.api_key}
+    elif fmt == ApiFormat.ANTHROPIC:
+        target = _endpoint_path(base, "/v1/models")
+        headers = {"x-api-key": provider.api_key,
+                   "anthropic-version": "2023-06-01"}
+    else:
+        target = _endpoint_path(base, "/v1/models")
+        headers = {"Authorization": f"Bearer {provider.api_key}"}
+    headers.update(provider.extra_headers or {})
+    try:
+        payload_bytes, _status, _err = _get_json(target, headers, timeout_sec)
+    except Exception:
+        return []
+    if payload_bytes is None:
+        return []
+    try:
+        payload = json.loads(payload_bytes.decode("utf-8-sig"))
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    return _extract_models(payload, fmt)
 
 
 def _probe_openai_models(provider: LlmProvider, timeout_sec: int) -> ConnectionResult:

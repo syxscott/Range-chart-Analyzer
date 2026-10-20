@@ -403,6 +403,10 @@ TRANSLATIONS["zh"] = {
     "wizard.fieldEffort": "推理强度 (effort)",
     "wizard.effortDefault": "默认（不发送）",
     "wizard.effortNotSupported": "该模型不支持推理强度",
+    # REVIEW-2026-10-20 (cc-switch): 从端点获取模型列表。
+    "wizard.fetchModels": "获取模型列表",
+    "wizard.fetchModelsNeedKey": "请先填写端点地址与 API Key",
+    "wizard.fetchModelsEmpty": "该端点没有返回模型列表，请手动填写模型名",
     "wizard.extraHeaders": "额外请求头 (JSON)",
     # API-REVIEW-2026-10-18: hostless endpoint gate (e.g. "https://" saved).
     "wizard.endpointNoHost": "端点缺少主机名——请填写完整的基础 URL（例如 https://api.example.com）",
@@ -978,6 +982,10 @@ TRANSLATIONS["en"] = {
     "wizard.fieldEffort": "Reasoning effort",
     "wizard.effortDefault": "Default (not sent)",
     "wizard.effortNotSupported": "This model has no reasoning control",
+    # REVIEW-2026-10-20 (cc-switch): fetch the model list from the endpoint.
+    "wizard.fetchModels": "Fetch model list",
+    "wizard.fetchModelsNeedKey": "Fill in the endpoint and the API key first",
+    "wizard.fetchModelsEmpty": "That endpoint returned no model list; type the model name by hand",
     "wizard.extraHeaders": "Extra Headers (JSON)",
     "wizard.endpointNoHost": "The endpoint has no hostname — enter a full base URL (e.g. https://api.example.com)",
     "wizard.presetAltEndpoints": "Backup endpoints: {urls}",
@@ -1536,6 +1544,10 @@ TRANSLATIONS["ja"] = {
     "wizard.fieldEffort": "推論の強度 (effort)",
     "wizard.effortDefault": "既定（送信しない）",
     "wizard.effortNotSupported": "このモデルは推論強度を制御しません",
+    # REVIEW-2026-10-20 (cc-switch): エンドポイントからモデル一覧を取得。
+    "wizard.fetchModels": "モデル一覧を取得",
+    "wizard.fetchModelsNeedKey": "先にエンドポイントと API キーを入力してください",
+    "wizard.fetchModelsEmpty": "このエンドポイントはモデル一覧を返しません。モデル名を手動で入力してください",
     "wizard.extraHeaders": "追加ヘッダー (JSON)",
     "wizard.endpointNoHost": "エンドポイントにホスト名がありません——完全なベース URL を入力してください（例：https://api.example.com）",
     "wizard.presetAltEndpoints": "バックアップエンドポイント：{urls}",

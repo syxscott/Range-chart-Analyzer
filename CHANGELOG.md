@@ -56,6 +56,37 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   request, not for the image. It was left out at first, so a user who
   switched the effort got the previous effort's answer back with no way to
   tell.
+- **The reasoning catalogue is a MAP, not a list of options.** cc-switch
+  keeps one universal level set and a per-model map
+  (`src/config/piThinkingProfiles.ts`), and that shape is strictly more
+  expressive than a list: it can say that a provider accepts only SOME of the
+  levels, and that a level's name on the wire differs from its name in the
+  UI — cc-switch maps Gemini's `low` to `"LOW"` and its `high` to `"HIGH"`,
+  which a list cannot express at all.
+
+  Two real gaps closed by it. A level the provider does not take is now
+  REFUSED rather than guessed at — cc-switch's rule is explicit about why:
+  "思考等级对部分供应商无效 ... 硬传可能导致请求被拒". And the "default" row
+  (let the provider decide) is now distinguished from every concrete level
+  by a mapped value rather than by a special case in the caller.
+- **The provider wizard can fetch the model list from the endpoint.**
+  cc-switch's "自动获取模型": the user pastes a key and picks the model from
+  what the endpoint actually serves, instead of copying a slug off a web
+  page.
+
+  This is the commonest configuration mistake and it fails LATE: the
+  settings look fine and the first extraction comes back 404. The plumbing
+  was already here — the connection test GETs `/v1/models` and keeps the
+  ids in `ConnectionResult.models_sample` — but the WIZARD never offered
+  them, so the user had to go and read the vendor's documentation. Measured
+  against MiniMax's own endpoint: the listing answers on both the
+  Anthropic-compatible and the OpenAI-compatible route and carries the real
+  ids.
+
+  The fetch runs on a worker thread (a GET against a distant relay can take
+  seconds, and the wizard is a modal dialog), and it applies the same SSRF
+  policy as every other path, so a private endpoint is never dialled with
+  the key.
 - **The extraction page shows REAL progress, and the model's own thinking.**
   The occurrence-matrix path makes FOUR calls for a typical figure (one for
   the axis labels, one per contact sheet) and each of them can take a minute

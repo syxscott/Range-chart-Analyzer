@@ -16,13 +16,33 @@ const RCA_CONFIG = {
   // as one JSON record per filled cell; at 4000 the last rows were simply cut
   // off. Must stay equal to DEFAULT_MAX_TOKENS in rca_core/extractor.py.
   defaultMaxTokens: 16000,
-  // REVIEW-2026-10-19: reasoning effort levels (MiniMax M3.1 family). The
-  // wire shape is `output_config: {effort: ...}` on the Anthropic-compatible
-  // endpoint -- NOT `thinking: {budget_tokens: N}`, which is not in M3.1's
-  // documented vocabulary. Must stay equal to REASONING_EFFORT_LEVELS in
+  // REVIEW-2026-10-19: the reasoning levels. The SET is universal and the
+  // per-model map says which of them a model accepts -- the shape cc-switch
+  // uses (src/config/piThinkingProfiles.ts). It is strictly more expressive
+  // than a per-model list, because it can say that a model accepts only SOME
+  // of the levels, and that a level's name on the wire differs from its name
+  // in the UI (cc-switch maps Gemini's "low" to "LOW").
+  //
+  // The wire shape is `output_config: {effort: ...}` on the Anthropic-
+  // compatible endpoint -- NOT `thinking: {budget_tokens: N}`, which is not in
+  // M3.1's documented vocabulary. Must stay equal to REASONING_LEVELS in
   // rca_core/llm.py.
-  reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+  reasoningLevels: ['default', 'off', 'on', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+  // UI level -> the value that goes on the wire. `null` means the provider
+  // does NOT support that level and it is not offered; `''` means "offered,
+  // but send nothing" (the provider's own default applies).
+  reasoningMaps: {
+    'minimax-m3.1-flash': {
+      'default': '', low: 'low', medium: 'medium', high: 'high',
+      xhigh: 'xhigh', max: 'max',
+    },
+    'minimax-m3': {
+      'default': '', on: 'on', off: 'off',
+    },
+  },
   defaultEffort: '',
+  // The levels the picker offers before a model is known.
+  defaultEffortLevels: ['default', 'low', 'medium', 'high', 'xhigh', 'max'],
   // M5: explicit bounds for max_tokens clamp — defends against typos.
   // REVIEW-2026-10-19: the ceiling is the MODEL's real limit, not a product
   // guess. MiniMax-M3.1-Flash answers a larger value with
@@ -54,6 +74,45 @@ function rcaClampMaxTokens(v) {
   const n = parseInt(v, 10);
   if (!Number.isFinite(n)) return RCA_CONFIG.defaultMaxTokens;
   return Math.max(RCA_CONFIG.minMaxTokens, Math.min(n, RCA_CONFIG.maxMaxTokens));
+}
+
+// ---------------------------------------------------------------------------
+// Reasoning effort — mirror of rca_core/llm.py's reasoning catalogue.
+// ---------------------------------------------------------------------------
+
+// The catalogue for a model, or null when the model takes no reasoning
+// control. The lookup is case- and prefix-tolerant for the same reason the
+// Python one is: a model that quietly falls back to "no reasoning control"
+// because of a capital letter is a model whose thinking depth silently
+// reverted to the vendor default.
+function rcaReasoningProfile(model) {
+  const name = String(model || '').trim().toLowerCase();
+  if (!name) return null;
+  const maps = RCA_CONFIG.reasoningMaps || {};
+  if (Object.prototype.hasOwnProperty.call(maps, name)) return maps[name];
+  for (const key of Object.keys(maps)) {
+    if (name.indexOf(key) === 0) return maps[key];
+  }
+  return null;
+}
+
+// The levels to OFFER for a model. A level the provider does not support
+// (mapped to null) is not offered: showing a control the provider would
+// reject or silently ignore is worse than not showing it.
+function rcaReasoningLevels(model) {
+  const map = rcaReasoningProfile(model);
+  if (!map) return [];
+  return (RCA_CONFIG.reasoningLevels || []).filter((lv) =>
+    Object.prototype.hasOwnProperty.call(map, lv) && map[lv] !== null);
+}
+
+// The value that goes on the wire for a level, or null when the level is
+// not supported by the model.
+function rcaReasoningWireValue(model, level) {
+  const map = rcaReasoningProfile(model);
+  if (!map) return null;
+  if (!Object.prototype.hasOwnProperty.call(map, level)) return null;
+  return map[level];
 }
 
 // Namespaced localStorage keys. Phase L fix: persist the four

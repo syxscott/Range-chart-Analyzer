@@ -159,3 +159,76 @@ def test_a_model_without_reasoning_control_offers_nothing(qapp):
         assert w._cmb_effort.isEnabled() is False
     finally:
         w.close()
+
+
+# --- the model list the endpoint serves (cc-switch: 自动获取模型) ---------
+
+@_requires_qt
+def test_the_wizard_offers_to_fetch_the_model_list(qapp):
+    w = _wizard(qapp, _existing(""))
+    try:
+        assert getattr(w, "_btn_models", None) is not None, \
+            "the wizard must offer to fetch the model's list"
+    finally:
+        w.close()
+
+
+@_requires_qt
+def test_fetching_needs_an_endpoint_and_a_key(qapp):
+    w = _wizard(qapp, _existing(""))
+    try:
+        w._ipt_endpoint.setText("")
+        w._ipt_key.setText("")
+        w._fetch_models()          # must not raise, must not dial anything
+    finally:
+        w.close()
+
+
+@_requires_qt
+def test_the_discovered_models_are_offered_and_picking_one_fills_the_field(qapp):
+    w = _wizard(qapp, _existing(""))
+    captured = {}
+
+    class _FakeSignal:
+        """A QAction's ``triggered`` is a SIGNAL, so it has ``connect``."""
+
+        def __init__(self):
+            self._cbs = []
+
+        def connect(self, cb):
+            self._cbs.append(cb)
+
+        def fire(self):
+            for cb in self._cbs:
+                cb(False)
+
+    class _FakeAction:
+        def __init__(self, name):
+            self._name = name
+            self.triggered = _FakeSignal()
+
+    class _FakeMenu:
+        def __init__(self, parent=None):
+            self._actions = []
+
+        def addAction(self, name):
+            act = _FakeAction(name)
+            self._actions.append(act)
+            return act
+
+        def exec(self, *_a):
+            captured["menu"] = self
+            return None
+
+    import gui_fluent_providers as gfp
+    orig_menu = gfp.QMenu
+    gfp.QMenu = _FakeMenu
+    try:
+        w._on_models_fetched(None, ["MiniMax-M3.1-Flash", "MiniMax-M3"])
+        actions = captured["menu"]._actions
+        assert [a._name for a in actions] == ["MiniMax-M3.1-Flash", "MiniMax-M3"]
+        actions[1].triggered.fire()
+        assert w._ipt_model.text() == "MiniMax-M3"
+    finally:
+        gfp.QMenu = orig_menu
+        w.close()

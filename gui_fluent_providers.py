@@ -26,7 +26,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QDrag, QKeyEvent, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLineEdit,
+    QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLineEdit, QMenu,
 )
 
 # AUDIT-2026-09-27 [item B-13] (B-13): PillPushButton / TransparentToolButton /
@@ -49,7 +49,8 @@ from rca_core import (
     PROVIDER_PRESETS, ApiFormat, LlmProvider, ProviderStore, Translator,
 )
 from rca_core.extractor import DEFAULT_ENDPOINT, DEFAULT_MODEL
-from rca_core.llm import REASONING_EFFORT_LEVELS, test_llm_connection
+from rca_core.llm import (REASONING_DEFAULT, REASONING_LEVELS,
+                          test_llm_connection)
 from rca_core.ssrf import validate_endpoint as _validate_endpoint
 
 
@@ -611,8 +612,31 @@ class ProviderWizard(QDialog):
 
         lbl = BodyLabel(self._t("settings.model"))
         fl.addWidget(lbl, r, 0, 1, 2); r += 1
+        model_row = QHBoxLayout()
         self._ipt_model = LineEdit()
-        fl.addWidget(self._ipt_model, r, 0, 1, 2); r += 1
+        # REVIEW-2026-10-20 (cc-switch): "自动获取模型" -- a button that asks
+        # the endpoint which models it serves and offers them in a menu.
+        #
+        # A wrong model name is the commonest configuration mistake, and it
+        # fails LATE: the settings look fine, and the first extraction comes
+        # back 404. cc-switch says it outright -- "模型名稱要對得上供應商 ...
+        # 填錯會回 404 或回到非預期的模型" -- and its answer is to make the
+        # endpoint list its own models instead of making the user copy a slug
+        # off a web page. Measured against MiniMax's own endpoint: the
+        # listing answers on both the Anthropic-compatible and the
+        # OpenAI-compatible route and carries the real ids.
+        self._btn_models = ToolButton(FIF.SYNC)
+        self._btn_models.setToolTip(self._t("wizard.fetchModels"))
+        self._btn_models.setFixedSize(28, 28)
+        self._btn_models.clicked.connect(self._fetch_models)
+        model_row.addWidget(self._ipt_model)
+        model_row.addWidget(self._btn_models)
+        model_row.addStretch(1)
+        fl.addLayout(model_row, r, 0, 1, 2); r += 1
+        # The worker that fetches the model list. Held so it is not garbage
+        # collected while it is running -- a QThread destroyed mid-flight is
+        # a crash, not a failed fetch.
+        self._models_worker = None
 
         # REVIEW-2026-10-19: reasoning effort.
         #
@@ -640,9 +664,15 @@ class ProviderWizard(QDialog):
         # The combo shows a localized "default" row, so the VALUES are kept in
         # a parallel list -- an index into a translated label list would break
         # the moment the wording changed.
-        self._effort_values = [""] + list(REASONING_EFFORT_LEVELS)
+        #
+        # The initial population is the UNIVERSAL level set; the model's own
+        # map narrows it as soon as a model is known (see
+        # _refresh_effort_options), because the levels a provider accepts are
+        # the provider's, not the program's.
+        self._effort_values = list(REASONING_LEVELS)
         self._cmb_effort.addItems([self._t("wizard.effortDefault")]
-                                  + list(REASONING_EFFORT_LEVELS))
+                                  + [lv for lv in REASONING_LEVELS
+                                     if lv != REASONING_DEFAULT])
         fl.addWidget(self._cmb_effort, r, 0, 1, 2); r += 1
         self._ipt_model.textChanged.connect(self._refresh_effort_options)
 
@@ -936,6 +966,74 @@ class ProviderWizard(QDialog):
             self._cmb_effort.setCurrentIndex(self._effort_values.index(wanted))
         except ValueError:
             self._cmb_effort.setCurrentIndex(0)
+
+    def _fetch_models(self, *_args):
+        """Ask the endpoint which models it serves, and offer them in a menu.
+
+        The network call runs on a worker thread -- a GET against a distant
+        relay can take seconds, and the wizard is a modal dialog, so blocking
+        the GUI thread here would freeze the app mid-edit.
+        """
+        endpoint = self._ipt_endpoint.text().strip()
+        api_key = self._ipt_key.text().strip()
+        if not endpoint or not api_key:
+            InfoBar.warning("", self._t("wizard.fetchModelsNeedKey"),
+                            parent=self, position=InfoBarPosition.TOP)
+            return
+        try:
+            fmt = ApiFormat(self._cmb_fmt.currentText())
+        except ValueError:
+            fmt = ApiFormat.ANTHROPIC
+        from rca_core.llm import LlmProvider
+        probe = LlmProvider(name="probe", api_format=fmt, endpoint=endpoint,
+                            api_key=api_key, model=self._ipt_model.text().strip())
+        from PySide6.QtCore import QThread
+
+        class _Worker(QThread):
+            # (worker, result) -- a BOUND METHOD is connected, so Qt queues
+            # the call onto the GUI thread. A lambda would be a DIRECT
+            # connection and the menu would be built off-thread.
+            done = Signal(object, object)
+
+            def __init__(self, p, parent=None):
+                super().__init__(parent)
+                self._p = p
+
+            def run(self):
+                from rca_core.llm import list_models
+                try:
+                    self.done.emit(self, list_models(self._p, timeout_sec=15))
+                except Exception as exc:
+                    self.done.emit(self, [])
+                    log.warning("fetch models: %s", exc)
+
+        self._btn_models.setEnabled(False)
+        worker = _Worker(probe, self)
+        worker.done.connect(self._on_models_fetched)
+        # Keep a reference: a QThread that is garbage-collected while running
+        # is destroyed mid-flight.
+        self._models_worker = worker
+        worker.start()
+
+    def _on_models_fetched(self, worker, models):
+        """Show the discovered models; picking one fills the model field."""
+        try:
+            self._btn_models.setEnabled(True)
+        except Exception:
+            pass
+        self._models_worker = None
+        models = [m for m in (models or []) if m]
+        if not models:
+            InfoBar.warning("", self._t("wizard.fetchModelsEmpty"),
+                            parent=self, position=InfoBarPosition.TOP)
+            return
+        menu = QMenu(self)
+        for name in models:
+            act = menu.addAction(name)
+            act.triggered.connect(lambda _checked=False, n=name:
+                                  self._ipt_model.setText(n))
+        menu.exec(self._btn_models.mapToGlobal(
+            self._btn_models.rect().bottomLeft()))
 
     def _on_ok(self):
         name = self._ipt_name.text().strip()

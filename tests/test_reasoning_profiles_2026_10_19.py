@@ -43,7 +43,7 @@ def test_m31_offers_the_five_named_levels_plus_default():
 
 def test_m3_offers_a_switch_not_a_depth():
     """M3's thinking is on/off; an effort value does not change its depth."""
-    assert L.reasoning_options_for("MiniMax-M3") == ["default", "on", "off"]
+    assert L.reasoning_options_for("MiniMax-M3") == ["default", "off", "on"]
 
 
 def test_a_model_with_no_reasoning_control_offers_nothing():
@@ -114,6 +114,72 @@ def test_default_sends_nothing():
 
 def test_a_model_with_no_profile_sends_nothing():
     assert _patch("gpt-4o", "max") == {}
+
+
+# --- the MAP, not just a list of options (cc-switch's shape) ---------------
+
+def test_a_level_the_provider_does_not_support_is_not_offered():
+    """A level mapped to None is not in the picker.
+
+    cc-switch's rule is explicit about why: "思考等级对部分供应商无效 ...
+    硬传可能导致请求被拒" -- offering a level the provider would reject is
+    worse than not offering it.
+    """
+    profile = L.reasoning_profile_for("MiniMax-M3.1-Flash")
+    assert profile.wire_value("off") is None
+    assert "off" not in profile.levels()
+    # ... and sending it anyway is refused rather than guessed at.
+    p = L.LlmProvider(model="MiniMax-M3.1-Flash", reasoning_effort="off")
+    assert L._reasoning_request_patch(p, L.ApiFormat.ANTHROPIC) == {}
+
+
+def test_the_wire_value_may_differ_from_the_level_name():
+    """cc-switch maps Gemini's ``low`` to ``"LOW"`` and ``high`` to ``"HIGH"``.
+
+    A per-model list of options has no way to say that, which is why the
+    catalogue is a MAP and not a list.
+    """
+    profile = L.REASONING_PROFILES["MiniMax-M3.1-Flash"]
+    assert profile.wire_value("low") == "low"
+    assert profile.wire_value("max") == "max"
+    # The "default" row is offered but sends nothing.
+    assert profile.wire_value(L.REASONING_DEFAULT) == L.REASONING_OMIT
+    assert L.REASONING_DEFAULT in profile.levels()
+
+
+def test_a_missing_level_is_not_the_same_as_an_unsupported_one():
+    """cc-switch's distinction, kept.
+
+    cc-switch spells "this provider does not take that level" by putting the
+    key in the map with a ``null`` VALUE (so the UI can still show the level
+    as unavailable), while a level that is simply ABSENT was never part of
+    the profile. Both are refused on the wire here, and the difference is
+    in what the catalogue MEANS -- so a catalogue that wants to be explicit
+    can use either spelling.
+    """
+    profile = L.reasoning_profile_for("MiniMax-M3.1-Flash")
+    # M3.1 omits the levels it does not take.
+    assert "off" not in profile.map
+    assert profile.wire_value("off") is None
+    assert "off" not in profile.levels()
+    # ... and a level that IS taken is mapped to its wire value.
+    assert profile.wire_value("high") == "high"
+
+    # The other spelling: the key is present and mapped to None.
+    explicit = L.ReasoningProfile(
+        map={"low": "low", "high": None}, default="low",
+        style=L.REASONING_STYLE_EFFORT)
+    assert explicit.levels() == ["low"]
+    assert explicit.wire_value("high") is None
+
+
+def test_the_wire_value_is_what_goes_out():
+    p = L.LlmProvider(model="MiniMax-M3.1-Flash", reasoning_effort="xhigh")
+    assert L._reasoning_request_patch(p, L.ApiFormat.ANTHROPIC) == {
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "xhigh"}}
+    p2 = L.LlmProvider(model="MiniMax-M3.1-Flash", reasoning_effort="default")
+    assert L._reasoning_request_patch(p2, L.ApiFormat.ANTHROPIC) == {}
 
 
 def test_extra_body_still_wins_over_the_built_in_patch():

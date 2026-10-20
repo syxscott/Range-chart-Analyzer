@@ -437,14 +437,53 @@
   }
 
   // ---- settings persistence ----
+  // Rebuild the effort picker's options from the MODEL's own list.
+  //
+  // The levels belong to the provider, not to the program: MiniMax's M3.1
+  // takes five named levels, M3 takes an on/off switch, and every other
+  // model takes none. A picker that offered every level to every model
+  // would advertise controls that do nothing -- and cc-switch's rule is
+  // explicit about why that matters: "思考等级对部分供应商无效 ... 硬传可能
+  // 导致请求被拒".
+  function syncEffortOptions() {
+    const sel = $('effort');
+    if (!sel) return;
+    const model = ($('model') && $('model').value.trim()) || '';
+    const levels = typeof rcaReasoningLevels === 'function'
+      ? rcaReasoningLevels(model) : [];
+    const previous = sel.value;
+    sel.innerHTML = '';
+    if (!levels.length) {
+      sel.disabled = true;
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = t('settings.effort.notSupported');
+      sel.appendChild(opt);
+      return;
+    }
+    sel.disabled = false;
+    for (const lv of levels) {
+      const opt = document.createElement('option');
+      opt.value = lv;
+      opt.textContent = lv === 'default' ? t('settings.effort.default') : lv;
+      sel.appendChild(opt);
+    }
+    if (levels.indexOf(previous) >= 0) sel.value = previous;
+  }
+
   function loadSettings() {
     $('endpoint').value = rcaStoreGet(RCA_STORE.endpoint, RCA_CONFIG.defaultEndpoint);
     $('model').value = rcaStoreGet(RCA_STORE.model, RCA_CONFIG.defaultModel);
     $('max-tokens').value = rcaStoreGet(RCA_STORE.maxTokens, String(RCA_CONFIG.defaultMaxTokens));
-    // REVIEW-2026-10-19: reasoning effort (MiniMax M3.1 family). Empty means
-    // "send nothing", which is the right default for every other model.
+    // REVIEW-2026-10-19: reasoning effort. The levels are the MODEL's, so the
+    // picker's options are rebuilt from the model name -- a provider that
+    // takes only some of the levels must not be offered the others.
     if ($('effort')) {
-      $('effort').value = rcaStoreGet(RCA_STORE.effort, RCA_CONFIG.defaultEffort);
+      syncEffortOptions();
+      const stored = rcaStoreGet(RCA_STORE.effort, RCA_CONFIG.defaultEffort);
+      const sel = $('effort');
+      if (stored) sel.value = stored;
+      if (sel.selectedIndex < 0) sel.selectedIndex = 0;
     }
     $('proxy').value = rcaStoreGet(RCA_STORE.proxy, '');
     $('conn-mode').value = rcaStoreGet(RCA_STORE.mode, 'auto');
@@ -2584,6 +2623,18 @@ cards.forEach((c, i) => {
       inp.addEventListener('input', sync);
       sync();
     });
+
+    // REVIEW-2026-10-19: the reasoning levels follow the MODEL, so typing a
+    // different model name has to rebuild the picker's options. Without this
+    // the picker kept offering the previous model's levels -- a control the
+    // new provider may reject outright.
+    const modelInput = $('model');
+    if (modelInput) {
+      modelInput.addEventListener('input', () => {
+        syncFooterModel();
+        syncEffortOptions();
+      });
+    }
 
     // Phase C: iOS-style toggle for remember-key. The aria-checked attribute
     // is the source of truth — saveSettings() reads it back directly.

@@ -388,7 +388,8 @@ function loadAllScripts(ctx) {
     // These are plain `const`/`function` declarations that vm doesn't expose
     // on the context automatically.
     const exports = {
-      'js/config.js': ['RCA_CONFIG', 'RCA_STORE', 'rcaStoreGet', 'rcaStoreSet', 'rcaClampMaxTokens'],
+      'js/config.js': ['RCA_CONFIG', 'RCA_STORE', 'rcaStoreGet', 'rcaStoreSet', 'rcaClampMaxTokens',
+                       'rcaReasoningProfile', 'rcaReasoningLevels', 'rcaReasoningWireValue'],
       'js/i18n.js': ['RCA_I18N', 'rcaSetLang', 'rcaApplyI18n', 't'],
       'js/json-utils.js': ['safeJsonLoads', 'extractBalancedJsonObject'], // truncation-repair fixture test uses safeJsonLoads
       'js/aggregate.js': ['rcaMergeResults', 'RCA_DEFAULT_KEYMAP', 'RCA_COLUMNAR_KEYMAP', 'RCA_ZONATION_KEYMAP'],
@@ -5255,11 +5256,80 @@ trackAsync('effort-unknown-is-dropped', test_effort_unknown_is_dropped());
 
 function test_effort_is_never_sent_as_budget_tokens() {
   return _directBodyWithEffort('low').then((body) => {
+    // The Anthropic-compatible shape IS `thinking: {type: adaptive}` PLUS
+    // `output_config: {effort}` -- the `thinking` block is not decoration,
+    // because `thinking.type=enabled` without an integer `budget_tokens` is
+    // what OpenRouter's Messages API rejects. What must never appear is a
+    // `budget_tokens`.
     check('effort-never-uses-thinking-budget-tokens',
-      !!body && body.thinking === undefined, body && body.thinking);
+      !!body && !(body.thinking && body.thinking.budget_tokens),
+      body && body.thinking);
+    check('effort-uses-the-adaptive-marker',
+      !!body && body.thinking && body.thinking.type === 'adaptive',
+      body && body.thinking);
   });
 }
 trackAsync('effort-is-never-budget-tokens', test_effort_is_never_sent_as_budget_tokens());
+
+// ---- the reasoning catalogue (mirror of rca_core/llm.py) -----------------
+//
+// The catalogue is a MAP, not a list: cc-switch's shape
+// (src/config/piThinkingProfiles.ts). It can say that a provider takes only
+// SOME of the levels, and that a level's name on the wire differs from its
+// name in the UI -- neither of which a per-model list can express.
+function test_reasoning_levels_follow_the_model() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const cfg = ctx.RCA_CONFIG;
+  const levels = ctx.rcaReasoningLevels;
+
+  check('m31-offers-its-own-levels',
+    JSON.stringify(levels('MiniMax-M3.1-Flash')) ===
+    JSON.stringify(['default', 'low', 'medium', 'high', 'xhigh', 'max']),
+    levels('MiniMax-M3.1-Flash'));
+
+  check('m3-offers-a-switch',
+    JSON.stringify(levels('MiniMax-M3')) ===
+    JSON.stringify(['default', 'off', 'on']),
+    levels('MiniMax-M3'));
+
+  check('an-unknown-model-offers-nothing',
+    levels('gpt-4o').length === 0, levels('gpt-4o'));
+
+  check('the-lookup-is-case-tolerant',
+    levels('minimax-m3.1-flash').length === 6, levels('minimax-m3.1-flash'));
+
+  check('the-universal-set-is-offered-in-order',
+    cfg.reasoningLevels.indexOf('default') === 0 &&
+    cfg.reasoningLevels.indexOf('low') < cfg.reasoningLevels.indexOf('high'),
+    cfg.reasoningLevels);
+}
+
+function test_reasoning_wire_value_is_the_mapped_one() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const wire = ctx.rcaReasoningWireValue;
+
+  check('the-wire-value-matches-the-level',
+    wire('MiniMax-M3.1-Flash', 'xhigh') === 'xhigh',
+    wire('MiniMax-M3.1-Flash', 'xhigh'));
+
+  // "default" is offered but sends nothing.
+  check('default-sends-nothing',
+    wire('MiniMax-M3.1-Flash', 'default') === '',
+    wire('MiniMax-M3.1-Flash', 'default'));
+
+  // A level the provider does not take has no wire value.
+  check('an-unsupported-level-has-no-wire-value',
+    wire('MiniMax-M3.1-Flash', 'off') === null,
+    wire('MiniMax-M3.1-Flash', 'off'));
+
+  check('an-unknown-model-has-no-wire-value',
+    wire('gpt-4o', 'low') === null, wire('gpt-4o', 'low'));
+}
+
+test_reasoning_levels_follow_the_model();
+test_reasoning_wire_value_is_the_mapped_one();
 
 // The classification round-trip is the SAME model with a 500-token budget --
 // which the thinking of an M3.1 at effort=max would eat completely, leaving
