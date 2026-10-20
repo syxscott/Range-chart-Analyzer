@@ -346,6 +346,358 @@ def _reasoning_request_patch(provider: "LlmProvider",
 
 
 # ---------------------------------------------------------------------------
+# Model metadata
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ModelMetadata:
+    """What a model can do, so the GUI can say it instead of guessing.
+
+    cc-switch fills a model's metadata in when it is picked
+    (``modelMetadataFill``) and shows the context window next to the model
+    field (``GptContextWindowHint``). It matters here for a measurable
+    reason: MiniMax-M3.1-Flash answers a larger ``max_tokens`` with
+    ``does not support max tokens > 524288``, and a user who types 1000000
+    gets a 400 instead of a clear limit. The ceiling belongs on screen.
+    """
+
+    #: The largest ``max_tokens`` the model accepts.
+    max_output: int = 0
+    #: The model's context window, in tokens.
+    context_window: int = 0
+    #: A short, human note.
+    note: str = ""
+
+
+#: Per-model metadata. The values are sourced, not guessed:
+#:
+#: * ``max_output`` for M3.1-Flash is 524288 -- MEASURED: the endpoint
+#:   rejects a larger value with "does not support max tokens > 524288
+#:   (2013)".
+#: * the context windows are the vendor's published figures, the same ones
+#:   cc-switch's catalogue carries.
+MODEL_METADATA: dict[str, ModelMetadata] = {
+    "MiniMax-M3.1-Flash": ModelMetadata(
+        max_output=524288, context_window=1000000,
+        note="思考 token 计入 max_tokens；effort 越高越慢"),
+    "MiniMax-M3.1-Flash-Preview": ModelMetadata(
+        max_output=524288, context_window=1000000,
+        note="思考 token 计入 max_tokens；effort 越高越慢"),
+    "MiniMax-M3": ModelMetadata(
+        max_output=128000, context_window=512000,
+        note="思考可开关，无 effort 档位"),
+    "MiniMax-M2.7": ModelMetadata(max_output=128000, context_window=200000),
+    "MiniMax-M2.5": ModelMetadata(max_output=128000, context_window=200000),
+}
+
+
+def model_metadata_for(model: object) -> ModelMetadata | None:
+    """The metadata of ``model``, or ``None`` when it is not catalogued."""
+    if not isinstance(model, str):
+        return None
+    name = model.strip().lower()
+    if not name:
+        return None
+    if name in MODEL_METADATA:
+        return MODEL_METADATA[name]
+    for key, meta in MODEL_METADATA.items():
+        if name.startswith(key.lower()):
+            return meta
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Quota / balance
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class QuotaTier:
+    """One window of a plan's quota (a 5-hour bucket, a weekly bucket)."""
+
+    #: ``"five_hour"`` / ``"weekly_limit"`` -- the tiers cc-switch shows.
+    name: str
+    #: How MUCH of the window is used, in percent (0-100).
+    used_percent: float
+    #: When the window resets, in epoch milliseconds.
+    resets_at: Optional[int] = None
+    #: For a BALANCE account: the amount left, the total, and the unit.
+    remaining: Optional[float] = None
+    total: Optional[float] = None
+    used: Optional[float] = None
+    unit: str = "%"
+
+
+@dataclass(frozen=True)
+class QuotaResult:
+    """The outcome of one quota query.
+
+    ``ok`` distinguishes a DETERMINISTIC failure (no plan, bad key, unknown
+    provider) from a transient one, the way cc-switch's two error channels do:
+    the first is shown with its reason, the second is retried.
+    """
+
+    ok: bool
+    tiers: list[QuotaTier] = field(default_factory=list)
+    error: str = ""
+    #: Epoch milliseconds of the query.
+    queried_at: int = 0
+    #: The provider's own words, when it had any (a plan name, a level).
+    detail: str = ""
+
+
+#: MiniMax's programming-plan quota endpoint. The route and the response
+#: shape were confirmed against our own Token Plan key (2026-10-20): HTTP 200
+#: with ``model_remains`` and a ``base_resp`` status.
+_MINIMAX_CODING_PLAN_URL = (
+    "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains")
+
+
+def _parse_minimax_plan_tiers(payload: dict[str, Any]) -> list[QuotaTier]:
+    """MiniMax's plan response -> quota tiers.
+
+    MEASURED shape (our own key, 2026-10-20)::
+
+        {"model_remains": [{"model_name": "general",
+                             "current_interval_remaining_percent": 99,
+                             "current_interval_status": 1,
+                             "current_weekly_status": 1,
+                             "current_weekly_remaining_percent": 82,
+                             "end_time": 1792479600000,
+                             "weekly_end_time": 1792944000000}, ...],
+         "base_resp": {"status_code": 0, "status_msg": "success"}}
+
+    Only the ``general`` model is the programming plan; ``video`` and the
+    rest are not, so they are skipped. The weekly bucket exists only when
+    ``current_weekly_status == 1`` -- on a plan without a weekly limit the
+    field is 3 and the remaining percent is a constant 100, which would
+    render a fake "0% used" bucket.
+    """
+    tiers: list[QuotaTier] = []
+    items = payload.get("model_remains")
+    if not isinstance(items, list):
+        return tiers
+    item = next((x for x in items
+                 if isinstance(x, dict) and x.get("model_name") == "general"),
+                None)
+    if item is None:
+        return tiers
+    remaining = _as_float(item.get("current_interval_remaining_percent"))
+    if remaining is not None:
+        tiers.append(QuotaTier(
+            name="five_hour",
+            used_percent=100.0 - remaining,
+            resets_at=_as_int(item.get("end_time")),
+        ))
+    if item.get("current_weekly_status") == 1:
+        weekly = _as_float(item.get("current_weekly_remaining_percent"))
+        if weekly is not None:
+            tiers.append(QuotaTier(
+                name="weekly_limit",
+                used_percent=100.0 - weekly,
+                resets_at=_as_int(item.get("weekly_end_time")),
+            ))
+    return tiers
+
+
+def _as_float(value: Any) -> Optional[float]:
+    """A number that may have arrived as a string."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _as_int(value: Any) -> Optional[int]:
+    """A number that may have arrived as a string."""
+    f = _as_float(value)
+    return int(f) if f is not None else None
+
+
+def _quota_get_json(url: str, headers: dict[str, str],
+                    timeout_sec: int) -> tuple[Optional[dict], Optional[int], str]:
+    """GET a quota endpoint. Returns (payload, status, error).
+
+    The error string distinguishes the two failure kinds cc-switch separates:
+    a transport failure (timeout, refused) is TRANSIENT and worth retrying,
+    and anything that came back with a status is DETERMINISTIC.
+    """
+    req = urllib.request.Request(url, method="GET", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            raw = resp.read(200000)
+            status = resp.status
+    except urllib.error.HTTPError as e:
+        body = b""
+        try:
+            body = e.read(4000)
+        except Exception:
+            pass
+        return None, e.code, ("HTTP %d: %s" % (e.code, _decode_err_body(body)[:300]))
+    except TimeoutError as e:
+        return None, None, "timeout: %s" % e
+    except urllib.error.URLError as e:
+        reason = getattr(e, "reason", None)
+        return None, None, ("network: %s" % (reason or e))
+    except Exception as e:
+        return None, None, "%s: %s" % (type(e).__name__, e)
+    try:
+        payload = json.loads(raw.decode("utf-8-sig"))
+    except Exception as e:
+        return None, status, "could not parse the response: %s" % e
+    if not isinstance(payload, dict):
+        return None, status, "the response was not a JSON object"
+    return payload, status, ""
+
+
+def query_coding_plan_quota(provider: LlmProvider,
+                            timeout_sec: int = 15) -> QuotaResult:
+    """The plan / balance of a provider, in the tiers the GUI shows.
+
+    MiniMax's programming plan is the one this product's users actually
+    have, and its route was confirmed against a live Token Plan key
+    (2026-10-20). The account-balance providers below are the ones with a
+    public route and a documented shape.
+
+    A provider with no known quota route returns ``ok=False`` with a
+    reason -- that is a DETERMINISTIC answer ("this provider does not
+    publish a quota"), not a failure to try again.
+    """
+    now = int(time.time() * 1000)
+    if provider is None or not (provider.api_key or "").strip():
+        return QuotaResult(ok=False, error="no API key", queried_at=now)
+    endpoint = (provider.endpoint or "").lower()
+    key = provider.api_key
+
+    if "minimaxi.com" in endpoint or "minimax.io" in endpoint:
+        host = "api.minimax.io" if "minimax.io" in endpoint else "api.minimaxi.com"
+        url = "https://%s/v1/api/openplatform/coding_plan/remains" % host
+        payload, status, err = _quota_get_json(
+            url, {"Authorization": "Bearer %s" % key,
+                  "Accept": "application/json"}, timeout_sec)
+        if payload is None:
+            if status in (401, 403):
+                return QuotaResult(ok=False, tiers=[], error=err or "auth",
+                                   queried_at=now)
+            return QuotaResult(ok=False, error=err or "query failed",
+                               queried_at=now)
+        base = payload.get("base_resp")
+        if isinstance(base, dict):
+            code = base.get("status_code")
+            if code not in (None, 0):
+                return QuotaResult(
+                    ok=False,
+                    error="API error (%s): %s" % (code, base.get("status_msg") or ""),
+                    queried_at=now)
+        return QuotaResult(ok=True,
+                           tiers=_parse_minimax_plan_tiers(payload),
+                           queried_at=now)
+
+    if "openrouter.ai" in endpoint:
+        payload, status, err = _quota_get_json(
+            "https://openrouter.ai/api/v1/credits",
+            {"Authorization": "Bearer %s" % key, "Accept": "application/json"},
+            timeout_sec)
+        if payload is None:
+            return QuotaResult(ok=False, error=err or "query failed",
+                               queried_at=now)
+        data = payload.get("data") if isinstance(payload.get("data"), dict) \
+            else payload
+        credits = _as_float(data.get("total_credits"))
+        usage = _as_float(data.get("total_usage"))
+        if credits is None or usage is None:
+            return QuotaResult(ok=False, error="the response had no credit "
+                                               "amounts", queried_at=now)
+        return QuotaResult(ok=True, queried_at=now, tiers=[QuotaTier(
+            name="balance", used_percent=0.0, remaining=credits - usage,
+            total=credits, used=usage, unit="USD")])
+
+    if "api.deepseek.com" in endpoint:
+        payload, status, err = _quota_get_json(
+            "https://api.deepseek.com/user/balance",
+            {"Authorization": "Bearer %s" % key, "Accept": "application/json"},
+            timeout_sec)
+        if payload is None:
+            return QuotaResult(ok=False, error=err or "query failed",
+                               queried_at=now)
+        tiers: list[QuotaTier] = []
+        infos = payload.get("balance_infos")
+        if isinstance(infos, list):
+            for info in infos:
+                if not isinstance(info, dict):
+                    continue
+                total = _as_float(info.get("total_balance"))
+                if total is None:
+                    continue
+                tiers.append(QuotaTier(
+                    name=str(info.get("currency") or "CNY"),
+                    used_percent=0.0, remaining=total, unit="CNY"))
+            # An account can list a CNY and a USD wallet; the empty one is
+            # noise, and cc-switch drops it for the same reason.
+            if any(t.remaining is not None and t.remaining > 0 for t in tiers):
+                tiers = [t for t in tiers
+                         if t.remaining is None or t.remaining > 0]
+        return QuotaResult(ok=True, tiers=tiers, queried_at=now)
+
+    return QuotaResult(ok=False, error="this provider publishes no quota",
+                       queried_at=now)
+
+
+def measure_endpoint_latency(provider: LlmProvider,
+                             timeout_sec: int = 10) -> tuple[Optional[int],
+                                                            Optional[int], str]:
+    """How long the endpoint takes to answer, in milliseconds.
+
+    Returns ``(latency_ms, status, error)``. The latency is measured even
+    when the answer is an error: a 404 from a gateway that does not list
+    models still says the endpoint is alive and how far away it is, which is
+    what the speed test is for. Only a transport failure has no latency.
+    """
+    if provider is None or not (provider.endpoint or "").strip():
+        return None, None, "no endpoint"
+    # A cheap GET: the model listing, which every OpenAI-compatible gateway
+    # serves and which costs nothing. The latency is what matters here --
+    # whether it answers 200 or 404 says the endpoint is alive either way.
+    if getattr(provider, "full_url", False):
+        target = (provider.endpoint or "").strip()
+    elif provider.api_format == ApiFormat.GEMINI:
+        target = _gemini_path(_api_base(provider.endpoint), "/v1beta/models")
+    else:
+        target = _endpoint_path(_api_base(provider.endpoint), "/v1/models")
+    headers = {"Accept": "application/json"}
+    if (provider.api_key or "").strip():
+        if provider.api_format == ApiFormat.ANTHROPIC:
+            headers["x-api-key"] = provider.api_key
+            headers["anthropic-version"] = "2023-06-01"
+        else:
+            headers["Authorization"] = "Bearer %s" % provider.api_key
+    headers.update(provider.extra_headers or {})
+    req = urllib.request.Request(target, method="GET", headers=headers)
+    t0 = time.perf_counter()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            resp.read(2048)
+            dt = int((time.perf_counter() - t0) * 1000)
+            return dt, resp.status, ""
+    except urllib.error.HTTPError as e:
+        dt = int((time.perf_counter() - t0) * 1000)
+        try:
+            e.read(2048)
+        except Exception:
+            pass
+        return dt, e.code, "HTTP %d" % e.code
+    except Exception as e:
+        return None, None, "%s: %s" % (type(e).__name__, e)
+
+
+# ---------------------------------------------------------------------------
 # Provider dataclass
 # ---------------------------------------------------------------------------
 
@@ -414,6 +766,30 @@ class LlmProvider:
     # GUI (the badge displays ✗, ✗2, ✗3+) so any value above 3 is fine
     # here but not very informative.
     consecutive_failures: int = 0
+
+    # ---- REVIEW-2026-10-20: the cc-switch borrowings ----------------------
+    #
+    # A free-text note on the provider: what the account is for, which plan
+    # it is on, when it expires. cc-switch shows it on the card and makes it
+    # searchable, which is what makes a list of five relay accounts usable
+    # instead of a list of five opaque names.
+    notes: str = ""
+
+    # Extra endpoints for THIS provider, offered by the speed test. The
+    # built-in endpoint stays the first candidate; the rest are alternates
+    # the user measured and kept.
+    custom_endpoints: list[str] = field(default_factory=list)
+
+    # The endpoint is a FULL request URL, used verbatim, instead of a prefix
+    # that the canonical ``/v1/...`` path is appended to. Only gateways with
+    # a non-standard path need it -- cc-switch gates it behind the same
+    # warning.
+    full_url: bool = False
+
+    # The profile this provider belongs to. A profile is a named GROUP of
+    # providers ("work", "personal"), and switching a profile switches the
+    # active provider and shows only that group's cards.
+    profile: str = ""
 
     # AUDIT-2026-09-27 P1: the ``fer:v1:``/``obf:v1:`` envelope of a key this
     # process could NOT decrypt, kept verbatim so ``to_dict`` can write it back
@@ -1846,6 +2222,22 @@ def _gemini_path(base: str, resource: str) -> str:
     return base + resource
 
 
+def _request_target(provider: LlmProvider, resource: str) -> str:
+    """The URL a request goes to, honouring the provider's ``full_url`` flag.
+
+    By default the endpoint is a PREFIX and the canonical path is appended
+    to it, which is what every vendor's base URL is. A gateway with a
+    non-standard layout (``/custom/path/messages``) cannot be reached that
+    way, so a provider may declare its endpoint to be a FULL request URL and
+    have it used verbatim. cc-switch gates the same thing behind the same
+    warning, for the same reason.
+    """
+    endpoint = (provider.endpoint or "").strip()
+    if getattr(provider, "full_url", False) and endpoint:
+        return endpoint
+    return _endpoint_path(_api_base(endpoint), resource)
+
+
 def _call_anthropic(
     *,
     provider: LlmProvider,
@@ -1874,7 +2266,7 @@ def _call_anthropic(
         return None, False, None, f"endpoint rejected by SSRF guard: {why_ep}", None
     if not image_b64:
         return None, False, None, "", None
-    target = _endpoint_path(_api_base(provider.endpoint), "/v1/messages")
+    target = _request_target(provider, "/v1/messages")
     body: dict[str, Any] = {
         "model": provider.model,
         "max_tokens": max_tokens or 4000,
@@ -1949,7 +2341,7 @@ def _call_openai(
         return None, False, None, f"endpoint rejected by SSRF guard: {why_ep}", None
     if not image_b64:
         return None, False, None, "", None
-    target = _endpoint_path(_api_base(provider.endpoint), "/v1/chat/completions")
+    target = _request_target(provider, "/v1/chat/completions")
     # OpenAI reasoning models (o1/o3/o4-mini) reject `max_tokens` and require
     # `max_completion_tokens`; sending the legacy name 400s the request.
     # They ALSO reject `role:system` (must be `developer` or merged into the
@@ -2119,7 +2511,11 @@ def _call_gemini(
     # (and any future model id that contains a reserved char) don't break
     # the URL parser or accidentally introduce an extra path segment.
     safe_model = urllib.parse.quote(model, safe="")
-    target = _gemini_path(base, f"/v1beta/models/{safe_model}:generateContent")
+    if getattr(provider, "full_url", False):
+        # A FULL-URL endpoint is the request URL, verbatim.
+        target = (provider.endpoint or "").strip()
+    else:
+        target = _gemini_path(base, f"/v1beta/models/{safe_model}:generateContent")
     body: dict[str, Any] = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [
@@ -2817,6 +3213,10 @@ def list_models(provider: LlmProvider, timeout_sec: int = 15) -> list[str]:
     except Exception:
         pass
     fmt = provider.api_format
+    if getattr(provider, "full_url", False):
+        # A FULL-URL endpoint has no listing route: it IS the request URL.
+        # Looking for ``/v1/models`` under it would be a guess.
+        return []
     base = _api_base(provider.endpoint)
     if fmt == ApiFormat.GEMINI:
         target = _gemini_path(base, "/v1beta/models")
@@ -2968,7 +3368,7 @@ def _probe_minimal_generate(
         """Returns (payload, status, err_body, latency_ms)."""
         t0 = _now_ms()
         if fmt == ApiFormat.OPENAI:
-            target = _endpoint_path(_api_base(provider.endpoint), "/v1/chat/completions")
+            target = _request_target(provider, "/v1/chat/completions")
             body = {"model": model, "max_tokens": PROBE_MAX_TOKENS,
                     "messages": [{"role": "user", "content": "hi"}]}
             headers = {"Authorization": f"Bearer {provider.api_key}",
@@ -2987,7 +3387,7 @@ def _probe_minimal_generate(
                        "x-goog-api-key": provider.api_key,
                        "x-api-key": provider.api_key}
         else:  # ANTHROPIC
-            target = _endpoint_path(_api_base(provider.endpoint), "/v1/messages")
+            target = _request_target(provider, "/v1/messages")
             body = {"model": model, "max_tokens": PROBE_MAX_TOKENS,
                     "messages": [{"role": "user", "content": "hi"}]}
             headers = {"x-api-key": provider.api_key,
