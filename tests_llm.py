@@ -11,6 +11,24 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import rca_core.llm as L  # noqa: E402
 
+# REVIEW-2026-10-20: the endpoint the request tests use.
+#
+# It used to be "https://example.com", and the SSRF guard RESOLVES the
+# host before it will let a request out. On a machine whose DNS is
+# intercepted -- a proxy, a corporate resolver, most Chinese ISPs --
+# "example.com" resolves to 127.0.0.1, the guard rejects it as private,
+# and the request never reaches the fake urlopen the test installed. The
+# test then failed on "the model did not answer" while the code under
+# test was perfectly fine; CI never saw it because GitHub's resolver
+# returns the real public address.
+#
+# A literal PUBLIC address removes the DNS lookup from the equation, so
+# the test asserts what it means to assert -- the dispatch: the headers,
+# the path and the body -- and nothing about the machine's resolver. The
+# guard's own behaviour against private hosts is covered by
+# tests/test_ssrf.py and tests/test_ssrf_shared.py.
+_TEST_ENDPOINT = "https://93.184.216.34"
+
 _pass = 0
 _fail = 0
 
@@ -160,7 +178,7 @@ for fmt, label in [
     (L.ApiFormat.GEMINI, "dispatch-gemini"),
 ]:
     provider = L.LlmProvider(
-        name="X", api_format=fmt, endpoint="https://example.com",
+        name="X", api_format=fmt, endpoint=_TEST_ENDPOINT,
         api_key="key", model="m",
     )
     captured, fake_urlopen = make_capture_post(fmt.value)
@@ -214,7 +232,7 @@ class FakeMaxtokResponse:
 
 
 for fmt in (L.ApiFormat.ANTHROPIC, L.ApiFormat.OPENAI, L.ApiFormat.GEMINI):
-    provider = L.LlmProvider(name="X", api_format=fmt, endpoint="https://example.com",
+    provider = L.LlmProvider(name="X", api_format=fmt, endpoint=_TEST_ENDPOINT,
                              api_key="key", model="m")
     import urllib.request as _ur
     orig = _ur.urlopen
@@ -245,7 +263,7 @@ _ur.urlopen = raise_http_error
 try:
     raw, truncated, status, err_body, usage = L.call_llm_api(
         provider=L.LlmProvider(name="X", api_format=L.ApiFormat.ANTHROPIC,
-                               endpoint="https://example.com", api_key="k", model="m"),
+                               endpoint=_TEST_ENDPOINT, api_key="k", model="m"),
         system_prompt="s", image_b64="QUFB", media_type="image/png", user_text="hi",
         max_tokens=100,
     )
