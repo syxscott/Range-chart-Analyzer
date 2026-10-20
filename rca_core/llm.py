@@ -377,16 +377,22 @@ class ModelMetadata:
 #:   (2013)".
 #: * the context windows are the vendor's published figures, the same ones
 #:   cc-switch's catalogue carries.
+#:
+#: The ``note`` is an i18n KEY, not a sentence: the GUI has three
+#: languages and a Chinese note in an English interface is a defect. The
+#: keys live in the i18n table as ``model.noteThinking`` and
+#: ``model.noteThinkingSwitch``; the GUI falls back to the raw string when
+#: a key is missing, so a catalogue entry is never silently blank.
 MODEL_METADATA: dict[str, ModelMetadata] = {
     "MiniMax-M3.1-Flash": ModelMetadata(
         max_output=524288, context_window=1000000,
-        note="思考 token 计入 max_tokens；effort 越高越慢"),
+        note="model.noteThinking"),
     "MiniMax-M3.1-Flash-Preview": ModelMetadata(
         max_output=524288, context_window=1000000,
-        note="思考 token 计入 max_tokens；effort 越高越慢"),
+        note="model.noteThinking"),
     "MiniMax-M3": ModelMetadata(
         max_output=128000, context_window=512000,
-        note="思考可开关，无 effort 档位"),
+        note="model.noteThinkingSwitch"),
     "MiniMax-M2.7": ModelMetadata(max_output=128000, context_window=200000),
     "MiniMax-M2.5": ModelMetadata(max_output=128000, context_window=200000),
 }
@@ -790,6 +796,15 @@ class LlmProvider:
     # providers ("work", "personal"), and switching a profile switches the
     # active provider and shows only that group's cards.
     profile: str = ""
+
+    # A custom glyph for the provider's card icon, overriding the two-letter
+    # abbreviation derived from the name. cc-switch lets the user upload a
+    # provider logo; a desktop app with no asset pipeline takes the same
+    # idea as ONE GLYPH, which needs no file, no path portability question
+    # and no image decoder -- and is what a user with five relay accounts
+    # actually needs (a coloured emoji, not five grey "MM" tiles).
+    # Empty means "derive it from the name", which is the default.
+    icon: str = ""
 
     # AUDIT-2026-09-27 P1: the ``fer:v1:``/``obf:v1:`` envelope of a key this
     # process could NOT decrypt, kept verbatim so ``to_dict`` can write it back

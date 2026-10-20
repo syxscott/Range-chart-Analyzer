@@ -25,7 +25,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QDrag, QKeyEvent, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
+    QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QLineEdit, QMenu,
 )
 
@@ -85,18 +85,44 @@ def _icon_char(name: str) -> str:
     return name[:2].upper()
 
 
+def _store_signature() -> str:
+    """A digest of the providers file, or "" when it does not exist.
+
+    REVIEW-2026-10-20 (cc-switch's external-change guard): the providers
+    file is a plain JSON file in the user's profile, so a text editor, a
+    sync client or a second copy of the app can change it while this one
+    has a modal open. Whichever version is written last wins, and the
+    loser is silent. A digest taken when the dialog opened, compared with
+    the one on disk when it closes, is what turns that silent loss into a
+    question the user can answer.
+    """
+    import hashlib
+    try:
+        with open(ProviderStore().path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return ""
+
+
 # ---------------------------------------------------------------------------
 # Per-provider icon tile (colored rounded rectangle + glyph)
 # ---------------------------------------------------------------------------
 class ProviderIconTile(QLabel):
-    def __init__(self, name, parent=None):
-        super().__init__(_icon_char(name), parent)
+    def __init__(self, name, parent=None, icon=""):
+        super().__init__(icon.strip() if icon and icon.strip()
+                         else _icon_char(name), parent)
         self.setFixedSize(40, 40)
         self.setAlignment(Qt.AlignCenter)
         self.setObjectName("provIconTile")
         h = abs(hash(name or "")) % 360
+        # REVIEW-2026-10-20 (cc-switch's custom provider logo): a custom
+        # glyph gets a NEUTRAL tile, because the colour is derived from the
+        # name -- and the whole point of a custom glyph is to tell two
+        # same-named relays apart, which a name-keyed colour would undo.
+        bg = "hsl(220,14%,46%)" if (icon and icon.strip()) \
+            else f"hsl({h},55%,47%)"
         self.setStyleSheet(
-            f"#provIconTile{{background-color:hsl({h},55%,47%);"
+            f"#provIconTile{{background-color:{bg};"
             f"color:#fff;border-radius:9px;"
             f"font:650 13px 'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif}}"
         )
@@ -188,7 +214,9 @@ class ProviderCard(CardWidget):
         # Use min+max instead of fixed height so the card can grow if the provider
         # name is long (font scaling, translations) without clipping content.
         self.setMinimumHeight(72)
-        self.setMaximumHeight(120)
+        # REVIEW-2026-10-20: the card grew two rows (the provider's note and
+        # the plan's quota chip), so the old 120 px ceiling clipped them.
+        self.setMaximumHeight(160)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.setAttribute(Qt.WA_Hover, True)
         # AUDIT-2026-09-27 [item B-13] (B-13): the action row was revealed by
@@ -206,7 +234,9 @@ class ProviderCard(CardWidget):
         self.drag = DragHandle(self, self)
         row.addWidget(self.drag)
 
-        row.addWidget(ProviderIconTile(provider.name))
+        self.icon_tile = ProviderIconTile(
+            provider.name, icon=getattr(provider, "icon", "") or "")
+        row.addWidget(self.icon_tile)
 
         mid = QVBoxLayout()
         mid.setSpacing(1)
@@ -237,6 +267,29 @@ class ProviderCard(CardWidget):
         sub = provider.endpoint or "(" + translate("provider.noEndpoint") + ")"
         self.lbl_sub = CaptionLabel(sub)
         mid.addWidget(self.lbl_sub)
+
+        # REVIEW-2026-10-20 (cc-switch): the provider's own note, and the
+        # plan's remaining quota, on the card itself.
+        #
+        # The note is what turns five relay accounts from five opaque names
+        # into five identifiable ones -- "monthly, expires in March" -- and
+        # cc-switch shows it in the same place.
+        #
+        # The quota chip is the same idea as cc-switch's UsageFooter: the
+        # number that decides whether the next extraction will even start.
+        # It is filled in ASYNCHRONOUSLY (the page's quota worker), because
+        # the query is a network round trip and the card is built on the UI
+        # thread.
+        self.lbl_note = CaptionLabel("")
+        self.lbl_note.setVisible(False)
+        mid.addWidget(self.lbl_note)
+        # The note belongs to the CARD, so the card reads it: a caller that
+        # forgets to set it would show a card with a saved note and no
+        # trace of it, and the user would retype what was already there.
+        self.set_note(getattr(provider, "notes", "") or "")
+        self.lbl_quota = CaptionLabel("")
+        self.lbl_quota.setVisible(False)
+        mid.addWidget(self.lbl_quota)
         row.addLayout(mid, 1)
 
         # Action buttons — hidden until the card is hovered OR focused
@@ -343,6 +396,52 @@ class ProviderCard(CardWidget):
         """Update the health badge from connection test result."""
         self._health_failures = consecutive_failures
         self._health_badge.set_failures(consecutive_failures)
+
+    def set_note(self, note: str) -> None:
+        """Show the provider's own note (cc-switch shows it on the card)."""
+        note = (note or "").strip()
+        self.lbl_note.setText(note)
+        self.lbl_note.setVisible(bool(note))
+
+    def set_quota(self, result) -> None:
+        """Show the plan's remaining quota, or say that it is unavailable.
+
+        The two windows are shown separately because they are separately
+        binding: MiniMax's Token Plan has a 5-hour bucket that refills
+        quickly and a weekly bucket that does not, and "1% left" against
+        the wrong one is either panic or false comfort.
+        """
+        from rca_core.llm import QuotaResult
+
+        if not isinstance(result, QuotaResult) or not result.ok:
+            # A provider that publishes no quota is NOT an error — there is
+            # nothing to say, so nothing is said. Only the tiers we can
+            # actually read are rendered.
+            self.lbl_quota.setVisible(False)
+            return
+        bits = []
+        for tier in result.tiers:
+            if tier.name == "five_hour":
+                bits.append(self._t("provider.quota5h").format(
+                    pct=self._pct_left(tier)))
+            elif tier.name == "weekly_limit":
+                bits.append(self._t("provider.quotaWeekly").format(
+                    pct=self._pct_left(tier)))
+        if not bits:
+            self.lbl_quota.setVisible(False)
+            return
+        self.lbl_quota.setText(" · ".join(bits))
+        self.lbl_quota.setVisible(True)
+
+    @staticmethod
+    def _pct_left(tier) -> int:
+        """How much of the window is LEFT, as a whole percent.
+
+        The API reports the USED share, and a chip that says "1% used" when
+        the user means "1% left" is a sign error with real consequences.
+        """
+        used = float(getattr(tier, "used_percent", 0.0) or 0.0)
+        return int(round(max(0.0, 100.0 - used)))
 
     def _actions_should_show(self) -> bool:
         """Visible while the mouse is over the card OR the keyboard focus is
@@ -526,6 +625,290 @@ class ProviderDragList(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# External-change conflict
+# ---------------------------------------------------------------------------
+
+
+class _ConflictDialog(QDialog):
+    """Ask what to do when the providers file changed underneath us.
+
+    Three answers, because there are three real outcomes and a two-button
+    dialog cannot express them:
+
+    * keep the file on disk and drop the edit in front of the user;
+    * overwrite the file with the edit;
+    * do nothing at all and leave the user to decide later.
+
+    The middle one is the dangerous one, which is why it is not the
+    default: the file on disk may hold a key the user pasted while this
+    dialog was open, and overwriting it silently would destroy a paid
+    credential.
+    """
+
+    KEEP_DISK = 1
+    OVERWRITE = 2
+    CANCEL = 0
+
+    def __init__(self, parent, translate):
+        super().__init__(parent)
+        self._t = translate
+        self.setWindowTitle(self._t("provider.conflictTitle"))
+        self.resize(460, 200)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(12)
+        msg = BodyLabel(self._t("provider.conflictHint"))
+        msg.setWordWrap(True)
+        lay.addWidget(msg)
+        row = QHBoxLayout()
+        btn_cancel = PushButton(self._t("wizard.cancel"))
+        btn_cancel.clicked.connect(self.reject)
+        btn_keep = PushButton(self._t("provider.conflictReload"))
+        btn_keep.clicked.connect(self._accept_keep)
+        btn_over = PrimaryPushButton(self._t("provider.conflictOverwrite"))
+        btn_over.clicked.connect(self._accept_overwrite)
+        row.addStretch(1)
+        row.addWidget(btn_cancel)
+        row.addWidget(btn_keep)
+        row.addWidget(btn_over)
+        lay.addLayout(row)
+        self._choice = self.CANCEL
+
+    def _accept_keep(self):
+        self._choice = self.KEEP_DISK
+        self.accept()
+
+    def _accept_overwrite(self):
+        self._choice = self.OVERWRITE
+        self.accept()
+
+    def choice(self) -> int:
+        return self._choice
+
+
+# ---------------------------------------------------------------------------
+# Endpoint speed test
+# ---------------------------------------------------------------------------
+
+
+class _EndpointSpeedDialog(QDialog):
+    """Measure the candidate endpoints and keep the alternates.
+
+    cc-switch's EndpointSpeedTest measures every candidate, colours the
+    latency (<300 ms green, 300-500 yellow, 500-800 orange, >=800 red),
+    can auto-select the fastest, and stores the custom endpoints on the
+    provider so the next run can use them.
+
+    The value here is lower than in cc-switch, and it is worth saying why:
+    what decides how long an extraction takes is the MODEL'S THINKING, not
+    the endpoint's round trip. What the round trip does tell you is whether
+    the endpoint is alive and how far away it is -- and with several relay
+    accounts, "which of them answers" is a real question.
+    """
+
+    def __init__(self, parent, endpoint="", custom=None, api_key="",
+                 api_format="anthropic", translate=None):
+        super().__init__(parent)
+        # The translator is taken from the parent when it has one and is
+        # passed in otherwise. Reaching into ``parent._t`` unconditionally
+        # made the dialog unusable with a None parent, which is exactly
+        # what a test wants to do.
+        self._t = translate or getattr(parent, "_t", None) or (lambda k: k)
+        self.setWindowTitle(self._t("wizard.speedTest"))
+        self.resize(560, 420)
+        self._rows: list[dict] = []
+        self._custom: list[str] = [u for u in (custom or []) if u]
+        self._selected: str = endpoint
+        self._api_key = api_key
+        self._api_format = api_format
+        # The in-flight measurement, if any. Kept so a second click on
+        # "run" does not start a second round of probes.
+        self._worker = None
+        seen = set()
+        for url in [endpoint] + self._custom:
+            if url and url not in seen:
+                seen.add(url)
+                self._rows.append({"url": url, "latency": None,
+                                   "status": None, "error": ""})
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(10)
+
+        self._auto = QCheckBox(self._t("wizard.speedAutoSelect"))
+        lay.addWidget(self._auto)
+        self._btn_run = PushButton(self._t("wizard.speedRun"))
+        self._btn_run.clicked.connect(self._run)
+        lay.addWidget(self._btn_run)
+
+        self._list = QWidget()
+        self._list_lay = QVBoxLayout(self._list)
+        self._list_lay.setContentsMargins(0, 0, 0, 0)
+        self._list_lay.setSpacing(4)
+        lay.addWidget(self._list)
+
+        add_row = QHBoxLayout()
+        self._ipt_new = LineEdit()
+        self._ipt_new.setPlaceholderText("https://")
+        btn_add = ToolButton(FIF.ADD)
+        btn_add.setFixedSize(28, 28)
+        btn_add.clicked.connect(self._add_endpoint)
+        add_row.addWidget(self._ipt_new)
+        add_row.addWidget(btn_add)
+        add_row.addStretch(1)
+        lay.addLayout(add_row)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        btn_cancel = PushButton(self._t("wizard.cancel"))
+        btn_cancel.clicked.connect(self.reject)
+        btn_ok = PrimaryPushButton(self._t("wizard.save"))
+        btn_ok.clicked.connect(self.accept)
+        buttons.addWidget(btn_cancel)
+        buttons.addWidget(btn_ok)
+        lay.addLayout(buttons)
+        self._rebuild()
+
+    # -- the list ----------------------------------------------------------
+    def _rebuild(self):
+        while self._list_lay.count():
+            item = self._list_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        for row in self._rows:
+            text = row["url"]
+            colour = ""
+            if row["latency"] is not None:
+                text += "  ·  %d ms" % row["latency"]
+                # cc-switch's thresholds: <300 ms green, 300-500 yellow,
+                # 500-800 orange, >=800 red. The number is the point; the
+                # colour is what makes a list of them scannable.
+                lat = row["latency"]
+                if lat < 300:
+                    colour = "#16a34a"
+                elif lat < 500:
+                    colour = "#ca8a04"
+                elif lat < 800:
+                    colour = "#ea580c"
+                else:
+                    colour = "#dc2626"
+            elif row["error"]:
+                text += "  ·  " + row["error"]
+                colour = "#dc2626"
+            btn = PushButton(text)
+            style = "text-align:left;padding-left:10px;"
+            if colour:
+                style += "color:%s;font-weight:600;" % colour
+            if row["url"] == self._selected:
+                style += "background:#eff6ff;border:1px solid #2563eb;"
+            btn.setStyleSheet(style)
+            btn.clicked.connect(lambda _=False, u=row["url"]: self._select(u))
+            self._list_lay.addWidget(btn)
+
+    def _select(self, url):
+        self._selected = url
+        self._rebuild()
+
+    def _add_endpoint(self):
+        url = self._ipt_new.text().strip().rstrip("/")
+        if not url:
+            return
+        if not url.lower().startswith(("http://", "https://")):
+            InfoBar.warning("", self._t("wizard.speedOnlyHttp"),
+                            parent=self, position=InfoBarPosition.TOP)
+            return
+        if any(r["url"] == url for r in self._rows):
+            InfoBar.warning("", self._t("wizard.speedDuplicate"),
+                            parent=self, position=InfoBarPosition.TOP)
+            return
+        self._rows.append({"url": url, "latency": None, "status": None,
+                            "error": ""})
+        if url not in self._custom:
+            self._custom.append(url)
+        self._ipt_new.clear()
+        self._rebuild()
+
+    # -- the measurement ----------------------------------------------------
+    def _run(self):
+        """Measure every candidate endpoint, in the background.
+
+        The measurement is a NETWORK round trip with a 12 s timeout per
+        endpoint, so it cannot run on the GUI thread: with three
+        candidates the dialog would be frozen for half a minute, and a
+        frozen dialog is a dialog the user closes and never uses.
+        """
+        if self._worker is not None and self._worker.isRunning():
+            return
+        from PySide6.QtCore import QThread
+        from rca_core.llm import ApiFormat, LlmProvider
+
+        fmt = ApiFormat.ANTHROPIC
+        try:
+            fmt = ApiFormat(self._api_format)
+        except ValueError:
+            pass
+        urls = [r["url"] for r in self._rows]
+
+        class _SpeedWorker(QThread):
+            measured = Signal(object, object, object, object)  # url, lat, status, err
+
+            def __init__(self, urls, api_key, api_format, parent=None):
+                super().__init__(parent)
+                self._urls = urls
+                self._key = api_key
+                self._fmt = api_format
+
+            def run(self):
+                from rca_core.llm import measure_endpoint_latency
+                for url in self._urls:
+                    prov = LlmProvider(name="probe", api_format=self._fmt,
+                                       endpoint=url, api_key=self._key,
+                                       model="probe")
+                    lat, status, err = measure_endpoint_latency(
+                        prov, timeout_sec=12)
+                    self.measured.emit(url, lat, status, err)
+
+        # The worker is parented to the APPLICATION, not to the dialog:
+        # closing the dialog must not destroy a running QThread (that is
+        # a crash), and a worker that outlives its dialog is harmless --
+        # its result simply goes nowhere.
+        app = QApplication.instance()
+        self._worker = _SpeedWorker(urls, self._api_key, fmt, parent=app)
+        self._worker.measured.connect(self._on_measured)
+        self._worker.finished.connect(self._on_measurement_done)
+        self._btn_run.setEnabled(False)
+        self._worker.start()
+
+    def _on_measured(self, url, latency, status, err) -> None:
+        """One endpoint's result -- GUI thread."""
+        for row in self._rows:
+            if row["url"] == url:
+                row["latency"] = latency
+                row["status"] = status
+                row["error"] = err or ""
+                break
+        self._rebuild()
+
+    def _on_measurement_done(self, *args) -> None:
+        """All the endpoints are done -- pick the fastest if asked to."""
+        self._btn_run.setEnabled(True)
+        if self._auto.isChecked():
+            good = [r for r in self._rows if r["latency"] is not None]
+            if good:
+                best = min(good, key=lambda r: r["latency"])
+                self._selected = best["url"]
+                self._rebuild()
+
+    # -- the result --------------------------------------------------------
+    def selected_url(self) -> str:
+        return self._selected
+
+    def custom_urls(self) -> list[str]:
+        return list(self._custom)
+
+
+# ---------------------------------------------------------------------------
 # ProviderWizard — modal to add / edit a provider (preset grid -> form)
 # ---------------------------------------------------------------------------
 class ProviderWizard(QDialog):
@@ -590,9 +973,27 @@ class ProviderWizard(QDialog):
 
         lbl = BodyLabel(self._t("wizard.fieldEndpoint"))
         fl.addWidget(lbl, r, 0, 1, 2); r += 1
+        endpoint_row = QHBoxLayout()
         self._ipt_endpoint = LineEdit()
         self._ipt_endpoint.setPlaceholderText("https://")
-        fl.addWidget(self._ipt_endpoint, r, 0, 1, 2); r += 1
+        # REVIEW-2026-10-20 (cc-switch's FullUrlToggle): a gateway whose path
+        # is not the canonical one cannot be reached by appending /v1/... to a
+        # prefix, so the endpoint may be declared to be the FULL request URL
+        # and used verbatim. cc-switch gates the same switch behind the same
+        # warning, for the same reason.
+        self._chk_full_url = QCheckBox(self._t("wizard.fullUrl"))
+        self._chk_full_url.setToolTip(self._t("wizard.fullUrlHelp"))
+        # REVIEW-2026-10-20 (cc-switch's EndpointSpeedTest): measure which of
+        # the candidate endpoints is fastest, and keep the alternates.
+        self._btn_speed = ToolButton(FIF.SPEED_HIGH)
+        self._btn_speed.setToolTip(self._t("wizard.speedTest"))
+        self._btn_speed.setFixedSize(28, 28)
+        self._btn_speed.clicked.connect(self._open_speed_test)
+        endpoint_row.addWidget(self._ipt_endpoint)
+        endpoint_row.addWidget(self._chk_full_url)
+        endpoint_row.addWidget(self._btn_speed)
+        endpoint_row.addStretch(1)
+        fl.addLayout(endpoint_row, r, 0, 1, 2); r += 1
 
         lbl = BodyLabel(self._t("settings.apiKey"))
         fl.addWidget(lbl, r, 0, 1, 2); r += 1
@@ -629,7 +1030,20 @@ class ProviderWizard(QDialog):
         self._btn_models.setToolTip(self._t("wizard.fetchModels"))
         self._btn_models.setFixedSize(28, 28)
         self._btn_models.clicked.connect(self._fetch_models)
+        # cc-switch's ModelInputWithFetch puts the INPUT and the fetched-model
+        # picker SIDE BY SIDE: the name can be typed OR picked, and the picker
+        # filters as you type. A button that opens a menu and disappears
+        # afterwards (the first version here) makes the second use a
+        # round-trip. qfluentwidgets' ComboBox has no search of its own, so
+        # the filtering is done here: the typed text narrows the list.
+        self._cmb_models = ComboBox()
+        self._cmb_models.setPlaceholderText(self._t("wizard.fetchModels"))
+        self._cmb_models.setFixedWidth(200)
+        self._cmb_models.setVisible(False)
+        self._model_options: list[str] = []
+        self._model_filtering = False
         model_row.addWidget(self._ipt_model)
+        model_row.addWidget(self._cmb_models)
         model_row.addWidget(self._btn_models)
         model_row.addStretch(1)
         fl.addLayout(model_row, r, 0, 1, 2); r += 1
@@ -637,6 +1051,19 @@ class ProviderWizard(QDialog):
         # collected while it is running -- a QThread destroyed mid-flight is
         # a crash, not a failed fetch.
         self._models_worker = None
+        # REVIEW-2026-10-20 (cc-switch's GptContextWindowHint + the model
+        # metadata fill): say what the model can do instead of letting the
+        # user find out. The max-output number is MEASURED -- M3.1-Flash
+        # answers a larger value with "does not support max tokens > 524288"
+        # -- so typing 1000000 is a 400, and the limit belongs on screen.
+        self._lbl_model_meta = CaptionLabel("")
+        fl.addWidget(self._lbl_model_meta, r, 0, 1, 2); r += 1
+        self._ipt_model.textChanged.connect(self._refresh_effort_options)
+        self._ipt_model.textChanged.connect(self._refresh_model_meta)
+        self._ipt_model.textChanged.connect(self._filter_model_options)
+        # Picking a fetched model fills the field. The guard flag keeps the
+        # two directions from chasing each other.
+        self._cmb_models.currentTextChanged.connect(self._on_model_picked)
 
         # REVIEW-2026-10-19: reasoning effort.
         #
@@ -676,12 +1103,81 @@ class ProviderWizard(QDialog):
         fl.addWidget(self._cmb_effort, r, 0, 1, 2); r += 1
         self._ipt_model.textChanged.connect(self._refresh_effort_options)
 
+        # ---- advanced section (collapsed by default) ---------------------
+        #
+        # REVIEW-2026-10-20 (cc-switch's collapsible fields): the extra
+        # headers, the note, the icon and the profile are filled in ONCE per
+        # account, while the name / endpoint / key / model are filled in
+        # every time. Laid out flat, the four rarely-used rows pushed the
+        # save button off the bottom of the 580 px dialog, and a field the
+        # user cannot see is a field the user cannot fill in.
+        self._btn_adv = PushButton("▸ " + self._t("wizard.advanced"))
+        self._btn_adv.setCheckable(True)
+        self._btn_adv.setFixedHeight(28)
+        self._btn_adv.clicked.connect(self._toggle_advanced)
+        fl.addWidget(self._btn_adv, r, 0, 1, 2); r += 1
+
+        self._adv_panel = QWidget()
+        al = QGridLayout(self._adv_panel)
+        al.setContentsMargins(14, 4, 0, 0)
+        al.setSpacing(10)
+        ar = 0
+
         # Extra headers field
         lbl = BodyLabel(self._t("wizard.extraHeaders"))
-        fl.addWidget(lbl, r, 0, 1, 2); r += 1
+        al.addWidget(lbl, ar, 0, 1, 2); ar += 1
+        headers_row = QHBoxLayout()
         self._ipt_extra_headers = LineEdit()
         self._ipt_extra_headers.setPlaceholderText('{"X-Custom-Header": "value"}')
-        fl.addWidget(self._ipt_extra_headers, r, 0, 1, 2); r += 1
+        # REVIEW-2026-10-20 (cc-switch's JsonEditor): a "format" button that
+        # re-indents the JSON and reports WHERE it is wrong. The field has
+        # always been raw JSON, and a typo in it fails at the request with
+        # nothing pointing at the field.
+        self._btn_format_headers = ToolButton(FIF.EDIT)
+        self._btn_format_headers.setToolTip(self._t("wizard.formatJson"))
+        self._btn_format_headers.setFixedSize(28, 28)
+        self._btn_format_headers.clicked.connect(self._format_extra_headers)
+        headers_row.addWidget(self._ipt_extra_headers)
+        headers_row.addWidget(self._btn_format_headers)
+        headers_row.addStretch(1)
+        al.addLayout(headers_row, ar, 0, 1, 2); ar += 1
+
+        # REVIEW-2026-10-20 (cc-switch): a free-text note on the provider --
+        # what the account is for, which plan it is on, when it expires. The
+        # card shows it and the list search finds it, which is what makes a
+        # list of five relay accounts usable instead of five opaque names.
+        lbl = BodyLabel(self._t("wizard.fieldNotes"))
+        al.addWidget(lbl, ar, 0, 1, 2); ar += 1
+        self._ipt_notes = LineEdit()
+        self._ipt_notes.setPlaceholderText(self._t("wizard.notesHint"))
+        al.addWidget(self._ipt_notes, ar, 0, 1, 2); ar += 1
+
+        # REVIEW-2026-10-20 (cc-switch's custom provider logo): the card's
+        # icon tile is derived from the provider's name, which gives five
+        # relay accounts five identical two-letter tiles. One glyph fixes
+        # that without an image pipeline, a file path to keep portable, or
+        # a decoder to depend on.
+        lbl = BodyLabel(self._t("wizard.fieldIcon"))
+        al.addWidget(lbl, ar, 0, 1, 2); ar += 1
+        self._ipt_icon = LineEdit()
+        self._ipt_icon.setPlaceholderText(self._t("wizard.iconHint"))
+        self._ipt_icon.setFixedWidth(90)
+        icon_row = QHBoxLayout()
+        icon_row.addWidget(self._ipt_icon)
+        icon_row.addStretch(1)
+        al.addLayout(icon_row, ar, 0, 1, 2); ar += 1
+
+        # REVIEW-2026-10-20 (cc-switch's profiles): a provider belongs to a
+        # named group, and the providers page can show one group at a time.
+        lbl = BodyLabel(self._t("wizard.fieldProfile"))
+        al.addWidget(lbl, ar, 0, 1, 2); ar += 1
+        self._ipt_profile = LineEdit()
+        self._ipt_profile.setPlaceholderText(self._t("wizard.profileHint"))
+        al.addWidget(self._ipt_profile, ar, 0, 1, 2); ar += 1
+
+        al.setColumnStretch(1, 1)
+        self._adv_panel.setVisible(False)
+        fl.addWidget(self._adv_panel, r, 0, 1, 2); r += 1
 
         # API-REVIEW-2026-10-18 (cc-switch comparison): ProviderPreset
         # carries doc_url / api_key_url / endpoint_candidates, and until
@@ -707,6 +1203,16 @@ class ProviderWizard(QDialog):
 
         # ---- footer ----
         footer = QHBoxLayout()
+        # REVIEW-2026-10-20 (cc-switch's full-screen provider detail): the
+        # detail form is taller than the 580 px dialog it lives in, so the
+        # fields at the bottom (the save button, the preset links) can end
+        # up below the fold. The button toggles the dialog between its
+        # natural size and the screen's, and remembers which it is.
+        self._btn_fullscreen = ToolButton(FIF.FULL_SCREEN)
+        self._btn_fullscreen.setToolTip(self._t("wizard.fullscreen"))
+        self._btn_fullscreen.setFixedSize(28, 28)
+        self._btn_fullscreen.clicked.connect(self._toggle_fullscreen)
+        footer.addWidget(self._btn_fullscreen)
         footer.addStretch(1)
         self._btn_cancel = PushButton(self._t("wizard.cancel"))
         self._btn_cancel.clicked.connect(self.reject)
@@ -718,6 +1224,21 @@ class ProviderWizard(QDialog):
         self._root.addLayout(footer)
 
         self._preset: object | None = None
+        # REVIEW-2026-10-20: the provider's own alternates (the speed test
+        # writes them) and the wizard's full-screen state. Both are
+        # initialised here rather than lazily in their getters, so a
+        # half-built wizard cannot answer "does this provider have
+        # alternates?" with an AttributeError.
+        self._custom_endpoints: list[str] = []
+        self._fullscreen = False
+        # Whether the advanced section is open. A flag and not
+        # ``isVisible()`` -- see the property for why.
+        self._advanced_open = False
+        # REVIEW-2026-10-20: the digest of the providers file as it was
+        # when this dialog opened. The page compares it with the file on
+        # disk before writing, so a change made elsewhere while the modal
+        # was open is a question rather than a silent overwrite.
+        self.store_signature = _store_signature()
         self._build_category_chips()
         self._render_presets()
 
@@ -794,11 +1315,100 @@ class ProviderWizard(QDialog):
         self._grid.addWidget(custom, r, c)
 
     def _show_custom_form(self) -> None:
+        if self._form_has_content() and not self._confirm_preset_switch():
+            return
         self._preset = None
         self._apply_preset_meta(_NO_PRESET)
         self._show_form()
 
+    # REVIEW-2026-10-20: "does the form already hold the user's work?"
+    #
+    # Only the fields a preset OVERWRITES count. The note, the icon and the
+    # profile survive a preset switch (nothing writes them), and the API key
+    # does not: a preset never carries a key, so a key the user typed is
+    # still there afterwards -- and warning about it would train the user to
+    # dismiss the warning.
+    def _form_has_content(self) -> bool:
+        return bool(
+            self._ipt_endpoint.text().strip()
+            or self._ipt_model.text().strip()
+            or self._ipt_key.text().strip()
+        )
+
+    def _confirm_preset_switch(self) -> bool:
+        """Ask before a preset replaces what the user typed.
+
+        Returns True when the switch may go ahead. The question is a
+        MessageBox rather than an InfoBar because it BLOCKS the action it
+        describes: an InfoBar that merely announces what already happened
+        is not a warning, it is a post-mortem.
+        """
+        box = MessageBox(
+            self._t("wizard.presetSwitchWarning"),
+            self._t("wizard.presetSwitchWarning"),
+            self,
+        )
+        return bool(box.exec())
+
+    def _toggle_advanced(self, *_args) -> None:
+        """Show or hide the fields that most accounts never touch."""
+        self._advanced_open = not self._advanced_open
+        self._adv_panel.setVisible(self._advanced_open)
+        self._btn_adv.setText(("▾ " if self._advanced_open else "▸ ")
+                              + self._t("wizard.advanced"))
+        self._btn_adv.setChecked(self._advanced_open)
+
+    @property
+    def advanced_open(self) -> bool:
+        """Whether the advanced section is open.
+
+        A flag and not ``isVisible()``: a widget that is not on screen
+        reports ``isVisible() == False`` whatever its own state is, so a
+        test (and any logic) that asks "is the advanced section open?"
+        would get the wrong answer for a dialog that has not been shown.
+        """
+        return self._advanced_open
+
+    def _toggle_fullscreen(self, *_args) -> None:
+        """Grow the dialog to the screen, or put it back.
+
+        The detail form is taller than the dialog, so the bottom of it --
+        where the save button lives -- can be below the fold on a short
+        screen. This is the same escape hatch cc-switch gives its provider
+        detail view.
+        """
+        if self._fullscreen:
+            self.showNormal()
+            self._fullscreen = False
+            self._btn_fullscreen.setToolTip(self._t("wizard.fullscreen"))
+        else:
+            self.showFullScreen()
+            self._fullscreen = True
+            self._btn_fullscreen.setToolTip(self._t("wizard.restore"))
+
+    def _open_advanced_if_needed(self) -> None:
+        """Open the advanced section when it already holds something.
+
+        A provider that HAS a note must show the note, or the field reads
+        as empty and the user retypes what was already saved.
+        """
+        if (self._ipt_notes.text().strip()
+                or self._ipt_icon.text().strip()
+                or self._ipt_profile.text().strip()
+                or self._ipt_extra_headers.text().strip()):
+            self._advanced_open = True
+            self._adv_panel.setVisible(True)
+            self._btn_adv.setChecked(True)
+            self._btn_adv.setText("▾ " + self._t("wizard.advanced"))
+
     def _pick_preset(self, preset):
+        # REVIEW-2026-10-20 (cc-switch warns before it overwrites a filled
+        # form): a preset is a TEMPLATE, and picking one replaces whatever
+        # the user had typed -- endpoint, model and API key. cc-switch puts
+        # the same warning on the same gesture, because the two directions
+        # look identical in the UI and only one of them destroys work.
+        if self._form_has_content() and not self._confirm_preset_switch():
+            return
         self._ipt_name.setText(preset.name)
         self._cmb_fmt.setCurrentText(preset.api_format.value)
         self._ipt_endpoint.setText(preset.endpoint)
@@ -875,6 +1485,16 @@ class ProviderWizard(QDialog):
         self._ipt_endpoint.setText(existing.endpoint)
         self._ipt_model.setText(existing.model)
         self._ipt_key.setText(existing.api_key)
+        # REVIEW-2026-10-20: the cc-switch fields. Each one is a FIELD of
+        # the record, so the wizard's rebuild has to carry it over — the
+        # same argument the reasoning effort makes: a field the rebuild
+        # forgets is a field the user loses the moment they edit the
+        # provider, with nothing on screen to explain why.
+        self._ipt_notes.setText(getattr(existing, "notes", "") or "")
+        self._ipt_icon.setText(getattr(existing, "icon", "") or "")
+        self._ipt_profile.setText(getattr(existing, "profile", "") or "")
+        self._chk_full_url.setChecked(bool(getattr(existing, "full_url", False)))
+        self._custom_endpoints = list(getattr(existing, "custom_endpoints", None) or [])
         # Restore extra_headers as JSON string
         if existing.extra_headers:
             import json
@@ -899,6 +1519,10 @@ class ProviderWizard(QDialog):
         self._preset = None
         self._apply_preset_meta(_NO_PRESET)
         self._show_form()
+        # A provider that already has a note / icon / profile must SHOW
+        # them, or the advanced section reads as empty and the user
+        # retypes what was already saved.
+        self._open_advanced_if_needed()
 
     def _parse_extra_headers(self) -> tuple[dict, str | None]:
         """Parse extra_headers from the text field.
@@ -967,6 +1591,135 @@ class ProviderWizard(QDialog):
         except ValueError:
             self._cmb_effort.setCurrentIndex(0)
 
+    def _on_model_picked(self, name):
+        """A model was picked from the fetched list -- put it in the field.
+
+        The guard flag matters here: setting the field fires textChanged,
+        which fires the FILTER, which would narrow the list down to the
+        one entry just picked. The user would then have to clear the field
+        to pick a second model -- a one-shot picker where the user
+        expects to compare.
+        """
+        if self._model_filtering or not name:
+            return
+        self._model_filtering = True
+        try:
+            self._ipt_model.setText(name)
+        finally:
+            self._model_filtering = False
+
+    def _refresh_model_meta(self, *_args):
+        """Say what the model can do, instead of letting the user find out.
+
+        The max-output number is measured, not copied: MiniMax-M3.1-Flash
+        answers a larger ``max_tokens`` with "does not support max tokens >
+        524288 (2013)", so typing 1000000 is a 400 and the limit belongs on
+        screen.
+        """
+        try:
+            from rca_core.llm import model_metadata_for
+            meta = model_metadata_for(self._ipt_model.text().strip())
+        except Exception:
+            meta = None
+        if meta is None:
+            self._lbl_model_meta.setText("")
+            self._lbl_model_meta.setVisible(False)
+            return
+        bits = []
+        if meta.max_output:
+            bits.append(self._t("wizard.metaMaxOutput").format(
+                n=format(meta.max_output, ",")))
+        if meta.context_window:
+            bits.append(self._t("wizard.metaContext").format(
+                n=format(meta.context_window, ",")))
+        if meta.note:
+            # The catalogue carries an i18n KEY, not a sentence -- a
+            # Chinese note in an English interface is a defect. The
+            # fallback keeps a catalogue entry visible even when its key
+            # is missing from the table.
+            note = self._t(meta.note)
+            if note == meta.note:
+                note = meta.note
+            bits.append(note)
+        self._lbl_model_meta.setText(" · ".join(bits))
+        self._lbl_model_meta.setVisible(True)
+
+    def _filter_model_options(self, *_args):
+        """Narrow the fetched-model picker to what the typed text matches.
+
+        qfluentwidgets' ComboBox has no search of its own, so the filtering
+        is done here: typing in the model field narrows the list, which is
+        the interaction cc-switch's ModelInputWithFetch gives.
+        """
+        if self._model_filtering or not self._model_options:
+            return
+        needle = self._ipt_model.text().strip().lower()
+        matches = [m for m in self._model_options
+                   if not needle or needle in m.lower()]
+        current = self._ipt_model.text().strip()
+        self._model_filtering = True
+        try:
+            self._cmb_models.blockSignals(True)
+            self._cmb_models.clear()
+            self._cmb_models.addItems(matches)
+            # Keep the current model highlighted when it survived the
+            # filter, so the combo does not jump to the first match while
+            # the user is typing.
+            self._cmb_models.setCurrentIndex(
+                matches.index(current) if current in matches else -1)
+            self._cmb_models.setVisible(bool(matches))
+        finally:
+            self._cmb_models.blockSignals(False)
+            self._model_filtering = False
+
+    def _format_extra_headers(self, *_args):
+        """Re-indent the extra-headers JSON and say WHERE it is wrong.
+
+        The field has always been raw JSON, and a typo in it fails at the
+        request with nothing pointing at the field.
+        """
+        text = self._ipt_extra_headers.text().strip()
+        if not text:
+            return
+        import json
+        try:
+            pretty = json.dumps(json.loads(text), indent=2,
+                                ensure_ascii=False, sort_keys=True)
+        except ValueError as exc:
+            InfoBar.warning("", self._t("wizard.jsonInvalid").format(
+                reason=str(exc)), parent=self, position=InfoBarPosition.TOP)
+            return
+        self._ipt_extra_headers.setText(pretty)
+
+    def _open_speed_test(self, *_args):
+        """Open the endpoint speed test.
+
+        cc-switch's EndpointSpeedTest measures every candidate endpoint,
+        colours the latency (<300 ms green, 300-500 yellow, 500-800 orange,
+        >=800 red), can auto-select the fastest, and keeps the alternates on
+        the provider. Ours measures the same candidates -- the endpoint plus
+        the ones the user has kept -- and writes the result back the same
+        way.
+        """
+        dlg = _EndpointSpeedDialog(
+            self,
+            endpoint=self._ipt_endpoint.text().strip(),
+            custom=list(self._speed_custom_endpoints()),
+            api_key=self._ipt_key.text().strip(),
+            api_format=self._cmb_fmt.currentText(),
+        )
+        dlg.exec()
+        if dlg.result() == QDialog.Accepted:
+            self._ipt_endpoint.setText(dlg.selected_url() or
+                                      self._ipt_endpoint.text())
+            self._speed_custom_endpoints(dlg.custom_urls())
+
+    def _speed_custom_endpoints(self, value=None):
+        """Read or write the provider's custom endpoint list."""
+        if value is not None:
+            self._custom_endpoints = [u for u in value if u]
+        return getattr(self, "_custom_endpoints", [])
+
     def _fetch_models(self, *_args):
         """Ask the endpoint which models it serves, and offer them in a menu.
 
@@ -1027,13 +1780,24 @@ class ProviderWizard(QDialog):
             InfoBar.warning("", self._t("wizard.fetchModelsEmpty"),
                             parent=self, position=InfoBarPosition.TOP)
             return
-        menu = QMenu(self)
-        for name in models:
-            act = menu.addAction(name)
-            act.triggered.connect(lambda _checked=False, n=name:
-                                  self._ipt_model.setText(n))
-        menu.exec(self._btn_models.mapToGlobal(
-            self._btn_models.rect().bottomLeft()))
+        self._model_options = list(models)
+        # The list is shown IN FULL when it arrives. The field's own text
+        # filters it as the user types, but a freshly fetched list narrowed
+        # by the model that is already in the field would show ONE entry
+        # for a provider that serves twenty -- which is the opposite of
+        # what "fetch the model list" is for.
+        self._model_filtering = True
+        try:
+            self._cmb_models.blockSignals(True)
+            self._cmb_models.clear()
+            self._cmb_models.addItems(self._model_options)
+            current = self._ipt_model.text().strip()
+            idx = self._model_options.index(current) if current in self._model_options else -1
+            self._cmb_models.setCurrentIndex(idx)
+        finally:
+            self._cmb_models.blockSignals(False)
+            self._model_filtering = False
+        self._cmb_models.setVisible(True)
 
     def _on_ok(self):
         name = self._ipt_name.text().strip()
@@ -1092,6 +1856,16 @@ class ProviderWizard(QDialog):
             # not a free-form blob, so it survives an edit of this provider.
             reasoning_effort=self._effort_values[
                 max(0, self._cmb_effort.currentIndex())],
+            # REVIEW-2026-10-20: the cc-switch fields, carried over for the
+            # same reason the effort is: the wizard REBUILDS the record from
+            # a hand-listed set of fields, so a field that is not listed
+            # here is a field the user loses the moment they edit this
+            # provider.
+            notes=self._ipt_notes.text().strip(),
+            icon=self._ipt_icon.text().strip()[:8],
+            profile=self._ipt_profile.text().strip(),
+            full_url=self._chk_full_url.isChecked(),
+            custom_endpoints=list(self._speed_custom_endpoints()),
             created_at=self._edit_created_at,       # same reasoning
             # Preserve is_current on edit. The wizard rebuilds the provider
             # from scratch and the LlmProvider default is False, which would
@@ -1135,6 +1909,11 @@ class ProvidersPage(ScrollArea):
         # replaced card is parked or deleted rather than orphaned — the id set
         # is what lets the NEW card pick the ⏳ back up.
         self._testing_ids: set[str] = set()
+        # REVIEW-2026-10-20: the in-flight quota queries, mapped to the
+        # card each one belongs to. Same shape as _test_workers and for the
+        # same reason: a QThread that is garbage collected while it is
+        # running is a crash, not a failed query.
+        self._quota_workers: dict = {}
         self._search_term = ""
         self._all_cards: list[ProviderCard] = []   # unfiltered list
         self.setObjectName("providersPage")
@@ -1157,6 +1936,31 @@ class ProvidersPage(ScrollArea):
         self.btn_add.clicked.connect(self._add_provider)
         header.addWidget(self.btn_add)
         self.lay.addLayout(header)
+
+        # REVIEW-2026-10-20 (cc-switch's category counts + profile switch):
+        # a summary line that says what is in the list, and a filter that
+        # narrows it to one group.
+        #
+        # The counts are not decoration: a list of providers with no
+        # indication of which one is active, which one is broken, and how
+        # many there are, is a list the user has to read card by card. The
+        # profile filter is the same idea as cc-switch's group tabs -- with
+        # five relay accounts in two groups ("work", "personal"), showing
+        # one group at a time is the difference between a usable list and a
+        # scroll.
+        summary_row = QHBoxLayout()
+        self.lbl_summary = CaptionLabel("")
+        summary_row.addWidget(self.lbl_summary)
+        summary_row.addStretch(1)
+        self._cmb_profile = ComboBox()
+        self._cmb_profile.setFixedWidth(160)
+        self._cmb_profile.setVisible(False)
+        self._cmb_profile.currentTextChanged.connect(self._on_profile_changed)
+        summary_row.addWidget(self._cmb_profile)
+        self.lay.addLayout(summary_row)
+        # The profile currently shown: None = every profile, "" = only the
+        # ungrouped ones, a name = only that profile.
+        self._profile_filter = None
 
         # Search bar (shown above the list)
         self._search_widget = QWidget()
@@ -1227,15 +2031,112 @@ class ProvidersPage(ScrollArea):
         self._apply_filter()
 
     def _apply_filter(self):
-        """Filter cards by search term, matching cc-switch search UX."""
+        """Filter cards by search term and by profile.
+
+        cc-switch filters the list by name AND lets the user narrow it to
+        one group; the note is searchable for the same reason it is
+        displayed -- a provider the user can only find by its name is a
+        provider they will not find.
+        """
         q = self._search_term
+        # Three states, not two: None means "every profile", "" means
+        # "only the providers with no profile", and a name means "only
+        # that profile". "All" and "Ungrouped" are DIFFERENT filters that
+        # happen to share the empty profile string, so the distinction
+        # cannot live in the filter value.
+        profile = getattr(self, "_profile_filter", None)
         for card in self._all_cards:
+            prov = card.provider
+            if profile is not None:
+                name = (getattr(prov, "profile", "") or "").strip()
+                if name != profile:
+                    card.setVisible(False)
+                    continue
             if not q:
                 card.setVisible(True)
+                continue
+            hay = " ".join([
+                (prov.name or "") if prov else "",
+                (prov.endpoint or "") if prov else "",
+                (getattr(prov, "notes", "") or "") if prov else "",
+                (getattr(prov, "model", "") or "") if prov else "",
+            ]).lower()
+            card.setVisible(q in hay)
+
+    # ---- the summary line and the profile filter (cc-switch) -------------
+
+    def _update_summary(self) -> None:
+        """Say what the list holds, and refresh the profile filter.
+
+        cc-switch shows the per-category counts above the provider list.
+        The same information here: how many providers there are, which one
+        is active, how many are healthy, and how many are failing -- the
+        four questions a user answers by reading every card otherwise.
+        """
+        providers = [c.provider for c in self._all_cards if c.provider]
+        total = len(providers)
+        current = sum(1 for p in providers if p.is_current)
+        healthy = sum(1 for p in providers
+                      if (getattr(p, "consecutive_failures", 0) or 0) <= 0)
+        failing = total - healthy
+        self.lbl_summary.setText("  ·  ".join([
+            self._t("provider.summary").format(n=total),
+            self._t("provider.summaryCurrent").format(n=current),
+            self._t("provider.summaryHealthy").format(n=healthy),
+            self._t("provider.summaryFailed").format(n=failing),
+        ]))
+        self._refresh_profile_options(providers)
+
+    def _refresh_profile_options(self, providers) -> None:
+        """Rebuild the profile combo from the profiles actually in use.
+
+        The options are DERIVED from the data rather than written down, so
+        a provider the user just filed under a new group shows up without
+        anything here having to know the name in advance.
+        """
+        names = []
+        for p in providers:
+            name = (getattr(p, "profile", "") or "").strip()
+            if name and name not in names:
+                names.append(name)
+        names.sort()
+        # The combo's items are (label, profile) pairs, and the profile is
+        # kept in a parallel list -- an index into a translated label list
+        # breaks the moment the wording changes. None = every profile,
+        # "" = only the ungrouped ones.
+        labels = [self._t("provider.profileAll")]
+        values = [None]
+        for name in names:
+            labels.append(name)
+            values.append(name)
+        if any(not (getattr(p, "profile", "") or "").strip()
+               for p in providers):
+            labels.append(self._t("provider.profileUngrouped"))
+            values.append("")
+        if labels == getattr(self, "_profile_labels", None):
+            return
+        self._profile_labels = labels
+        self._profile_values = values
+        current = getattr(self, "_profile_filter", None)
+        self._cmb_profile.blockSignals(True)
+        try:
+            self._cmb_profile.clear()
+            self._cmb_profile.addItems(labels)
+            if current in values:
+                self._cmb_profile.setCurrentIndex(values.index(current))
             else:
-                name_match = q in (card.provider.name or "").lower()
-                endpoint_match = q in (card.provider.endpoint or "").lower()
-                card.setVisible(name_match or endpoint_match)
+                self._profile_filter = None
+                self._cmb_profile.setCurrentIndex(0)
+        finally:
+            self._cmb_profile.blockSignals(False)
+        self._cmb_profile.setVisible(len(labels) > 1)
+
+    def _on_profile_changed(self, *_args) -> None:
+        """Show one profile's providers, or all of them."""
+        values = getattr(self, "_profile_values", None) or [None]
+        idx = self._cmb_profile.currentIndex()
+        self._profile_filter = values[idx] if 0 <= idx < len(values) else None
+        self._apply_filter()
 
     def _build_cards(self) -> list[ProviderCard]:
         try:
@@ -1295,11 +2196,25 @@ class ProvidersPage(ScrollArea):
             # either. Empty the list on the way to the empty state; the cards
             # go through the same release/park path as any other refresh.
             self.list_widget.set_cards([])
+            self._update_summary()
             self._show_empty()
             return
         self._hide_empty()
         self.list_widget.set_cards(cards)
+        self._update_summary()
         self._apply_filter()
+        # REVIEW-2026-10-20: the plan's remaining quota, fetched per
+        # provider in the background. The card is already on screen; this
+        # fills in the one number that says whether the next extraction can
+        # start at all.
+        self._start_quota_queries(cards)
+        # The extract page's environment strip says "no provider is
+        # configured" — and this page is where that becomes true or false.
+        try:
+            self.win.extract_page.refresh_environment_banner()
+        except Exception:
+            log.debug("could not refresh the environment banner",
+                      exc_info=True)
 
     def _show_empty(self):
         if hasattr(self, "_empty") and self._empty is not None:
@@ -1328,6 +2243,21 @@ class ProvidersPage(ScrollArea):
             return ProviderStore().load()
         except Exception:
             return None
+
+    def _confirm_no_external_change(self, seen_signature: str) -> int:
+        """Ask what to do when the providers file changed underneath us.
+
+        Returns one of ``_ConflictDialog``'s three answers. When nothing
+        changed, the answer is OVERWRITE -- i.e. "go ahead and write".
+        """
+        if not seen_signature:
+            return _ConflictDialog.OVERWRITE
+        current = _store_signature()
+        if current == seen_signature:
+            return _ConflictDialog.OVERWRITE
+        dlg = _ConflictDialog(self.win, self._t)
+        dlg.exec()
+        return dlg.choice()
 
     def _on_order_changed(self, order):
         store = self._load_store()
@@ -1366,6 +2296,17 @@ class ProvidersPage(ScrollArea):
         self._provider_wizard = wiz
         try:
             if wiz.exec() and wiz.created_provider:
+                # REVIEW-2026-10-20: the same external-change guard as the
+                # edit path. A new provider is an APPEND, so the other
+                # version's providers are not at risk -- but the file's
+                # current id and order are, and the user deserves to know
+                # the file moved under them.
+                choice = self._confirm_no_external_change(wiz.store_signature)
+                if choice == _ConflictDialog.CANCEL:
+                    return
+                if choice == _ConflictDialog.KEEP_DISK:
+                    self._refresh()
+                    return
                 store = self._load_store()
                 if store:
                     store.add(wiz.created_provider)     # saves internally
@@ -1406,6 +2347,21 @@ class ProvidersPage(ScrollArea):
             return
         wiz = ProviderWizard(self.win, self._t, existing=existing)
         if wiz.exec() and wiz.created_provider:
+            # REVIEW-2026-10-20 (cc-switch's external-change guard): the
+            # file may have been changed by something else while the modal
+            # was open. Ask BEFORE writing, because after the write the
+            # other version is gone.
+            choice = self._confirm_no_external_change(wiz.store_signature)
+            if choice == _ConflictDialog.CANCEL:
+                return
+            if choice == _ConflictDialog.KEEP_DISK:
+                self._refresh()
+                return
+            # OVERWRITE: reload the store first, so the OTHER providers'
+            # changes survive and only this one is replaced.
+            store = self._load_store()
+            if not store:
+                return
             ok = store.update(wiz.created_provider)
             if not ok:
                 # Should not happen now that the wizard preserves the id,
@@ -1465,6 +2421,70 @@ class ProvidersPage(ScrollArea):
                 sp.refresh_active()
         except Exception as exc:
             print(f"[rca] sync settings page: {exc}")
+
+    # ---- the plan's remaining quota (cc-switch's UsageFooter) -----------
+
+    def _start_quota_queries(self, cards) -> None:
+        """Ask each provider's plan how much of its quota is left.
+
+        The query is a NETWORK round trip, so it runs on a worker thread
+        per card and the result is applied to whichever card is on screen
+        when it arrives -- the same "resolve the live card by provider id"
+        rule the connection test uses, because a refresh between the query
+        and its answer replaces the widget the answer was meant for.
+        """
+        from PySide6.QtCore import QThread
+
+        class _QuotaWorker(QThread):
+            done = Signal(object, object)      # (worker, result)
+
+            def __init__(self, provider, parent=None):
+                super().__init__(parent)
+                self._p = provider
+
+            def run(self):
+                # An exception here would leave the card without a quota
+                # and, worse, without emitting done() -- so the worker
+                # would never be released. The card simply shows nothing,
+                # which is what a provider with no published quota does.
+                try:
+                    from rca_core.llm import query_coding_plan_quota
+                    result = query_coding_plan_quota(self._p, timeout_sec=12)
+                except Exception:
+                    log.exception("quota query failed for %r",
+                                  getattr(self._p, "name", ""))
+                    result = None
+                self.done.emit(self, result)
+
+        for card in cards:
+            prov = card.provider
+            if prov is None or not (getattr(prov, "api_key", "") or "").strip():
+                continue
+            w = _QuotaWorker(prov)
+            self._quota_workers[w] = card
+            w.done.connect(self._on_quota_done)
+            w.finished.connect(self._on_quota_finished)
+            w.start()
+
+    def _on_quota_done(self, worker, result) -> None:
+        """GUI-thread slot for the quota worker's answer."""
+        card = self._quota_workers.get(worker)
+        if card is None:
+            return
+        live = card
+        if card.provider is not None:
+            live = self._live_card_for(card.provider.id) or card
+        try:
+            live.set_quota(result)
+        except RuntimeError:
+            # The card was destroyed between the answer and this call.
+            pass
+
+    def _on_quota_finished(self, *args) -> None:
+        """Drop the strong reference once the worker is done."""
+        worker = args[0] if args else self.sender()
+        if worker is not None:
+            self._quota_workers.pop(worker, None)
 
     def _test(self, provider, card):
         card.set_testing(True)

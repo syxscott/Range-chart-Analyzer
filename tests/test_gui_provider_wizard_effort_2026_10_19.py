@@ -186,49 +186,24 @@ def test_fetching_needs_an_endpoint_and_a_key(qapp):
 
 @_requires_qt
 def test_the_discovered_models_are_offered_and_picking_one_fills_the_field(qapp):
+    """REVIEW-2026-10-20: the picker is a COMBOBOX now, not a menu.
+
+    The first version opened a QMenu that vanished after one pick, which
+    made the second use a round trip. cc-switch's ModelInputWithFetch puts
+    the input and the picker SIDE BY SIDE, so the fetched list stays
+    available and the typed text narrows it. The test was rewritten to
+    match the new interaction -- the OLD assertion (a menu with two
+    actions) no longer describes what the wizard does.
+    """
     w = _wizard(qapp, _existing(""))
-    captured = {}
-
-    class _FakeSignal:
-        """A QAction's ``triggered`` is a SIGNAL, so it has ``connect``."""
-
-        def __init__(self):
-            self._cbs = []
-
-        def connect(self, cb):
-            self._cbs.append(cb)
-
-        def fire(self):
-            for cb in self._cbs:
-                cb(False)
-
-    class _FakeAction:
-        def __init__(self, name):
-            self._name = name
-            self.triggered = _FakeSignal()
-
-    class _FakeMenu:
-        def __init__(self, parent=None):
-            self._actions = []
-
-        def addAction(self, name):
-            act = _FakeAction(name)
-            self._actions.append(act)
-            return act
-
-        def exec(self, *_a):
-            captured["menu"] = self
-            return None
-
-    import gui_fluent_providers as gfp
-    orig_menu = gfp.QMenu
-    gfp.QMenu = _FakeMenu
     try:
         w._on_models_fetched(None, ["MiniMax-M3.1-Flash", "MiniMax-M3"])
-        actions = captured["menu"]._actions
-        assert [a._name for a in actions] == ["MiniMax-M3.1-Flash", "MiniMax-M3"]
-        actions[1].triggered.fire()
-        assert w._ipt_model.text() == "MiniMax-M3"
+        items = [w._cmb_models.itemText(i)
+                 for i in range(w._cmb_models.count())]
+        assert items == ["MiniMax-M3.1-Flash", "MiniMax-M3"], \
+            "the fetched models must be offered in the picker: %r" % (items,)
+        w._cmb_models.setCurrentText("MiniMax-M3")
+        assert w._ipt_model.text() == "MiniMax-M3", \
+            "picking a model must fill the field"
     finally:
-        gfp.QMenu = orig_menu
         w.close()

@@ -74,6 +74,196 @@ def maybe_show_onboarding(win, tr: Translator) -> None:
         mark_onboarding_seen()
 
 
+# ---------------------------------------------------------------------------
+# What's new — shown on the first launch after an upgrade
+# ---------------------------------------------------------------------------
+
+def last_seen_version_path() -> str:
+    return os.path.join(
+        os.path.expanduser("~"), ".range_chart_analyzer", "last_seen_version"
+    )
+
+
+def read_last_seen_version() -> str:
+    """The version the user last saw, or "" when we do not know."""
+    try:
+        with open(last_seen_version_path(), "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def write_last_seen_version(version: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(last_seen_version_path()), exist_ok=True)
+        with open(last_seen_version_path(), "w", encoding="utf-8") as f:
+            f.write(version or "")
+    except OSError:
+        pass
+
+
+def changelog_path() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "CHANGELOG.md")
+
+
+def _version_tuple(text: str):
+    """'0.1.2' -> (0, 1, 2). Unparseable -> None."""
+    parts = []
+    for chunk in (text or "").strip().lstrip("v").split("."):
+        if not chunk.isdigit():
+            return None
+        parts.append(int(chunk))
+    return tuple(parts) or None
+
+
+def _bullet_title(text: str) -> str:
+    """The one-line title of a changelog bullet.
+
+    The changelog's bullets are written as ``**Title.** body``, with the
+    title often wrapped over two lines. A dialog that shows the body
+    paragraph is unreadable; the title is the thing the user scans.
+    """
+    flat = " ".join(part.strip() for part in text.split("\n")).strip()
+    if flat.startswith("**"):
+        end = flat.find("**", 2)
+        if end > 0:
+            return flat[2:end].strip().rstrip(".")
+    # No bold lead: take the first sentence, capped so a run-on line
+    # cannot become a paragraph in a dialog.
+    stop = flat.find(". ")
+    if 0 < stop <= 120:
+        return flat[:stop].strip()
+    return flat[:120].strip()
+
+
+def changelog_entries_since(version: str, limit: int = 12) -> list[str]:
+    """The titles of the changelog entries added after ``version``.
+
+    Returns an empty list when the changelog is missing (a packaged build
+    may not ship it), when the file cannot be parsed, or when nothing new
+    was added. The comparison is by version number, and the ``[Unreleased]``
+    section counts as newer than every released version.
+    """
+    target = _version_tuple(version)
+    try:
+        with open(changelog_path(), "r", encoding="utf-8") as f:
+            lines = f.read().split("\n")
+    except OSError:
+        return []
+
+    out: list[str] = []
+    current_new = False
+    bullet: list[str] = []
+    in_bullet = False
+
+    def _flush():
+        nonlocal bullet, in_bullet
+        if in_bullet:
+            out.append(_bullet_title("\n".join(bullet)))
+        bullet = []
+        in_bullet = False
+
+    for raw in lines:
+        line = raw.rstrip()
+        if line.startswith("## ["):
+            _flush()
+            head = line[3:].lstrip("[").split("]", 1)[0].strip()
+            if head.lower() == "unreleased":
+                current_new = True
+                continue
+            found = _version_tuple(head)
+            if found is None:
+                current_new = False
+                continue
+            # "Newer than what the user last saw" -- and the section must
+            # not be one they have already read.
+            current_new = (target is None) or (found > target)
+            continue
+        if line.startswith("### "):
+            _flush()
+            continue
+        if line.startswith("- "):
+            _flush()
+            if current_new:
+                bullet = [line[2:].strip()]
+                in_bullet = True
+            continue
+        if in_bullet:
+            if not line.strip():
+                _flush()
+                continue
+            if line.startswith("  ") or line.startswith("\t"):
+                bullet.append(line.strip())
+                continue
+            _flush()
+    _flush()
+    return out[:limit]
+
+
+def maybe_show_whats_new(win, tr: Translator) -> None:
+    """Tell the user what changed since the last time they ran the app.
+
+    The rule is the cc-switch one: show it when the VERSION moved, not
+    every launch, and not on the very first launch (the welcome dialog
+    already covers that).
+    """
+    if not _HAVE_QT:
+        return
+    last = read_last_seen_version()
+    if not last or last == __version__:
+        if not last:
+            write_last_seen_version(__version__)
+        return
+    try:
+        entries = changelog_entries_since(last)
+    except Exception:
+        entries = []
+    write_last_seen_version(__version__)
+    if not entries:
+        return
+    try:
+        dlg = WhatsNewDialog(win, tr, last, entries)
+        dlg.exec()
+    except Exception:
+        pass
+
+
+if _HAVE_QT:
+    class WhatsNewDialog(MessageBox):
+        """The "what changed" dialog shown after an upgrade."""
+
+        def __init__(self, parent, tr: Translator, last_version: str,
+                     entries: list[str]) -> None:
+            super().__init__(
+                tr.t("app.whatsNewTitle"),
+                f"{tr.t('about.version')} {last_version} → {__version__}",
+                parent,
+            )
+            body = QWidget()
+            v = QVBoxLayout(body)
+            v.setContentsMargins(8, 4, 8, 4)
+            v.setSpacing(8)
+            for entry in entries:
+                row = QWidget()
+                rl = QHBoxLayout(row)
+                rl.setContentsMargins(0, 0, 0, 0)
+                rl.setSpacing(8)
+                dot = QLabel("•")
+                dot.setFixedWidth(14)
+                rl.addWidget(dot)
+                lbl = BodyLabel(entry)
+                lbl.setWordWrap(True)
+                rl.addWidget(lbl, 1)
+                v.addWidget(row)
+            try:
+                self.yesButton.setText(tr.t("onboarding.gotIt"))
+                self.cancelButton.hide()
+            except Exception:
+                pass
+            self.textLayout.addWidget(body)
+
+
 if _HAVE_QT:
     class OnboardingDialog(MessageBox):
         """First-launch welcome dialog with three setup steps."""

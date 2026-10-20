@@ -471,6 +471,42 @@
     if (levels.indexOf(previous) >= 0) sel.value = previous;
   }
 
+  // REVIEW-2026-10-20 (cc-switch's usage query): how much of the plan is
+  // left.
+  //
+  // The number that decides whether the next extraction can start at all.
+  // It is fetched from the LOCAL server, which holds the key — the browser
+  // never sees the credential, and the endpoint is loopback-only unless
+  // the operator has configured a token.
+  //
+  // The two windows are shown separately because they are separately
+  // binding: MiniMax's Token Plan has a 5-hour bucket that refills
+  // quickly and a weekly bucket that does not.
+  async function refreshQuota() {
+    const el = $('quota-hint');
+    if (!el) return;
+    el.textContent = t('quota.checking');
+    try {
+      const resp = await fetch('/api/quota', {
+        headers: { 'X-RCA-Client': 'range-chart-analyzer' },
+      });
+      if (!resp.ok) { el.textContent = t('quota.unavailable'); return; }
+      const data = await resp.json();
+      if (!data || !data.ok) { el.textContent = t('quota.unavailable'); return; }
+      const parts = [];
+      for (const tier of (data.tiers || [])) {
+        if (tier.name === 'five_hour') {
+          parts.push(t('quota.fiveHour', { pct: tier.left_percent }));
+        } else if (tier.name === 'weekly_limit') {
+          parts.push(t('quota.weekly', { pct: tier.left_percent }));
+        }
+      }
+      el.textContent = parts.length ? parts.join(' · ') : t('quota.unavailable');
+    } catch (_e) {
+      el.textContent = t('quota.unavailable');
+    }
+  }
+
   function loadSettings() {
     $('endpoint').value = rcaStoreGet(RCA_STORE.endpoint, RCA_CONFIG.defaultEndpoint);
     $('model').value = rcaStoreGet(RCA_STORE.model, RCA_CONFIG.defaultModel);
@@ -2388,6 +2424,11 @@
 
     loadSettings();
     syncFooterRuntime();
+    // REVIEW-2026-10-20 (cc-switch's usage query): fetch the plan's
+    // remaining quota once at start-up. It is NOT awaited — the page has
+    // to become usable first, and a vendor that is slow must not hold the
+    // UI hostage. The element is filled in when the answer arrives.
+    refreshQuota();
 
     // language switch
     // FE-BORROW-2026-09-20 (domain U): #lang-switch is a radiogroup now (see

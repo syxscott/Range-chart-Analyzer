@@ -132,6 +132,15 @@
                         </select>
                         <p class="field-hint" data-i18n="settings.effort.hint">MiniMax M3.1 默认 max，思考会吃满 max_tokens；密集图建议选 low。</p>
                     </div>
+                    <!-- REVIEW-2026-10-20 (cc-switch's usage query): how much
+                         of the plan is left, BEFORE an extraction that cannot
+                         start. The number is fetched from the local server,
+                         which holds the key — the browser never sees it. The
+                         text is written by JS (no data-i18n), because the
+                         wording depends on which windows the plan publishes. -->
+                    <div class="form-row">
+                        <p class="field-hint" id="quota-hint" role="status" aria-live="polite"></p>
+                    </div>
                     <div class="form-row">
                         <label class="field-label" for="max-tokens" data-i18n="settings.maxTokens">最大输出 Token</label>
                         <div class="range-row">

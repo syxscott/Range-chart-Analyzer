@@ -1494,9 +1494,58 @@ class ExtractPage(ScrollArea):
         self._split.addWidget(right_panel)
 
         # Mount the splitter as the sole child of root
-        root_lay = QHBoxLayout(root)
+        root_lay = QVBoxLayout(root)
         root_lay.setContentsMargins(0, 0, 0, 0)
+        root_lay.setSpacing(8)
+        # REVIEW-2026-10-20 (cc-switch's environment check): a strip above
+        # the panels that says what is wrong with the environment BEFORE
+        # the user spends a minute on an extraction that cannot work. It
+        # is a widget and not an InfoBar on purpose: an InfoBar that
+        # disappears after five seconds is a message the user has to be
+        # looking at exactly when it appears, and "no provider is
+        # configured" is a failure the user is about to hit.
+        self._env_banner = None
+        try:
+            from gui_fluent_diagnostics import EnvBanner
+            self._env_banner = EnvBanner(
+                self, self._t, on_fix=self._goto_providers)
+            root_lay.addWidget(self._env_banner)
+        except Exception:
+            log.warning("the environment banner is unavailable", exc_info=True)
         root_lay.addWidget(self._split)
+
+    # ---- environment banner (cc-switch's environment check) ----
+
+    def refresh_environment_banner(self) -> None:
+        """Re-check the environment and update the strip above the panels.
+
+        Called on start-up and whenever the provider list changes, because
+        "no provider is configured" becomes true the moment the user
+        deletes the only provider and false the moment they add one.
+        """
+        banner = getattr(self, "_env_banner", None)
+        if banner is None:
+            return
+        try:
+            from rca_core.llm import ProviderStore
+            from gui_fluent_diagnostics import environment_warnings
+            store = ProviderStore().load()
+            providers = store.providers if store else []
+            current = sum(1 for p in providers if p.is_current)
+            keys = environment_warnings(
+                provider_count=len(providers), current_count=current)
+        except Exception:
+            log.warning("the environment check failed", exc_info=True)
+            keys = []
+        banner.set_warnings(keys)
+
+    def _goto_providers(self) -> None:
+        """The banner's "go and fix it" button."""
+        try:
+            self.win.switch_to_providers()
+        except Exception:
+            log.warning("could not switch to the providers page",
+                        exc_info=True)
 
     # ---- image ----
     def _style_preview_empty(self) -> None:
@@ -3574,6 +3623,18 @@ class ExtractPage(ScrollArea):
         self.lbl_title.setText("Extract" if self._t("upload.title") == "upload.title" else self._t("upload.title"))
         self.btn_choose.setText(self._t("image.choose"))
         self.btn_paste.setText(self._t("image.paste"))
+        # REVIEW-2026-10-20: the environment banner's own text and its
+        # button. The banner re-checks the environment on a language switch
+        # because the CHECKS are language-independent but the WORDS are
+        # not, and a banner left in the previous language is a banner the
+        # user cannot read.
+        banner = getattr(self, "_env_banner", None)
+        if banner is not None:
+            try:
+                banner.retranslate()
+            except Exception:
+                log.exception("could not retranslate the environment banner")
+            self.refresh_environment_banner()
         # UI-REVIEW-2026-09-05: inline chart selectors + dropzone hint.
         self.lbl_ctype_inline.setText(self._t("settings.chartType"))
         self.lbl_clang_inline.setText(self._t("settings.chartLang"))
@@ -4290,6 +4351,32 @@ class RangeChartFluentWindow(FluentWindow):
         except Exception as exc:
             log.warning("onboarding init failed: %s", exc)
 
+        # REVIEW-2026-10-20 (cc-switch): the "what's new" note on the
+        # first launch after an upgrade. It runs AFTER the onboarding
+        # dialog, because on a first launch there is no previous version
+        # to compare against and the welcome dialog is the thing to show.
+        try:
+            from PySide6.QtCore import QTimer as _Q2
+            from gui_fluent_onboarding import maybe_show_whats_new
+            _Q2.singleShot(900, lambda: maybe_show_whats_new(self, self.tr))
+        except Exception as exc:
+            log.warning("what's-new init failed: %s", exc)
+
+        # REVIEW-2026-10-20 (cc-switch's environment check): the strip
+        # above the extract panels. It is refreshed on a timer as well as
+        # at start-up, because the providers can change while the app is
+        # open and a banner that goes stale is worse than no banner.
+        try:
+            from PySide6.QtCore import QTimer as _Q3
+            self._env_timer = _Q3(self)
+            self._env_timer.setInterval(30000)
+            self._env_timer.timeout.connect(
+                lambda: self.extract_page.refresh_environment_banner())
+            self._env_timer.start()
+            self.extract_page.refresh_environment_banner()
+        except Exception as exc:
+            log.warning("environment banner init failed: %s", exc)
+
     # ---- navigation helpers (used by the History / Settings pages) ----
 
     def switch_to_providers(self) -> None:
@@ -4740,6 +4827,16 @@ class RangeChartFluentWindow(FluentWindow):
 
     def closeEvent(self, event):
         try:
+            # REVIEW-2026-10-20: stop the environment banner's timer FIRST.
+            # It is a GUI-thread QTimer, so it is not protected by the park
+            # mechanism below, and its next tick would re-read the provider
+            # store while the page is being torn down.
+            try:
+                env_timer = getattr(self, "_env_timer", None)
+                if env_timer is not None:
+                    env_timer.stop()
+            except Exception:
+                log.exception("failed to stop the environment timer on close")
             # Before the cfg blob is written, mirror the live ipt_key into the
             # provider store. The provider record is the one the next launch
             # reads from when populating ipt_key. Without this sync a user who
@@ -4913,6 +5010,35 @@ class RangeChartFluentWindow(FluentWindow):
                 tw_dict.clear()
         except Exception:
             pass
+        # Same deal for the providers page's QUOTA workers (REVIEW-2026-10-20).
+        # They are QThreads too, and a quota query is a network round trip
+        # with a 12 s timeout -- so a window closed during one would let the
+        # GC collect a RUNNING QThread, which Qt6 turns into a qFatal
+        # ("Destroyed while thread is still running") at exit.
+        try:
+            qw_dict = getattr(self.providers_page, "_quota_workers", None)
+            if qw_dict is not None:
+                for qw in list(qw_dict.keys()):
+                    try:
+                        qw.done.disconnect()
+                        qw.finished.disconnect()
+                    except (TypeError, RuntimeError, AttributeError):
+                        pass
+                for qw in list(qw_dict.keys()):
+                    if qw.isRunning():
+                        if not _wait(qw, 500):
+                            try:
+                                log.warning(
+                                    "Quota worker did not finish in time; "
+                                    "abandoning without terminate()."
+                                )
+                            except Exception:
+                                pass
+                        if qw.isRunning():
+                            _park_orphaned_worker(qw)
+                qw_dict.clear()
+        except Exception:
+            pass
         self.extract_page.busy = False
         super().closeEvent(event)
 
@@ -4939,7 +5065,27 @@ def main():
     app = QApplication.instance() or QApplication(sys.argv)
     setTheme(Theme.AUTO)
     setThemeColor("#2563eb")
+    # REVIEW-2026-10-20 (cc-switch's error boundary): an unhandled
+    # exception now reaches a dialog with the traceback in the clipboard,
+    # instead of a console that a packaged app does not have. PySide6
+    # >= 6.5 routes an exception raised in a SLOT to sys.excepthook
+    # (verified on 6.11.1), so this covers the GUI as well as the
+    # main-thread code.
+    #
+    # Installed BEFORE the window is built, so an exception raised while
+    # the window is being constructed is covered too; the dialog's parent
+    # is filled in afterwards.
+    try:
+        from gui_fluent_diagnostics import install_error_boundary
+        install_error_boundary(Translator(load_config().get("lang", "zh")))
+    except Exception:
+        log.warning("could not install the error boundary", exc_info=True)
     win = RangeChartFluentWindow()
+    try:
+        from gui_fluent_diagnostics import set_error_parent
+        set_error_parent(win)
+    except Exception:
+        log.warning("could not set the error dialog's parent", exc_info=True)
     # QFluentWidgets enables the Windows 11 Mica effect by default
     # (window/fluent_window.py: setMicaEffectEnabled(True)). On machines where
     # Mica isn't supported (VMs, RDP, some GPUs/drivers, Windows 10) the effect

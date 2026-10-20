@@ -9,6 +9,102 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The provider UI now has the things cc-switch's has.** Nineteen items were
+  taken from `farion1231/cc-switch`'s provider settings, and the ones that
+  fit this product were implemented rather than listed:
+
+  | cc-switch | what it is here |
+  |---|---|
+  | `ModelInputWithFetch` | the model field and a fetched-model picker side by side; the typed text narrows the list, and picking an entry fills the field |
+  | `GptContextWindowHint` + `modelMetadataFill` | a line under the model field saying the **measured** ceiling — 524,288 output tokens, 1,000,000 context — instead of letting the user find out with a 400 |
+  | `FullUrlToggle` | the endpoint may be the FULL request URL, used verbatim, for a gateway whose path is not the canonical one |
+  | `EndpointSpeedTest` | measure the candidate endpoints, colour the latency (cc-switch's <300 / 300–500 / 500–800 / ≥800 ms bands), auto-select the fastest, keep the alternates on the record |
+  | `JsonEditor` | a "format" button on the extra-headers field that re-indents the JSON and says **where** it is wrong |
+  | provider notes | a free-text note per provider, shown on the card and searchable — what turns five relay accounts from five opaque names into five identifiable ones |
+  | custom provider logo | a custom glyph for the card's icon tile, instead of a name-derived abbreviation that gives five relays five identical tiles |
+  | profiles | a provider belongs to a named group; the providers page filters to one group at a time |
+  | category counts | a line above the list saying how many providers there are, which one is active, how many are healthy and how many are failing |
+  | usage query | the plan's remaining quota, on the card and in the browser — the number that decides whether the next extraction can start |
+  | environment check | a persistent strip above the extract panel when no provider is configured, or a proxy is set |
+  | error boundary | an unhandled exception reaches a dialog with the traceback in the clipboard instead of a console a packaged app does not have |
+  | what's new | the first launch after an upgrade says what changed, read out of this file |
+
+  The advanced fields (extra headers, note, icon, profile) are folded into one
+  "advanced" row, because the fields a user fills in ONCE were pushing the save
+  button off the bottom of the dialog, and a field the user cannot see is a
+  field the user cannot fill in.
+
+  The speed test runs on a worker thread. It did not at first, and with three
+  candidate endpoints the dialog was frozen for half a minute — a frozen
+  dialog is a dialog the user closes and never uses.
+
+- **The plan's remaining quota is now a number you can see.**
+  MiniMax's programming plan publishes it, and the route was confirmed against
+  a live Token Plan key: `GET /v1/api/openplatform/coding_plan/remains`, with
+  a 5-hour bucket that refills quickly and a weekly bucket that does not.
+  Measured at the time: the 5-hour bucket 1 % used, the weekly bucket 18 % used
+  — which is the one that was actually throttling the account.
+
+  The two windows are shown SEPARATELY, because they are separately binding,
+  and the chip shows what is **LEFT**: the API reports the used share, and
+  "1 % used" where the user reads "1 % left" is a sign error the user acts on.
+  The card shows the same number the browser does, and the browser gets it
+  from a new `GET /api/quota` on the local server, which holds the key — the
+  browser never sees the credential. That endpoint is loopback-only (or
+  token-gated) and has its own, tighter rate bucket, because every call to it
+  leaves the machine and spends the account's own limit.
+
+- **The providers file is no longer overwritten in silence.**
+  `providers.json` is a plain JSON file in the user's profile, so a text
+  editor, a sync client or a second copy of the app can change it while a
+  dialog is open. Whichever version is written last used to win, and the loser
+  was silent. The digest taken when the dialog opened is now compared with the
+  file on disk when it closes, and a change is a QUESTION — keep the file on
+  disk, overwrite it with the edit, or cancel — because the file on disk may
+  hold a key the user pasted a minute ago.
+
+- **A provider's note, icon, profile, full-URL flag and alternate endpoints are
+  FIELDS of the record.** The wizard REBUILDS the provider from a hand-listed
+  set of fields, so a field that is not listed is a field the user loses the
+  moment they edit that provider — and the product reverts to a configuration
+  that times out, with nothing on screen to explain why. The reasoning effort
+  was exactly such a field once; the same argument applies to every field
+  added here, and the same test covers them.
+
+- **The environment is checked before an extraction, not after.**
+  No provider configured, or a system proxy that a local endpoint cannot be
+  reached through, is a failure the user is about to hit — and a proxy makes
+  `127.0.0.1` fail in a way that looks exactly like a dead server.
+
+### Fixed
+
+- **`Optional` was used in `rca_core/llm.py` without being imported.** The
+  annotations are strings at runtime (`from __future__ import annotations`), so
+  the tests were green and the import did not fail — but the CI lint gate
+  (`ruff check . --select F821`) was red, and `typing.get_type_hints()` on the
+  quota catalogue would have raised `NameError`. The same class of defect was
+  already fixed once in this file (`Mapping`, REVIEW-2026-10-20), which is why
+  the gate exists.
+
+- **The model catalogue's note was Chinese prose in a three-language UI.** The
+  note is now an i18n key, translated in zh/en/ja, with the raw string as the
+  fallback so a catalogue entry is never silently blank.
+
+- **`tests_llm.py` only passed on a machine whose DNS is not intercepted.**
+  The test asserted the request dispatch against `https://example.com`, and
+  the SSRF guard RESOLVES the host before it lets a request out. On a
+  machine whose resolver is a proxy or a corporate DNS — most Chinese ISPs
+  among them — `example.com` resolves to `127.0.0.1`, the guard rejects it
+  as private, the request never reaches the fake `urlopen` the test
+  installed, and the test failed on "the model did not answer" while the
+  code under test was perfectly fine. CI never saw it because GitHub's
+  resolver returns the real public address.
+
+  The endpoint is now a literal public address, so the test asserts what it
+  means to assert — the headers, the path and the body — and nothing about
+  the machine's resolver. The guard's own behaviour against private hosts
+  is covered by `tests/test_ssrf.py` and `tests/test_ssrf_shared.py`.
+
 - **A provider can now say how hard the model should think, and the levels are
   the MODEL's.** MiniMax's M3.1 family ALWAYS thinks and its effort level
   DEFAULTS TO `max`; the thinking tokens are billed against and CONSUME

@@ -45,6 +45,13 @@ _RATE_MAX_REQUESTS = 30
 # cap, so token minting can never crowd out extractions.
 _RATE_MAX_REQUESTS_GET = 120
 _RATE_MAX_REQUESTS_PROV = 60
+# REVIEW-2026-10-20: the quota endpoint gets its own, TIGHTER bucket. Every
+# call to it leaves the machine and hits the VENDOR's account API with the
+# user's key, so unlike the static assets it is not free to serve: a
+# client that polled it would spend the account's own rate limit, and
+# MiniMax's coding-plan endpoint is what a busy extraction is already
+# competing for.
+_RATE_MAX_REQUESTS_QUOTA = 12
 _rate_history: dict[str, collections.deque] = {}
 _rate_lock = threading.Lock()
 # REVIEW-2026-09-10: sweep fully-expired entries once the map is this large,
@@ -859,6 +866,58 @@ def _is_loopback_addr(addr: str) -> bool:
     if mapped is not None:
         return mapped.is_loopback
     return ip.is_loopback
+
+
+def _quota_payload() -> dict:
+    """The current provider's plan quota, as a JSON-ready dict.
+
+    REVIEW-2026-10-20 (cc-switch's usage query): the browser front-end
+    needs the same number the desktop card shows -- how much of the plan
+    is left -- so it can warn before an extraction that cannot start.
+
+    Everything here is best-effort and NEVER raises out of the handler:
+    a provider that publishes no quota, a store that cannot be read, a
+    vendor that is down -- each of them is an answer, not a crash, and a
+    crash here would take the whole request down with it.
+    """
+    from rca_core.llm import ProviderStore, query_coding_plan_quota
+
+    try:
+        store = ProviderStore().load()
+        provider = store.get_current() if store else None
+    except Exception:
+        provider = None
+    if provider is None:
+        return {"ok": False, "error": "no provider is configured"}
+    try:
+        result = query_coding_plan_quota(provider, timeout_sec=12)
+    except Exception:
+        return {"ok": False, "error": "the quota query failed"}
+    if not result.ok:
+        return {"ok": False, "error": result.error or "no quota",
+                "provider": provider.name}
+    tiers = []
+    for tier in result.tiers:
+        used = float(getattr(tier, "used_percent", 0.0) or 0.0)
+        tiers.append({
+            "name": tier.name,
+            "used_percent": used,
+            # The API reports the USED share. The client shows what is
+            # LEFT, and a sign error here is a sign error the user acts
+            # on, so both numbers travel together.
+            "left_percent": int(round(max(0.0, 100.0 - used))),
+            "resets_at": tier.resets_at,
+            "remaining": tier.remaining,
+            "total": tier.total,
+            "unit": tier.unit,
+        })
+    return {
+        "ok": True,
+        "provider": provider.name,
+        "model": provider.model,
+        "tiers": tiers,
+        "queried_at": result.queried_at,
+    }
 
 
 # CSRF token storage: thread-safe dict mapping session tokens to CSRF tokens.
@@ -2047,6 +2106,54 @@ class Handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path.rstrip("/") == "/health":
             self._send_json(200, {"ok": True, "service": "range-chart-analyzer"})
             return
+        # REVIEW-2026-10-20 (cc-switch's usage query): the plan's remaining
+        # quota, for the browser front-end.
+        #
+        # The same guards the provenance export has, for the same reason:
+        # the answer describes the user's PAID account, and a server
+        # started with --host 0.0.0.0 would otherwise let every machine on
+        # the LAN read it. The client header stops a browser from reading
+        # it cross-origin (it is not a simple header, so it needs a
+        # preflight), and the loopback-or-token gate stops a scanner.
+        if urlparse(self.path).path.rstrip("/") == "/api/quota":
+            client_header = (
+                self.headers.get(_PROVENANCE_CLIENT_HEADER) or ""
+            ).strip()
+            if client_header != _PROVENANCE_CLIENT_VALUE:
+                self._send_json(403, {"ok": False, "error": "forbidden"})
+                return
+            try:
+                client_ip = self.client_address[0]
+            except Exception:
+                client_ip = "unknown"
+            configured_token = (os.environ.get(_PROVENANCE_TOKEN_ENV) or "").strip()
+            provided_token = (self.headers.get(_PROVENANCE_TOKEN_HEADER) or "").strip()
+            if configured_token:
+                if not provided_token or not secrets.compare_digest(
+                        provided_token.encode("utf-8"),
+                        configured_token.encode("utf-8")):
+                    self._send_json(403, {"ok": False, "error": "forbidden"})
+                    return
+            elif not _is_loopback_addr(client_ip):
+                self._send_json(403, {
+                    "ok": False,
+                    "error": "forbidden",
+                    "hint": "the quota endpoint is loopback-only unless "
+                            f"{_PROVENANCE_TOKEN_ENV} is set",
+                })
+                return
+            allowed, wait_sec = _check_rate_limit(
+                client_ip, bucket="quota",
+                max_requests=_RATE_MAX_REQUESTS_QUOTA)
+            if not allowed:
+                self._send_json(429, {
+                    "ok": False,
+                    "error_key": "err.rateLimit",
+                    "error_body": f"Rate limit exceeded. Retry after {wait_sec} seconds.",
+                })
+                return
+            self._send_json(200, _quota_payload())
+            return
         # CSRF token endpoint: issue a token for the client to use in subsequent POSTs.
         if urlparse(self.path).path.rstrip("/") == "/api/extract":
             # Apply a per-IP rate limit so a single client cannot mint
@@ -2261,7 +2368,8 @@ class Handler(BaseHTTPRequestHandler):
         405 with headers only (still length-framed).
         """
         _path = urlparse(self.path).path
-        if _path.rstrip("/") == "/api/extract" or _PROVENANCE_ID_RE.match(_path):
+        if _path.rstrip("/") == "/api/extract" or _PROVENANCE_ID_RE.match(_path) \
+                or _path.rstrip("/") == "/api/quota":
             self._send_json(405, {
                 "ok": False,
                 "error_key": "err.methodNotAllowed",

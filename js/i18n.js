@@ -48,6 +48,12 @@ const RCA_I18N = {
     'settings.effort.default': '默认（不发送）',
     'settings.effort.notSupported': '该模型不支持推理强度',
     'settings.effort.hint': 'MiniMax M3.1 默认 max，思考会吃满 max_tokens；密集图建议选 low。',
+    // REVIEW-2026-10-20 (cc-switch's usage query): the plan's remaining
+    // quota, shown next to the settings the user is about to change.
+    'quota.checking': '正在查询套餐配额…',
+    'quota.unavailable': '套餐配额不可用',
+    'quota.fiveHour': '5 小时剩余 {pct}%',
+    'quota.weekly': '周剩余 {pct}%',
     'settings.maxTokens': '最大输出 Token',
     'settings.maxTokens.hint': '种属很多的大图可调高，避免结果被截断。',
   'settings.enhance': '图像增强',
@@ -460,6 +466,12 @@ RCA_I18N.en = {
   'settings.effort.default': 'Default (not sent)',
   'settings.effort.notSupported': 'This model has no reasoning control',
   'settings.effort.hint': 'MiniMax M3.1 defaults to max, and the thinking consumes max_tokens; pick low for dense figures.',
+  // REVIEW-2026-10-20 (cc-switch's usage query): the plan's remaining
+  // quota, shown next to the settings the user is about to change.
+  'quota.checking': 'Checking the plan quota…',
+  'quota.unavailable': 'The plan quota is unavailable',
+  'quota.fiveHour': '5h left {pct}%',
+  'quota.weekly': 'weekly left {pct}%',
   'settings.maxTokens': 'Max output tokens',
   'settings.maxTokens.hint': 'Increase for large charts with many species to avoid truncation.',
   'settings.enhance': 'Image enhancement',
@@ -836,6 +848,12 @@ RCA_I18N.ja = {
   'settings.effort.default': '既定（送信しない）',
   'settings.effort.notSupported': 'このモデルは推論強度を制御しません',
   'settings.effort.hint': 'MiniMax M3.1 の既定は max で思考が max_tokens を消費します。密な図では low を推奨。',
+  // REVIEW-2026-10-20 (cc-switch's usage query): the plan's remaining
+  // quota, shown next to the settings the user is about to change.
+  'quota.checking': 'プランの残量を確認しています…',
+  'quota.unavailable': 'プランの残量を取得できません',
+  'quota.fiveHour': '5時間 残り {pct}%',
+  'quota.weekly': '週間 残り {pct}%',
   'settings.maxTokens': '最大出力トークン',
   'settings.maxTokens.hint': '種が多い大きな図では値を上げ、結果の途切れを防ぎます。',
   'settings.enhance': '画像強調',
