@@ -1463,6 +1463,30 @@ PROVIDER_PRESETS: list[ProviderPreset] = [
 
 
 def _default_store_path() -> str:
+    """Where the provider store lives, unless the environment says otherwise.
+
+    REVIEW-2026-10-20: the ``RCA_PROVIDER_STORE`` override exists because
+    of a real accident. A probe script tried to redirect the store by
+    replacing the module attribute ``_default_store_path`` -- and that
+    does NOTHING, because ``ProviderStore.path`` is declared as
+    ``field(default_factory=_default_store_path)`` and the factory is
+    BOUND AT CLASS-CREATION TIME. The class kept pointing at the original
+    function, so the probe silently wrote to the USER'S REAL store, and
+    emptied it: five providers, two of them paid MiniMax keys. The only
+    recovery was a backup that had been taken by hand the day before.
+
+    So: the redirect is an ENVIRONMENT VARIABLE, which cannot be defeated
+    by a binding subtlety, and the store backs itself up on every change
+    (see ``ProviderStore._backup_before_replace``) so the same accident is
+    recoverable from the store itself.
+
+    The override is also the supported way to isolate a test or a probe
+    from the real store -- the CI workflow already isolates the HOME
+    directory on Linux for the same reason.
+    """
+    override = (os.environ.get("RCA_PROVIDER_STORE") or "").strip()
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
     base = os.path.join(os.path.expanduser("~"), ".range_chart_analyzer")
     return os.path.join(base, "providers.json")
 
@@ -1497,6 +1521,114 @@ class ProviderStore:
     lock: "threading.RLock" = field(default_factory=threading.RLock, repr=False)
 
     # -- persistence -----------------------------------------------------
+
+    #: How many rolling backups the store keeps. Five is the same number
+    #: ``scripts/update_ics.py`` keeps for the canonical table, and the
+    #: same rotation shape (``.bak``, ``.bak.1`` ... ``.bak.4``).
+    BACKUP_COUNT = 5
+
+    def _config_fingerprint(self, data: dict) -> str:
+        """A digest of the store's CONFIGURATION.
+
+        Three things are deliberately excluded:
+
+        * the API key ciphertext -- it is re-encrypted with a random IV on
+          every write, so including it would make every save look like a
+          change and the backup chain would fill with copies of the same
+          configuration;
+        * ``current_id`` -- that is a POINTER, not configuration. The
+          store rewrites the file every time the user switches the active
+          provider, and a switch must not cost the user the previous
+          configuration: five provider switches would otherwise push their
+          real providers out of the chain entirely.
+        * ``is_current`` -- the same pointer, stored on each provider. It
+          is DERIVED from ``current_id`` on every load, so it changes with
+          the switch and belongs with it.
+        """
+        import hashlib
+        rows = []
+        for p in data.get("providers") or []:
+            rows.append({k: v for k, v in p.items()
+                         if k not in ("api_key", "is_current")})
+        payload = json.dumps(rows, sort_keys=True, ensure_ascii=False,
+                             default=str)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _rotate_backups(self) -> str:
+        """Shift ``.bak`` -> ``.bak.1`` -> ... and return the free slot.
+
+        The same rotation ``scripts/update_ics.py`` uses, for the same
+        reason: a single fixed-name ``.bak`` is clobbered by every write,
+        so after a few writes the true previous state is gone. Each step
+        is an ``os.replace``, so a crash mid-rotation cannot lose a
+        generation.
+        """
+        newest = self.path + ".bak"
+        if os.path.exists(newest):
+            oldest = "%s.bak.%d" % (self.path, self.BACKUP_COUNT - 1)
+            if os.path.exists(oldest):
+                try:
+                    os.remove(oldest)
+                except OSError:
+                    pass
+            for k in range(self.BACKUP_COUNT - 2, 0, -1):
+                src = "%s.bak.%d" % (self.path, k)
+                if os.path.exists(src):
+                    try:
+                        os.replace(src, "%s.bak.%d" % (self.path, k + 1))
+                    except OSError:
+                        pass
+            try:
+                os.replace(newest, newest + ".1")
+            except OSError:
+                pass
+        return newest
+
+    def _backup_before_replace(self, data: dict) -> None:
+        """Snapshot the file that is about to be replaced.
+
+        REVIEW-2026-10-20: the store had NO history of its own. A probe
+        script emptied it, and the only way back was a backup somebody had
+        taken by hand the day before -- a lucky accident, not a design.
+
+        The snapshot is taken only when the CONFIGURATION changes, so a
+        save that merely switches the active provider does not spend a
+        generation. It lands next to the store, in the same 0700
+        directory, with the same 0600 mode, because it holds the same
+        encrypted keys -- and it is a BYTE-LEVEL copy of the file, not a
+        re-serialisation of the data, for the reason
+        ``scripts/update_ics.py`` gives: a backup is the OLD state.
+        """
+        if not self.path or not os.path.isfile(self.path):
+            return
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except (OSError, ValueError):
+            return
+        if not isinstance(existing, dict):
+            return
+        if self._config_fingerprint(existing) == self._config_fingerprint(data):
+            return
+        slot = self._rotate_backups()
+        tmp = "%s.%d.tmp" % (slot, os.getpid())
+        try:
+            with open(self.path, "rb") as src, open(tmp, "wb") as dst:
+                dst.write(src.read())
+                dst.flush()
+                os.fsync(dst.fileno())
+            _chmod_user_only(tmp)
+            os.replace(tmp, slot)
+            _chmod_user_only(slot)
+        except OSError:
+            # A failed backup must not stop the save: refusing to write
+            # because the backup failed would turn a recoverable problem
+            # into a lost configuration.
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
 
     def load(self) -> "ProviderStore":
         self.providers = []
@@ -1581,6 +1713,11 @@ class ProviderStore:
                 "providers": [p.to_dict() for p in self.providers],
             }
             tmp = self.path + ".tmp"
+            # REVIEW-2026-10-20: take the history BEFORE the file is
+            # replaced, so an accidental wipe is recoverable from the
+            # store itself rather than from a copy somebody happened to
+            # make by hand.
+            self._backup_before_replace(data)
             # REVIEW-2026-09-20 #25: without the finally a failed write or a
             # failed os.replace (locked target on Windows, disk full,
             # permissions) left ``providers.json.tmp`` behind forever - a

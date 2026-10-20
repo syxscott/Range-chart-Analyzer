@@ -38,6 +38,25 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   candidate endpoints the dialog was frozen for half a minute — a frozen
   dialog is a dialog the user closes and never uses.
 
+- **`effort=max` with `max_tokens=524288` now answers 3 of 3.** The end-to-end
+  regression of the SHIPPED path (the real entry point, scored against the
+  authority CSV) was re-run on the budgets that scale with the reasoning
+  level — 240 s per call, 600 s per path — and every run came back perfect:
+
+  | run | wall clock | cells | precision | recall |
+  |---|---|---|---|---|
+  | 0 | 252 s | 93 / 93 | 1.0000 | 1.0000 |
+  | 1 | 191 s | 93 / 93 | 1.0000 | 1.0000 |
+  | 2 | 419 s | 93 / 93 | 1.0000 | 1.0000 |
+
+  The third run is the interesting one: at 419 s it would have been cut off by
+  the old 120 s ceiling, which is what the previous round measured as "2 of 3,
+  one network failure". The budget was the missing piece, not the model.
+
+  The price is wall clock, and it is worth stating plainly: `low` answers the
+  same figure in 24–31 s for about a quarter of the tokens, and `max` is for
+  the run where the answer has to be right rather than fast.
+
 - **The plan's remaining quota is now a number you can see.**
   MiniMax's programming plan publishes it, and the route was confirmed against
   a live Token Plan key: `GET /v1/api/openplatform/coding_plan/remains`, with
@@ -77,6 +96,36 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `127.0.0.1` fail in a way that looks exactly like a dead server.
 
 ### Fixed
+
+- **The provider store could be emptied with no way back.** A probe script
+  emptied the live `providers.json` — five providers, two of them paid
+  MiniMax keys — and the only way back was a backup somebody had taken by
+  hand the day before. A lucky accident, not a design.
+  Two things were missing, and both are here now:
+
+  - **A supported way to point the store somewhere else.**
+    `RCA_PROVIDER_STORE` overrides the path. The obvious way to redirect
+    it — replacing the module attribute `_default_store_path` — does
+    NOTHING, and that is the trap worth naming: `ProviderStore.path` is
+    declared with `field(default_factory=_default_store_path)`, and the
+    factory is bound at CLASS-CREATION TIME, so the class keeps calling
+    the original function. The probe believed it was writing to a temp
+    file and was in fact writing to the user's real one. The test suite
+    now pins the trap itself, so nobody reaches for it again.
+
+  - **A history of the store's own.** Every save that changes the
+    CONFIGURATION keeps the file it replaced, as a byte-level snapshot in
+    a rolling `.bak` / `.bak.1` … chain — the same rotation and the same
+    count `scripts/update_ics.py` already uses for the canonical table.
+
+    The rule is deliberate about what counts as a change. The API key is
+    excluded, because it is re-encrypted with a random IV on every write
+    and including it would make every save look like a change. `current_id`
+    and `is_current` are excluded too, because they are a POINTER rather
+    than configuration: the store rewrites the file every time the user
+    switches the active provider, and five switches would otherwise push
+    the user's real providers out of the chain — which is the chain they
+    would need precisely after an accident.
 
 - **`Optional` was used in `rca_core/llm.py` without being imported.** The
   annotations are strings at runtime (`from __future__ import annotations`), so
