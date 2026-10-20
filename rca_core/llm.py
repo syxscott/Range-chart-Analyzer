@@ -36,7 +36,7 @@ import urllib.request
 import uuid
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Mapping
 
 # AUDIT-2026-09-29: shared with server.py on purpose -- see
 # rca_core/redact.py for why a second copy of that pattern is a liability.

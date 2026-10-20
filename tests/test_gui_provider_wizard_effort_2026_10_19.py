@@ -32,7 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest                                                  # noqa: E402
 
-from rca_core.llm import LlmProvider, REASONING_EFFORT_LEVELS  # noqa: E402
+from rca_core.llm import (LlmProvider, REASONING_DEFAULT,  # noqa: E402
+                          REASONING_EFFORT_LEVELS)
 
 
 def _qt_available():
@@ -139,7 +140,6 @@ def test_the_default_row_means_do_not_send(qapp):
 
 @_requires_qt
 def test_every_documented_level_is_offered(qapp):
-    from rca_core.llm import REASONING_EFFORT_LEVELS, REASONING_DEFAULT
     w = _wizard(qapp, _existing(""))
     try:
         w._ipt_model.setText("MiniMax-M3.1-Flash")
