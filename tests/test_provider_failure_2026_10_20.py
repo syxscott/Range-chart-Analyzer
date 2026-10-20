@@ -189,6 +189,32 @@ def test_a_retry_after_in_milliseconds_is_carried_out():
     assert f.retry_after_sec == 2.5
 
 
+def test_the_headers_are_cleared_when_a_call_never_reaches_the_network():
+    """A call the SSRF guard rejects sends nothing, so there are no headers.
+
+    Without the clearing, the slot would still hold the PREVIOUS
+    attempt's headers -- and a stale "Retry-After: 120" would then delay
+    a retry that has nothing to do with that response.
+    """
+    import rca_core.llm as L
+    from rca_core.llm import _last_response_headers
+
+    L._LAST_RESPONSE_HEADERS.headers = {"retry-after": "120"}
+    provider = L.LlmProvider(name="p", endpoint="http://127.0.0.1:9/x",
+                              api_key="k", model="m")
+    # 127.0.0.1 is allowed by the guard, so use a body that cannot be
+    # serialised to make the call fail BEFORE the network.
+    provider.extra_body = {"bad": object()}
+    try:
+        L.call_llm_api(provider=provider, system_prompt="s", image_b64="QQ==",
+                       media_type="image/png", user_text="u", max_tokens=10)
+    except Exception:
+        pass
+    assert _last_response_headers() == {}, (
+        "a stale header survived a call that never reached the network: %r"
+        % (_last_response_headers(),))
+
+
 # ---------------------------------------------------------------------------
 # The retry layers use it
 # ---------------------------------------------------------------------------

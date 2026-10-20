@@ -2969,6 +2969,13 @@ def call_llm_api(
     — typically what production callers want. The audit trail reads
     these values out of ``provider.extra_body`` for request_meta.
     """
+    # REVIEW-2026-10-20: clear the thread's response-header slot before
+    # this attempt. The slot holds the LAST response, and a call that
+    # never reaches the network (the SSRF guard rejects the endpoint, a
+    # malformed body) would otherwise leave the PREVIOUS attempt's
+    # headers in place -- and a stale "Retry-After: 120" would then delay
+    # a retry that has nothing to do with that response.
+    _LAST_RESPONSE_HEADERS.headers = {}
     # If temperature/seed were supplied at this layer, fold them into
     # a copy of the provider's extra_body so the per-call sampling is
     # auditable in request_meta without mutating the caller's provider.
