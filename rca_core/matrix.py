@@ -147,13 +147,50 @@ SHEET_CHUNK_MAX = 124
 #: call) would have answered.
 MAX_SHEET_CALLS = 3
 
+#: Ceiling on ONE call of the two-stage path, and the budget for the WHOLE
+#: path, per reasoning level -- (per-call ceiling, path budget) in seconds.
+#:
+#: REVIEW-2026-10-19: these were one pair of numbers (90 s / 360 s), which
+#: was right for the "low" level and wrong for every other one. Measured on
+#: the reference figure's label call, ONE call:
+#:
+#:     low   28.3 s              out_tok  3,077
+#:     high  48.3 s              out_tok  5,948
+#:     max   69.1 s / 102.4 s    out_tok  9,932 / 14,738
+#:
+#: The thinking is UNBOUNDED, so a ceiling has to clear the SLOWEST
+#: measurement rather than the average one: at 90 s the "max" level
+#: straddled the line and the path gave up before it could answer, and the
+#: end-to-end regression at "max" failed 3 of 3 with an empty reply.
+#:
+#: The "low" row is the measured 3-of-3 configuration (precision 1.000,
+#: recall 1.000), so it keeps the old numbers exactly.
+REASONING_BUDGETS = {
+    "low":    (90, 360),
+    "medium": (120, 420),
+    "high":   (150, 480),
+    "xhigh":  (180, 540),
+    "max":    (240, 600),
+}
+#: The budget for a configuration with no reasoning control (or one the model
+#: does not recognise): the old numbers, which are the measured-good ones.
+DEFAULT_REASONING_BUDGET = (90, 360)
+
+#: The whole-path budget's CEILING, independent of the reasoning level.
+#:
+#: The server's single-run budget has to hold this path AND the single-pass
+#: fallback that follows it, so the path cannot have the whole of it.
+#: ``extractor.SINGLE_RUN_MAX_ATTEMPTS`` is the attempt count the server's
+#: budget is derived from.
+MAX_PATH_BUDGET_SEC = 600
+
 #: Ceiling on ONE call of the two-stage path.
 #:
 #: The server's budget is a wall-clock guard over the whole run, and this path
 #: makes several calls, so each one is capped: a hung call can then spend at
 #: most its share of the budget instead of the whole of it. Measured, the calls
-#: take 5-45 s (MiniMax-M3 on the label image, and on a 31-tile sheet at 8x),
-#: so 90 s is a generous ceiling and a real hang is caught early.
+#: take 5-45 s on "low" (MiniMax-M3 on the label image, and on a 31-tile sheet
+#: at 8x), so 90 s is a generous ceiling and a real hang is caught early.
 MATRIX_CALL_TIMEOUT_SEC = 90
 
 #: Wall-clock budget for the WHOLE two-stage path, retries included.
@@ -205,6 +242,75 @@ def matrix_path_budget_sec(timeout_sec: int) -> int:
 
 #: Tiles per row on a sheet.
 SHEET_PER_ROW = 8
+
+
+def _report_progress(progress, token: str) -> None:
+    """Report which call the path is on, if the caller wants to know.
+
+    The two-stage path makes FOUR calls for a typical matrix (one for the
+    labels, one per contact sheet) and each of them can take a minute or
+    more. A single spinner says "working" for all of them, which is no
+    information at all: measured, the "max" reasoning level spends 70-100 s
+    in a single call. The tokens are
+
+        ``call:labels``        the axis-label call
+        ``call:legend``        the legend re-ask
+        ``call:cells:2/3``     contact sheet 2 of 3
+        ``call:single``        the single-pass fallback
+
+    A callback that raises must not take the extraction down with it, so the
+    call is wrapped.
+    """
+    if progress is None:
+        return
+    try:
+        progress(token)
+    except Exception:
+        pass
+
+
+def matrix_budgets_for(model: str, effort: str,
+                       timeout_sec: int) -> tuple[int, int]:
+    """The (per-call ceiling, whole-path budget) for this configuration.
+
+    Both are in seconds. The per-call ceiling is what ONE call of the
+    two-stage path may take; the path budget is what the whole path may
+    spend, retries included.
+
+    The reasoning level decides both, because the level decides how long the
+    model thinks (see ``REASONING_BUDGETS`` for the measurements).
+
+    The caller's ``timeout_sec`` bounds the RUN, not one call of it: the
+    server's single-run budget is derived from it, and this path's share of
+    that budget is what it gets. Capping a single call by it instead left the
+    deeper levels with no room at all -- measured, the "max" label call took
+    69.1 s, 94 s, 102.4 s and 121 s on four tries, so a 120 s per-call
+    ceiling failed it about half the time, while a 240 s one cleared every
+    measurement. A path that makes four calls is not four requests with the
+    caller's deadline; it is one request with a budget.
+
+    So: the per-call ceiling is the level's own need, capped by the path
+    budget, and the path budget is the level's need capped by what is left
+    of the server's budget after the single-pass fallback that follows it.
+    """
+    from .llm import resolve_reasoning_choice
+    choice = resolve_reasoning_choice(model, effort)
+    per_call, path = REASONING_BUDGETS.get(choice, DEFAULT_REASONING_BUDGET)
+    try:
+        caller_timeout = int(timeout_sec)
+    except (TypeError, ValueError):
+        caller_timeout = 120
+    # The path may not have the whole of the server's single-run budget: the
+    # single-pass fallback that follows it has to fit as well, and it is one
+    # more call at the caller's timeout with its own retry. Without this the
+    # path could overrun the budget at a SHORT timeout -- measured: at 30 s
+    # the server's budget is 265 s and the path was allowed 600.
+    from .extractor import extraction_wall_clock_budget_sec
+    server_budget = extraction_wall_clock_budget_sec(caller_timeout)
+    fallback = 2 * caller_timeout
+    path = max(1, min(path, MAX_PATH_BUDGET_SEC, server_budget - fallback))
+    per_call = max(1, min(per_call, path))
+    return per_call, path
 
 #: The label call reads the whole figure; 2x is what took sample headers from
 #: 12/15 to 18/18. Capped so a very large figure is not upscaled without bound.
@@ -952,6 +1058,7 @@ def extract_matrix_two_stage(
     max_tokens: int = 32000,
     confidence: float = 0.9,
     sheet_chunk: int = 0,
+    progress=None,
 ) -> Optional[Dict[str, Any]]:
     """Two-stage extraction. ``None`` means "use the single-pass path instead".
 
@@ -985,6 +1092,7 @@ def extract_matrix_two_stage(
     label_prompt = LABEL_PROMPT_TEMPLATE.replace(
         "{N_ROWS}", str(filled.n_rows)).replace(
         "{N_COLS}", str(filled.n_cols))
+    _report_progress(progress, "call:labels")
     text, truncated, err = call_model(
         label_prompt, label_img,
         f"Transcribe every axis label in this figure. There are exactly "
@@ -1011,6 +1119,7 @@ def extract_matrix_two_stage(
     if legend_is_plausible(labels.get("legend") or []) is not None:
         log.info("matrix: legend implausible (%s); asking again",
                  legend_is_plausible(labels.get("legend") or []))
+        _report_progress(progress, "call:legend")
         ltext, ltrunc, _lerr = call_model(
             LEGEND_SYSTEM_PROMPT, label_img,
             "Read the class legend of this figure.", max_tokens)
@@ -1069,10 +1178,23 @@ def extract_matrix_two_stage(
     cells: List[Dict[str, Any]] = []
     unanswered = 0
     out_of_vocab = 0
-    for sheet_b64, meta in sheets:
+    total_cells = max(1, len(filled.cells))
+    done_cells = 0
+    for sheet_idx, (sheet_b64, meta) in enumerate(sheets, start=1):
+        _report_progress(progress,
+                         f"call:cells:{sheet_idx}/{len(sheets)}")
         stext, sheet_truncated, serr = call_model(
             cell_prompt, sheet_b64,
             f"Read all {len(meta)} tiles.", max_tokens)
+        # REVIEW-2026-10-19: how far through the matrix the reader is. This
+        # is REAL progress -- the fraction of the figure's filled cells that
+        # have actually been read -- and it is what the GUI's progress bar
+        # shows. It is reported after the call, not during it, because a
+        # fraction that moved while a call was still in flight would be a
+        # guess, and a guess on a progress bar is worse than no bar.
+        done_cells += len(meta)
+        _report_progress(progress,
+                         f"frac:{min(1.0, done_cells / total_cells):.4f}")
         # `sheet_truncated`, NOT `truncated`. The latter is the LABEL call's flag,
         # still bound from line 760 and always False by now -- so a truncated
         # sheet was never recognised as one. Measured: with two sheets and the

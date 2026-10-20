@@ -120,22 +120,42 @@ def test_a_changed_effort_is_saved(qapp):
 def test_the_default_row_means_do_not_send(qapp):
     w = _wizard(qapp, _existing(""))
     try:
-        assert w._effort_values[w._cmb_effort.currentIndex()] == "", \
-            "a provider with no effort must open on the 'not sent' row"
+        # REVIEW-2026-10-19: the levels are the MODEL's, and minimax-code's
+        # catalog puts "default" FIRST in M3.1-Flash's option list -- it is a
+        # visible level, not an absence, because a level the user cannot see
+        # is a level the user cannot reason about. "default" means "let the
+        # provider decide", and it sends nothing.
+        assert w._effort_values[w._cmb_effort.currentIndex()] == "default", \
+            "a provider with no stored effort must open on the 'default' row"
         w._ipt_name.setText("MiniMax")
         w._ipt_endpoint.setText("https://api.minimaxi.com/anthropic")
         w._ipt_key.setText("sk-test")
         w._ipt_model.setText("MiniMax-M3")
         w._on_ok()
-        assert w.created_provider.reasoning_effort == ""
+        assert w.created_provider.reasoning_effort == "default"
     finally:
         w.close()
 
 
 @_requires_qt
 def test_every_documented_level_is_offered(qapp):
+    from rca_core.llm import REASONING_EFFORT_LEVELS, REASONING_DEFAULT
     w = _wizard(qapp, _existing(""))
     try:
-        assert w._effort_values == [""] + list(REASONING_EFFORT_LEVELS)
+        w._ipt_model.setText("MiniMax-M3.1-Flash")
+        assert w._effort_values == [REASONING_DEFAULT] + list(REASONING_EFFORT_LEVELS)
+    finally:
+        w.close()
+
+
+@_requires_qt
+def test_a_model_without_reasoning_control_offers_nothing(qapp):
+    """M3's thinking is an on/off switch, and any other model takes none."""
+    w = _wizard(qapp, _existing(""))
+    try:
+        w._ipt_model.setText("gpt-4o")
+        assert w._effort_values == [""], \
+            "a model with no reasoning control must not offer a level"
+        assert w._cmb_effort.isEnabled() is False
     finally:
         w.close()

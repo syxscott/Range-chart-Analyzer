@@ -78,6 +78,8 @@ TRANSLATIONS["zh"] = {
     "settings.endpoint": "API 端点",
     "settings.model": "模型",
     "settings.maxTokens": "最大输出 Token",
+    # REVIEW-2026-10-19: 推理强度。档位属于模型而不属于程序。
+    "settings.effort": "推理强度 (effort)",
     "settings.maxEdge": "图像分辨率上限 (px)",
     "settings.runs": "运行次数 (1-5)",
     "settings.chartLang": "图表语言",
@@ -188,6 +190,10 @@ TRANSLATIONS["zh"] = {
     "names.ambiguous": "学名 {name} 在参考数据库中存在多个同等强度的匹配，需人工消歧",
     "status.uploading": "正在上传图像……",
     "status.thinking": "正在分析图像，请稍候……",
+    "status.callLabels": "正在读取坐标轴标签",
+    "status.callLegend": "正在读取图例",
+    "status.callCells": "正在读取格子 {idx}/{total}",
+    "status.callSingle": "改用整体识别",
     "status.parsing": "正在解析结果……",
     # UX-2026-10-18 (流畅性 A3): emitted by call_llm_api_with_retry before
     # each backoff sleep, and suffixed by _on_progress with
@@ -396,6 +402,7 @@ TRANSLATIONS["zh"] = {
     # 思考 token 计入 max_tokens，密集图上会把预算吃光导致读超时。
     "wizard.fieldEffort": "推理强度 (effort)",
     "wizard.effortDefault": "默认（不发送）",
+    "wizard.effortNotSupported": "该模型不支持推理强度",
     "wizard.extraHeaders": "额外请求头 (JSON)",
     # API-REVIEW-2026-10-18: hostless endpoint gate (e.g. "https://" saved).
     "wizard.endpointNoHost": "端点缺少主机名——请填写完整的基础 URL（例如 https://api.example.com）",
@@ -680,6 +687,8 @@ TRANSLATIONS["en"] = {
     "settings.endpoint": "API Endpoint",
     "settings.model": "Model",
     "settings.maxTokens": "Max output tokens",
+    # REVIEW-2026-10-19: the levels belong to the model, not the program.
+    "settings.effort": "Reasoning effort",
     "settings.maxEdge": "Max image resolution (px)",
     "settings.runs": "Runs (1-5)",
     "settings.chartLang": "Chart language",
@@ -773,6 +782,10 @@ TRANSLATIONS["en"] = {
     "names.ambiguous": "Name {name} has several equal-strength matches in the reference database (manual disambiguation needed)",
     "status.uploading": "Uploading image...",
     "status.thinking": "Analyzing image...",
+    "status.callLabels": "Reading the axis labels",
+    "status.callLegend": "Reading the legend",
+    "status.callCells": "Reading the cells {idx}/{total}",
+    "status.callSingle": "Falling back to a single reading",
     "status.parsing": "Parsing result...",
     # See the zh entry above: suffixed with " {next}/{retries} ({seconds})".
     "status.retrying": "Rate limited, retrying...",
@@ -964,6 +977,7 @@ TRANSLATIONS["en"] = {
     # thinking tokens eat max_tokens -- a dense figure then never answers).
     "wizard.fieldEffort": "Reasoning effort",
     "wizard.effortDefault": "Default (not sent)",
+    "wizard.effortNotSupported": "This model has no reasoning control",
     "wizard.extraHeaders": "Extra Headers (JSON)",
     "wizard.endpointNoHost": "The endpoint has no hostname — enter a full base URL (e.g. https://api.example.com)",
     "wizard.presetAltEndpoints": "Backup endpoints: {urls}",
@@ -1230,6 +1244,8 @@ TRANSLATIONS["ja"] = {
     "settings.endpoint": "API エンドポイント",
     "settings.model": "モデル",
     "settings.maxTokens": "最大出力トークン",
+    # REVIEW-2026-10-19: 推論強度。档位属于模型而不属于程序。
+    "settings.effort": "推論の強度 (effort)",
     "settings.maxEdge": "画像解像度の上限 (px)",
     "settings.runs": "実行回数 (1-5)",
     "settings.chartLang": "図表の言語",
@@ -1322,6 +1338,10 @@ TRANSLATIONS["ja"] = {
     "names.ambiguous": "学名 {name} に対して同等の一致が複数あります（人手による解消が必要）",
     "status.uploading": "画像をアップロード中……",
     "status.thinking": "画像を分析中……",
+    "status.callLabels": "軸ラベルを読み取り中",
+    "status.callLegend": "凡例を読み取り中",
+    "status.callCells": "セルを読み取り中 {idx}/{total}",
+    "status.callSingle": "一括読み取りに切替",
     "status.parsing": "結果を解析中……",
     # See the zh entry above: suffixed with " {next}/{retries} ({seconds})".
     "status.retrying": "レート制限中です。再試行中……",
@@ -1515,6 +1535,7 @@ TRANSLATIONS["ja"] = {
     # max_tokens を消費するため密な図では応答が終わらない)。
     "wizard.fieldEffort": "推論の強度 (effort)",
     "wizard.effortDefault": "既定（送信しない）",
+    "wizard.effortNotSupported": "このモデルは推論強度を制御しません",
     "wizard.extraHeaders": "追加ヘッダー (JSON)",
     "wizard.endpointNoHost": "エンドポイントにホスト名がありません——完全なベース URL を入力してください（例：https://api.example.com）",
     "wizard.presetAltEndpoints": "バックアップエンドポイント：{urls}",

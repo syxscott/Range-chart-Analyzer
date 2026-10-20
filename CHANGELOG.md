@@ -9,17 +9,17 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **A provider can now say how hard the model should think.** MiniMax's M3.1
-  family ALWAYS thinks, and its effort level DEFAULTS TO `max`; the thinking
-  tokens are billed against and consume `max_tokens`. Measured on the
-  reference figure's label call:
+- **A provider can now say how hard the model should think, and the levels are
+  the MODEL's.** MiniMax's M3.1 family ALWAYS thinks and its effort level
+  DEFAULTS TO `max`; the thinking tokens are billed against and CONSUME
+  `max_tokens`. Measured on the reference figure's label call:
 
-  | model | effort | label call |
-  |---|---|---|
-  | `MiniMax-M3` | thinking off by default | 6.5–13.1 s, answered |
-  | `MiniMax-M3.1-Flash` | `max` (the default) | read TIMEOUT at 90 s, 2 of 2 |
-  | `MiniMax-M3.1-Flash` | `low` | 28.3 s, answered 22 rows / 18 columns / 3 legend |
-  | `MiniMax-M3.1-Flash` | `high` | 48.3 s, answered 22 rows / 18 columns / 3 legend |
+  | model | effort | label call | out_tok |
+  |---|---|---|---|
+  | `MiniMax-M3` | thinking off by default | 6.5–13.1 s | — |
+  | `MiniMax-M3.1-Flash` | `low` | 28.3 s | 3,077 |
+  | `MiniMax-M3.1-Flash` | `high` | 48.3 s | 5,948 |
+  | `MiniMax-M3.1-Flash` | `max` | 69.1 s / 94 s / 102.4 s / 121 s | 9,932 / 14,738 |
 
   The failure is invisible from the outside: with `max_tokens=2000` the call
   returned HTTP 200 in 23.3 s with `stop_reason=max_tokens` and an EMPTY
@@ -27,16 +27,28 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wrote a character of the answer. Raising `max_tokens` does not help — the
   thinking is unbounded — and lowering the effort does.
 
+  The levels are declared **per model**, the way minimax-code's catalogue
+  does it: M3.1 takes five named levels, and M3 does not take an effort at
+  all (its thinking is an on/off switch, and an effort value does not change
+  its depth). The picker is filled from the active provider's model, so it
+  never offers a control that does nothing, and the resolution rule is
+  minimax-code's: a valid stored choice wins, the catalogue's default wins
+  over the midpoint, and an even-length list without a default uses the
+  higher midpoint.
+
+  The wire shape is MiniMax's, not Anthropic's: `thinking: {type: adaptive}`
+  PLUS `output_config: {effort: ...}` on the Anthropic-compatible endpoint,
+  `reasoning_effort` on the OpenAI one. `thinking: {budget_tokens: N}` is
+  NOT in M3.1's documented vocabulary and is never sent — OpenRouter's
+  Messages API rejects it outright, and its Claude 4.6 migration note says
+  adaptive and the budget mode are different mechanisms.
+
   `LlmProvider.reasoning_effort` is a first-class field (persisted with the
-  record, editable in the provider wizard, mirrored by the browser client)
-  and goes on the wire as `output_config: {effort: ...}` on the
-  Anthropic-compatible endpoint. `thinking: {budget_tokens: N}` is NOT in
-  M3.1's documented vocabulary and is never sent. An unrecognised level is
-  dropped rather than forwarded, so a hand-edited record cannot turn into a
-  request the endpoint answers with a 400. The field is deliberately not an
-  `extra_body` blob: the provider wizard REBUILDS the record from a fixed
-  field list, so anything smuggled into `extra_body` is silently dropped the
-  moment the user edits that provider — and the product would revert to the
+  record, editable in the provider wizard AND in the settings page, mirrored
+  by the browser client) and it is deliberately not an `extra_body` blob:
+  the provider wizard REBUILDS the record from a fixed field list, so
+  anything smuggled into `extra_body` is silently dropped the moment the
+  user edits that provider — and the product would revert to the
   timing-out configuration with nothing on screen to explain why.
 
   The effort is also part of the **cache key**, by the same rule the cache
@@ -44,6 +56,22 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   request, not for the image. It was left out at first, so a user who
   switched the effort got the previous effort's answer back with no way to
   tell.
+- **The extraction page shows REAL progress, and the model's own thinking.**
+  The occurrence-matrix path makes FOUR calls for a typical figure (one for
+  the axis labels, one per contact sheet) and each of them can take a minute
+  — measured, the label call alone spent 28 s on "low", 48 s on "high" and
+  69–121 s on "max". A spinner that says "working" for two minutes tells
+  the operator nothing, and there is no way to tell a slow extraction from a
+  hung one.
+
+  So the page now carries a four-pixel determinate bar (the fraction of the
+  matrix cells the reader has ACTUALLY read — real progress, not a guess)
+  and ONE elided line of the model's thinking. The thinking is real because
+  the two-stage path now STREAMS its calls: the reply already carried a
+  `thinking` block that the reader threw away, and the stream delivers it
+  while the model is still thinking. Measured against M3.1-Flash: the first
+  thinking chunk arrives about a second in, and the assembled answer is the
+  same one the single-body call returns (22 rows / 18 columns / 3 legend).
 
 ### Fixed
 
@@ -57,13 +85,23 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ANSWERED now gets up to four attempts; a network-level failure keeps two.
 - **The two-stage path's wall clock was bounded by a call COUNT, which stopped
   being true once each call could retry.** The server's single-run budget is
-  `timeout_sec * 6 + 25` s and its meaning is "at most six attempts' worth of
-  seconds", but the path makes four calls of its own. The path now carries its
-  own deadline, and the retry chain checks it before every attempt — so cheap
-  congestion is ridden out and the expensive failure is stopped exactly when
-  it would threaten the run. The path's share scales with the caller's
-  timeout, because a fixed number would starve a short-timeout run and
-  overrun a long one.
+  `timeout_sec * 8 + 25` s and its meaning is "at most eight outbound
+  attempts' worth of seconds" — eight, because the path makes four calls of
+  its own and each of them may retry. The path now carries its own deadline,
+  checked before every attempt, and the deadline SCALES with the reasoning
+  level, because the level decides how long the model thinks: a single 90 s
+  ceiling was right for "low" and too small for the others (at "max" the path
+  gave up before it could answer, and the end-to-end regression failed 3 of 3
+  with an empty reply).
+- **The `max_tokens` ceiling was a product-side guess, not the model's limit.**
+  MiniMax-M3.1-Flash answers a larger value with `does not support max
+  tokens > 524288`, and 1000000 is a 400 — so 524288 is the largest value
+  that is accepted. The old 32000 was why a reasoning model could not be
+  given room to think: the thinking tokens are billed against `max_tokens`,
+  and at 32000 the "max" effort spent the whole budget thinking and returned
+  an EMPTY body (HTTP 200, `stop_reason=max_tokens`, zero characters of
+  answer). The ceiling is now the model's, in the core, in the web UI's clamp
+  and in the desktop spin box alike.
 
 - **A cell-reading failure was invisible: a truncated contact sheet was never
   recognised as one.** The cell call bound its truncation flag to one name and

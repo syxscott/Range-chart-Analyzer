@@ -628,6 +628,12 @@ class ProviderWizard(QDialog):
         # anything smuggled into extra_body would be silently dropped the
         # moment the user edited this provider, and the product would revert
         # to the timing-out configuration with nothing on screen to say why.
+        #
+        # The LEVELS are the MODEL's, not the program's: minimax-code declares
+        # them per model in its catalog and asks the runtime for the list
+        # rather than hard-coding one, and M3 does not take an effort at all
+        # (its thinking is an on/off switch). So the combo is repopulated
+        # from the model name as it is typed.
         lbl = BodyLabel(self._t("wizard.fieldEffort"))
         fl.addWidget(lbl, r, 0, 1, 2); r += 1
         self._cmb_effort = ComboBox()
@@ -638,6 +644,7 @@ class ProviderWizard(QDialog):
         self._cmb_effort.addItems([self._t("wizard.effortDefault")]
                                   + list(REASONING_EFFORT_LEVELS))
         fl.addWidget(self._cmb_effort, r, 0, 1, 2); r += 1
+        self._ipt_model.textChanged.connect(self._refresh_effort_options)
 
         # Extra headers field
         lbl = BodyLabel(self._t("wizard.extraHeaders"))
@@ -883,6 +890,52 @@ class ProviderWizard(QDialog):
         if isinstance(parsed, dict):
             return parsed, None
         return {}, f"extra_headers must be a JSON object, got {type(parsed).__name__}"
+
+    def _refresh_effort_options(self, *_args):
+        """Repopulate the effort combo from the MODEL's own list of levels.
+
+        The levels belong to the model: MiniMax's M3.1 takes five named
+        levels, M3 takes an on/off switch instead, and any other model takes
+        none. Offering a level the model does not understand would be a
+        control that does nothing, and offering none where there are some
+        would hide the one knob that decides whether the model answers at
+        all.
+
+        The SELECTION is kept if the new list still contains it, and the
+        model's own default is selected otherwise -- which is minimax-code's
+        resolution rule, transcribed: a valid stored choice wins, the
+        catalogue's default wins over the midpoint, and without a default an
+        even-length list uses the higher midpoint.
+        """
+        from rca_core.llm import (REASONING_DEFAULT, reasoning_options_for,
+                                  resolve_reasoning_choice)
+        model = self._ipt_model.text().strip()
+        options = reasoning_options_for(model)
+        if not options:
+            # A model with no reasoning control: keep the row but say so, and
+            # do not let a stale selection linger.
+            self._effort_values = [""]
+            self._cmb_effort.clear()
+            self._cmb_effort.addItems([self._t("wizard.effortNotSupported")])
+            self._cmb_effort.setEnabled(False)
+            return
+        self._cmb_effort.setEnabled(True)
+        self._effort_values = list(options)
+        labels = []
+        for opt in options:
+            if opt == REASONING_DEFAULT:
+                labels.append(self._t("wizard.effortDefault"))
+            else:
+                labels.append(opt)
+        current = self._effort_values[self._cmb_effort.currentIndex()] \
+            if self._cmb_effort.currentIndex() >= 0 else ""
+        self._cmb_effort.clear()
+        self._cmb_effort.addItems(labels)
+        wanted = resolve_reasoning_choice(model, current)
+        try:
+            self._cmb_effort.setCurrentIndex(self._effort_values.index(wanted))
+        except ValueError:
+            self._cmb_effort.setCurrentIndex(0)
 
     def _on_ok(self):
         name = self._ipt_name.text().strip()

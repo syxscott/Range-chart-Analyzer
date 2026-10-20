@@ -26,11 +26,14 @@ class TestClampMaxTokens(unittest.TestCase):
         self.assertEqual(clamp_max_tokens(-100), 1)
 
     def test_clamp_above_max(self):
-        # Core cap is now 32000, aligned with the web UI (index.html:65
-        # max="32000", js/config.js:17 maxMaxTokens: 32000). The previous
-        # 100000 here was a stale assertion from before the core/UI cap
-        # was reconciled.
-        self.assertEqual(clamp_max_tokens(1_000_000), 32000)
+        # REVIEW-2026-10-19: the cap is now the MODEL's real limit, 524288 --
+        # MiniMax-M3.1-Flash answers a larger value with "does not support max
+        # tokens > 524288", and 1000000 is a 400. The old 32000 was a
+        # product-side cap with nothing to do with the model, and it was why
+        # a reasoning model could not be given room to think: the thinking
+        # tokens are billed against max_tokens, and at 32000 the "max" effort
+        # spent the whole budget thinking and returned an EMPTY body.
+        self.assertEqual(clamp_max_tokens(1_000_000), 524288)
 
     def test_default_on_non_numeric(self):
         # The fallback must be DEFAULT_MAX_TOKENS, not a literal. These two

@@ -51,6 +51,7 @@ from qfluentwidgets import (
     SpinBox, SwitchButton, TableWidget, BodyLabel, TitleLabel, SubtitleLabel,
     StrongBodyLabel, CaptionLabel, CardWidget, TextEdit, InfoBar, InfoBarPosition,
     ScrollArea, IndeterminateProgressRing, Pivot, MessageBox, setTheme, Theme, setThemeColor,
+    ProgressBar,
     # imported locally in _show_figure_full, where the dialog is built.)
     # image card's zoom row. (QDialog/QDialogButtonBox are Qt, and are
     ToolButton,
@@ -68,6 +69,7 @@ from rca_core.report import build_extraction_report
 from rca_core.aggregate import COLUMNAR_SECTION_SCHEMA, RANGE_CHART_SCHEMA, SCHEMA_BY_MODE
 from rca_core.extractor import (
     DEFAULT_ENDPOINT, DEFAULT_MAX_TOKENS, DEFAULT_MAX_EDGE, DEFAULT_MODEL,
+    MAX_MAX_TOKENS,
     ExtractResult, clamp_max_tokens,
 )
 from rca_core.llm import test_llm_connection
@@ -531,6 +533,8 @@ class ExtractWorker(QThread):
     # thread is the crash class this module's header explicitly forbids.
     finished_ok = Signal(object, object)  # (worker, ExtractResult)
     progress = Signal(str)         # status text
+    # REVIEW-2026-10-19: the model's thinking, in chunks, as it is produced.
+    thinking = Signal(str)
 
     def __init__(self, params, mode, runs, auto_filename="", gen=None):
         super().__init__()
@@ -619,6 +623,21 @@ class ExtractWorker(QThread):
             self.progress.emit(stage)
 
         params["progress_callback"] = prog
+
+        # REVIEW-2026-10-19: the model's THINKING, as it is produced. The
+        # two-stage occurrence-matrix path streams its calls, so this is the
+        # model's own text arriving WHILE it is still thinking -- which is
+        # what turns a two-minute spinner into something an operator can
+        # read. It is emitted on a separate signal from `progress` because
+        # the two are different things: a stage token is a state machine
+        # event, and a thinking chunk is content.
+        def thinking(chunk):
+            try:
+                self.thinking.emit(chunk)
+            except Exception:
+                pass
+
+        params["thinking_callback"] = thinking
 
         try:
             if runs <= 1:
@@ -1305,6 +1324,36 @@ class ExtractPage(ScrollArea):
         run_row.addWidget(self.btn_cancel)
         run_row.addWidget(self.btn_extract)
         left_lay.addLayout(run_row)
+
+        # REVIEW-2026-10-19: a DETERMINATE progress bar and the model's own
+        # thinking, in about twenty pixels of height.
+        #
+        # The occurrence-matrix path makes FOUR calls for a typical figure (one
+        # for the axis labels, one per contact sheet) and each of them can
+        # take a minute: measured on the reference figure, the label call
+        # alone spent 28 s on the "low" reasoning level, 48 s on "high" and
+        # 69-102 s on "max". A spinner that says "working" for two minutes
+        # tells the operator nothing, and there is no way to tell a slow
+        # extraction from a hung one.
+        #
+        # The bar is REAL: it advances by the fraction of the matrix cells the
+        # reader has actually read, and the number under it is the model's own
+        # THINKING, which arrives while the model is still thinking (the
+        # two-stage path streams its calls). Neither takes room: the bar is
+        # four pixels tall and the thinking is ONE elided line.
+        self.progress_bar = ProgressBar()
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setFixedHeight(4)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setVisible(False)
+        left_lay.addWidget(self.progress_bar)
+
+        self.lbl_thinking = CaptionLabel("")
+        self.lbl_thinking.setWordWrap(False)
+        self.lbl_thinking.setVisible(False)
+        self.lbl_thinking.setMaximumHeight(18)
+        left_lay.addWidget(self.lbl_thinking)
+
         left_lay.addStretch(1)
 
         self._split.addWidget(left_panel)
@@ -2022,7 +2071,20 @@ class ExtractPage(ScrollArea):
         # Re-derive the whole set through the one gate.
         self._update_result_actions()
         self.spinner.setVisible(busy)
+        # REVIEW-2026-10-19: the progress bar and the thinking line live only
+        # while a run is in flight. The bar is reset to zero here rather than
+        # left at the last value, so a second run does not start with a bar
+        # that is already three-quarters full.
+        self.progress_bar.setVisible(busy)
         if busy:
+            self.progress_bar.setValue(0)
+            self._thinking_buf = ""
+            # The text AND the tooltip are cleared: the label is hidden, but a
+            # stale tooltip would still answer "what was the model doing?"
+            # with the PREVIOUS run's thinking.
+            self.lbl_thinking.setText("")
+            self.lbl_thinking.setToolTip("")
+            self.lbl_thinking.setVisible(False)
             self.lbl_status.setText(self._t("status.loading"))
 
     def _sync_export_buttons(self, busy):
@@ -2142,6 +2204,7 @@ class ExtractPage(ScrollArea):
                                      auto_filename=auto_filename,
                                      gen=launch_gen)
         self._worker.progress.connect(self._on_progress)
+        self._worker.thinking.connect(self._on_thinking)
         self._worker.finished_ok.connect(self._on_worker_result)
         self._worker.start()
 
@@ -2202,6 +2265,29 @@ class ExtractPage(ScrollArea):
                 # so a future format change degrades instead of going blank.
                 detail = text.split(":", 1)[-1]
             self.lbl_status.setText(self._t("status.retrying") + " " + detail)
+        elif text.startswith("call:"):
+            # REVIEW-2026-10-19: WHICH call the two-stage path is on.
+            #
+            # The occurrence-matrix path makes four calls for a typical figure
+            # (one for the axis labels, one per contact sheet) and each of them
+            # can take a minute, so "working" for two minutes says nothing.
+            # The tokens are
+            #     call:labels      the axis-label call
+            #     call:legend      the legend re-ask
+            #     call:cells:2/3   contact sheet 2 of 3
+            #     call:single      the single-pass fallback
+            # and `frac:0.667` carries the fraction of the matrix cells the
+            # reader has actually read, which is what the bar shows.
+            self._on_call_progress(text)
+        elif text.startswith("frac:"):
+            try:
+                frac = float(text.split(":", 1)[1])
+            except (ValueError, IndexError):
+                return
+            try:
+                self.progress_bar.setValue(int(max(0.0, min(1.0, frac)) * 1000))
+            except Exception:
+                pass
         elif text == "analyzing":
             # UX-2026-10-18 (流畅性 A8): the single-run path emits exactly this
             # one stage and then blocks, so this is where the GUI-thread
@@ -2216,6 +2302,58 @@ class ExtractPage(ScrollArea):
             self.lbl_status.setText(self._t("status.loading") + " (" + text.split(":", 1)[1] + ")")
         else:
             self.lbl_status.setText(self._t("status.loading"))
+
+    def _on_call_progress(self, token):
+        """Render the two-stage path's "which call" tokens.
+
+        Kept apart from ``_on_progress`` because it is a different kind of
+        event: the stage tokens are a state machine, these describe the WORK
+        (which call, how far through the matrix). The status line gets the
+        short form; the bar gets the fraction, which arrives separately as
+        ``frac:`` so that the two never have to be derived from each other.
+        """
+        try:
+            body = token.split(":", 1)[1] if ":" in token else ""
+            if body == "labels":
+                self.lbl_status.setText(self._t("status.callLabels"))
+            elif body == "legend":
+                self.lbl_status.setText(self._t("status.callLegend"))
+            elif body == "single":
+                self.lbl_status.setText(self._t("status.callSingle"))
+            elif body.startswith("cells:"):
+                idx, _, total = body[len("cells:"):].partition("/")
+                self.lbl_status.setText(
+                    self._t("status.callCells").format(idx=idx, total=total))
+            else:
+                self.lbl_status.setText(self._t("status.loading"))
+        except Exception:
+            self.lbl_status.setText(self._t("status.loading"))
+
+    def _on_thinking(self, chunk):
+        """GUI thread: show the model's own thinking, in one elided line.
+
+        The text arrives while the model is still thinking, so it is the only
+        thing on screen that changes during a long call. It is kept to ONE
+        line and elided: the operator wants to see that the model is
+        working and roughly on what, not to read a transcript.
+
+        The buffer is bounded so a long reasoning level cannot grow it without
+        limit, and the label is rebuilt from the TAIL of the buffer -- the
+        newest text is the relevant part.
+        """
+        if not chunk:
+            return
+        buf = getattr(self, "_thinking_buf", "") + chunk
+        if len(buf) > 1200:
+            buf = buf[-1200:]
+        self._thinking_buf = buf
+        # Collapse the model's newlines into spaces: the label is one line.
+        flat = " ".join(buf.split())
+        if len(flat) > 160:
+            flat = "…" + flat[-160:]
+        self.lbl_thinking.setText(flat)
+        self.lbl_thinking.setToolTip(buf[-2000:])
+        self.lbl_thinking.setVisible(True)
 
     def _start_heartbeat(self) -> None:
         """GUI thread: (re)start the single-run elapsed ticker.
@@ -3583,21 +3721,42 @@ class SettingsPage(ScrollArea):
 
         self.lbl_maxtok = StrongBodyLabel(self._t("settings.maxTokens"))
         self.spin_maxtok = SpinBox()
-        self.spin_maxtok.setRange(1, 100000)
+        # REVIEW-2026-10-19: the ceiling is the MODEL's real limit --
+        # MiniMax-M3.1-Flash answers a larger value with "does not support
+        # max tokens > 524288", and 1000000 is a 400. The old 100000 here was
+        # a product-side guess that had nothing to do with the model, and it
+        # is why a reasoning model could not be given room to think: the
+        # thinking tokens are billed against max_tokens, and at a small
+        # ceiling the "max" effort spent the whole budget thinking and
+        # returned an EMPTY body.
+        self.spin_maxtok.setRange(1, MAX_MAX_TOKENS)
         self.spin_maxtok.setValue(int(cfg.get("max_tokens", DEFAULT_MAX_TOKENS)))
         g2.addWidget(self.lbl_maxtok, 0, 0); g2.addWidget(self.spin_maxtok, 0, 1)
+
+        # REVIEW-2026-10-19: the reasoning effort, next to the token budget
+        # it interacts with. The levels are the MODEL's (minimax-code keeps
+        # them in a per-model catalogue and asks the runtime for the list),
+        # so the combo is filled from the active provider's model and says so
+        # when the model takes no reasoning control at all.
+        self.lbl_effort = StrongBodyLabel(self._t("settings.effort"))
+        self.cmb_effort = ComboBox()
+        self._effort_values = [""]
+        self.cmb_effort.addItems([self._t("wizard.effortNotSupported")])
+        self.cmb_effort.setEnabled(False)
+        g2.addWidget(self.lbl_effort, 1, 0); g2.addWidget(self.cmb_effort, 1, 1)
+        self.cmb_effort.currentIndexChanged.connect(self._save_effort)
 
         self.lbl_maxedge = StrongBodyLabel(self._t("settings.maxEdge"))
         self.spin_maxedge = SpinBox()
         self.spin_maxedge.setRange(0, 8000)
         self.spin_maxedge.setValue(int(cfg.get("max_edge", DEFAULT_MAX_EDGE)))
-        g2.addWidget(self.lbl_maxedge, 1, 0); g2.addWidget(self.spin_maxedge, 1, 1)
+        g2.addWidget(self.lbl_maxedge, 2, 0); g2.addWidget(self.spin_maxedge, 2, 1)
 
         self.lbl_runs = StrongBodyLabel(self._t("settings.runs"))
         self.spin_runs = SpinBox()
         self.spin_runs.setRange(1, 5)
         self.spin_runs.setValue(int(cfg.get("runs", 1)))
-        g2.addWidget(self.lbl_runs, 2, 0); g2.addWidget(self.spin_runs, 2, 1)
+        g2.addWidget(self.lbl_runs, 3, 0); g2.addWidget(self.spin_runs, 3, 1)
 
         # AUDIT-2026-09-27 [item 3.1] (D2): the chart-type and chart-language
         # mirror rows had no parent at all once their g2.addWidget lines went
@@ -3693,6 +3852,72 @@ class SettingsPage(ScrollArea):
             self.val_model.setText(current.model or "-")
             # Pre-fill the key field with the existing key (masked by PasswordLineEdit).
             self.ipt_key.setText(current.api_key or "")
+        # REVIEW-2026-10-19: the effort combo follows the ACTIVE provider's
+        # model, so it is filled here rather than once at construction: the
+        # provider can be switched on the Providers page, and the levels are
+        # the model's.
+        self.refresh_effort_options()
+
+    def _save_effort(self, *_args):
+        """Persist the chosen reasoning level onto the ACTIVE provider.
+
+        The effort belongs to the provider record, not to the shared config:
+        it is a property of the MODEL, and the provider is what carries the
+        model. Writing it to the config would let two providers disagree
+        about the same model.
+        """
+        try:
+            current = self.win.current_provider()
+            if current is None:
+                return
+            idx = self.cmb_effort.currentIndex()
+            if idx < 0 or idx >= len(self._effort_values):
+                return
+            value = self._effort_values[idx]
+            if value == (current.reasoning_effort or ""):
+                return
+            current.reasoning_effort = value
+            store = self.win._provider_store
+            if store is not None:
+                store.update(current)
+        except Exception as exc:
+            log.warning("save reasoning effort: %s", exc)
+
+    def refresh_effort_options(self):
+        """Fill the effort combo from the ACTIVE provider's model.
+
+        The levels are the model's, and they change with the model: MiniMax's
+        M3.1 takes five named levels, M3 takes an on/off switch, and every
+        other model takes none. A combo that offered all six to every model
+        would advertise controls that do nothing.
+        """
+        try:
+            from rca_core.llm import (REASONING_DEFAULT, reasoning_options_for,
+                                      resolve_reasoning_choice)
+            current = self.win.current_provider()
+            model = (current.model if current is not None else "") or ""
+            options = reasoning_options_for(model)
+            if not options:
+                self._effort_values = [""]
+                self.cmb_effort.clear()
+                self.cmb_effort.addItems([self._t("wizard.effortNotSupported")])
+                self.cmb_effort.setEnabled(False)
+                return
+            self.cmb_effort.setEnabled(True)
+            self._effort_values = list(options)
+            labels = [self._t("wizard.effortDefault") if o == REASONING_DEFAULT
+                      else o for o in options]
+            self.cmb_effort.blockSignals(True)
+            try:
+                self.cmb_effort.clear()
+                self.cmb_effort.addItems(labels)
+                wanted = resolve_reasoning_choice(
+                    model, current.reasoning_effort if current else "")
+                self.cmb_effort.setCurrentIndex(self._effort_values.index(wanted))
+            finally:
+                self.cmb_effort.blockSignals(False)
+        except Exception as exc:
+            log.warning("refresh reasoning effort options: %s", exc)
 
     def _save_key(self) -> None:
         """Commit the API key: into the active provider AND the legacy cfg field.

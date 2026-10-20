@@ -124,10 +124,21 @@ _MULTI_RUN_TIMEOUT_SLACK_SEC = 10
 # had a batch budget (Sprint B #1); single-run gets the same treatment: a hard
 # wall-clock cutoff of ``timeout_sec`` x the maximum number of outbound attempts
 # the stack can spend on one extraction, plus slack.
-#   attempts: llm.call_llm_api_with_retry (retries=3) + the extractor's
-#   empty-reply re-ask + the "auto" mode classification round-trip + 1 spare.
-_SINGLE_RUN_MAX_ATTEMPTS = 6
-_SINGLE_RUN_DEADLINE_SLACK_SEC = 15
+#
+# REVIEW-2026-10-19: the attempt count moved into rca_core.extractor, beside
+# the code that spends it, and it went from SIX to EIGHT. Six was derived for
+# a SINGLE call with a retry (call_llm_api_with_retry's 3) plus the
+# empty-reply re-ask, the "auto" mode classification round-trip and a spare --
+# but the two-stage occurrence-matrix path makes FOUR calls of its own (one
+# for the labels, one per contact sheet) and each of them may retry, so the
+# stack can spend eight outbound attempts. A budget derived from six was
+# already too small for that path, and the reasoning levels made its calls
+# slower still. The values are taken from rca_core.extractor just below the
+# import, so the two cannot drift; the names stay here because the existing
+# tests -- which shrink them to keep the suite quick -- read and write THESE
+# module globals.
+#
+# (assigned right after the extractor import, further down)
 
 
 def _extraction_wall_clock_budget_sec(timeout_sec: int) -> int:
@@ -154,7 +165,6 @@ def _extraction_wall_clock_budget_sec(timeout_sec: int) -> int:
     return (timeout_sec * _SINGLE_RUN_MAX_ATTEMPTS
             + _SINGLE_RUN_DEADLINE_SLACK_SEC
             + _MULTI_RUN_TIMEOUT_SLACK_SEC)
-
 
 # S8 fix: redact API-key-like patterns from error_body before echoing to the UI.
 # Upstream servers may echo back request headers (including Authorization)
@@ -398,10 +408,22 @@ from rca_core.extractor import (  # noqa: E402
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL,
     DEFAULT_TIMEOUT_SEC,
+    MULTI_RUN_TIMEOUT_SLACK_SEC as _CANONICAL_MULTI_RUN_SLACK_SEC,
+    SINGLE_RUN_DEADLINE_SLACK_SEC as _CANONICAL_DEADLINE_SLACK_SEC,
+    SINGLE_RUN_MAX_ATTEMPTS as _CANONICAL_MAX_ATTEMPTS,
     ExtractResult,
     clamp_max_tokens,
     resolve_auto_mode,
 )
+
+# REVIEW-2026-10-19: the wall-clock budget's knobs, taken from the module
+# that SPENDS them (rca_core.extractor) so the two cannot drift. They are
+# module globals HERE on purpose: the tests shrink these names to keep the
+# suite quick, and a function that read the extractor's copy would ignore
+# that.
+_SINGLE_RUN_MAX_ATTEMPTS = _CANONICAL_MAX_ATTEMPTS
+_SINGLE_RUN_DEADLINE_SLACK_SEC = _CANONICAL_DEADLINE_SLACK_SEC
+_MULTI_RUN_TIMEOUT_SLACK_SEC = _CANONICAL_MULTI_RUN_SLACK_SEC
 from rca_core.report import build_extraction_report  # noqa: E402
 from rca_core.aggregate import (  # noqa: E402
     COLUMNAR_SECTION_SCHEMA,

@@ -1461,8 +1461,16 @@ class TestP2ProviderPayloadWithABomStillParses:
             plain.decode("utf-8"))
 
     def test_every_provider_decode_uses_a_bom_tolerant_codec(self):
-        """A static check, because the five sites are identical in shape and
-        a future sixth one would silently miss the fix."""
+        """A static check, because the sites are identical in shape and
+        a future one would silently miss the fix.
+
+        REVIEW-2026-10-19: there are SIX sites now, not five -- the
+        Anthropic streaming reader (which falls back to reading one JSON body
+        when the endpoint ignores `stream: true`) decodes its payload the
+        same BOM-tolerant way. The count is a guard against a NEW site
+        skipping the fix, so it moves with the code; the invariant is that
+        every one of them is `utf-8-sig`.
+        """
         import re
         import os
         path = os.path.join(
@@ -1471,7 +1479,7 @@ class TestP2ProviderPayloadWithABomStillParses:
         with open(path, encoding="utf-8") as fh:
             src = fh.read()
         sites = re.findall(r'json\.loads\(payload_bytes\.decode\("([^"]+)"\)\)', src)
-        assert len(sites) == 5, ("the set of provider payload decodes changed; "
+        assert len(sites) == 6, ("the set of provider payload decodes changed; "
                                  "re-check them", sites)
         assert set(sites) == {"utf-8-sig"}, sites
 

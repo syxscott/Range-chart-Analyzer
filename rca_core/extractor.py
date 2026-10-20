@@ -94,14 +94,56 @@ DEFAULT_MAX_TOKENS = 16000
 # M5: explicit min/max bounds for clamp_max_tokens — defends against
 # user typing absurd values (negative, millions) in the GUI / API.
 MIN_MAX_TOKENS = 1
-# Cap must match the web UI's max token slider: index.html:65 has
-# max="32000" and js/config.js:17 has maxMaxTokens: 32000 (the JS clamp
-# at js/config.js:34 also uses 32000). The previous 100000 was a
-# core/UI inconsistency that let the server accept values the UI could
-# never produce; align the core to the system-wide 32000 cap.
-MAX_MAX_TOKENS = 32000
+# The ceiling, raised on 2026-10-19 from 32000 to the MODEL's real limit.
+#
+# MiniMax-M3.1-Flash answers with an explicit bound:
+#     "invalid params, model[MiniMax-M3.1-Flash] does not support max tokens
+#      > 524288 (2013)"
+# -- so 524288 is the largest value that is actually accepted, and 1000000
+# is a 400. The old 32000 was a product-side cap that had nothing to do with
+# the model, and it was the reason a reasoning model could not be given room
+# to think: the thinking tokens are billed against max_tokens, and at 32000
+# the "max" effort spent the whole budget thinking and returned an EMPTY
+# body (HTTP 200, stop_reason=max_tokens, zero characters of answer).
+#
+# max_tokens is a CEILING, not a reservation, so raising it costs nothing
+# unless the answer is actually that long.
+#
+# The web UI's slider must match: index.html's max-tokens input and
+# js/config.js's maxMaxTokens both carry this number.
+MAX_MAX_TOKENS = 524288
 DEFAULT_TIMEOUT_SEC = 120
 DEFAULT_MAX_EDGE = 4000
+
+#: The server's single-run budget, derived from the number of outbound
+#: attempts the stack can spend on one extraction.
+#:
+#: REVIEW-2026-10-19: this was 6, derived for a SINGLE call with a retry
+#: (call_llm_api_with_retry's 3) plus the empty-reply re-ask, the "auto"
+#: classification round-trip and a spare. The two-stage occurrence-matrix
+#: path makes FOUR calls of its own -- one for the labels, one per contact
+#: sheet -- and each of them may retry, so the stack can spend EIGHT
+#: outbound attempts. A budget derived from six was already too small for
+#: the two-stage path, and the reasoning levels made the calls slower still.
+#:
+#: It lives here, beside the extraction code that spends it, so the server
+#: and the matrix path cannot disagree about how much time there is.
+SINGLE_RUN_MAX_ATTEMPTS = 8
+SINGLE_RUN_DEADLINE_SLACK_SEC = 15
+MULTI_RUN_TIMEOUT_SLACK_SEC = 10
+
+
+def extraction_wall_clock_budget_sec(timeout_sec: int) -> int:
+    """Total wall-clock seconds ONE extraction may spend, for every caller.
+
+    ``timeout_sec`` per outbound attempt, times the worst-case number of
+    attempts, plus slack. The server's single-run and multi-run branches
+    both use this value, so a batch's slots -- which run concurrently -- are
+    bounded by ONE slot's budget and not by N of them added up.
+    """
+    return (timeout_sec * SINGLE_RUN_MAX_ATTEMPTS
+            + SINGLE_RUN_DEADLINE_SLACK_SEC
+            + MULTI_RUN_TIMEOUT_SLACK_SEC)
 
 
 def clamp_max_tokens(value):
@@ -2949,7 +2991,8 @@ _RETRYABLE_TRANSPORT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504,
 # request, and a network failure is judged against the SMALLER budget.
 
 
-def _call_llm(*, time_budget_sec: float | None = None, **kwargs):
+def _call_llm(*, time_budget_sec: float | None = None,
+              stream: bool = False, thinking_callback=None, **kwargs):
     """``call_llm_api`` with one bounded retry on transient transport errors.
 
     Returns the same 5-tuple. The LAST attempt's status is what is returned,
@@ -2984,6 +3027,9 @@ def _call_llm(*, time_budget_sec: float | None = None, **kwargs):
         per_call_timeout = 0.0
     t_start = time.monotonic()
     notes: list[str] = []
+    if stream and thinking_callback is not None:
+        kwargs["stream"] = True
+        kwargs["thinking_callback"] = thinking_callback
     result = call_llm_api(**kwargs)
     calls = 1
     attempt = 0
@@ -5555,6 +5601,7 @@ def extract_occurrence_matrix(
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
     provider: LlmProvider | None = None,
     progress_callback=None,
+    thinking_callback=None,
     cell_strategy: str = OCCURRENCE_DEFAULT_CELL_STRATEGY,
 ) -> ExtractResult:
     """Taxon x locality occurrence-matrix extraction.
@@ -5566,6 +5613,12 @@ def extract_occurrence_matrix(
     ``cell_strategy`` selects how much of the figure the model is asked for.
     See ``OCCURRENCE_CELL_STRATEGIES``. Whatever it is, the returned data
     carries a ``cell_status`` saying which parts were verified.
+
+    ``thinking_callback``, if given, receives the model's THINKING as it is
+    produced (the two-stage path streams its calls). It is the difference
+    between a progress indicator that says "working" and one that shows what
+    the model is doing -- which matters at the higher reasoning levels, where
+    a single call can spend a minute and a half thinking.
     """
     from .prompt import (OCCURRENCE_LABELS_SYSTEM_PROMPT,
                          OCCURRENCE_MATRIX_SYSTEM_PROMPT)
@@ -5605,17 +5658,17 @@ def extract_occurrence_matrix(
         _grid_usage: list[dict[str, Any]] = []
         _grid_raws: list[dict[str, Any]] = []
         try:
-            from .matrix import (MATRIX_CALL_TIMEOUT_SEC,
-                                extract_matrix_two_stage, guess_media_type,
-                                matrix_path_budget_sec)
+            from .matrix import (extract_matrix_two_stage, guess_media_type,
+                                matrix_budgets_for)
 
-            # REVIEW-2026-10-19: this path gets its OWN wall-clock budget.
+            # REVIEW-2026-10-19: this path gets its OWN wall-clock budget,
+            # and the budget DEPENDS on the reasoning level.
             #
-            # The server's single-run budget is `timeout_sec * 6 + 25` s and
-            # its meaning is "at most six outbound attempts' worth of wall
+            # The server's single-run budget is `timeout_sec * 8 + 25` s and its
+            # meaning is "at most eight outbound attempts' worth of wall
             # clock". This path spends FOUR calls (one for the labels, one per
             # contact sheet), and each of them may retry -- so counting calls
-            # is no longer enough, and the arithmetic has to be done in
+            # is no longer enough and the arithmetic has to be done in
             # seconds.
             #
             # A budget does that job better than an attempt count, because the
@@ -5626,11 +5679,15 @@ def extract_occurrence_matrix(
             # retried freely and stops the expensive ones exactly when they
             # would start to threaten the run.
             #
-            # The number is a budget, not a target: the measured runs take
-            # 35-57 s, and the fallback to the single-pass path still has to
-            # fit afterwards (its own two attempts at the full timeout are
-            # 240 s, and 360 + 240 = 600 s stays inside the server's 745 s).
-            _grid_deadline = time.monotonic() + matrix_path_budget_sec(timeout_sec)
+            # And the budget scales with the level, because the level decides
+            # how long the model thinks: measured, the label call takes
+            # 28.3 s on "low", 48.3 s on "high" and 69-102 s on "max". A single
+            # 90 s ceiling was right for "low" and too small for the others --
+            # at "max" the path gave up before it could answer, and the
+            # end-to-end regression failed 3 of 3.
+            _per_call_ceiling, _path_budget = matrix_budgets_for(
+                p.model, p.reasoning_effort, timeout_sec)
+            _grid_deadline = time.monotonic() + _path_budget
 
             def _grid_read_call(system_prompt, img_b64, user_text, mt):
                 # FIX-2026-10-17 (P2-3): declare the media type the BYTES
@@ -5649,21 +5706,14 @@ def extract_occurrence_matrix(
                 # cannot be wrong about a file the module itself produced.
                 #
                 # REVIEW-2026-10-19: the per-call timeout is CAPPED, and so is
-                # the call's share of the path budget. The server's single-run
-                # budget is `timeout_sec * 6 + 25` s, and this path spends one
-                # call on the labels plus one per contact sheet, so several
-                # calls at the full timeout would eat the whole budget and the
-                # request would be abandoned with no data at all. Measured, the
-                # calls themselves take 5-45 s -- 90 s is a generous ceiling,
-                # and a hung call can no longer spend more than its share of
-                # the budget.
+                # the call's share of the path budget, so a hung call can
+                # never spend more than its share.
                 _remaining = _grid_deadline - time.monotonic()
                 if _remaining <= 1:
                     return None, False, (
                         "[matrix] the path budget was exhausted before this "
                         "call; the single-pass fallback will answer instead")
-                _call_timeout = int(min(timeout_sec, MATRIX_CALL_TIMEOUT_SEC,
-                                        _remaining))
+                _call_timeout = int(min(_per_call_ceiling, _remaining))
                 raw, trunc, _status, err_body, usage = _call_llm(
                     provider=p,
                     system_prompt=system_prompt,
@@ -5675,6 +5725,13 @@ def extract_occurrence_matrix(
                     time_budget_sec=_remaining,
                     capture_error_body=True,
                     progress_callback=progress_callback,
+                    # REVIEW-2026-10-19: streamed, so the model's THINKING
+                    # reaches the UI while it is still thinking. Measured
+                    # against M3.1-Flash: the first thinking chunk arrives
+                    # about a second in, and the assembled answer is the same
+                    # one the single-body call returns.
+                    stream=thinking_callback is not None,
+                    thinking_callback=thinking_callback,
                 )
                 if usage:
                     _grid_usage.append(usage)
@@ -5687,7 +5744,8 @@ def extract_occurrence_matrix(
                 return raw, trunc, err_body
 
             two_stage = extract_matrix_two_stage(
-                image_b64, _grid_read_call, max_tokens=max_tokens)
+                image_b64, _grid_read_call, max_tokens=max_tokens,
+                progress=progress_callback)
         except Exception as exc:                # never raises out of this path
             log.warning("grid_read failed, falling back: %s: %s",
                         type(exc).__name__, exc)
@@ -5715,6 +5773,15 @@ def extract_occurrence_matrix(
                     latency_ms=latency_ms, image_sha256=image_sha256,
                     max_tokens=max_tokens, parsed=two_stage)
         cell_strategy = "single_pass"
+
+    # REVIEW-2026-10-19: tell the UI that the two-stage path is over and
+    # the single-pass fallback is answering now, so the progress line does
+    # not claim a sheet is being read when it is not.
+    if progress_callback:
+        try:
+            progress_callback("call:single")
+        except Exception:
+            pass
 
     cell_status = OCCURRENCE_STATUS_BY_STRATEGY[cell_strategy]
     # The gated path asks a DIFFERENT question, not a shorter version of the
@@ -6773,6 +6840,27 @@ def _merge_llm_cost(target: ExtractResult, usage: dict[str, Any] | None,
     return target
 
 
+def _thinking_kwargs(fn, thinking_callback) -> dict[str, Any]:
+    """The ``thinking_callback`` kwarg, but only for a mode that accepts one.
+
+    The modes share one dispatch table and one call site, and they do NOT
+    share a signature: only the occurrence matrix streams its calls today.
+    Passing the kwarg to a mode that does not accept it is a TypeError, and
+    adding it to every mode's signature would advertise a capability the
+    other seven do not have. So the call site's kwargs are built from what
+    the target actually takes.
+    """
+    if thinking_callback is None:
+        return {}
+    try:
+        import inspect
+        if "thinking_callback" in inspect.signature(fn).parameters:
+            return {"thinking_callback": thinking_callback}
+    except (TypeError, ValueError):
+        pass
+    return {}
+
+
 def extract(
     *,
     mode: str,
@@ -6790,6 +6878,10 @@ def extract(
     base_url: str = DEFAULT_ENDPOINT,
     model: str = DEFAULT_MODEL,
     progress_callback=None,
+    # REVIEW-2026-10-19: the model's THINKING, as it is produced. It reaches
+    # the modes that stream their calls (today: the occurrence matrix, whose
+    # two-stage path makes four calls that can each take a minute).
+    thinking_callback=None,
     # REVIEW-2026-09-20 #14: ``extract`` only ever sees base64, so the auto
     # resolver used to be called with an empty filename and no timeout.
     # Optional so existing callers keep working.
@@ -6869,6 +6961,7 @@ def extract(
         timeout_sec=timeout_sec,
         provider=provider,
         progress_callback=progress_callback,
+        **_thinking_kwargs(fn, thinking_callback),
     )
     if _classify_usage or _classify_latency:
         # REVIEW-2026-09-20 #8: fold the vision-classify cost into the
@@ -6895,6 +6988,7 @@ def extract(
                 timeout_sec=timeout_sec,
                 provider=provider,
                 progress_callback=progress_callback,
+                **_thinking_kwargs(fn, thinking_callback),
             )
         except Exception:
             retry = None

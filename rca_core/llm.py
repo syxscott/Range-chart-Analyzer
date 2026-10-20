@@ -87,9 +87,134 @@ class ApiFormat(str, Enum):
 #:
 #: Measured on the reference figure's label call (2026-10-19): ``low`` 28.3 s
 #: with a complete answer, ``high`` 48.3 s with a complete answer, and the
-#: DEFAULT (``max``) never answered inside 90 s. The value is the level NAME,
-#: not a token budget -- there is no "off": M3.1 always thinks.
+#: DEFAULT (``max``) answered in 73.4 s and 102.4 s on two tries -- slow, not
+#: broken. The value is the level NAME, not a token budget -- there is no
+#: "off": M3.1 always thinks, and thinking tokens are billed against and
+#: consume ``max_tokens``.
 REASONING_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+#: The "let the provider decide" level.
+#:
+#: It is a VISIBLE option, not an absence. minimax-code's catalog
+#: (packages/config/src/minimax-model-catalog.ts) puts ``"default"`` FIRST in
+#: M3.1-Flash's option list, and a level the user cannot see is a level the
+#: user cannot reason about.
+REASONING_DEFAULT = "default"
+
+#: How a model wants its thinking depth expressed on the wire.
+#:
+#:   * ``effort``  -- a named level: ``output_config: {effort: <level>}``.
+#:   * ``switch`` -- an on/off: ``thinking: {type: adaptive|disabled}``.
+#:
+#: These are different MECHANISMS, not two spellings of one: OpenRouter's
+#: Messages API rejects ``thinking.type=enabled`` without an integer
+#: ``budget_tokens``, and its Claude 4.6 migration note says adaptive and the
+#: budget mode are not interchangeable (ZCode's
+#: docs/openrouter-reasoning-request-contract.md). minimax-code sends
+#: ``thinking: {type: 'adaptive'}`` ALONGSIDE ``output_config.effort`` on the
+#: Anthropic-compatible endpoint.
+REASONING_STYLE_EFFORT = "effort"
+REASONING_STYLE_SWITCH = "switch"
+
+
+@dataclass(frozen=True)
+class ReasoningProfile:
+    """One model's reasoning options.
+
+    The levels belong to the MODEL, not to the program. minimax-code declares
+    them per model in its catalog and its TUI asks the runtime for the list
+    rather than hard-coding one; the resolution rule below is a transcription
+    of that runtime's ``resolveTuiEffortChoice``.
+    """
+
+    #: The levels the user may pick, in the order they should be offered.
+    options: tuple[str, ...]
+    #: The level the model uses when the user has not chosen.
+    default: str
+    #: ``effort`` (a named level) or ``switch`` (thinking on / off).
+    style: str
+
+
+#: The per-model reasoning catalogue.
+#:
+#: M3.1 takes the five named levels. M3 does NOT take an effort at all: its
+#: thinking is an on/off switch, and -- as minimax-code puts it -- "Responses
+#: effort values do not change thinking depth", so offering M3 an effort list
+#: would advertise a control that does nothing.
+REASONING_PROFILES: dict[str, ReasoningProfile] = {
+    "MiniMax-M3.1-Flash": ReasoningProfile(
+        options=(REASONING_DEFAULT,) + REASONING_EFFORT_LEVELS,
+        default=REASONING_DEFAULT,
+        style=REASONING_STYLE_EFFORT),
+    "MiniMax-M3.1-Flash-Preview": ReasoningProfile(
+        options=(REASONING_DEFAULT,) + REASONING_EFFORT_LEVELS,
+        default=REASONING_DEFAULT,
+        style=REASONING_STYLE_EFFORT),
+    "MiniMax-M3": ReasoningProfile(
+        options=(REASONING_DEFAULT, "on", "off"),
+        default=REASONING_DEFAULT,
+        style=REASONING_STYLE_SWITCH),
+}
+
+
+def reasoning_profile_for(model: object) -> ReasoningProfile | None:
+    """The reasoning profile of ``model``, or ``None`` when it takes none.
+
+    The lookup is case- and prefix-tolerant on purpose: the catalogue names
+    ``MiniMax-M3.1-Flash`` while users type ``minimax-m3.1-flash`` and the
+    preview suffix, and a model that quietly falls back to "no reasoning
+    control" because of a capital letter is a model whose thinking depth
+    silently reverted to the vendor default -- the configuration that times
+    out.
+    """
+    if not isinstance(model, str):
+        return None
+    name = model.strip().lower()
+    if not name:
+        return None
+    if name in REASONING_PROFILES:
+        return REASONING_PROFILES[name]
+    for key, profile in REASONING_PROFILES.items():
+        if name.startswith(key.lower()):
+            return profile
+    return None
+
+
+def reasoning_options_for(model: object) -> list[str]:
+    """The levels the GUI may offer for ``model`` (empty when it takes none)."""
+    profile = reasoning_profile_for(model)
+    return list(profile.options) if profile else []
+
+
+def resolve_reasoning_choice(model: object, selected: object = None) -> str:
+    """Resolve the level to USE for ``model``, or ``""`` for "send nothing".
+
+    This is minimax-code's ``resolveTuiEffortChoice``, transcribed:
+
+    * a model with no profile gets nothing -- there is no control to offer;
+    * a valid stored choice wins;
+    * the catalogue's DEFAULT wins over the midpoint, and can be fixed without
+      editable options;
+    * without a default, an even-length list uses the HIGHER midpoint, so a
+      two-choice on/off model stays enabled until the user says otherwise.
+
+    The returned value is a level NAME, and it is passed to the wire
+    verbatim -- minimax-code keeps the user's exact value and maps only its
+    internal transport key back to it, and so does this.
+    """
+    profile = reasoning_profile_for(model)
+    if profile is None:
+        return ""
+    allowed = list(profile.options)
+    if isinstance(selected, str):
+        trimmed = selected.strip()
+        if trimmed and trimmed in allowed:
+            return trimmed
+    if profile.default in allowed:
+        return profile.default
+    if not allowed:
+        return ""
+    return allowed[len(allowed) // 2]
 
 
 def normalize_reasoning_effort(value: object) -> str:
@@ -107,6 +232,62 @@ def normalize_reasoning_effort(value: object) -> str:
         return ""
     v = value.strip().lower()
     return v if v in REASONING_EFFORT_LEVELS else ""
+
+
+def _reasoning_request_patch(provider: "LlmProvider",
+                             api_format: "ApiFormat") -> dict[str, Any]:
+    """The request fields that carry this provider's reasoning choice.
+
+    minimax-code's ``resolveModelThinkingProtocol`` does this per API format
+    and so does this:
+
+    * ``anthropic-messages`` -- ``thinking: {type: 'adaptive'}`` PLUS
+      ``output_config: {effort: <level>}``. The ``thinking`` block is not
+      decoration: OpenRouter's Messages API rejects ``thinking.type=enabled``
+      without an integer ``budget_tokens``, and its Claude 4.6 migration note
+      says adaptive and the budget mode are DIFFERENT mechanisms
+      (ZCode's ``docs/openrouter-reasoning-request-contract.md``,
+      2026-09-14). ``adaptive`` is the one that needs no budget.
+    * ``openai-completions`` -- ``reasoning_effort: <level>`` at the top level.
+    * ``openai-responses`` -- ``reasoning: {effort: <level>}``.
+
+    The user's value goes on the wire VERBATIM: minimax-code keeps the user's
+    exact choice and maps only its internal transport key back to it, and so
+    does this.
+
+    A model with no profile sends NOTHING. A level the model does not
+    understand is a 400, and a provider that takes no reasoning control must
+    behave exactly as it did before this field existed.
+    """
+    profile = reasoning_profile_for(getattr(provider, "model", ""))
+    if profile is None:
+        return {}
+    choice = resolve_reasoning_choice(
+        getattr(provider, "model", ""),
+        getattr(provider, "reasoning_effort", "") or "")
+    if not choice:
+        return {}
+    if profile.style == REASONING_STYLE_SWITCH:
+        # M3's thinking is an on/off switch, not a depth: minimax-code puts
+        # it in the wire as `thinking: {type: adaptive|disabled}` and notes
+        # that "Responses effort values do not change thinking depth".
+        on = choice == "on"
+        if api_format == ApiFormat.ANTHROPIC:
+            return {"thinking": {"type": "adaptive" if on else "disabled"}}
+        if api_format == ApiFormat.OPENAI:
+            return {"reasoning_effort": "high" if on else "none"}
+        return {"reasoning": {"effort": "high" if on else "none"}}
+    if choice == REASONING_DEFAULT:
+        # "default" means "let the provider decide" -- so nothing is sent.
+        # (For MiniMax's M3.1 the provider's own default is `max`, which is
+        # the slow one; the GUI says so next to the option.)
+        return {}
+    if api_format == ApiFormat.ANTHROPIC:
+        return {"thinking": {"type": "adaptive"},
+                "output_config": {"effort": choice}}
+    if api_format == ApiFormat.OPENAI:
+        return {"reasoning_effort": choice}
+    return {"reasoning": {"effort": choice}}
 
 
 # ---------------------------------------------------------------------------
@@ -1314,6 +1495,175 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
         return None, None, f"[network] {type(e).__name__}: {e}".encode("utf-8")
 
 
+def _sse_events(resp):
+    """Yield the JSON payload of each ``data:`` line of an SSE response.
+
+    The Anthropic-compatible stream sends an ``event: <type>`` line followed
+    by a ``data: <json>`` line, and the JSON carries its own ``type`` -- so
+    the data line is the one to parse. Measured against MiniMax-M3.1-Flash
+    (2026-10-19): ``text/event-stream``, ``content_block_delta`` events with
+    ``delta.type == "thinking_delta"`` carrying the model's thinking text.
+    """
+    for raw in resp:
+        try:
+            line = raw.decode("utf-8", "replace").strip()
+        except Exception:
+            continue
+        if not line or line.startswith("event:") or line.startswith(":"):
+            continue
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if not line or line == "[DONE]":
+            continue
+        try:
+            yield json.loads(line)
+        except Exception:
+            # A malformed event must not kill the stream: the rest of it is
+            # still worth reading.
+            continue
+
+
+def _read_response_stream(target: str, body: dict[str, Any],
+                           headers: dict[str, str], timeout_sec: int,
+                           progress_callback=None,
+                           thinking_callback=None):
+    """Read an SSE reply and assemble it into the usual 5-tuple.
+
+    Returns the same shape as ``_read_response`` so the callers above do not
+    have to know whether the reply came as one JSON body or as a stream.
+
+    ``thinking_callback`` receives each chunk of the model's THINKING as it
+    arrives. That content is in the reply either way -- an Anthropic reply
+    carries ``content: [{type: 'thinking', ...}, {type: 'text', ...}]`` and the
+    non-streaming reader concatenates only the text blocks -- so the only
+    thing streaming adds is that it arrives WHILE the model is still
+    thinking, which is the difference between a progress bar that says
+    "working" and one that shows what the model is doing.
+
+    If the endpoint answers with a plain JSON body instead of a stream (it
+    may ignore ``stream: true``), the body is parsed the ordinary way, so
+    the caller gets an answer either way.
+    """
+    try:
+        data = json.dumps(body).encode("utf-8")
+    except Exception as e:
+        return None, False, None, (
+            f"[request] body not serialisable: {type(e).__name__}: {e}"), None
+    req = urllib.request.Request(target, data=data, headers=headers,
+                                 method="POST")
+    if progress_callback:
+        progress_callback("submitting")
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout_sec)
+    except urllib.error.HTTPError as e:
+        err_body = b""
+        try:
+            err_body = _read_limited(e) or b""
+        except Exception:
+            err_body = b""
+        finally:
+            try:
+                e.close()
+            except Exception:
+                pass
+        if progress_callback:
+            progress_callback("thinking")
+        return None, False, e.code, _decode_err_body(err_body), None
+    except TimeoutError as e:
+        return None, False, None, f"[network] timeout: {e}", None
+    except urllib.error.URLError as e:
+        reason = getattr(e, "reason", None)
+        msg = (f"[network] {type(reason).__name__ if reason else 'URLError'}: "
+               f"{reason or e}")
+        return None, False, None, msg, None
+    except Exception as e:
+        return None, False, None, f"[network] {type(e).__name__}: {e}", None
+
+    with resp:
+        if progress_callback:
+            progress_callback("thinking")
+        ctype = (resp.headers.get("Content-Type") or "").lower()
+        if "text/event-stream" not in ctype:
+            # The endpoint ignored `stream: true`. Read it as one body.
+            try:
+                payload_bytes = _read_limited(resp)
+            except ValueError as e:
+                return None, False, resp.status, str(e), None
+            try:
+                payload = json.loads(payload_bytes.decode("utf-8-sig"))
+            except Exception:
+                return (None, False, resp.status,
+                        _decode_err_body(payload_bytes), None)
+            # The status has to be carried through: a caller that sees
+            # status=None reads it as a NETWORK failure, and a 200 that
+            # answered is not the same thing.
+            text, truncated, _status, err, usage = _assemble_anthropic_payload(
+                payload)
+            return text, truncated, resp.status, err, usage
+
+        raw_text = ""
+        thinking_chars = 0
+        truncated = False
+        usage_obj = None
+        for ev in _sse_events(resp):
+            etype = ev.get("type") or ""
+            if etype == "content_block_delta":
+                delta = ev.get("delta") or {}
+                dtype = delta.get("type") or ""
+                if dtype == "thinking_delta":
+                    chunk = _coerce_text(delta.get("thinking"))
+                    if chunk:
+                        thinking_chars += len(chunk)
+                        if thinking_callback:
+                            try:
+                                thinking_callback(chunk)
+                            except Exception:
+                                pass
+                elif dtype == "text_delta":
+                    raw_text += _coerce_text(delta.get("text"))
+            elif etype == "message_start":
+                msg = ev.get("message") or {}
+                if isinstance(msg, dict) and isinstance(msg.get("usage"), dict):
+                    usage_obj = msg["usage"]
+            elif etype == "message_delta":
+                delta = ev.get("delta") or {}
+                if delta.get("stop_reason") == "max_tokens":
+                    truncated = True
+                if isinstance(ev.get("usage"), dict):
+                    usage_obj = ev["usage"]
+            elif etype in ("message_stop", "error"):
+                break
+        usage = None
+        if usage_obj:
+            usage = dict(usage_obj)
+            usage["estimated"] = False
+        if not raw_text.strip():
+            return (None, truncated, resp.status,
+                    ("the model produced no text" if not thinking_chars
+                     else "the model produced no text (it spent the whole "
+                          "answer budget thinking)"), usage)
+        return raw_text, truncated, resp.status, "", usage
+
+
+def _assemble_anthropic_payload(payload: Any):
+    """Turn a non-streaming Anthropic payload into the usual 5-tuple.
+
+    Split out of ``_read_response`` so the streaming path can reuse it for the
+    case where the endpoint answered with one JSON body instead of a stream.
+    """
+    if not isinstance(payload, dict):
+        return None, False, None, "[response] body was not a JSON object", None
+    raw_text = ""
+    for c in payload.get("content", []) or []:
+        if isinstance(c, dict) and c.get("type") == "text":
+            raw_text += _coerce_text(c.get("text"))
+    truncated = payload.get("stop_reason") == "max_tokens"
+    if not raw_text.strip():
+        return (None, truncated, None, _summarise_empty_payload(payload),
+                payload)
+    return raw_text, truncated, None, "", payload
+
+
 def _get_json(url: str, headers: dict[str, str], timeout_sec: int):
     """Fire a GET and return (payload_bytes, status_code, err_body). Never raises.
 
@@ -1451,6 +1801,8 @@ def _call_anthropic(
     max_tokens: int,
     timeout_sec: int,
     progress_callback=None,
+    stream: bool = False,
+    thinking_callback=None,
 ) -> tuple[str | None, bool, int | None, str, dict | None]:
     # P0-2 (REVIEW-2026-07-25): validate endpoint before any network call.
     # The server.py path validated before dispatching, but the GUI path loads
@@ -1485,17 +1837,7 @@ def _call_anthropic(
     # REVIEW-2026-10-19: reasoning effort, BEFORE ``extra_body`` so a user
     # who put ``output_config`` in extra_body by hand still wins -- extra_body
     # is the documented escape hatch and must keep the last word.
-    #
-    # Anthropic-compatible only. The OpenAI-compatible endpoint of the same
-    # vendor takes a different spelling of this knob and it has NOT been
-    # measured here, so guessing a second shape would risk a 400 on a request
-    # that used to work. An effort set on a non-Anthropic provider is
-    # therefore ignored, not sent.
-    if provider.api_format == ApiFormat.ANTHROPIC:
-        _effort = normalize_reasoning_effort(
-            getattr(provider, "reasoning_effort", ""))
-        if _effort:
-            body["output_config"] = {"effort": _effort}
+    body.update(_reasoning_request_patch(provider, ApiFormat.ANTHROPIC))
     body.update(provider.extra_body or {})
     headers = {
         "x-api-key": provider.api_key,
@@ -1505,6 +1847,18 @@ def _call_anthropic(
     headers.update(provider.extra_headers or {})
     if progress_callback:
         progress_callback("uploading")
+    if stream:
+        # REVIEW-2026-10-19: the stream carries the model's THINKING as it is
+        # produced, which is the only way a progress indicator can show what
+        # the model is actually doing instead of a spinner that says
+        # "working" for a hundred seconds. The reply is assembled into the
+        # same 5-tuple, so nothing above this line changes.
+        body["stream"] = True
+        text, truncated, status, err_body, usage = _read_response_stream(
+            target, body, headers, timeout_sec, progress_callback,
+            thinking_callback,
+        )
+        return text, truncated, status, err_body, usage
     text, truncated, status, err_body, payload = _read_response(
         target, body, headers, timeout_sec, progress_callback
     )
@@ -1875,6 +2229,8 @@ def call_llm_api(
     progress_callback=None,
     temperature: float | None = None,
     seed: int | None = None,
+    stream: bool = False,
+    thinking_callback=None,
 ) -> tuple[str | None, bool, int | None, str, dict | None]:
     """Dispatch a call on the provider's API format. Never raises.
 
@@ -1893,6 +2249,14 @@ def call_llm_api(
     ``progress_callback``, if given, is called with stage strings
     ``"submitting"``, ``"uploading"``, ``"thinking"`` to allow the UI to
     show granular extraction progress.
+
+    ``stream`` asks for the Anthropic-compatible endpoint's SSE reply, and
+    ``thinking_callback`` then receives the model's THINKING as it is
+    produced. The reply is assembled into the same 5-tuple, so this changes
+    only WHEN the answer arrives, not what it is. Measured against
+    MiniMax-M3.1-Flash (2026-10-19): the thinking arrives as
+    ``content_block_delta`` events with ``delta.type == "thinking_delta"``,
+    a few hundred milliseconds apart.
 
     ``temperature`` and ``seed`` (P1 fix): first-class reproducibility
     parameters. When supplied, they're injected into the request body
@@ -1932,6 +2296,14 @@ def call_llm_api(
         ApiFormat.GEMINI: _call_gemini,
     }
     fn = dispatch.get(provider.api_format) or _call_anthropic
+    # REVIEW-2026-10-19: streaming is implemented for the Anthropic-compatible
+    # endpoint, which is the one MiniMax and Claude both speak. The other two
+    # formats have no streaming reader here, so a request that asks for one
+    # falls back to the ordinary single-body call rather than raising.
+    extra: dict[str, Any] = {}
+    if stream and thinking_callback is not None \
+            and provider.api_format == ApiFormat.ANTHROPIC:
+        extra = {"stream": True, "thinking_callback": thinking_callback}
     raw_text, truncated, status, err_body, usage = fn(
         provider=provider,
         system_prompt=system_prompt,
@@ -1941,6 +2313,7 @@ def call_llm_api(
         max_tokens=max_tokens,
         timeout_sec=timeout_sec,
         progress_callback=progress_callback,
+        **extra,
     )
     if not capture_error_body:
         # REVIEW-2026-09-10: this was a no-op (`if capture_error_body and not

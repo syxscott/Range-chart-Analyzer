@@ -113,9 +113,21 @@ def test_no_effort_means_no_output_config():
 
 
 def test_budget_tokens_is_never_sent():
-    """`thinking: {budget_tokens: N}` is not in M3.1's vocabulary."""
+    """`thinking: {budget_tokens: N}` is not in M3.1's vocabulary.
+
+    The Anthropic-compatible shape IS `thinking: {type: adaptive}` plus
+    `output_config: {effort: ...}` -- OpenRouter's Messages API rejects
+    `thinking.type=enabled` without an integer budget, and its Claude 4.6
+    migration note says adaptive and the budget mode are different
+    mechanisms. So `thinking` may be present; what must never be is a
+    `budget_tokens`.
+    """
     body = _captured_body(_anthropic(reasoning_effort="low"))
-    assert "thinking" not in body
+    thinking = body.get("thinking") or {}
+    assert "budget_tokens" not in thinking, \
+        "a fixed token budget is not M3.1's vocabulary"
+    assert thinking.get("type") == "adaptive"
+    assert body.get("output_config") == {"effort": "low"}
 
 
 def test_extra_body_still_wins():

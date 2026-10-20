@@ -24,8 +24,19 @@ const RCA_CONFIG = {
   reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
   defaultEffort: '',
   // M5: explicit bounds for max_tokens clamp — defends against typos.
+  // REVIEW-2026-10-19: the ceiling is the MODEL's real limit, not a product
+  // guess. MiniMax-M3.1-Flash answers a larger value with
+  //   "invalid params, model[MiniMax-M3.1-Flash] does not support max tokens
+  //    > 524288 (2013)"
+  // so 524288 is the largest value that is actually accepted, and 1000000 is
+  // a 400. The old 32000 was a product-side cap that had nothing to do with
+  // the model -- and it was why a reasoning model could not be given room to
+  // think: the thinking tokens are billed against max_tokens, and at 32000
+  // the "max" effort spent the whole budget thinking and returned an EMPTY
+  // body (HTTP 200, stop_reason=max_tokens, zero characters of answer).
+  // Must stay equal to MAX_MAX_TOKENS in rca_core/extractor.py.
   minMaxTokens: 1,
-  maxMaxTokens: 32000,
+  maxMaxTokens: 524288,
   requestTimeoutMs: 120000,
   // Long edge cap for client-side image downscale (px). base64 grows ~33%,
   // so we downscale very large scans before upload to avoid huge request
