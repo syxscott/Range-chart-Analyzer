@@ -10,10 +10,10 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **The one-file exe is 21.2 % smaller, and the compressor was never the
-  problem.** 234.3 MiB → **184.7 MiB**, no feature lost. UPX was already
-  doing its job — PyInstaller calls it with `--lzma`, and it is what
-  takes `cv2.pyd` from 86.3 MB to 21.3 MB. The size was somewhere else
-  entirely.
+  problem.** 234.9 MiB (246,301,199 bytes) → **185.1 MiB (194,070,977
+  bytes)**, no feature lost. UPX was already doing its job — PyInstaller
+  calls it with `--lzma`, and it is what takes `cv2.pyd` from 86.3 MB to
+  21.3 MB. The size was somewhere else entirely.
 
   **PyInstaller's PySide6 hook sweeps the whole Qt installation into the
   bundle.** `pyside6_library_info.collect_extra_binaries()` takes every
@@ -73,7 +73,7 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   written down instead of being a mystery in a build log.
 
   Honest limit: this is a QWebEngine application, and
-  `Qt6WebEngineCore.dll` alone is 83.7 MB of the 184.7 that remain.
+  `Qt6WebEngineCore.dll` alone is 83.7 MB of the 185.1 that remain.
   Chromium's own size is the floor here, not the packaging.
 
 ## [0.1.3] — 2026-10-21
