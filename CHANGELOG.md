@@ -9,6 +9,56 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The models in the preset list finally say what they can do.** The 109
+  presets carried no limit at all, so a user typed `max_tokens` by
+  guessing — and a guess that is too large is a 400, which is exactly
+  how the `max_tokens=1000000` request that started this round became
+  "does not support max tokens > 524288".
+
+  `rca_core/model_capabilities.py` is now a catalogue of 26 models, each
+  with its context window, its output ceiling, and **the source the
+  numbers came from**. It covers 102 of the 109 presets — the presets
+  name 109 things that are really about thirty models, sixty-nine of them
+  being the same `claude-sonnet-4-20250514`, so the catalogue is keyed
+  by model with a family fallback.
+
+  Two rules the numbers follow. **Every number carries its source**, so
+  it can be checked and refreshed. And **unknown stays unknown**: a model
+  that is not in the catalogue has no entry, and the interface says so
+  rather than showing a number nobody can check — which would be worse
+  than no number, because it tells the user their request is fine when
+  it is not. Seven preset models are still unknown, and that is the
+  honest state rather than an oversight.
+
+  The vendors do not publish this: MiniMax's `/v1/models` answers with
+  `id`, `display_name` and `created_at` and nothing else. The numbers
+  come from the documentation, and MiniMax's own ceiling was measured
+  against the live endpoint.
+
+  The settings page now says what the active model can answer, and says
+  so **in red** when the number in the box is over the model's ceiling —
+  which the provider answers with a 400 and nothing else.
+
+- **The three API formats are three adapters now, not three functions in
+  the middle of the transport module.** `_call_anthropic`,
+  `_call_openai` and `_call_gemini` moved to `rca_core/protocols.py` as
+  classes behind a registry, and each one owns its own endpoint, body,
+  headers and reply-reading.
+
+  A fourth format is now one class plus one registry line, and the
+  transport is not touched. The protocol bodies were MOVED rather than
+  rewritten: every quirk they carry is load-bearing, and most of them
+  are load-bearing because of a bug that was measured — the
+  reasoning-model field names, the `role:system` merge, Gemini's
+  `thought` parts, the `utf-8-sig` decode, and the "an empty 200 is not
+  an empty answer" rule.
+
+  The three names stay importable from `rca_core.llm`, and the dispatch
+  stays LATE-BOUND: `call_llm_api` looks the function up on the module
+  at call time, so a test that patches `llm._call_openai` still reaches
+  the patched function. That property is now pinned by a test, because
+  it is what made the refactor safe to do at all.
+
 - **A failed call is now CLASSIFIED, and the classification decides whether
   it is worth retrying.** The retryable set was a list of HTTP STATUSES, so
   a 429 was retried three times whatever it meant. But a 429 can be a

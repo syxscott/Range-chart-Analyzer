@@ -102,7 +102,45 @@ def test_the_metadata_lookup_is_case_and_prefix_tolerant():
     assert L.model_metadata_for("minimax-m3.1-flash") == \
         L.model_metadata_for("MiniMax-M3.1-Flash")
     assert L.model_metadata_for("MiniMax-M3.1-Flash-Preview") is not None
-    assert L.model_metadata_for("gpt-4o") is None
+
+
+def test_the_catalogue_knows_more_than_minimax_now():
+    """REVIEW-2026-10-20: the catalogue grew.
+
+    It used to hold five MiniMax entries and nothing else, so all 109
+    presets -- sixty-nine of which are the same ``claude-sonnet-4`` --
+    said nothing about how big the model's window is or how much it can
+    answer in one response, and the user typed ``max_tokens`` by
+    guessing.
+    """
+    gpt = L.model_metadata_for("gpt-4o")
+    assert gpt is not None, "gpt-4o is catalogued now"
+    assert gpt.context_window == 128000
+    assert gpt.max_output == 16384
+
+    # A dated snapshot of a catalogued model still resolves.
+    assert L.model_metadata_for("claude-sonnet-4-20250514") is not None
+    # And the aggregator spellings resolve too.
+    assert L.model_metadata_for("anthropic/claude-sonnet-4") is not None
+
+
+def test_an_unknown_model_stays_unknown():
+    """A number nobody can check is worse than no number: it tells the
+    user their request is fine when it is not."""
+    assert L.model_metadata_for("no-such-model-anywhere") is None
+    assert L.model_metadata_for("") is None
+    assert L.model_metadata_for(None) is None
+
+
+def test_every_catalogue_number_carries_its_source():
+    """A number the user cannot trace is a number the user cannot check."""
+    from rca_core.model_capabilities import MODEL_CAPABILITIES
+    for name, meta in MODEL_CAPABILITIES.items():
+        assert meta.source, "%s has no source" % name
+        assert meta.max_output > 0, "%s has no max output" % name
+        assert meta.context_window > 0, "%s has no context window" % name
+        assert meta.max_output <= meta.context_window, (
+            "%s can output more than it can read" % name)
 
 
 # --- the quota query --------------------------------------------------------

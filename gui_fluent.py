@@ -3818,6 +3818,16 @@ class SettingsPage(ScrollArea):
         self.spin_maxtok.setRange(1, MAX_MAX_TOKENS)
         self.spin_maxtok.setValue(int(cfg.get("max_tokens", DEFAULT_MAX_TOKENS)))
         g2.addWidget(self.lbl_maxtok, 0, 0); g2.addWidget(self.spin_maxtok, 0, 1)
+        # REVIEW-2026-10-20: what the ACTIVE model can actually do, and
+        # whether the number in the box is one it will accept. The presets
+        # carried no limit at all, so the user typed a max_tokens by
+        # guessing -- and a guess that is too large is a 400. The ceiling
+        # is now looked up per model (rca_core/model_capabilities.py), and
+        # an UNKNOWN model says so rather than showing a wrong number.
+        self.lbl_maxtok_hint = CaptionLabel("")
+        self.lbl_maxtok_hint.setVisible(False)
+        g2.addWidget(self.lbl_maxtok_hint, 2, 0, 1, 2)
+        self.spin_maxtok.valueChanged.connect(self._refresh_maxtok_hint)
 
         # REVIEW-2026-10-19: the reasoning effort, next to the token budget
         # it interacts with. The levels are the MODEL's (minimax-code keeps
@@ -3943,6 +3953,57 @@ class SettingsPage(ScrollArea):
         # provider can be switched on the Providers page, and the levels are
         # the model's.
         self.refresh_effort_options()
+        # REVIEW-2026-10-20: the token budget's ceiling belongs to the
+        # MODEL, so the hint follows the active provider like the effort
+        # combo does.
+        self._refresh_maxtok_hint()
+
+    def _refresh_maxtok_hint(self, *_args) -> None:
+        """Say what the active model can answer, and whether this fits.
+
+        Two things, and they are different: the model's own ceiling (so
+        the number in the box is informed rather than a guess), and
+        whether the number in the box is OVER it -- which the provider
+        answers with a 400 and nothing else.
+        """
+        label = getattr(self, "lbl_maxtok_hint", None)
+        if label is None:
+            return
+        try:
+            current = self.win.current_provider()
+        except Exception:
+            current = None
+        model = (getattr(current, "model", "") or "").strip()
+        caps = None
+        if model:
+            try:
+                from rca_core.model_capabilities import capabilities_for
+                caps = capabilities_for(model)
+            except Exception:
+                caps = None
+        if caps is None:
+            # Unknown model: say nothing rather than guess. A number the
+            # user cannot check is worse than no number.
+            label.setText("")
+            label.setVisible(False)
+            return
+        value = int(self.spin_maxtok.value())
+        if caps.max_output and value > caps.max_output:
+            label.setText(self._t("settings.maxTokensOver").format(
+                n=format(caps.max_output, ",")))
+            label.setStyleSheet("color:#dc2626;")
+            label.setVisible(True)
+            return
+        bits = []
+        if caps.max_output:
+            bits.append(self._t("settings.maxTokensCeiling").format(
+                n=format(caps.max_output, ",")))
+        if caps.context_window:
+            bits.append(self._t("wizard.metaContext").format(
+                n=format(caps.context_window, ",")))
+        label.setText("  ·  ".join(bits))
+        label.setStyleSheet("")
+        label.setVisible(bool(bits))
 
     def _save_effort(self, *_args):
         """Persist the chosen reasoning level onto the ACTIVE provider.

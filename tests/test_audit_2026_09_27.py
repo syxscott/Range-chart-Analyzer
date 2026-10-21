@@ -1471,15 +1471,23 @@ class TestP2ProviderPayloadWithABomStillParses:
         count is a guard against a NEW site skipping the fix, so it moves
         with the code; the invariant is that every one of them is
         `utf-8-sig`.
+
+        REVIEW-2026-10-20: the sites now live in TWO modules -- the
+        OpenAI and Gemini payload decodes moved to ``rca_core/protocols.py``
+        with the rest of their protocol bodies. The invariant did not
+        change, only where the code sits, so the scan covers both files
+        and the count is unchanged.
         """
         import re
         import os
-        path = os.path.join(
+        root = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "rca_core", "llm.py")
-        with open(path, encoding="utf-8") as fh:
-            src = fh.read()
-        sites = re.findall(r'json\.loads\(payload_bytes\.decode\("([^"]+)"\)\)', src)
+            "rca_core")
+        pattern = r'json\.loads\(payload_bytes\.decode\("([^"]+)"\)\)'
+        sites = []
+        for name in ("llm.py", "protocols.py"):
+            with open(os.path.join(root, name), encoding="utf-8") as fh:
+                sites += re.findall(pattern, fh.read())
         assert len(sites) == 7, ("the set of provider payload decodes changed; "
                                  "re-check them", sites)
         assert set(sites) == {"utf-8-sig"}, sites

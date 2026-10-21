@@ -89,3 +89,27 @@ def rca_isolate_user_config(monkeypatch):
         if hasattr(mod, "save_config"):
             monkeypatch.setattr(mod, "save_config", lambda cfg: True)
     return patched
+
+
+# REVIEW-2026-10-20: the provider STORE needs the same isolation the config
+# got, and it was missing.
+#
+# The GUI tests build a real window, and a window builds a real
+# ProviderStore -- at the REAL path, ~/.range_chart_analyzer/providers.json.
+# So a local test run could write the user's providers: their API keys, their
+# active provider, their notes. The CI runner never noticed, because the
+# workflow points HOME at a scratch directory; on a developer machine HOME is
+# the developer's own.
+#
+# It was noticed because the store now keeps a rolling backup of what it
+# replaced: a local test run left `providers.json.bak` and `.bak.1` in the
+# user's profile directory, which is how the write became visible at all.
+#
+# The env var is read when a ProviderStore is CONSTRUCTED, so setting it
+# per test covers every store the test makes.
+@pytest.fixture(autouse=True)
+def rca_isolate_provider_store(tmp_path_factory, monkeypatch):
+    """Point the provider store at a scratch file for every test."""
+    store = tmp_path_factory.mktemp("rca_providers") / "providers.json"
+    monkeypatch.setenv("RCA_PROVIDER_STORE", str(store))
+    return str(store)

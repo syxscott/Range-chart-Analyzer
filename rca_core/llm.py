@@ -351,67 +351,22 @@ def _reasoning_request_patch(provider: "LlmProvider",
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class ModelMetadata:
-    """What a model can do, so the GUI can say it instead of guessing.
+#: REVIEW-2026-10-20: the model catalogue moved to
+#: ``rca_core/model_capabilities.py`` -- it grew from five MiniMax entries
+#: to about thirty models, every one carrying the source of its numbers,
+#: and none of it belongs in the middle of the transport module. The old
+#: names are re-exported here so that the GUI and the tests keep
+#: importing them from ``rca_core.llm``.
+from .model_capabilities import (                            # noqa: E402
+    MODEL_CAPABILITIES, ModelCapabilities, capabilities_for,
+)
 
-    cc-switch fills a model's metadata in when it is picked
-    (``modelMetadataFill``) and shows the context window next to the model
-    field (``GptContextWindowHint``). It matters here for a measurable
-    reason: MiniMax-M3.1-Flash answers a larger ``max_tokens`` with
-    ``does not support max tokens > 524288``, and a user who types 1000000
-    gets a 400 instead of a clear limit. The ceiling belongs on screen.
-    """
-
-    #: The largest ``max_tokens`` the model accepts.
-    max_output: int = 0
-    #: The model's context window, in tokens.
-    context_window: int = 0
-    #: A short, human note.
-    note: str = ""
-
-
-#: Per-model metadata. The values are sourced, not guessed:
-#:
-#: * ``max_output`` for M3.1-Flash is 524288 -- MEASURED: the endpoint
-#:   rejects a larger value with "does not support max tokens > 524288
-#:   (2013)".
-#: * the context windows are the vendor's published figures, the same ones
-#:   cc-switch's catalogue carries.
-#:
-#: The ``note`` is an i18n KEY, not a sentence: the GUI has three
-#: languages and a Chinese note in an English interface is a defect. The
-#: keys live in the i18n table as ``model.noteThinking`` and
-#: ``model.noteThinkingSwitch``; the GUI falls back to the raw string when
-#: a key is missing, so a catalogue entry is never silently blank.
-MODEL_METADATA: dict[str, ModelMetadata] = {
-    "MiniMax-M3.1-Flash": ModelMetadata(
-        max_output=524288, context_window=1000000,
-        note="model.noteThinking"),
-    "MiniMax-M3.1-Flash-Preview": ModelMetadata(
-        max_output=524288, context_window=1000000,
-        note="model.noteThinking"),
-    "MiniMax-M3": ModelMetadata(
-        max_output=128000, context_window=512000,
-        note="model.noteThinkingSwitch"),
-    "MiniMax-M2.7": ModelMetadata(max_output=128000, context_window=200000),
-    "MiniMax-M2.5": ModelMetadata(max_output=128000, context_window=200000),
-}
-
-
-def model_metadata_for(model: object) -> ModelMetadata | None:
-    """The metadata of ``model``, or ``None`` when it is not catalogued."""
-    if not isinstance(model, str):
-        return None
-    name = model.strip().lower()
-    if not name:
-        return None
-    if name in MODEL_METADATA:
-        return MODEL_METADATA[name]
-    for key, meta in MODEL_METADATA.items():
-        if name.startswith(key.lower()):
-            return meta
-    return None
+#: The old name for the catalogue's value type.
+ModelMetadata = ModelCapabilities
+#: The old name for the catalogue.
+MODEL_METADATA = MODEL_CAPABILITIES
+#: The old name for the lookup.
+model_metadata_for = capabilities_for
 
 
 # ---------------------------------------------------------------------------
@@ -953,6 +908,20 @@ class ProviderPreset:
     api_key_url: str = ""
     # cc-switch inspired: backup endpoint candidates for failover
     endpoint_candidates: list[str] = field(default_factory=list)
+
+    @property
+    def capabilities(self):
+        """What this preset's model can do, when the catalogue knows.
+
+        REVIEW-2026-10-20: the presets carried no limit at all, so a
+        user typed ``max_tokens`` by guessing and a guess that is too
+        large is a 400. The numbers live in
+        ``rca_core/model_capabilities.py`` and are looked up by the model
+        name, so a preset gets them without the preset table having to
+        repeat them.
+        """
+        from .model_capabilities import capabilities_for
+        return capabilities_for(self.model)
 
 
 def _p(
@@ -2613,70 +2582,28 @@ def _call_anthropic(
     stream: bool = False,
     thinking_callback=None,
 ) -> tuple[str | None, bool, int | None, str, dict | None]:
-    # P0-2 (REVIEW-2026-07-25): validate endpoint before any network call.
-    # The server.py path validated before dispatching, but the GUI path loads
-    # providers from disk without re-validation. This unifies both paths.
-    # REVIEW-2026-07-31: use validate_endpoint_local_ok — the SAME policy
-    # as test_llm_connection and _call_gemini. validate_endpoint_or_raise
-    # rejected loopback + plain-http, so a local Ollama
-    # (http://127.0.0.1:11434) passed the connection test but every real
-    # extraction failed — the two paths disagreed (Ollama is a legitimate
-    # desktop use case).
-    from .ssrf import validate_endpoint_local_ok
-    ok_ep, why_ep = validate_endpoint_local_ok(provider.endpoint)
-    if not ok_ep:
-        return None, False, None, f"endpoint rejected by SSRF guard: {why_ep}", None
-    if not image_b64:
-        return None, False, None, "", None
-    target = _request_target(provider, "/v1/messages")
-    body: dict[str, Any] = {
-        "model": provider.model,
-        "max_tokens": max_tokens or 4000,
-        "system": system_prompt,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": media_type or "image/png", "data": image_b64}},
-                    {"type": "text", "text": user_text},
-                ],
-            }
-        ],
-    }
-    # REVIEW-2026-10-19: reasoning effort, BEFORE ``extra_body`` so a user
-    # who put ``output_config`` in extra_body by hand still wins -- extra_body
-    # is the documented escape hatch and must keep the last word.
-    body.update(_reasoning_request_patch(provider, ApiFormat.ANTHROPIC))
-    body.update(provider.extra_body or {})
-    headers = {
-        "x-api-key": provider.api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    headers.update(provider.extra_headers or {})
-    if progress_callback:
-        progress_callback("uploading")
-    if stream:
-        # REVIEW-2026-10-19: the stream carries the model's THINKING as it is
-        # produced, which is the only way a progress indicator can show what
-        # the model is actually doing instead of a spinner that says
-        # "working" for a hundred seconds. The reply is assembled into the
-        # same 5-tuple, so nothing above this line changes.
-        body["stream"] = True
-        text, truncated, status, err_body, usage = _read_response_stream(
-            target, body, headers, timeout_sec, progress_callback,
-            thinking_callback,
-        )
-        return text, truncated, status, err_body, usage
-    text, truncated, status, err_body, payload = _read_response(
-        target, body, headers, timeout_sec, progress_callback
+    """Call the Anthropic Messages API.
+
+    REVIEW-2026-10-20: the protocol now lives in
+    ``rca_core/protocols.py`` -- one class per API format -- and this is
+    the thin shell the rest of the codebase (and the tests) imports. The
+    name and the signature are unchanged, and the wrapper is late-bound,
+    so a test that patches ``llm._call_anthropic`` still reaches the
+    patched function.
+    """
+    from .protocols import adapter_for
+    return adapter_for(ApiFormat.ANTHROPIC).call(
+        provider=provider,
+        system_prompt=system_prompt,
+        image_b64=image_b64,
+        media_type=media_type,
+        user_text=user_text,
+        max_tokens=max_tokens,
+        timeout_sec=timeout_sec,
+        progress_callback=progress_callback,
+        stream=stream,
+        thinking_callback=thinking_callback,
     )
-    usage = None
-    if payload is not None:
-        u = parse_usage(payload, "anthropic")
-        if u:
-            usage = dict(u); usage["estimated"] = False
-    return text, truncated, status, err_body, usage
 
 
 def _call_openai(
@@ -2690,140 +2617,22 @@ def _call_openai(
     timeout_sec: int,
     progress_callback=None,
 ) -> tuple[str | None, bool, int | None, str, dict | None]:
-    # P0-2 (REVIEW-2026-07-25): validate endpoint before any network call.
-    # The server.py path validated before dispatching, but the GUI path loads
-    # providers from disk without re-validation. This unifies both paths.
-    # REVIEW-2026-07-31: validate_endpoint_local_ok — same policy as the
-    # connection test and the Gemini path (loopback + plain-http allowed
-    # for local Ollama-style endpoints; everything else stays
-    # SSRF-rejected).
-    from .ssrf import validate_endpoint_local_ok
-    ok_ep, why_ep = validate_endpoint_local_ok(provider.endpoint)
-    if not ok_ep:
-        return None, False, None, f"endpoint rejected by SSRF guard: {why_ep}", None
-    if not image_b64:
-        return None, False, None, "", None
-    target = _request_target(provider, "/v1/chat/completions")
-    # OpenAI reasoning models (o1/o3/o4-mini) reject `max_tokens` and require
-    # `max_completion_tokens`; sending the legacy name 400s the request.
-    # They ALSO reject `role:system` (must be `developer` or merged into the
-    # user message) and `response_format={"type":"json_object"}` (must rely on
-    # native structured-output / json_schema). Without these adjustments the
-    # reasoning path 400s every call.
-    model = provider.model
-    # REVIEW-2026-11-07 (low): some aggregators list reasoning models with a
-    # capital letter ("O1"). The case-sensitive regex then missed them, the
-    # request kept `max_tokens` + `role:system`, and OpenAI 400'd it.
-    is_reasoning = bool(model and re.match(r"^o\d", model, re.IGNORECASE))
-    messages: list[dict[str, Any]] = []
-    # Sprint B (REVIEW-2026-09-04): reasoning models reject `role:system`,
-    # but the previous code silently DROPPED the system prompt on this path,
-    # losing the strict-JSON contract that keeps outputs parseable. Merge it
-    # into the head of the user message instead. We deliberately avoid the
-    # `developer` role: aggregator/relay providers ("中转") commonly forward
-    # to whatever upstream they happen to route to, and `developer` is not
-    # universally accepted there, while a leading text block always is.
-    user_text_full = (
-        f"{system_prompt}\n\n{user_text}"
-        if (is_reasoning and system_prompt) else user_text
+    """Call the OpenAI Chat Completions API.
+
+    REVIEW-2026-10-20: see ``_call_anthropic`` -- the protocol moved to
+    ``rca_core/protocols.py`` and this is the thin shell.
+    """
+    from .protocols import adapter_for
+    return adapter_for(ApiFormat.OPENAI).call(
+        provider=provider,
+        system_prompt=system_prompt,
+        image_b64=image_b64,
+        media_type=media_type,
+        user_text=user_text,
+        max_tokens=max_tokens,
+        timeout_sec=timeout_sec,
+        progress_callback=progress_callback,
     )
-    if not is_reasoning and system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    user_msg: dict[str, Any] = {
-        "role": "user",
-        "content": [
-            {"type": "image_url", "image_url": {"url": f"data:{media_type or 'image/png'};base64,{image_b64}"}},
-            {"type": "text", "text": user_text_full},
-        ],
-    }
-    messages.append(user_msg)
-    body: dict[str, Any] = {
-        "model": model,
-        ("max_completion_tokens" if is_reasoning else "max_tokens"): max_tokens or 4000,
-        "messages": messages,
-    }
-    if not is_reasoning:
-        # FIX (json-object): ask OpenAI-compatible APIs to emit only valid JSON.
-        # This single field eliminates the vast majority of markdown-fence /
-        # prose-wrapped / truncated outputs that the fallback chain otherwise
-        # has to clean up. Reasoning models reject this field — see above.
-        body["response_format"] = {"type": "json_object"}
-    body.update(provider.extra_body or {})
-    headers = {
-        "Authorization": f"Bearer {provider.api_key}",
-        "content-type": "application/json",
-    }
-    headers.update(provider.extra_headers or {})
-    if progress_callback:
-        progress_callback("uploading")
-    payload_bytes, status, err_body = _post_json(
-        target, body, headers, timeout_sec, progress_callback
-    )
-    err_str = _decode_err_body(err_body)
-    if payload_bytes is None:
-        return None, False, status, err_str, None
-    try:
-        # AUDIT-2026-09-28: "utf-8-sig", not "utf-8", at all FIVE provider
-        # payload decodes (this one, 1662, 1724, 2074, 2126). A gateway or
-        # proxy that prepends a UTF-8 BOM made json.loads raise
-        # "Unexpected UTF-8 BOM" on a perfectly good 2xx body, and the
-        # except below then reported the whole response as an error body.
-        # rca_core/json_utils.safe_json_loads got the same treatment earlier
-        # the same day; this layer bypasses that chain, so it needed its own
-        # fix -- the same guard missing on a sibling path. utf-8-sig is a
-        # no-op when there is no BOM, so nothing else changes.
-        payload = json.loads(payload_bytes.decode("utf-8-sig"))
-    except Exception:
-        # REVIEW-2026-09-10: a 2xx that is not JSON (a WAF page, an SSE
-        # stream) must hand its bytes back as the error body, not vanish.
-        return None, False, status, _decode_err_body(payload_bytes), None
-    raw_text = ""
-    choices = payload.get("choices") if isinstance(payload, dict) else None
-    if isinstance(choices, str):
-        # Relays that stringify the array instead of emitting it.
-        try:
-            choices = json.loads(choices)
-        except Exception:
-            choices = []
-    truncated = False
-    for ch in (choices or []) if isinstance(choices, list) else []:
-        # REVIEW-2026-09-20 #20: ``payload`` may be a list/str/None (a
-        # malformed 2xx), ``message`` may be a string, and ``content`` may be
-        # null or a number. Every one of those used to raise AttributeError /
-        # TypeError out of a function documented as never raising - the whole
-        # reply was lost instead of being reported as an empty response.
-        if not isinstance(ch, dict):
-            continue
-        msg = ch.get("message")
-        if not isinstance(msg, dict):
-            continue
-        content = msg.get("content", "")
-        # Some OpenAI-compatible endpoints return content as a list of parts
-        # ({"type":"text","text":...}) rather than a plain string; collapse
-        # it to text so downstream JSON parsing doesn't receive a list.
-        if isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict):
-                    raw_text += _coerce_text(part.get("text"))
-                elif isinstance(part, str):
-                    raw_text += part
-        else:
-            raw_text += _coerce_text(content)
-        if raw_text.strip():
-            truncated = ch.get("finish_reason") == "length"
-            break
-    if not raw_text.strip():
-        # REVIEW-2026-09-20 #21: mirrors _read_response. Returning "" told the
-        # caller "the model answered, it was just empty", so the UI reported a
-        # parse error and the real reason (an error object inside a 2xx, e.g.
-        # "insufficient balance") was thrown away.
-        return (None, truncated, status, _summarise_empty_payload(payload),
-                payload if isinstance(payload, dict) else None)
-    usage = None
-    u = parse_usage(payload, "openai")
-    if u:
-        usage = dict(u); usage["estimated"] = False
-    return raw_text, truncated, status, err_str, usage
 
 
 def _is_safe_endpoint(endpoint: str) -> bool:
@@ -2856,132 +2665,22 @@ def _call_gemini(
     timeout_sec: int,
     progress_callback=None,
 ) -> tuple[str | None, bool, int | None, str, dict | None]:
-    if not image_b64:
-        return None, False, None, "", None
-    # F-26 fix: validate the endpoint before using it. The server.py caller
-    # already validated, but this guards against the GUI path (providers loaded
-    # from disk) and any future caller that bypasses server.py.
-    if not _is_safe_endpoint(provider.endpoint):
-        return None, False, None, "bad endpoint", None
-    # Gemini accepts the API key via query param (key=) or header
-    # (x-api-key). We default to the header to keep the key out of server,
-    # proxy, and Referer logs — matching the safe pattern used by the other
-    # format callers. Callers can override via provider.extra_headers.
-    model = provider.model or "gemini-2.5-pro"
-    base = _api_base(provider.endpoint)
-    # URL-encode the model name so tuned models like ``tunedModels/foo``
-    # (and any future model id that contains a reserved char) don't break
-    # the URL parser or accidentally introduce an extra path segment.
-    safe_model = urllib.parse.quote(model, safe="")
-    if getattr(provider, "full_url", False):
-        # A FULL-URL endpoint is the request URL, verbatim.
-        target = (provider.endpoint or "").strip()
-    else:
-        target = _gemini_path(base, f"/v1beta/models/{safe_model}:generateContent")
-    body: dict[str, Any] = {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {"inline_data": {"mime_type": media_type or "image/png", "data": image_b64}},
-                    {"text": user_text},
-                ],
-            }
-        ],
-        "generation_config": {
-            "max_output_tokens": max_tokens or 4000,
-            # Force Gemini to emit JSON directly. Without this, Gemini
-            # sometimes wraps its output in markdown fences or free-form
-            # prose, and the model's own internal chain-of-thought ("thought")
-            # parts leak into the response. ``response_mime_type`` cleanly
-            # separates the two output streams downstream.
-            "response_mime_type": "application/json",
-        },
-    }
-    body.update(provider.extra_body or {})
-    # REVIEW-2026-09-20 #27: ``call_llm_api`` folds temperature/seed into
-    # ``extra_body``, and the update above dropped them at the ROOT of this
-    # payload - but the Gemini REST schema keeps both inside
-    # ``generation_config``. Official Google answers an unknown root field with
-    # 400 ``Unknown name`` (or silently ignores it), so the reproducibility
-    # knobs were a no-op on this format. Move them in; a value the user set
-    # directly inside ``generation_config`` still wins.
-    # Copy before mutating: ``body["generation_config"]`` may be the very dict
-    # owned by ``provider.extra_body``, and editing it in place would leak the
-    # per-call sampling into the persisted provider.
-    gen_cfg = body.get("generation_config")
-    gen_cfg = dict(gen_cfg) if isinstance(gen_cfg, dict) else {}
-    for _key in ("temperature", "seed"):
-        if _key in body:
-            gen_cfg.setdefault(_key, body.pop(_key))
-    body["generation_config"] = gen_cfg
-    headers = {
-        "content-type": "application/json",
-        # Google's official Generative Language API authenticates via
-        # `x-goog-api-key` (or ?key=); `x-api-key` is an Anthropic convention
-        # the official endpoint ignores, so the "Google Gemini" preset 401'd.
-        # Send both so official Google + third-party Gemini proxies both work.
-        "x-goog-api-key": provider.api_key,
-        "x-api-key": provider.api_key,
-    }
-    headers.update(provider.extra_headers or {})
-    if progress_callback:
-        progress_callback("uploading")
-    payload_bytes, status, err_body = _post_json(
-        target, body, headers, timeout_sec, progress_callback
+    """Call Google's Generative Language API.
+
+    REVIEW-2026-10-20: see ``_call_anthropic`` -- the protocol moved to
+    ``rca_core/protocols.py`` and this is the thin shell.
+    """
+    from .protocols import adapter_for
+    return adapter_for(ApiFormat.GEMINI).call(
+        provider=provider,
+        system_prompt=system_prompt,
+        image_b64=image_b64,
+        media_type=media_type,
+        user_text=user_text,
+        max_tokens=max_tokens,
+        timeout_sec=timeout_sec,
+        progress_callback=progress_callback,
     )
-    err_str = _decode_err_body(err_body)
-    if payload_bytes is None:
-        return None, False, status, err_str, None
-    try:
-        payload = json.loads(payload_bytes.decode("utf-8-sig"))
-    except Exception:
-        # REVIEW-2026-09-20 #20: a 2xx that is not JSON (a WAF page, an SSE
-        # stream) used to be reported with the *stale* empty err_str, so the
-        # operator saw "HTTP 200" and nothing else. Mirror _read_response.
-        return None, False, status, _decode_err_body(payload_bytes), None
-    # REVIEW-2026-09-20 #20: a malformed 2xx whose root is a list/str/number
-    # (relays do this) raised AttributeError out of a documented never-raising
-    # function, so the whole reply vanished instead of reporting "no text".
-    payload_obj = payload if isinstance(payload, dict) else {}
-    candidates = payload_obj.get("candidates") or []
-    if isinstance(candidates, str):
-        try:
-            candidates = json.loads(candidates)
-        except Exception:
-            candidates = []
-    if not isinstance(candidates, list):
-        candidates = []
-    first = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
-    raw_text = ""
-    content = first.get("content")
-    parts = content.get("parts") if isinstance(content, dict) else None
-    for part in (parts or []) if isinstance(parts, list) else []:
-        if not isinstance(part, dict):
-            continue
-        # Gemini 2.5+ emits a separate ``thought`` part alongside the
-        # real output — chain-of-thought / planning that the model
-        # surfaces as text. Skip it: the JSON downstream parser would
-        # otherwise see e.g. ``internal reasoning...{"answer":42}``.
-        if part.get("thought"):
-            continue
-        if "text" in part:
-            # ``part["text"]`` may legitimately be null/numeric from a broken
-            # proxy; ``raw_text += None`` used to raise TypeError here.
-            raw_text += _coerce_text(part.get("text"))
-    finish = first.get("finishReason")
-    truncated = finish in ("MAX_TOKENS", "LENGTH")
-    usage = None
-    u = parse_usage(payload_obj, "gemini")
-    if u:
-        usage = dict(u); usage["estimated"] = False
-    if not raw_text.strip():
-        # REVIEW-2026-09-20 #21: same contract as the Anthropic / OpenAI paths -
-        # an empty 200 is NOT "the model answered with nothing"; hand the
-        # upstream reason (blockReason, an in-body error) back as err_body.
-        return None, truncated, status, _summarise_empty_payload(payload_obj), None
-    return raw_text, truncated, status, err_str, usage
 
 
 def _read_response(
@@ -3027,6 +2726,34 @@ def _read_response(
         # the user sees the real cause.
         return None, truncated, status, _summarise_empty_payload(payload), payload
     return raw_text, truncated, status, err_str, payload
+
+
+#: The protocol adapters, one per API format.
+#:
+#: REVIEW-2026-10-20: the protocols live in ``rca_core/protocols.py`` and
+#: this is the registry. A fourth format is one class in that file plus
+#: one line here.
+ADAPTERS: dict = {}
+
+
+def _adapters() -> dict:
+    """The registry, built lazily so the import stays one-way.
+
+    ``protocols.py`` needs the transport from this module, and this
+    module needs the adapter classes from that one. The import is
+    therefore resolved at CALL time rather than at import time, which
+    also keeps it cheap: the dict is built once and cached.
+    """
+    global ADAPTERS
+    if not ADAPTERS:
+        from .protocols import (AnthropicAdapter, GeminiAdapter,
+                                OpenAIAdapter)
+        ADAPTERS = {
+            ApiFormat.ANTHROPIC: AnthropicAdapter(),
+            ApiFormat.OPENAI: OpenAIAdapter(),
+            ApiFormat.GEMINI: GeminiAdapter(),
+        }
+    return ADAPTERS
 
 
 def call_llm_api(
