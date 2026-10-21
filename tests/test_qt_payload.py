@@ -20,6 +20,10 @@ import sys
 import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
+# The path is spelled as a literal chain on purpose: the contract test in
+# tests/test_standalone_loadable_modules.py reconstructs the target of a
+# spec_from_file_location call from its string constants, and an f-string
+# hides the file name from it (it would see ".py" and nothing else).
 SPEC = importlib.util.spec_from_file_location(
     "qt_payload", REPO / "scripts" / "qt_payload.py")
 qt_payload = importlib.util.module_from_spec(SPEC)

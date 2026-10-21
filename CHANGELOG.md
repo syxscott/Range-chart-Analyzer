@@ -9,8 +9,8 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **The one-file exe is 19.7 % smaller, and the compressor was never the
-  problem.** 234.3 MiB → **188.1 MiB**, no feature lost. UPX was already
+- **The one-file exe is 21.2 % smaller, and the compressor was never the
+  problem.** 234.3 MiB → **184.7 MiB**, no feature lost. UPX was already
   doing its job — PyInstaller calls it with `--lzma`, and it is what
   takes `cv2.pyd` from 86.3 MB to 21.3 MB. The size was somewhere else
   entirely.
@@ -32,8 +32,8 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Because the closure is read out of the PE import tables at build time it
   follows the code: if a dependency ever appears, its DLL comes back.
 
-  Measured on the new build: **215 binaries and 2412 data files dropped**
-  (112.6 MB of source payload); archive entries **4336 → 1668**;
+  Measured on the new build: **217 binaries and 2442 data files dropped**
+  (121.0 MB of source payload); archive entries **4336 → 1625**;
   top-level Qt6 DLLs **137 → 28**; the QML tree **2510 → 0**; the
   multimedia stack **39 → 0**, ffmpeg included — `qfluentwidgets.multimedia`
   was the only thing pulling in QtMultimedia, and it is the ONLY
@@ -46,12 +46,34 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   closed. It was mutation-checked: breaking the closure (dependencies
   collected but never expanded) turns the test red, and so does un-marking
   the QML tree as dead weight. The finished artifact is then checked
-  again from the outside: 227 PEs read out of the exe, every import
+  again from the outside: 204 PEs read out of the exe, every import
   resolved — and the checker is itself checked, by asking it to notice a
   required DLL that HAD been dropped.
 
+- **And the Python side had its own ballast.** The same question one
+  level up: `requests`, `urllib3` and `idna` were not in the import graph
+  at all; `bs4`, `soupsieve`, `html5lib` and `chardet` were reachable only
+  through `lxml.html`, which nothing here uses; Pillow's AVIF codec
+  (1.8 MB) and matplotlib's example images came along for the ride.
+
+  `scripts/payload_policy.py` holds the rules, and
+  `tests/test_payload_policy.py` checks them against a REAL build's import
+  graph instead of trusting the file. It caught two of them, which is the
+  only reason they are right: `charset_normalizer` is imported by
+  `numpy.f2py.crackfortran` (numpy is a hard dependency) and is worth
+  0.01 MB, so it stays; and `lxml` itself stays too, because
+  `openpyxl.xml` imports `lxml.etree` — dropping it would not break the
+  XLSX export, it would slow it down, which is a different kind of
+  regression and not one to trade for 2.6 MB.
+
+  `libcrypto-1_1-x64.dll` looks like pollution — it was picked up from
+  `C:\Program Files\HONOR\PCManager`, because the Windows DLL search path
+  found it there — but `sqlite3.dll` statically imports it, so removing it
+  would stop SQLite from loading at all. It stays, and the reason is now
+  written down instead of being a mystery in a build log.
+
   Honest limit: this is a QWebEngine application, and
-  `Qt6WebEngineCore.dll` alone is 83.7 MB of the 188.1 that remain.
+  `Qt6WebEngineCore.dll` alone is 83.7 MB of the 184.7 that remain.
   Chromium's own size is the floor here, not the packaging.
 
 ## [0.1.3] — 2026-10-21

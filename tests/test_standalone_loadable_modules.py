@@ -51,6 +51,15 @@ STANDALONE_LOADABLE: dict[str, str] = {
         "may be promoted"
     ),
     "scripts/update_ics.py": "the promotion script itself, loaded by file path",
+    "scripts/qt_payload.py": (
+        "the build-time Qt payload rule, loaded by file path from "
+        "RangeChartAnalyzer.spec -- PyInstaller EXECs the spec, so it has no "
+        "package to import it from -- and by tests/test_qt_payload.py"
+    ),
+    "scripts/payload_policy.py": (
+        "the build-time Python payload rule, loaded by file path from "
+        "RangeChartAnalyzer.spec and from tests/test_payload_policy.py"
+    ),
     "tests/gen_frontend_parity_fixtures.py": (
         "the differential-fixture generator, re-executed by two test modules "
         "so the committed fixture is proven to match Python"

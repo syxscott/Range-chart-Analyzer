@@ -37,6 +37,21 @@ import os
 
 block_cipher = None
 
+# The Python-side exclusion rules live in scripts/ so they can be tested
+# and checked against a real build's import graph (scripts/payload_policy.py
+# -- see tests/test_payload_policy.py). The spec only carries them in.
+# PyInstaller EXECs a spec, so __file__ does not exist in it; it does set
+# SPECPATH, and the cwd fallback is for the documented "run from the
+# project root" build.
+import importlib.util as _ilu
+
+_pl_spec = _ilu.spec_from_file_location(
+    "payload_policy",
+    os.path.join(globals().get("SPECPATH") or os.getcwd(),
+                 "scripts", "payload_policy.py"))
+_pl = _ilu.module_from_spec(_pl_spec)
+_pl_spec.loader.exec_module(_pl)
+
 # qfluentwidgets resolves most of its widget tree through dynamic imports
 # (components/, common/, window/...), which static analysis cannot see.
 #
@@ -98,6 +113,18 @@ excludes = [
     "onnxruntime", "polars", "_polars_runtime_32", "pyarrow",
     "bitsandbytes", "scipy", "sklearn", "pandas",
     "grpc", "google", "pdfminer", "pdfplumber",
+    # 0.1.3: the Python packages that nothing outside their own family
+    # reaches. Each one was checked against a real build's import graph
+    # and against the first-party source; the rules and their evidence
+    # are in scripts/payload_policy.py, and
+    # tests/test_payload_policy.py checks the rules against a build's
+    # xref rather than trusting this list.
+    #
+    #   lxml itself is NOT excluded: openpyxl.xml imports lxml.etree, and
+    #   dropping it would not break the XLSX export, it would slow it
+    #   down. Only lxml.html goes, and with it the bs4/soupsieve/chardet
+    #   chain that only lxml.html pulls in.
+    *_pl.excludes(),
 ]
 
 datas = [
@@ -301,6 +328,18 @@ _qp = _ilu.module_from_spec(_qp_spec)
 _qp_spec.loader.exec_module(_qp)
 
 _drop_bin, _drop_data, _report = _qp.analyse(a.binaries, a.datas)
+
+# The Python-side dead weight: Pillow's optional AVIF codec and
+# matplotlib's example images. Pillow registers its format plugins in a
+# try/except loop, so a missing optional codec costs the AVIF format and
+# nothing else.
+_pl_bin, _pl_data = _pl.analyse(a.binaries, a.datas)
+if _pl_bin or _pl_data:
+    print("[spec] python payload: dropped %d binaries + %d data files"
+          % (len(_pl_bin), len(_pl_data)))
+_drop_bin = list(_drop_bin) + list(_pl_bin)
+_drop_data = list(_drop_data) + list(_pl_data)
+
 _dropped_bytes = 0
 for _e in list(_drop_bin) + list(_drop_data):
     try:
