@@ -39,7 +39,19 @@ block_cipher = None
 
 # qfluentwidgets resolves most of its widget tree through dynamic imports
 # (components/, common/, window/...), which static analysis cannot see.
-hiddenimports = collect_submodules("qfluentwidgets")
+#
+# 0.1.3: collect_submodules() took ALL of them, and `qfluentwidgets.multimedia`
+# is the one subpackage this app has no use for -- it drags in
+# PySide6.QtMultimedia, Qt6MultimediaWidgets and the whole ffmpeg backend
+# (avcodec/avformat/avutil/swscale/swresample, 7.2 MB stored) for a video
+# widget the app never shows. Verified before excluding: the ONLY files in
+# the whole qfluentwidgets package that touch QtMultimedia are
+# multimedia/media_player.py and multimedia/video_widget.py, and
+# qfluentwidgets/__init__.py does not import the subpackage at all.
+hiddenimports = [
+    m for m in collect_submodules("qfluentwidgets")
+    if not m.startswith("qfluentwidgets.multimedia")
+]
 
 # Dev-only trees. Everything else stays in, because matplotlib/PySide6 pull in
 # surprising transitive imports and a wrong exclusion surfaces at runtime, not
@@ -255,6 +267,65 @@ print("[spec] dropped %d binary + %d data entries, %.1f MB of payload"
       % (len(dropped_bin), len(dropped_data), _removed / 1e6))
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+# ---------------------------------------------------------------------------
+# 0.1.3: leave out the Qt payload the app cannot reach
+# ---------------------------------------------------------------------------
+# MEASURED, on the 0.1.3 build: 137 top-level PySide6 DLLs, of which only
+# 20 bindings were ever imported, and the whole QML module tree (2510
+# archive entries) rode along. The cause is PyInstaller's own PySide6 hook,
+# which calls pyside6_library_info.collect_extra_binaries() and sweeps the
+# ENTIRE Qt installation into the bundle -- Qt3D, Charts, Pdf, Location,
+# Graphs, the ffmpeg backends, the QML tree -- whether or not anything
+# imports it. Most of the exe was ballast.
+#
+# The rule for what may go lives in scripts/qt_payload.py, and it is a
+# dependency rule, not a guess: a Qt6*.dll stays if some PE in the bundle
+# imports it (directly or through a chain), and the plugin families that
+# serve only features this app does not have go as whole directories.
+# Qt loads plugins BY NAME at runtime, so "nobody imports it" is not
+# sufficient on its own -- those families are named explicitly instead.
+#
+# The closure is computed from the PE import tables at BUILD time, so it
+# follows the code: if a dependency ever appears, its DLL comes back.
+import importlib.util as _ilu
+
+_qp_spec = _ilu.spec_from_file_location(
+    "qt_payload",
+    # PyInstaller EXECs the spec, so __file__ does not exist in it. It does
+    # set SPECPATH (the directory the spec lives in); the cwd fallback is
+    # for the documented "run from the project root" build.
+    os.path.join(globals().get("SPECPATH") or os.getcwd(),
+                 "scripts", "qt_payload.py"))
+_qp = _ilu.module_from_spec(_qp_spec)
+_qp_spec.loader.exec_module(_qp)
+
+_drop_bin, _drop_data, _report = _qp.analyse(a.binaries, a.datas)
+_dropped_bytes = 0
+for _e in list(_drop_bin) + list(_drop_data):
+    try:
+        _dropped_bytes += os.path.getsize(str(_e[1]))
+    except OSError:
+        pass
+
+_bin_keys = set((str(e[0]), str(e[1])) for e in _drop_bin)
+_dat_keys = set((str(e[0]), str(e[1])) for e in _drop_data)
+_a_bin = [e for e in a.binaries if (str(e[0]), str(e[1])) not in _bin_keys]
+_a_dat = [e for e in a.datas if (str(e[0]), str(e[1])) not in _dat_keys]
+
+print("[spec] Qt payload: dropped %d binaries + %d data files "
+      "(%.1f MB of source payload)"
+      % (len(a.binaries) - len(_a_bin), len(a.datas) - len(_a_dat),
+         _dropped_bytes / 1e6))
+print("[spec]   bindings kept  : %d" % len(_report["roots"]))
+print("[spec]   Qt DLLs needed : %d"
+      % len([c for c in _report["closure"] if c.startswith("qt6")]))
+for _name in _report["dropped_binaries"][:10]:
+    print("[spec]   dropped       : %s" % _name)
+if len(_report["dropped_binaries"]) > 10:
+    print("[spec]   ... and %d more dropped binaries"
+          % (len(_report["dropped_binaries"]) - 10))
+a.binaries, a.datas = _a_bin, _a_dat
 
 # --- windowed build: the shipped artifact -------------------------------
 # 0.1.2 (2026-10-18): UPX is applied as a POST-PROCESS (scripts/upx_compress.py),

@@ -5,6 +5,55 @@ All notable changes to Range Chart Analyzer are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The one-file exe is 19.7 % smaller, and the compressor was never the
+  problem.** 234.3 MiB → **188.1 MiB**, no feature lost. UPX was already
+  doing its job — PyInstaller calls it with `--lzma`, and it is what
+  takes `cv2.pyd` from 86.3 MB to 21.3 MB. The size was somewhere else
+  entirely.
+
+  **PyInstaller's PySide6 hook sweeps the whole Qt installation into the
+  bundle.** `pyside6_library_info.collect_extra_binaries()` takes every
+  Qt DLL and the entire QML module tree, whether or not anything imports
+  it. On the 0.1.3 build that was **137 top-level PySide6 DLLs of which
+  only 20 bindings were ever imported**, plus **2510 archive entries of
+  QML tree** — Qt3D, Charts, Pdf, Location, Graphs, the ffmpeg backends
+  and the whole Quick* family, all of it ballast in the shipped exe.
+
+  What may go is now a **dependency rule computed at build time**
+  (`scripts/qt_payload.py`): a Qt6*.dll stays if some PE in the bundle
+  imports it, directly or through a chain, and the plugin families that
+  serve only features this app does not have go as whole directories. Qt
+  loads plugins *by name* at runtime, so "nobody imports it" is not
+  sufficient on its own — those families are named explicitly instead.
+  Because the closure is read out of the PE import tables at build time it
+  follows the code: if a dependency ever appears, its DLL comes back.
+
+  Measured on the new build: **215 binaries and 2412 data files dropped**
+  (112.6 MB of source payload); archive entries **4336 → 1668**;
+  top-level Qt6 DLLs **137 → 28**; the QML tree **2510 → 0**; the
+  multimedia stack **39 → 0**, ffmpeg included — `qfluentwidgets.multimedia`
+  was the only thing pulling in QtMultimedia, and it is the ONLY
+  subpackage in the whole of qfluentwidgets that touches QtMultimedia
+  (`qfluentwidgets/__init__.py` does not import it at all).
+
+  **The proof is a property, not a promise.**
+  `tests/test_qt_payload.py` asserts that after the exclusion every
+  surviving PE has every DLL it imports still present — the closure is
+  closed. It was mutation-checked: breaking the closure (dependencies
+  collected but never expanded) turns the test red, and so does un-marking
+  the QML tree as dead weight. The finished artifact is then checked
+  again from the outside: 227 PEs read out of the exe, every import
+  resolved — and the checker is itself checked, by asking it to notice a
+  required DLL that HAD been dropped.
+
+  Honest limit: this is a QWebEngine application, and
+  `Qt6WebEngineCore.dll` alone is 83.7 MB of the 188.1 that remain.
+  Chromium's own size is the floor here, not the packaging.
+
 ## [0.1.3] — 2026-10-21
 
 ### Added
