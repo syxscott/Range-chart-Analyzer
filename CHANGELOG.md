@@ -188,6 +188,25 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The script is left in the repository so the number can be re-checked
   instead of re-argued.
 
+- **A cancel now stops a running extraction.** The GUI's own docstring
+  admitted the gap: for a single-run extraction "there is NO checkpoint
+  inside the blocking urllib request, so the flag is only observed after
+  extract() returns -- a cancel during a single run can take up to the
+  full network timeout to take effect". The network timeout is 240 s at
+  `effort=max` (it was 120 s when the gap was written down), so the
+  budget change made it worse: a cancel could wait out four minutes.
+
+  The cancellation is now a per-thread hook the transport consults
+  before a request goes out, between SSE events, and between slices of a
+  retry backoff. So a cancel takes effect within about a second on the
+  streaming path (the one `effort=max` uses) instead of after the whole
+  request, and a cancelled call never reaches the network at all — it
+  cannot spend the account's quota on an answer nobody wants.
+
+  What is still true: a request already inside a single blocking socket
+  read cannot be interrupted mid-read, so the non-streaming path's one
+  big read still waits for its timeout.
+
 - **The provider store could be emptied with no way back.** A probe script
   emptied the live `providers.json` — five providers, two of them paid
   MiniMax keys — and the only way back was a backup somebody had taken by

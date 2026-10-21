@@ -1995,6 +1995,95 @@ def _read_limited(resp, limit: int = MAX_RESPONSE_BYTES) -> bytes:
     return data
 
 
+#: The caller's "stop now" hook, per thread.
+#:
+#: REVIEW-2026-10-20: the GUI's own docstring said the cancel flag was
+#: "only observed after extract() returns -- a cancel during a single run
+#: can take up to the full network timeout to take effect". That timeout
+#: is 240 s at effort=max, so the gap grew with the budget change.
+#:
+#: It is a thread-local and not a parameter on every function because
+#: ``extract()`` dispatches through explicit keyword signatures: a
+#: parameter would mean touching six-plus functions and all their
+#: callers. The transport consults it before a request, between SSE
+#: events, and between slices of a retry backoff.
+_CANCEL_CHECK = threading.local()
+
+#: The marker a cancelled call leaves in its error body. The codebase
+#: already uses bracketed prefixes for the same purpose ("[network]
+#: timeout", "[transport retry 1/2 ...]", "[upstream error body not
+#: captured]"), so this follows that convention rather than inventing a
+#: second mechanism.
+_CANCELLED_MARKER = "[cancelled]"
+
+
+def set_cancel_check(check) -> None:
+    """Install the caller's cancellation hook for THIS thread."""
+    _CANCEL_CHECK.check = check
+
+
+def clear_cancel_check() -> None:
+    """Remove the cancellation hook from THIS thread."""
+    _CANCEL_CHECK.check = None
+
+
+def current_cancel_check():
+    """The cancellation hook installed on this thread, or None."""
+    return getattr(_CANCEL_CHECK, "check", None)
+
+
+def cancel_requested_now() -> bool:
+    """Has the caller asked to stop? Never raises."""
+    check = current_cancel_check()
+    if check is None:
+        return False
+    try:
+        return bool(check())
+    except Exception:
+        return False
+
+
+def cancelled_result() -> tuple:
+    """The 5-tuple a cancelled call returns."""
+    return (None, False, None,
+            (_CANCELLED_MARKER + " the caller asked to stop"), None)
+
+
+def is_cancelled(err_body) -> bool:
+    """Does this error body say the call was cancelled?"""
+    if isinstance(err_body, bytes):
+        try:
+            err_body = err_body.decode("utf-8", "replace")
+        except Exception:
+            return False
+    return bool(err_body) and str(err_body).startswith(_CANCELLED_MARKER)
+
+
+def interruptible_sleep(seconds: float) -> bool:
+    """Sleep, but wake early if the caller cancels.
+
+    Returns True when the wait was cut short by a cancellation.
+
+    With NO cancellation hook installed this is ONE plain ``time.sleep``,
+    exactly as it was before: the slicing exists only to wake early for a
+    caller that can cancel, and splitting every backoff into 0.2 s slices
+    for callers that cannot would change the shape of the sleep for
+    everyone (and the tests that count the sleeps count them for a
+    reason).
+    """
+    if current_cancel_check() is None:
+        time.sleep(max(0.0, float(seconds)))
+        return False
+    deadline = time.monotonic() + max(0.0, float(seconds))
+    while True:
+        if cancel_requested_now():
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.2, remaining))
+
+
 #: The headers of the most recent response, per thread.
 #:
 #: REVIEW-2026-10-20: the headers are the only place a provider can say
@@ -2056,6 +2145,12 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
     ``"submitting"`` and ``"thinking"`` to allow the UI to show granular
     progress rather than a generic spinner.
     """
+    if cancel_requested_now():
+        # REVIEW-2026-10-20: the caller cancelled before the request went
+        # out. Sending it anyway would spend the caller's quota on an
+        # answer nobody wants.
+        return None, None, (_CANCELLED_MARKER
+                            + " the caller asked to stop").encode("utf-8")
     try:
         # REVIEW-2026-09-20 #20: a provider whose ``extra_body`` holds a
         # non-serialisable value (a datetime, an object pasted in by hand into
@@ -2145,7 +2240,7 @@ def _post_json(url: str, body: dict[str, Any], headers: dict[str, str], timeout_
         return None, None, f"[network] {type(e).__name__}: {e}".encode("utf-8")
 
 
-def _sse_events(resp):
+def _sse_events(resp, cancel_check=None):
     """Yield the JSON payload of each ``data:`` line of an SSE response.
 
     The Anthropic-compatible stream sends an ``event: <type>`` line followed
@@ -2155,6 +2250,13 @@ def _sse_events(resp):
     ``delta.type == "thinking_delta"`` carrying the model's thinking text.
     """
     for raw in resp:
+        # REVIEW-2026-10-20: one event is the granularity of the
+        # cancellation, and the events arrive ~0.3-1 s apart, so a cancel
+        # during a streaming answer takes effect within about a second
+        # instead of waiting out the whole request. The generator STOPS
+        # rather than raising, so the reader's loop is not re-indented.
+        if cancel_check is not None and cancel_check():
+            return
         try:
             line = raw.decode("utf-8", "replace").strip()
         except Exception:
@@ -2267,7 +2369,7 @@ def _read_response_stream(target: str, body: dict[str, Any],
         # gets a shorter range chart and never learns why.
         saw_stop = False
         stream_error = ""
-        for ev in _sse_events(resp):
+        for ev in _sse_events(resp, cancel_requested_now):
             etype = ev.get("type") or ""
             if etype == "content_block_delta":
                 delta = ev.get("delta") or {}
@@ -2306,6 +2408,13 @@ def _read_response_stream(target: str, body: dict[str, Any],
                 else:
                     stream_error = _coerce_text(err_obj)
                 break
+        if cancel_requested_now():
+            # The generator stopped because the caller cancelled, not
+            # because the stream ended. Whatever arrived is a PREFIX of
+            # the answer, and a prefix of a table is a wrong table.
+            return (None, truncated, resp.status,
+                    (_CANCELLED_MARKER
+                     + " the caller asked to stop"), None)
         usage = None
         if usage_obj:
             usage = dict(usage_obj)
@@ -2976,6 +3085,12 @@ def call_llm_api(
     # headers in place -- and a stale "Retry-After: 120" would then delay
     # a retry that has nothing to do with that response.
     _LAST_RESPONSE_HEADERS.headers = {}
+    # REVIEW-2026-10-20: and the cancellation check goes HERE, at the one
+    # entry point all three formats share, so a cancel short-circuits
+    # before the SSRF guard, before the body is built and before anything
+    # is sent.
+    if cancel_requested_now():
+        return cancelled_result()
     # If temperature/seed were supplied at this layer, fold them into
     # a copy of the provider's extra_body so the per-call sampling is
     # auditable in request_meta without mutating the caller's provider.
@@ -3032,7 +3147,13 @@ def call_llm_api(
         # already empty), so the documented privacy switch did nothing and the
         # decoded upstream body was returned on every path regardless. Blank
         # it, keeping a marker so the caller still knows WHY there is no body.
-        err_body = "[upstream error body not captured]" if err_body else ""
+        #
+        # REVIEW-2026-10-20: a CANCELLATION is not an upstream error, and
+        # masking it would hide the one thing the caller needs to see -- the
+        # "did you ask for this?" marker. The privacy switch is about the
+        # PROVIDER's words, not ours.
+        if not is_cancelled(err_body):
+            err_body = "[upstream error body not captured]" if err_body else ""
     # When the API didn't return a usage block but we got text back, fall
     # back to local estimation. Flag the row so the UI can label it.
     # Include an image token estimate so vision calls aren't under-counted
@@ -3268,6 +3389,8 @@ def call_llm_api_with_retry(
             except Exception:
                 pass
     for attempt in range(retries):
+        if cancel_requested_now():
+            return cancelled_result()
         # REVIEW-2026-10-20: the response HEADERS, captured on the way out.
         # They carry the provider's own Retry-After, which is the one delay
         # it knows to be right, and x-should-retry, which is the provider
@@ -3288,6 +3411,8 @@ def call_llm_api_with_retry(
         resp_headers = _last_response_headers()
         text, truncated, status, err_body, usage = last
         if text is not None:
+            return last
+        if is_cancelled(err_body):
             return last
         # REVIEW-2026-10-20 (borrowed from opencode's provider-error.ts):
         # the CLASSIFICATION decides, and it reproduces the old status
@@ -3419,7 +3544,11 @@ def call_llm_api_with_retry(
         if progress_callback is not None:
             progress_callback(
                 f"retrying:{attempt + 2}/{retries}:{backoff:.1f}s")
-        time.sleep(backoff)
+        # REVIEW-2026-10-20: the wait is interruptible, so a cancel
+        # during a backoff does not have to sit out the rest of it.
+        if interruptible_sleep(backoff):
+            return (None, False, status,
+                    (_CANCELLED_MARKER + " the caller asked to stop"), usage)
     return last
 
 

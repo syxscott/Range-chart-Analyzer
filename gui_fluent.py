@@ -569,15 +569,24 @@ class ExtractWorker(QThread):
     def request_cancel(self) -> None:
         """Ask the worker to stop at the next cancellation checkpoint.
 
-        Sprint B (REVIEW-2026-09-04) honesty note: for a single-run
-        extraction (runs <= 1) there is NO checkpoint inside the blocking
-        urllib request, so the flag is only observed after extract()
-        returns — a cancel during a single run can take up to the full
-        network timeout to take effect. The multi-run path (runs > 1)
-        checks the flag BEFORE each submit and between completion
-        batches, so it stops promptly and reports uncollected runs as
-        cancelled. Safe to call from any thread (the flag is a plain
-        Python bool).
+        REVIEW-2026-10-20: the single-run path now has a checkpoint INSIDE
+        the call. The worker installs a per-thread cancellation hook
+        (``rca_core.llm.set_cancel_check``) for the duration of the
+        extraction, and the transport consults it before a request goes
+        out, between SSE events and between slices of a retry backoff. So
+        a cancel now takes effect within about a second instead of after
+        the full network timeout -- which is 240 s at effort=max.
+
+        What is still true: a request that is already inside a single
+        blocking socket read cannot be interrupted mid-read, so the
+        NON-STREAMING path's one big read still waits for its timeout.
+        The streaming path (the one effort=max uses) stops between
+        events.
+
+        The multi-run path (runs > 1) additionally checks the flag BEFORE
+        each submit and between completion batches, so it stops promptly
+        and reports uncollected runs as cancelled. Safe to call from any
+        thread (the flag is a plain Python bool).
         """
         self._cancel_requested = True
 
@@ -675,7 +684,23 @@ class ExtractWorker(QThread):
                 # starts and stops the ticker on the GUI thread instead, off
                 # this "analyzing" stage and its own result handler. So the
                 # only thing left to do here is the blocking call itself.
-                result = extract(mode=mode, **params)
+                # REVIEW-2026-10-20: install the cancellation hook for
+                # this worker thread, so the transport can see the cancel
+                # WHILE the request is in flight. Without it the flag was
+                # only observed after extract() returned -- and the network
+                # timeout is 240 s at effort=max.
+                try:
+                    from rca_core.llm import (clear_cancel_check,
+                                              set_cancel_check)
+                except Exception:
+                    set_cancel_check = clear_cancel_check = None
+                if set_cancel_check is not None:
+                    set_cancel_check(self.cancel_requested)
+                try:
+                    result = extract(mode=mode, **params)
+                finally:
+                    if clear_cancel_check is not None:
+                        clear_cancel_check()
                 try:
                     result._mode = mode
                 except Exception:

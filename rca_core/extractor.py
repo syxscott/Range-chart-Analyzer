@@ -3043,6 +3043,14 @@ def _call_llm(*, time_budget_sec: float | None = None,
         text, _truncated, status, _err_body, _usage = result
         if text is not None:
             break
+        # REVIEW-2026-10-20: the caller cancelled. That is not a failure
+        # and not a reason to try again.
+        try:
+            from .llm import is_cancelled
+            if is_cancelled(_err_body):
+                break
+        except Exception:
+            pass
         # REVIEW-2026-10-20 (borrowed from opencode's provider-error.ts):
         # the CLASSIFIER decides, and it reproduces the old status policy
         # for every status it knows. Two cases the status alone got wrong:
@@ -3099,7 +3107,12 @@ def _call_llm(*, time_budget_sec: float | None = None,
             delay = TRANSPORT_BASE_BACKOFF_SEC
         notes.append(f"[transport retry {attempt + 1}/{max_retries}"
                      f" after {delay:.1f}s: HTTP {status if status is not None else 'network'}]")
-        time.sleep(delay)
+        try:
+            from .llm import interruptible_sleep
+            if interruptible_sleep(delay):
+                break
+        except Exception:
+            time.sleep(delay)
         result = call_llm_api(**kwargs)
         calls += 1
         attempt += 1
