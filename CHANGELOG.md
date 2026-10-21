@@ -5,7 +5,7 @@ All notable changes to Range Chart Analyzer are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.3] — 2026-10-21
 
 ### Added
 
@@ -409,8 +409,6 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   thinking chunk arrives about a second in, and the assembled answer is the
   same one the single-body call returns (22 rows / 18 columns / 3 legend).
 
-### Fixed
-
 - **A busy tier and a dead socket did not cost the same, and were retried the
   same number of times.** The transport wrapper gave both exactly one retry.
   A 429/529 comes back in about a second, while a read timeout has already
@@ -526,6 +524,24 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   extraction. On the two-stage path's four sequential calls the per-call rate
   compounds into the run's rate, which is why `MiniMax-M3.1-Flash` failed
   every run of one measurement while answering 7 of 8 single requests.
+- **The packaged app's "what's new" dialog had nothing to show.**
+  `CHANGELOG.md` was not in the spec's `datas`, so in a onefile build
+  `gui_fluent_onboarding.changelog_path()` looked for it at the bundle root
+  and did not find it: the dialog listed nothing, silently, in exactly the
+  artifact that ships to users — and in a release whose own notes are what
+  that dialog exists to display. It is 77 KB against a 235 MB payload.
+  `tests/test_release_spec_assets.py` now parses the spec and fails if a
+  runtime payload file drops out again. The check was mutation-verified
+  (removing the entry turns it red), because a test that cannot fail is
+  not a check.
+- **A test asserted that this repository contains an `[Unreleased]`
+  section.** True while a version is being built, false the day it ships —
+  which is what happened: renaming that section to `[0.1.3]` IS what
+  releasing means, so the test turned red on the release it was written
+  for. It now tests the parser's contract against a changelog it writes
+  itself, and a second test pins `__version__` to a CHANGELOG section, so
+  bumping the version without opening a section can no longer happen
+  silently. Both were mutation-checked.
 
 ## [0.1.2] — 2026-10-18
 
@@ -563,14 +579,6 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never defined** — every "Export Excel" click would have raised `NameError`
   inside the worker and surfaced only as an InfoBar "export failed"
   (`tests/test_unbound_names.py` caught it).
-
-## [0.1.1] — 2026-10-16
-
-- Cut the one-file exe by 16.4% (323.5 → 270.6 MB) with no loss of function:
-  DevTools debug payloads and OpenCV video-IO decoders dropped, audited by
-  `scripts/audit_exclude_imports.py` / `audit_exclude_suite.py`.
-
-### Fixed
 
 - **Full-code review of 2026-10-17: six P1 defects, all measured and fixed.**
   Complete report in `docs/CODE-REVIEW-2026-10-17.md`. No P0 (no auth bypass,
@@ -1169,5 +1177,7 @@ earlier version to compare against.
   consistently. Small italic serif text at the figure's native resolution is
   the limit here.
 
-[Unreleased]: https://github.com/syxscott/Range-chart-Analyzer/compare/v0.1.0...HEAD
+[0.1.3]: https://github.com/syxscott/Range-chart-Analyzer/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/syxscott/Range-chart-Analyzer/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/syxscott/Range-chart-Analyzer/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/syxscott/Range-chart-Analyzer/releases/tag/v0.1.0

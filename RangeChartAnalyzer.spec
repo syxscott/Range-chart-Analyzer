@@ -96,6 +96,13 @@ datas = [
     ("assets", "assets"),
     # Runtime data tables read via Path(__file__) from inside rca_core.
     ("rca_core/resources", "rca_core/resources"),
+    # 0.1.3: the changelog has to SHIP. `gui_fluent_onboarding.changelog_path()`
+    # resolves it next to the module file, so in a frozen build it is looked
+    # for at the bundle root -- and it was not there. The packaged app's
+    # "what's new" dialog therefore found nothing to show, silently, in
+    # exactly the build that was released to users. 77 KB against a 235 MB
+    # payload is not a trade-off worth making.
+    ("CHANGELOG.md", "."),
 ]
 
 a = Analysis(

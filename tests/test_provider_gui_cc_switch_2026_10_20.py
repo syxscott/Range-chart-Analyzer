@@ -180,11 +180,48 @@ def test_a_missing_changelog_yields_no_entries(monkeypatch):
     assert g.changelog_entries_since("0.1.0") == []
 
 
-def test_the_unreleased_section_counts_as_newer_than_every_release():
-    """The unreleased section IS the next version's changelog."""
-    from gui_fluent_onboarding import changelog_entries_since
-    assert changelog_entries_since("99.0.0"), \
+def test_the_unreleased_section_counts_as_newer_than_every_release(monkeypatch, tmp_path):
+    """The ``[Unreleased]`` section counts as newer than ANY release.
+
+    It is not "newer than the versions above it in the file" -- there is
+    nothing above it. It is newer than everything, so a user whose last
+    run was from a build the file cannot even name still gets the note.
+
+    The changelog is written here instead of read from the repository on
+    purpose: the repository's own top section is RENAMED on every release
+    (that is what shipping a version means), so a test that read the
+    repository file and asserted on an ``[Unreleased]`` section went red
+    the day the version shipped. The parser's contract is what is under
+    test here, not the repository's current section name.
+    """
+    import gui_fluent_onboarding as g
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        "## [Unreleased]\n\n### Added\n\n- **A thing.** body\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(g, "changelog_path", lambda: str(changelog))
+    assert g.changelog_entries_since("99.0.0"), \
         "the unreleased section must count as newer than any release"
+
+
+def test_the_current_version_has_a_changelog_section():
+    """The version the app reports must have its own section in the
+    CHANGELOG -- and that section is what a user upgrading to it is shown.
+
+    Nothing in the code connects ``__version__`` to the changelog, so
+    bumping the version without opening a section for it is silent: the
+    "what's new" dialog would list the PREVIOUS version's entries.
+    """
+    import rca_core
+    from gui_fluent_onboarding import changelog_path
+
+    with open(changelog_path(), "r", encoding="utf-8") as f:
+        text = f.read()
+    assert f"## [{rca_core.__version__}]" in text, (
+        f"CHANGELOG.md has no section for the current version "
+        f"{rca_core.__version__}"
+    )
 
 
 # ---------------------------------------------------------------------------
