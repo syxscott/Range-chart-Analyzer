@@ -58,11 +58,37 @@ def main() -> int:
     print("%-14s %7s %7s %7s %8s  %s"
           % ("FIGURE", "TRUTH", "PRODUCED", "UNSUP", "RECALL", "MODE"))
     print("-" * 74)
-    for tag in sorted({m["tag"] for m in
-                       json.load(io.open(ART / "round2_manifest.json",
-                                         encoding="utf-8"))}):
+    # AUDIT-2026-10-22: the manifest and the scored results live in
+    # ``_figtest/``, which is gitignored -- so on CI (and on any machine
+    # without a past run) this file used to die with a FileNotFoundError
+    # before it printed a single line. Its own docstring claims it "is safe
+    # to run in CI", and it had never been run there, so the claim was
+    # untested. The harness now degrades the way its ground-truth rules
+    # demand: a figure with no artefact is reported as NOT SCORED, which is
+    # not the same as a clean run and not the same as "not transcribed".
+    manifest = ART / "round2_manifest.json"
+    if manifest.is_file():
+        tags = sorted({m["tag"] for m in
+                       json.load(io.open(manifest, encoding="utf-8"))})
+    else:
+        tags = sorted(GROUND_TRUTH)
+        print("no artefact directory (%s): nothing to score."
+              " The ground-truth set is still checked below." % ART)
+    for tag in tags:
         rp = ART / ("%s%s_result.json" % (args.prefix, tag))
         if not rp.is_file():
+            truth = GROUND_TRUTH.get(tag)
+            if truth is None:
+                report[tag] = {"status": "not_transcribed"}
+                print("%-14s %7s %7s %7s %8s  %s"
+                      % (tag, "-", "-", "-", "-",
+                         "NOT TRANSCRIBED - absence of truth is not a pass"))
+            else:
+                report[tag] = {"status": "not_scored",
+                               "detail": "no artefact to score"}
+                print("%-14s %7s %7s %7s %8s  %s"
+                      % (tag, "-", "-", "-", "-",
+                         "NOT SCORED - no saved extraction for this figure"))
             continue
         truth = GROUND_TRUTH.get(tag)
         if truth is None:
@@ -105,9 +131,17 @@ def main() -> int:
         mark = "in truth set" if truth else "figure not transcribed yet"
         print("  %-14s %-46s [%s]" % (tag, assembled, mark))
 
-    json.dump(report, io.open(ART / args.out, "w", encoding="utf-8"),
-              ensure_ascii=False, indent=1)
-    print("\nwrote _figtest/%s" % args.out)
+    # AUDIT-2026-10-22: the report goes to the artefact directory, which
+    # may not exist on a machine that has never run an extraction. Create it
+    # rather than dying on the LAST line of a run that otherwise worked.
+    try:
+        ART.mkdir(parents=True, exist_ok=True)
+        json.dump(report, io.open(ART / args.out, "w", encoding="utf-8"),
+                  ensure_ascii=False, indent=1)
+        print("\nwrote _figtest/%s" % args.out)
+    except Exception as exc:
+        print("\ncould not write _figtest/%s (%s: %s)"
+              % (args.out, type(exc).__name__, exc))
     return 0 if ok else 1
 
 

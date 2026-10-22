@@ -42,16 +42,38 @@ def test_eval_harness_runs_and_stays_honest(tmp_path):
     out = r.stdout or ""
     # 1. the harness itself did not crash
     assert r.returncode == 0, (
-        "tests/eval/run_eval.py exits %d without artefacts -- the harness "
-        "rotted, which blocks the maintainer's ability to ever measure "
-        "accuracy again. stderr: %s" % (r.returncode, (r.stderr or "")[:400]))
-    # 2. untranscribed figures are NAMED, not silently passed
-    assert "NOT TRANSCRIBED" in out, (
-        "the harness no longer distinguishes 'not transcribed' from 'clean' "
-        "-- that distinction is the whole point of the ground-truth file")
+        "tests/eval/run_eval.py exits %d -- the harness rotted, which blocks "
+        "the maintainer's ability to ever measure accuracy again. stderr: %s"
+        % (r.returncode, (r.stderr or "")[:400]))
+    # 2. every figure it could not score is NAMED, and none of them is
+    #    presented as a clean pass. "NOT SCORED" is the state when the
+    #    artefact is missing; "NOT TRANSCRIBED" is the state when the
+    #    ground truth is missing. Neither may be silently omitted.
+    assert ("NOT SCORED" in out) or ("NOT TRANSCRIBED" in out), (
+        "the harness printed no per-figure verdict for the figures it could "
+        "not score -- absence of a verdict must not read as a pass. "
+        "output: %s" % out[:600])
     # 3. the scorer still catches the planted transcription errors
     assert "all known transcription errors are caught" in out, (
         "the known-error canaries stopped tripping; the scorer's "
-        "catch-a-mistake property is gone. output: %s" % out[:400])
+        "catch-a-mistake property is gone. output: %s" % out[:600])
     # 4. a per-figure recall table is printed (the scoreable subset)
     assert "RECALL" in out
+    # 5. the harness did not invent a score for a figure it did not read:
+    #    every scored row must carry a number, and every unscored row must
+    #    carry a dash. A recall printed against an unreadable figure is the
+    #    one thing this harness must never do.
+    for line in out.splitlines():
+        if not line.startswith("r10_"):
+            continue
+        cells = line.split()
+        if len(cells) < 6:
+            continue
+        recall = cells[4]
+        verdict = line.split("  ")[-1].strip()
+        if "NOT " in verdict:
+            assert recall == "-", (
+                "an unscored figure carries a recall value: %r" % line)
+        else:
+            assert recall != "-", (
+                "a scored figure carries no recall value: %r" % line)
