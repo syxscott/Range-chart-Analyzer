@@ -441,6 +441,10 @@
          document.readyState === 'loading', so a deferred load still sees the
          same "DOM complete, DOMContentLoaded not yet fired" moment they were
          written for. -->
+    <!-- AUDIT-2026-10-22: bed_parser.js is the single JS authority for
+         bed-label parsing (js/quality.js and js/minimax.js both read it),
+         so it must load first. -->
+    <script defer src="js/bed_parser.js"></script>
     <script defer src="js/config.js"></script>
     <script defer src="js/i18n.js"></script>
     <script defer src="js/prompt.js"></script>

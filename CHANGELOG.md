@@ -5,6 +5,145 @@ All notable changes to Range Chart Analyzer are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The PBDB export was publishing the SECTION's age span as every taxon's
+  FAD and LAD.** A range chart's endpoints are bed labels, and they do not
+  resolve to ICS ages — so `_resolve_pbdb_bounds` returned nothing and the
+  writer fell back to the section's interval. Measured on the repository's
+  own 41-taxon reference extraction, **all 41 occurrences came out as one
+  identical interval** (Wuchiapingian–Induan, 259.51–249.9 Ma) and the
+  per-taxon resolution was simply gone. The `*_reso` qualifiers said
+  `"stage"` for a per-row age and for a section-level one alike, so the
+  source was invisible — although `_validated_pbdb_ages`'s own docstring
+  says the qualifier's job is exactly that.
+
+  A row that claims a range of its own no longer inherits the section's
+  age. The taxon's own endpoints survive in `notes` and, as of this
+  release, in two machine-readable columns (`range_base_label`,
+  `range_top_label`) a consumer can join against its own bed-to-age
+  calibration. The section's age stays on the **collection** record,
+  where it belongs.
+
+- **A `not_drawn` row was published as a presence.** `response_kind:
+  "not_drawn"` is the model saying the taxon was EXAMINED and NOT found;
+  `uncertain` is the name being unreadable. Both were written out as
+  occurrences carrying the section's age span. Neither is now published,
+  and both are **reported** — the standards writers take a `warnings_out`
+  channel, mirroring `exporter.to_xlsx`, so a dropped row is never silent.
+
+- **One illegible taxon name made the whole XLSX un-exportable.** The
+  system prompt says to leave `species` empty and put "unclear" in `note`
+  (never invent a plausible-looking taxon name), and `EXPORT_INVARIANTS`
+  treated the empty name as a blocking defect — so the user's only way
+  forward was to delete the row, destroying the record that the cell was
+  examined. `not_drawn` / `uncertain` rows are exempt from the blocking
+  check and reported as warnings.
+
+- **The desktop and the browser loaded DIFFERENT chronostratigraphic
+  tables, and the desktop was 20x wrong.** `ics.py` loaded the 98-row
+  `ics_2024.json` while `js/ics_table.js` shipped the 109-row
+  `ics_current.json`. That was a capability gap for the Silurian
+  subseries, but it was also a CORRECTION bug: with no "Late Pleistocene"
+  row, `ics_resolve_age_bound("Late Pleistocene")` fell through to the
+  bare PLEISTOCENE EPOCH and published a **FAD of 2.58 Ma instead of
+  0.129 Ma** — a factor of 20 — straight into the `max_ma` column of the
+  Darwin Core and PBDB exports, while the browser got it right. Six
+  stage-boundary ages also resolved to different stage *names* per
+  transport.
+
+  The canonical table is now the 109-row table, byte-identical to
+  `ics_current.json`, and the Early / Middle / Upper Pleistocene
+  subseries are resolvable on both sides (`Middle Pleistocene` was 2.58 Ma
+  on BOTH surfaces before; it is 0.774 Ma now).
+  `tests/test_ics_transport_table_parity.py` was a module that pinned the
+  gap; it is now the standing guard that the two ends stay in step.
+
+- **The two engines wrote different range endpoints for the same model
+  response.** `rca_core/extractor.py` repairs a row whose printed labels
+  contradict the model-assigned indices (the text is the transposed half,
+  so it is swapped to match) — and `js/minimax.js` had no mirror, and no
+  label-ordinal reader at all. The desktop published the corrected
+  endpoints and the browser published the **inverted** ones. The browser
+  did not notice: its FAD/LAD check needs a number out of the label, and
+  `"A5 (606 m)"` yields null, so the row was never checked at all.
+
+  `js/bed_parser.js` is the new single JS authority, mirroring
+  `rca_core/bed_parser.py` (the strict parser moved out of
+  `js/quality.js`, which now delegates to it), and the differential
+  harness gained the `rc_endpoint_label_index_swap` fixture that makes
+  this divergence a build failure.
+
+- **The JSON recovery chain could not recognise an occurrence-matrix
+  payload.** `rca_core/json_utils.py::_KNOWN_ROOT_KEYS` — which claims to
+  be the union of the per-mode ROOTS constants — was missing the
+  occurrence_matrix and generic_table roots, so a TRUNCATED matrix reply
+  whose only roots are `columns` and `occurrences` did not qualify as a
+  payload: the recovery chain returned ONE INNER OBJECT instead of the
+  array and the whole matrix was lost. The same payload with a `legend`
+  key alongside repaired correctly, which is why no test caught it. The
+  union is complete now, and `tests/test_known_root_keys_union.py` pins it
+  to the per-mode lists on BOTH sides.
+
+- **A cache-served extraction wrote no history record.** The single-run
+  cache-hit path returned before the history write, on the reasoning that
+  "they're already a previous audit record" — but that record captures the
+  FIRST request's decisions. The served result now records who re-ran it,
+  when, and under which mode decision.
+
+- **The DwC-A `packageId` collided, and no export carried provenance.**
+  The id was date + ROW COUNT, so two different figures extracted the
+  same day with the same row count got byte-identical ids (measured: two
+  archives, different titles, one id). It is now seeded from the image
+  fingerprint; the EML carries the model, prompt version, run count and
+  ICS chart version as EML `<parameter>` values; and the XLSX gained a
+  `provenance` sheet (image sha256, model, prompt version, mode, runs,
+  ICS version, truncation flag, tool version, human edit count) that also
+  states that the per-row `confidence` column is the **model's own
+  self-report, not a calibrated probability**.
+
+- **The pipeline's own row flags never reached the user.**
+  `endpoint_label_index_swap` and `response_kind_divergent` were written
+  to the row's `_warning` and consumed nowhere, so a species whose FAD/LAD
+  the pipeline had silently REWRITTEN looked exactly like one read off
+  the plate. Both are now quality issues, with translated messages.
+
+- **The README documented report schema v1 while the code emitted v2.** A
+  consumer validating per the README rejected every current report. The
+  README now shows v2 and says what v2 adds.
+
+### Added
+
+- **A LICENSE and a CITATION.cff.** The README carried a terms paragraph
+  but no license text and no citable release, so reuse was not granted by
+  default. The upstream RLPE license text is not bundled, so the LICENSE
+  states the terms the README already stated, points at the authoritative
+  upstream, and separates the DATA license (CC0, matching what the
+  Darwin Core writer emits) from the software license.
+
+- **The standards export is reachable from the app.** The Darwin Core and
+  PBDB writers existed, but only from Python — so the desktop GUI, the
+  default entry point, could not produce the files the documentation told
+  users to publish. `rca_core/standards_export.py` (Qt-free, tested) writes
+  a DwC-A and the three PBDB sheets, and the GUI has a button for it.
+
+- **`tests/test_eval_harness_alive.py`** keeps the accuracy-evaluation
+  harness from rotting: it must run, it must name the figures that were
+  never transcribed (absence of truth is not a pass), and its planted
+  transcription errors must still be caught.
+
+### Changed
+
+- The bundled ICS table is now the 109-row refresh (ICS v2024/12, every
+  row now carrying its `source` / `license` / `retrieved_at` /
+  `ics_version` provenance) and the two transports read one file. The
+  official **v2026/06** update (base Olenekian 249.9 -> 250.8, base
+  Anisian 246.7 -> 247.0, base Wuchiapingian 259.51 -> 259.857) is still
+  NOT adopted: it needs `scripts/update_ics.py` to fetch the authoritative
+  chart, and the deferral stays documented and version-stamped.
+
 ## [0.1.4] — 2026-10-21
 
 ### Changed

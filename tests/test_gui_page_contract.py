@@ -240,8 +240,13 @@ def test_c4_provider_drag_list_public_surface():
 # ---------------------------------------------------------------------------
 # C5 — the six action buttons and the single gate
 # ---------------------------------------------------------------------------
-_ACTION_BUTTONS = ("btn_export", "btn_export_xlsx", "btn_add_row",
-                   "btn_del_row", "btn_discard", "btn_apply_edits")
+# AUDIT-2026-10-22: a seventh action button, the standards export
+# (Darwin Core Archive + the PBDB sheets). The README advertised those
+# deliverables and the writers existed, but they were reachable only from
+# Python -- so the default entry point could not produce them.
+_ACTION_BUTTONS = ("btn_export", "btn_export_xlsx", "btn_export_standards",
+                   "btn_add_row", "btn_del_row", "btn_discard",
+                   "btn_apply_edits")
 
 
 @pytest.mark.parametrize("attr", _ACTION_BUTTONS)

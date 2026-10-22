@@ -1,14 +1,4 @@
 {
-  "Aquitanian": {
-    "rank": "Stage",
-    "abbrev": "Aq",
-    "top_ma": 20.45,
-    "base_ma": 23.04,
-    "period": "Neogene",
-    "period_top_ma": 2.58,
-    "period_base_ma": 23.04,
-    "era": "Cenozoic"
-  },
   "Aalenian": {
     "rank": "Stage",
     "abbrev": "Aa",
@@ -17,7 +7,31 @@
     "period": "Jurassic",
     "period_top_ma": 143.1,
     "period_base_ma": 201.4,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Middle Jurassic",
+    "color": "#9AD9DD",
+    "source_id": 57
+  },
+  "Aeronian": {
+    "rank": "Stage",
+    "abbrev": "Ae",
+    "top_ma": 438.6,
+    "base_ma": 440.5,
+    "period": "Silurian",
+    "period_top_ma": 419.62,
+    "period_base_ma": 443.1,
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Llandovery",
+    "color": "#B3E1C2",
+    "source_id": 235
   },
   "Albian": {
     "rank": "Stage",
@@ -27,7 +41,14 @@
     "period": "Cretaceous",
     "period_top_ma": 66.0,
     "period_base_ma": 143.1,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Cretaceous",
+    "color": "#CCEA97",
+    "source_id": 42
   },
   "Anisian": {
     "rank": "Stage",
@@ -37,7 +58,14 @@
     "period": "Triassic",
     "period_top_ma": 201.4,
     "period_base_ma": 251.902,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Middle Triassic",
+    "color": "#BC75B7",
+    "source_id": 70
   },
   "Aptian": {
     "rank": "Stage",
@@ -47,7 +75,31 @@
     "period": "Cretaceous",
     "period_top_ma": 66.0,
     "period_base_ma": 143.1,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Cretaceous",
+    "color": "#BFE48A",
+    "source_id": 43
+  },
+  "Aquitanian": {
+    "rank": "Stage",
+    "abbrev": "Aq",
+    "top_ma": 20.45,
+    "base_ma": 23.04,
+    "period": "Neogene",
+    "period_top_ma": 2.58,
+    "period_base_ma": 23.04,
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Miocene",
+    "color": "#FFFF33",
+    "source_id": 19
   },
   "Artinskian": {
     "rank": "Stage",
@@ -57,7 +109,14 @@
     "period": "Permian",
     "period_top_ma": 251.902,
     "period_base_ma": 298.9,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Cisuralian",
+    "color": "#E37B68",
+    "source_id": 81
   },
   "Asselian": {
     "rank": "Stage",
@@ -67,7 +126,14 @@
     "period": "Permian",
     "period_top_ma": 251.902,
     "period_base_ma": 298.9,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Cisuralian",
+    "color": "#E36350",
+    "source_id": 83
   },
   "Bajocian": {
     "rank": "Stage",
@@ -77,7 +143,14 @@
     "period": "Jurassic",
     "period_top_ma": 143.1,
     "period_base_ma": 201.4,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Middle Jurassic",
+    "color": "#A6DDE0",
+    "source_id": 56
   },
   "Barremian": {
     "rank": "Stage",
@@ -87,7 +160,14 @@
     "period": "Cretaceous",
     "period_top_ma": 66.0,
     "period_base_ma": 143.1,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Cretaceous",
+    "color": "#B3DF7F",
+    "source_id": 44
   },
   "Bartonian": {
     "rank": "Stage",
@@ -97,7 +177,14 @@
     "period": "Paleogene",
     "period_top_ma": 23.04,
     "period_base_ma": 66.0,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Eocene",
+    "color": "#FDC091",
+    "source_id": 26
   },
   "Bashkirian": {
     "rank": "Stage",
@@ -107,7 +194,14 @@
     "period": "Carboniferous",
     "period_top_ma": 298.9,
     "period_base_ma": 358.86,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Pennsylvanian",
+    "color": "#99C2B5",
+    "source_id": 89
   },
   "Bathonian": {
     "rank": "Stage",
@@ -117,7 +211,14 @@
     "period": "Jurassic",
     "period_top_ma": 143.1,
     "period_base_ma": 201.4,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Middle Jurassic",
+    "color": "#B3E2E3",
+    "source_id": 55
   },
   "Berriasian": {
     "rank": "Stage",
@@ -127,7 +228,14 @@
     "period": "Cretaceous",
     "period_top_ma": 66.0,
     "period_base_ma": 143.1,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Cretaceous",
+    "color": "#8CCD60",
+    "source_id": 47
   },
   "Burdigalian": {
     "rank": "Stage",
@@ -137,7 +245,14 @@
     "period": "Neogene",
     "period_top_ma": 2.58,
     "period_base_ma": 23.04,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Miocene",
+    "color": "#FFFF41",
+    "source_id": 18
   },
   "Calabrian": {
     "rank": "Stage",
@@ -147,7 +262,14 @@
     "period": "Quaternary",
     "period_top_ma": 0.0,
     "period_base_ma": 2.58,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Pleistocene",
+    "color": "#FFF2C7",
+    "source_id": 276
   },
   "Callovian": {
     "rank": "Stage",
@@ -157,7 +279,14 @@
     "period": "Jurassic",
     "period_top_ma": 143.1,
     "period_base_ma": 201.4,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Middle Jurassic",
+    "color": "#BFE7E5",
+    "source_id": 54
   },
   "Campanian": {
     "rank": "Stage",
@@ -167,7 +296,14 @@
     "period": "Cretaceous",
     "period_top_ma": 66.0,
     "period_base_ma": 143.1,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Cretaceous",
+    "color": "#E6F47F",
+    "source_id": 36
   },
   "Capitanian": {
     "rank": "Stage",
@@ -177,7 +313,14 @@
     "period": "Permian",
     "period_top_ma": 251.902,
     "period_base_ma": 298.9,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Guadalupian",
+    "color": "#FB9A85",
+    "source_id": 224
   },
   "Carnian": {
     "rank": "Stage",
@@ -187,7 +330,14 @@
     "period": "Triassic",
     "period_top_ma": 201.4,
     "period_base_ma": 251.902,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Triassic",
+    "color": "#C99BCB",
+    "source_id": 67
   },
   "Cenomanian": {
     "rank": "Stage",
@@ -197,7 +347,14 @@
     "period": "Cretaceous",
     "period_top_ma": 66.0,
     "period_base_ma": 143.1,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Cretaceous",
+    "color": "#B3DE53",
+    "source_id": 40
   },
   "Changhsingian": {
     "rank": "Stage",
@@ -207,7 +364,14 @@
     "period": "Permian",
     "period_top_ma": 251.902,
     "period_base_ma": 298.9,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Lopingian",
+    "color": "#FCC0B2",
+    "source_id": 221
   },
   "Chattian": {
     "rank": "Stage",
@@ -217,7 +381,14 @@
     "period": "Paleogene",
     "period_top_ma": 23.04,
     "period_base_ma": 66.0,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Oligocene",
+    "color": "#FEE6AA",
+    "source_id": 22
   },
   "Chibanian": {
     "rank": "Stage",
@@ -227,7 +398,14 @@
     "period": "Quaternary",
     "period_top_ma": 0.0,
     "period_base_ma": 2.58,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Pleistocene",
+    "color": "#fff2c7",
+    "source_id": 1688
   },
   "Coniacian": {
     "rank": "Stage",
@@ -237,7 +415,14 @@
     "period": "Cretaceous",
     "period_top_ma": 66.0,
     "period_base_ma": 143.1,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Cretaceous",
+    "color": "#CCE968",
+    "source_id": 38
   },
   "Danian": {
     "rank": "Stage",
@@ -247,7 +432,14 @@
     "period": "Paleogene",
     "period_top_ma": 23.04,
     "period_base_ma": 66.0,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Paleocene",
+    "color": "#FDB462",
+    "source_id": 31
   },
   "Dapingian": {
     "rank": "Stage",
@@ -257,7 +449,14 @@
     "period": "Ordovician",
     "period_top_ma": 443.1,
     "period_base_ma": 486.85,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Middle Ordovician",
+    "color": "#66C092",
+    "source_id": 241
   },
   "Darriwilian": {
     "rank": "Stage",
@@ -267,7 +466,14 @@
     "period": "Ordovician",
     "period_top_ma": 443.1,
     "period_base_ma": 486.85,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Middle Ordovician",
+    "color": "#74C69C",
+    "source_id": 240
   },
   "Drumian": {
     "rank": "Stage",
@@ -277,7 +483,14 @@
     "period": "Cambrian",
     "period_top_ma": 486.85,
     "period_base_ma": 538.8,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Miaolingian",
+    "color": "#BFD99D",
+    "source_id": 251
   },
   "Eifelian": {
     "rank": "Stage",
@@ -287,7 +500,14 @@
     "period": "Devonian",
     "period_top_ma": 358.86,
     "period_base_ma": 419.62,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Middle Devonian",
+    "color": "#F1D576",
+    "source_id": 100
   },
   "Emsian": {
     "rank": "Stage",
@@ -297,7 +517,14 @@
     "period": "Devonian",
     "period_top_ma": 358.86,
     "period_base_ma": 419.62,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Devonian",
+    "color": "#E5D075",
+    "source_id": 102
   },
   "Famennian": {
     "rank": "Stage",
@@ -307,7 +534,14 @@
     "period": "Devonian",
     "period_top_ma": 358.86,
     "period_base_ma": 419.62,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Devonian",
+    "color": "#F2EDC5",
+    "source_id": 96
   },
   "Floian": {
     "rank": "Stage",
@@ -317,7 +551,14 @@
     "period": "Ordovician",
     "period_top_ma": 443.1,
     "period_base_ma": 486.85,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Ordovician",
+    "color": "#41B087",
+    "source_id": 242
   },
   "Fortunian": {
     "rank": "Stage",
@@ -327,7 +568,14 @@
     "period": "Cambrian",
     "period_top_ma": 486.85,
     "period_base_ma": 538.8,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Terreneuvian",
+    "color": "#99B575",
+    "source_id": 256
   },
   "Frasnian": {
     "rank": "Stage",
@@ -337,7 +585,14 @@
     "period": "Devonian",
     "period_top_ma": 358.86,
     "period_base_ma": 419.62,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Devonian",
+    "color": "#F2EDAD",
+    "source_id": 97
   },
   "Gelasian": {
     "rank": "Stage",
@@ -347,7 +602,14 @@
     "period": "Quaternary",
     "period_top_ma": 0.0,
     "period_base_ma": 2.58,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Pleistocene",
+    "color": "#FFEDB3",
+    "source_id": 219
   },
   "Givetian": {
     "rank": "Stage",
@@ -357,7 +619,48 @@
     "period": "Devonian",
     "period_top_ma": 358.86,
     "period_base_ma": 419.62,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Middle Devonian",
+    "color": "#F1E185",
+    "source_id": 99
+  },
+  "Gorstian": {
+    "rank": "Stage",
+    "abbrev": "Go",
+    "top_ma": 425.0,
+    "base_ma": 426.7,
+    "period": "Silurian",
+    "period_top_ma": 419.62,
+    "period_base_ma": 443.1,
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Ludlow",
+    "color": "#CCECDD",
+    "source_id": 231
+  },
+  "Greenlandian": {
+    "rank": "Stage",
+    "abbrev": "Gr",
+    "top_ma": 0.0082,
+    "base_ma": 0.0117,
+    "period": "Quaternary",
+    "period_top_ma": 0.0,
+    "period_base_ma": 2.58,
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Holocene",
+    "color": "#FEF2E0",
+    "source_id": 1040
   },
   "Guzhangian": {
     "rank": "Stage",
@@ -367,7 +670,14 @@
     "period": "Cambrian",
     "period_top_ma": 486.85,
     "period_base_ma": 538.8,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Miaolingian",
+    "color": "#CCDFAA",
+    "source_id": 250
   },
   "Gzhelian": {
     "rank": "Stage",
@@ -377,7 +687,14 @@
     "period": "Carboniferous",
     "period_top_ma": 298.9,
     "period_base_ma": 358.86,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Pennsylvanian",
+    "color": "#CCD4C7",
+    "source_id": 86
   },
   "Hauterivian": {
     "rank": "Stage",
@@ -387,7 +704,14 @@
     "period": "Cretaceous",
     "period_top_ma": 66.0,
     "period_base_ma": 143.1,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Cretaceous",
+    "color": "#A6D975",
+    "source_id": 45
   },
   "Hettangian": {
     "rank": "Stage",
@@ -397,7 +721,14 @@
     "period": "Jurassic",
     "period_top_ma": 143.1,
     "period_base_ma": 201.4,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Jurassic",
+    "color": "#4EB3D3",
+    "source_id": 62
   },
   "Hirnantian": {
     "rank": "Stage",
@@ -407,7 +738,14 @@
     "period": "Ordovician",
     "period_top_ma": 443.1,
     "period_base_ma": 486.85,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Ordovician",
+    "color": "#A6DBAB",
+    "source_id": 237
   },
   "Holocene": {
     "rank": "Series",
@@ -417,7 +755,29 @@
     "period": "Quaternary",
     "period_top_ma": 0.0,
     "period_base_ma": 2.58,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1 (carried forward from ics_2024.json)",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "carried_forward": true
+  },
+  "Homerian": {
+    "rank": "Stage",
+    "abbrev": "Ho",
+    "top_ma": 426.7,
+    "base_ma": 430.6,
+    "period": "Silurian",
+    "period_top_ma": 419.62,
+    "period_base_ma": 443.1,
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Wenlock",
+    "color": "#CCEBD1",
+    "source_id": 232
   },
   "Induan": {
     "rank": "Stage",
@@ -427,7 +787,14 @@
     "period": "Triassic",
     "period_top_ma": 201.4,
     "period_base_ma": 251.902,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Triassic",
+    "color": "#A4469F",
+    "source_id": 73
   },
   "Jiangshanian": {
     "rank": "Stage",
@@ -437,7 +804,14 @@
     "period": "Cambrian",
     "period_top_ma": 486.85,
     "period_base_ma": 538.8,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Furongian",
+    "color": "#D9F0BB",
+    "source_id": 248
   },
   "Kasimovian": {
     "rank": "Stage",
@@ -447,7 +821,14 @@
     "period": "Carboniferous",
     "period_top_ma": 298.9,
     "period_base_ma": 358.86,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Pennsylvanian",
+    "color": "#BFD0C5",
+    "source_id": 87
   },
   "Katian": {
     "rank": "Stage",
@@ -457,7 +838,14 @@
     "period": "Ordovician",
     "period_top_ma": 443.1,
     "period_base_ma": 486.85,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Ordovician",
+    "color": "#99D69F",
+    "source_id": 238
   },
   "Kimmeridgian": {
     "rank": "Stage",
@@ -467,7 +855,14 @@
     "period": "Jurassic",
     "period_top_ma": 143.1,
     "period_base_ma": 201.4,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Jurassic",
+    "color": "#CCECF4",
+    "source_id": 51
   },
   "Kungurian": {
     "rank": "Stage",
@@ -477,7 +872,14 @@
     "period": "Permian",
     "period_top_ma": 251.902,
     "period_base_ma": 298.9,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Cisuralian",
+    "color": "#E38776",
+    "source_id": 79
   },
   "Ladinian": {
     "rank": "Stage",
@@ -487,7 +889,14 @@
     "period": "Triassic",
     "period_top_ma": 201.4,
     "period_base_ma": 251.902,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Middle Triassic",
+    "color": "#C983BF",
+    "source_id": 69
   },
   "Langhian": {
     "rank": "Stage",
@@ -497,7 +906,31 @@
     "period": "Neogene",
     "period_top_ma": 2.58,
     "period_base_ma": 23.04,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Miocene",
+    "color": "#FFFF4D",
+    "source_id": 17
+  },
+  "Late Pleistocene": {
+    "rank": "Stage",
+    "abbrev": "La",
+    "top_ma": 0.0117,
+    "base_ma": 0.129,
+    "period": "Quaternary",
+    "period_top_ma": 0.0,
+    "period_base_ma": 2.58,
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Pleistocene",
+    "color": "#FFF2C7",
+    "source_id": 492
   },
   "Llandovery": {
     "rank": "Series",
@@ -507,7 +940,12 @@
     "period": "Silurian",
     "period_top_ma": 419.62,
     "period_base_ma": 443.1,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1 (carried forward from ics_2024.json)",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "carried_forward": true
   },
   "Lochkovian": {
     "rank": "Stage",
@@ -517,7 +955,31 @@
     "period": "Devonian",
     "period_top_ma": 358.86,
     "period_base_ma": 419.62,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Devonian",
+    "color": "#E5B75A",
+    "source_id": 229
+  },
+  "Ludfordian": {
+    "rank": "Stage",
+    "abbrev": "Lu",
+    "top_ma": 422.7,
+    "base_ma": 425.0,
+    "period": "Silurian",
+    "period_top_ma": 419.62,
+    "period_base_ma": 443.1,
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Ludlow",
+    "color": "#D9F0DF",
+    "source_id": 230
   },
   "Ludlow": {
     "rank": "Series",
@@ -527,7 +989,12 @@
     "period": "Silurian",
     "period_top_ma": 419.62,
     "period_base_ma": 443.1,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1 (carried forward from ics_2024.json)",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "carried_forward": true
   },
   "Lutetian": {
     "rank": "Stage",
@@ -537,7 +1004,14 @@
     "period": "Paleogene",
     "period_top_ma": 23.04,
     "period_base_ma": 66.0,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Eocene",
+    "color": "#FCB482",
+    "source_id": 27
   },
   "Maastrichtian": {
     "rank": "Stage",
@@ -547,7 +1021,31 @@
     "period": "Cretaceous",
     "period_top_ma": 66.0,
     "period_base_ma": 143.1,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Cretaceous",
+    "color": "#F2FA8C",
+    "source_id": 35
+  },
+  "Meghalayan": {
+    "rank": "Stage",
+    "abbrev": "Me",
+    "top_ma": 0.0,
+    "base_ma": 0.0042,
+    "period": "Quaternary",
+    "period_top_ma": 0.0,
+    "period_base_ma": 2.58,
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Holocene",
+    "color": "#FEF2E0",
+    "source_id": 1038
   },
   "Messinian": {
     "rank": "Stage",
@@ -557,7 +1055,14 @@
     "period": "Neogene",
     "period_top_ma": 2.58,
     "period_base_ma": 23.04,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Miocene",
+    "color": "#FFFF73",
+    "source_id": 14
   },
   "Moscovian": {
     "rank": "Stage",
@@ -567,7 +1072,14 @@
     "period": "Carboniferous",
     "period_top_ma": 298.9,
     "period_base_ma": 358.86,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Pennsylvanian",
+    "color": "#C7CBB9",
+    "source_id": 88
   },
   "Norian": {
     "rank": "Stage",
@@ -577,7 +1089,31 @@
     "period": "Triassic",
     "period_top_ma": 201.4,
     "period_base_ma": 251.902,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Triassic",
+    "color": "#D6AAD3",
+    "source_id": 66
+  },
+  "Northgrippian": {
+    "rank": "Stage",
+    "abbrev": "No",
+    "top_ma": 0.0042,
+    "base_ma": 0.0082,
+    "period": "Quaternary",
+    "period_top_ma": 0.0,
+    "period_base_ma": 2.58,
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Holocene",
+    "color": "#FEF2E0",
+    "source_id": 1039
   },
   "Olenekian": {
     "rank": "Stage",
@@ -587,7 +1123,14 @@
     "period": "Triassic",
     "period_top_ma": 201.4,
     "period_base_ma": 251.902,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Triassic",
+    "color": "#B051A5",
+    "source_id": 72
   },
   "Oxfordian": {
     "rank": "Stage",
@@ -597,7 +1140,14 @@
     "period": "Jurassic",
     "period_top_ma": 143.1,
     "period_base_ma": 201.4,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Jurassic",
+    "color": "#BFE7F1",
+    "source_id": 52
   },
   "Paibian": {
     "rank": "Stage",
@@ -607,7 +1157,14 @@
     "period": "Cambrian",
     "period_top_ma": 486.85,
     "period_base_ma": 538.8,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Furongian",
+    "color": "#CCEBAE",
+    "source_id": 249
   },
   "Piacenzian": {
     "rank": "Stage",
@@ -617,7 +1174,14 @@
     "period": "Neogene",
     "period_top_ma": 2.58,
     "period_base_ma": 23.04,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Pliocene",
+    "color": "#FFFFBF",
+    "source_id": 11
   },
   "Pliensbachian": {
     "rank": "Stage",
@@ -627,7 +1191,14 @@
     "period": "Jurassic",
     "period_top_ma": 143.1,
     "period_base_ma": 201.4,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Jurassic",
+    "color": "#80C5DD",
+    "source_id": 60
   },
   "Pragian": {
     "rank": "Stage",
@@ -637,7 +1208,14 @@
     "period": "Devonian",
     "period_top_ma": 358.86,
     "period_base_ma": 419.62,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Devonian",
+    "color": "#E5C468",
+    "source_id": 228
   },
   "Priabonian": {
     "rank": "Stage",
@@ -647,7 +1225,14 @@
     "period": "Paleogene",
     "period_top_ma": 23.04,
     "period_base_ma": 66.0,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Eocene",
+    "color": "#FDCDA1",
+    "source_id": 25
   },
   "Pridoli": {
     "rank": "Series",
@@ -657,7 +1242,13 @@
     "period": "Silurian",
     "period_top_ma": 419.62,
     "period_base_ma": 443.1,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "color": "#E6F5E1",
+    "source_id": 107
   },
   "Rhaetian": {
     "rank": "Stage",
@@ -667,7 +1258,31 @@
     "period": "Triassic",
     "period_top_ma": 201.4,
     "period_base_ma": 251.902,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Triassic",
+    "color": "#E3B9DB",
+    "source_id": 65
+  },
+  "Rhuddanian": {
+    "rank": "Stage",
+    "abbrev": "Rh",
+    "top_ma": 440.5,
+    "base_ma": 443.1,
+    "period": "Silurian",
+    "period_top_ma": 419.62,
+    "period_base_ma": 443.1,
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Llandovery",
+    "color": "#A6DCB5",
+    "source_id": 236
   },
   "Roadian": {
     "rank": "Stage",
@@ -677,7 +1292,14 @@
     "period": "Permian",
     "period_top_ma": 251.902,
     "period_base_ma": 298.9,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Guadalupian",
+    "color": "#FB8069",
+    "source_id": 226
   },
   "Rupelian": {
     "rank": "Stage",
@@ -687,7 +1309,14 @@
     "period": "Paleogene",
     "period_top_ma": 23.04,
     "period_base_ma": 66.0,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Oligocene",
+    "color": "#FED99A",
+    "source_id": 23
   },
   "Sakmarian": {
     "rank": "Stage",
@@ -697,7 +1326,14 @@
     "period": "Permian",
     "period_top_ma": 251.902,
     "period_base_ma": 298.9,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Cisuralian",
+    "color": "#E36F5C",
+    "source_id": 82
   },
   "Sandbian": {
     "rank": "Stage",
@@ -707,7 +1343,14 @@
     "period": "Ordovician",
     "period_top_ma": 443.1,
     "period_base_ma": 486.85,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Ordovician",
+    "color": "#8CD094",
+    "source_id": 239
   },
   "Santonian": {
     "rank": "Stage",
@@ -717,7 +1360,14 @@
     "period": "Cretaceous",
     "period_top_ma": 66.0,
     "period_base_ma": 143.1,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Cretaceous",
+    "color": "#D9EF74",
+    "source_id": 37
   },
   "Selandian": {
     "rank": "Stage",
@@ -727,7 +1377,14 @@
     "period": "Paleogene",
     "period_top_ma": 23.04,
     "period_base_ma": 66.0,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Paleocene",
+    "color": "#FEBF65",
+    "source_id": 273
   },
   "Series 2": {
     "rank": "Series",
@@ -737,7 +1394,12 @@
     "period": "Cambrian",
     "period_top_ma": 486.85,
     "period_base_ma": 538.8,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1 (carried forward from ics_2024.json)",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "carried_forward": true
   },
   "Serpukhovian": {
     "rank": "Stage",
@@ -747,7 +1409,14 @@
     "period": "Carboniferous",
     "period_top_ma": 298.9,
     "period_base_ma": 358.86,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Mississippian",
+    "color": "#BFC26B",
+    "source_id": 91
   },
   "Serravallian": {
     "rank": "Stage",
@@ -757,7 +1426,31 @@
     "period": "Neogene",
     "period_top_ma": 2.58,
     "period_base_ma": 23.04,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Miocene",
+    "color": "#FFFF59",
+    "source_id": 16
+  },
+  "Sheinwoodian": {
+    "rank": "Stage",
+    "abbrev": "Sh",
+    "top_ma": 430.6,
+    "base_ma": 432.9,
+    "period": "Silurian",
+    "period_top_ma": 419.62,
+    "period_base_ma": 443.1,
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Wenlock",
+    "color": "#BFE6C3",
+    "source_id": 233
   },
   "Sinemurian": {
     "rank": "Stage",
@@ -767,7 +1460,14 @@
     "period": "Jurassic",
     "period_top_ma": 143.1,
     "period_base_ma": 201.4,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Jurassic",
+    "color": "#67BCD8",
+    "source_id": 61
   },
   "Stage 10": {
     "rank": "Stage",
@@ -777,7 +1477,14 @@
     "period": "Cambrian",
     "period_top_ma": 486.85,
     "period_base_ma": 538.8,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Furongian",
+    "color": "#E6F5C9",
+    "source_id": 247
   },
   "Stage 2": {
     "rank": "Stage",
@@ -787,7 +1494,14 @@
     "period": "Cambrian",
     "period_top_ma": 486.85,
     "period_base_ma": 538.8,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Terreneuvian",
+    "color": "#A6BA80",
+    "source_id": 255
   },
   "Stage 3": {
     "rank": "Stage",
@@ -797,7 +1511,14 @@
     "period": "Cambrian",
     "period_top_ma": 486.85,
     "period_base_ma": 538.8,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Series 2",
+    "color": "#A6C583",
+    "source_id": 254
   },
   "Stage 4": {
     "rank": "Stage",
@@ -807,7 +1528,14 @@
     "period": "Cambrian",
     "period_top_ma": 486.85,
     "period_base_ma": 538.8,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Series 2",
+    "color": "#B3CA8E",
+    "source_id": 253
   },
   "Stage 5": {
     "rank": "Stage",
@@ -817,7 +1545,12 @@
     "period": "Cambrian",
     "period_top_ma": 486.85,
     "period_base_ma": 538.8,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1 (carried forward from ics_2024.json)",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "carried_forward": true
   },
   "Stage 9": {
     "rank": "Stage",
@@ -827,7 +1560,29 @@
     "period": "Cambrian",
     "period_top_ma": 486.85,
     "period_base_ma": 538.8,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1 (carried forward from ics_2024.json)",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "carried_forward": true
+  },
+  "Telychian": {
+    "rank": "Stage",
+    "abbrev": "Te",
+    "top_ma": 432.9,
+    "base_ma": 438.6,
+    "period": "Silurian",
+    "period_top_ma": 419.62,
+    "period_base_ma": 443.1,
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Llandovery",
+    "color": "#BFE6CF",
+    "source_id": 234
   },
   "Thanetian": {
     "rank": "Stage",
@@ -837,7 +1592,14 @@
     "period": "Paleogene",
     "period_top_ma": 23.04,
     "period_base_ma": 66.0,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Paleocene",
+    "color": "#FDBF6F",
+    "source_id": 30
   },
   "Tithonian": {
     "rank": "Stage",
@@ -847,7 +1609,14 @@
     "period": "Jurassic",
     "period_top_ma": 143.1,
     "period_base_ma": 201.4,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Jurassic",
+    "color": "#D9F1F7",
+    "source_id": 50
   },
   "Toarcian": {
     "rank": "Stage",
@@ -857,7 +1626,14 @@
     "period": "Jurassic",
     "period_top_ma": 143.1,
     "period_base_ma": 201.4,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Jurassic",
+    "color": "#99CEE3",
+    "source_id": 59
   },
   "Tortonian": {
     "rank": "Stage",
@@ -867,7 +1643,14 @@
     "period": "Neogene",
     "period_top_ma": 2.58,
     "period_base_ma": 23.04,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Miocene",
+    "color": "#FFFF66",
+    "source_id": 15
   },
   "Tournaisian": {
     "rank": "Stage",
@@ -877,7 +1660,14 @@
     "period": "Carboniferous",
     "period_top_ma": 298.9,
     "period_base_ma": 358.86,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Mississippian",
+    "color": "#8CB06C",
+    "source_id": 93
   },
   "Tremadocian": {
     "rank": "Stage",
@@ -887,7 +1677,14 @@
     "period": "Ordovician",
     "period_top_ma": 443.1,
     "period_base_ma": 486.85,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Ordovician",
+    "color": "#33A97E",
+    "source_id": 121
   },
   "Turonian": {
     "rank": "Stage",
@@ -897,7 +1694,14 @@
     "period": "Cretaceous",
     "period_top_ma": 66.0,
     "period_base_ma": 143.1,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Late Cretaceous",
+    "color": "#BFE35D",
+    "source_id": 39
   },
   "Valanginian": {
     "rank": "Stage",
@@ -907,7 +1711,14 @@
     "period": "Cretaceous",
     "period_top_ma": 66.0,
     "period_base_ma": 143.1,
-    "era": "Mesozoic"
+    "era": "Mesozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Early Cretaceous",
+    "color": "#99D36A",
+    "source_id": 46
   },
   "Visean": {
     "rank": "Stage",
@@ -917,7 +1728,14 @@
     "period": "Carboniferous",
     "period_top_ma": 298.9,
     "period_base_ma": 358.86,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Mississippian",
+    "color": "#A6B96C",
+    "source_id": 92
   },
   "Wenlock": {
     "rank": "Series",
@@ -927,7 +1745,12 @@
     "period": "Silurian",
     "period_top_ma": 419.62,
     "period_base_ma": 443.1,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1 (carried forward from ics_2024.json)",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "carried_forward": true
   },
   "Wordian": {
     "rank": "Stage",
@@ -937,7 +1760,14 @@
     "period": "Permian",
     "period_top_ma": 251.902,
     "period_base_ma": 298.9,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Guadalupian",
+    "color": "#FB8D76",
+    "source_id": 225
   },
   "Wuchiapingian": {
     "rank": "Stage",
@@ -947,7 +1777,14 @@
     "period": "Permian",
     "period_top_ma": 251.902,
     "period_base_ma": 298.9,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Lopingian",
+    "color": "#FCB4A2",
+    "source_id": 222
   },
   "Wuliuan": {
     "rank": "Stage",
@@ -957,7 +1794,14 @@
     "period": "Cambrian",
     "period_top_ma": 486.85,
     "period_base_ma": 538.8,
-    "era": "Paleozoic"
+    "era": "Paleozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Miaolingian",
+    "color": "#B3D492",
+    "source_id": 252
   },
   "Ypresian": {
     "rank": "Stage",
@@ -967,7 +1811,14 @@
     "period": "Paleogene",
     "period_top_ma": 23.04,
     "period_base_ma": 66.0,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Eocene",
+    "color": "#FCA773",
+    "source_id": 28
   },
   "Zanclean": {
     "rank": "Stage",
@@ -977,6 +1828,13 @@
     "period": "Neogene",
     "period_top_ma": 2.58,
     "period_base_ma": 23.04,
-    "era": "Cenozoic"
+    "era": "Cenozoic",
+    "source": "macrostrat:defs/intervals?timescale_id=1",
+    "license": "CC-BY 4.0",
+    "retrieved_at": "2026-09-19T22:41:14Z",
+    "ics_version": "ICS v2024/12",
+    "series": "Pliocene",
+    "color": "#FFFFB3",
+    "source_id": 12
   }
 }

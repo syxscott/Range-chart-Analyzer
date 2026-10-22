@@ -50,6 +50,33 @@ def _copy_baseline(tmp_path: Path) -> Path:
     return canon
 
 
+#: The eleven stages the 2026-10-22 promote added to the canonical table.
+_PROMOTED_STAGES = (
+    "Aeronian", "Gorstian", "Greenlandian", "Homerian", "Late Pleistocene",
+    "Ludfordian", "Meghalayan", "Northgrippian", "Rhuddanian",
+    "Sheinwoodian", "Telychian",
+)
+
+
+def _copy_pre_promotion_baseline(tmp_path: Path) -> Path:
+    """A baseline WITHOUT the eleven stages the 2026-10-22 promote added.
+
+    The version-contradiction gate fires when the refresh carries stages the
+    baseline never had. The shipped baseline was promoted on 2026-10-22 and
+    now HAS those stages, so the gate can no longer fire against it. These
+    tests exercise the GATE, so they get a baseline that predates the
+    promote; the shipped table's own shape is pinned by
+    tests/test_ics_current_json_2026_09_22.py.
+    """
+    table = json.loads(BASELINE.read_text(encoding="utf-8"))
+    for stage in _PROMOTED_STAGES:
+        table.pop(stage, None)
+    canon = tmp_path / "ics_2024.json"
+    canon.write_text(json.dumps(table, ensure_ascii=False, indent=2) + "\n",
+                     encoding="utf-8")
+    return canon
+
+
 def _promote(tmp_path: Path, canon: Path, *, lines: list, **kwargs):
     """Fetch-injected macrostrat promotion (no fixture provenance, so the
     run exercises exactly one gate at a time)."""
@@ -113,7 +140,9 @@ class TestVersionProvenance:
         # The Macrostrat channel always answers "" for ics_version; the
         # fallback "ICS v2024/12" comes from ICS_VERSION in ics.py and
         # describes the BASELINE, not the refresh.
-        canon = _copy_baseline(tmp_path)
+        # AUDIT-2026-10-22: a pre-promotion baseline, so the "stages the
+        # baseline never had" contradiction the gate looks for still exists.
+        canon = _copy_pre_promotion_baseline(tmp_path)
         lines: list = []
         summary = _promote(tmp_path, canon, lines=lines)
         assert summary["version"] == "ICS v2024/12"
@@ -123,7 +152,10 @@ class TestVersionProvenance:
                summary["new_beyond_baseline"], "contradiction must be detectable"
 
     def test_promote_refused_when_version_contradicts_the_stage_set(self, tmp_path):
-        canon = _copy_baseline(tmp_path)
+        # AUDIT-2026-10-22: pre-promotion baseline -- the shipped one now
+        # carries the stages the refresh adds, so there is no contradiction
+        # left to refuse.
+        canon = _copy_pre_promotion_baseline(tmp_path)
         before = canon.read_bytes()
         lines: list = []
         summary = _promote(tmp_path, canon, lines=lines)
@@ -344,7 +376,9 @@ class TestLoudIcsFallback:
             module = _load_ics_copy(
                 tmp_path, BASELINE.read_text(encoding="utf-8"), "healthy")
         assert module.ICS_TABLE_DEGRADED is False
-        assert len(module.ICS_2024) == 98
+        # AUDIT-2026-10-22: the canonical table was promoted to the
+        # 109-row refresh, so it now carries 109 entries.
+        assert len(module.ICS_2024) == 109
 
 
 # ---------------------------------------------------------------------------

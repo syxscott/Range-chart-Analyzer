@@ -269,6 +269,23 @@ const RCA_KNOWN_ROOT_KEYS = new Set([
   'groups', 'points', 'outliers', 'statistics',
   // phylogenetic_tree
   'metadata', 'nodes', 'root_ids', 'legend',
+  // axis_calibration -- BORROW-2026-09-20 (A): the optional figure-level
+  // root the four contract modes carry, so a payload that is ONLY a
+  // calibration still qualifies as a payload. AUDIT-2026-10-22: it was
+  // missing here as well.
+  'axis_calibration',
+  // occurrence_matrix (js/minimax.js:RCA_MODE_ROOT_KEYS)
+  //
+  // AUDIT-2026-10-22: these were MISSING, and the set's own comment claims
+  // it is the union of the per-mode ROOTS constants -- so it was not. The
+  // consequence was not cosmetic: a TRUNCATED occurrence-matrix reply whose
+  // only roots are `columns` and `occurrences` did not qualify as a payload,
+  // so the recovery chain returned ONE INNER OBJECT instead of the array and
+  // the whole matrix was lost. The same payload with a `legend` key
+  // alongside repaired correctly -- which is why no test caught it.
+  'columns', 'occurrences', 'strat_rows', 'taxon_rows', 'cell_status',
+  // generic_table (js/minimax.js:RCA_MODE_ROOT_KEYS)
+  'rows', 'notes',
 ]);
 
 // True when *parsed* is an object carrying at least one known root key.

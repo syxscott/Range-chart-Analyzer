@@ -137,9 +137,18 @@ class TestIcsCenozoicLookups:
         from rca_core.standards.ics import ics_stage_from_age
         assert ics_stage_from_age(58.0) == "Thanetian"
 
-    def test_stage_from_age_holocene(self, ics):
+    def test_stage_from_age_present_day_is_the_meghalayan(self, ics):
         from rca_core.standards.ics import ics_stage_from_age
-        assert ics_stage_from_age(0.0) == "Holocene"
+        # AUDIT-2026-10-22: the promoted table carries the Meghalayan, the
+        # stage that ends at the present. At exactly 0.0 Ma the Holocene
+        # SUBSERIES matches too, and the tool's rule is "a stage beats a
+        # series" within a match group -- which is what the browser already
+        # answered before the promote, so this is the two transports finally
+        # agreeing rather than a behaviour change.
+        assert ics_stage_from_age(0.0) == "Meghalayan"
+        assert ics_stage_from_age(0.002) == "Meghalayan"
+        assert ics_stage_from_age(0.006) == "Northgrippian"
+        assert ics_stage_from_age(0.05) == "Late Pleistocene"
 
     def test_age_compare_danian_older_than_thanetian(self, ics):
         from rca_core.standards.ics import ics_age_compare

@@ -48,7 +48,7 @@ const fs = require('fs'), path = require('path'), vm = require('vm');
 const ROOT = process.env.RCA_REPO;
 const files = process.argv.slice(3, 5);
 let src = ['js/config.js', 'js/json-utils.js', 'js/ics_table.js',
-           'js/reason-codes.js', 'js/quality.js', 'js/aggregate.js',
+           'js/reason-codes.js', 'js/bed_parser.js', 'js/quality.js', 'js/aggregate.js',
            'js/table.js', 'js/minimax.js']
   .map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
 const ctx = { console, setTimeout, clearTimeout, setInterval, clearInterval,

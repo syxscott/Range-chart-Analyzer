@@ -82,7 +82,7 @@ ctx.globalThis = ctx; ctx.window = ctx; ctx.self = ctx;
 vm.createContext(ctx);
 for (const f of ['js/config.js', 'js/i18n.js', 'js/json-utils.js',
                  'js/reason-codes.js', 'js/aggregate.js', 'js/ics_table.js',
-                 'js/quality.js', 'js/table.js']) {
+                 'js/bed_parser.js', 'js/quality.js', 'js/table.js']) {
   new vm.Script(fs.readFileSync(path.join(ROOT, f), 'utf8'),
                 { filename: f }).runInContext(ctx);
 }

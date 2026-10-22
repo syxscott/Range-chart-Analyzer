@@ -1,0 +1,46 @@
+cff-version: 1.2.0
+message: "If you use this software in published work, please cite it as below."
+title: "Range Chart Analyzer: LLM-based extraction of stratigraphic range charts into structured data"
+abstract: >-
+  Range Chart Analyzer reads a published stratigraphic range chart, columnar
+  section, abundance diagram, zonation chart, phylogenetic tree or occurrence
+  matrix, and extracts it into structured, editable, standards-conformant
+  data. It uses a vision language model, records a full evidence chain for
+  every extraction, and exports Darwin Core, PBDB and ICS tables alongside
+  CSV, TSV, JSON and XLSX.
+type: software
+version: 0.1.4
+date-released: "2026-10-22"
+license: "See LICENSE. The software inherits the upstream RLPE-Radiolarian-Plate-Extractor terms and is provided for research and educational use only. Data exported by the tool is released under CC0 1.0."
+repository-code: "https://github.com/syxscott/Range-chart-Analyzer"
+url: "https://github.com/syxscott/Range-chart-Analyzer"
+keywords:
+  - palaeontology
+  - micropalaeontology
+  - biostratigraphy
+  - range chart
+  - radiolarians
+  - conodonts
+  - Darwin Core
+  - Paleobiology Database
+  - ICS chronostratigraphy
+  - vision language model
+authors:
+  - family-names: syxscott
+    given-names: ""
+    alias: syxscott
+preferred-citation:
+  type: software
+  title: >-
+    Range Chart Analyzer: LLM-based extraction of stratigraphic range charts
+    into structured data
+  authors:
+    - family-names: syxscott
+  year: 2026
+  version: 0.1.4
+  doi: ""
+  url: "https://github.com/syxscott/Range-chart-Analyzer"
+  notes: >-
+    Timescale: ICS v2024/12. Cite the ICS chart version you relied on
+    alongside this software; it is recorded in the export's provenance block
+    (ics_version) and in the evidence-chain report.

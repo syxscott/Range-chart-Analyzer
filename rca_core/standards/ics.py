@@ -418,6 +418,19 @@ _SERIES_STAGE_LISTS: dict[str, tuple[str, list[str]]] = {
     "oligocene": ("Oligocene", ["Rupelian", "Chattian"]),
     "miocene": ("Miocene", ["Aquitanian", "Burdigalian", "Langhian", "Serravallian", "Tortonian", "Messinian"]),
     "pliocene": ("Pliocene", ["Zanclean", "Piacenzian"]),
+    # AUDIT-2026-10-22: the QUATERNARY SUBSERIES must come BEFORE the bare
+    # "pleistocene" entry, because the step-4 matcher is
+    # ``re.search(r"\b<label>\b", text)`` and "\bpleistocene\b" ALSO matches
+    # inside "middle pleistocene". With the bare epoch first, "Middle
+    # Pleistocene" resolved to the EPOCH and published a FAD of 2.58 Ma
+    # instead of 0.774 Ma - a factor of 3.3 too old, straight into the
+    # DwC/PBDB `max_ma` column. "Late Pleistocene" is the ICS 2023+ name for
+    # Upper Pleistocene and is a table row, so it resolves on the stage path.
+    "lower pleistocene": ("Lower Pleistocene", ["Gelasian"]),
+    "early pleistocene": ("Lower Pleistocene", ["Gelasian"]),
+    "middle pleistocene": ("Middle Pleistocene", ["Calabrian"]),
+    "upper pleistocene": ("Upper Pleistocene", ["Chibanian"]),
+    "late pleistocene": ("Late Pleistocene", ["Chibanian"]),
     "pleistocene": ("Pleistocene", ["Gelasian", "Calabrian", "Chibanian"]),
     "early ordovician": ("Lower Ordovician", ["Tremadocian", "Floian"]),
     "middle ordovician": ("Middle Ordovician", ["Dapingian", "Darriwilian"]),
@@ -481,6 +494,16 @@ _SERIES_STAGE_LISTS: dict[str, tuple[str, list[str]]] = {
 # Sprint A (2026-09-01): base Quaternary updated 2.588 -> 2.58 (v2024/12).
 _SERIES_EXPLICIT_BOUNDS: dict[str, tuple[float, float]] = {
     "pleistocene": (2.58, 0.0117),
+    # AUDIT-2026-10-22: the Quaternary subseries (ICS v2024/12 chart).
+    # Lower Pleistocene 2.58-0.774, Middle Pleistocene 0.774-0.129,
+    # Upper Pleistocene 0.129-0.0117 ("Late Pleistocene" is the same span
+    # under its 2023+ name). Without these the qualified label fell through
+    # to the epoch bounds above.
+    "lower pleistocene": (2.58, 0.774),
+    "early pleistocene": (2.58, 0.774),
+    "middle pleistocene": (0.774, 0.129),
+    "upper pleistocene": (0.129, 0.0117),
+    "late pleistocene": (0.129, 0.0117),
 }
 
 

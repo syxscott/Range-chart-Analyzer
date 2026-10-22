@@ -35,7 +35,7 @@ const SCRIPTS = [
   'js/json-utils.js',
   'js/ics_table.js',
   'js/reason-codes.js',
-  'js/quality.js',
+  'js/bed_parser.js', 'js/quality.js',
   'js/aggregate.js',
   'js/minimax.js',
 ];

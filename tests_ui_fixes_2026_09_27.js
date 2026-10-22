@@ -242,8 +242,14 @@ function check(name, ok, detail) {
     hrefs.join(' '));
   // No new <script> may appear: this wave is CSS/markup/catalogue only.
   const srcs = [...html.matchAll(/<script[^>]*src="([^"]+)"/g)].map((m) => m[1]);
-  // 16 is the shipped count; this wave is CSS / markup / catalogue only.
-  check('f07-script-count-unchanged', srcs.length === 16, srcs.length);
+  // 17 is the shipped count. AUDIT-2026-10-22 added js/bed_parser.js, the
+  // single JS authority for bed-label parsing (js/quality.js and
+  // js/minimax.js both read it) -- it carries the LABEL ORDINAL reader the
+  // endpoint-label/index repair needs, which the browser had no mirror of.
+  // It is loaded FIRST because the other two call into it.
+  check('f07-script-count-unchanged', srcs.length === 17, srcs.length);
+  check('f07-bed-parser-loaded-first',
+    srcs.indexOf('js/bed_parser.js') === 0, srcs.join(' '));
   check('f07-no-runtime-worker-script-tag',
     srcs.indexOf('js/sharpen_worker.js') === -1);
 })();

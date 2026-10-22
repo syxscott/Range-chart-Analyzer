@@ -134,13 +134,13 @@ SQLite 历史库（PROV-O 溯源导出） · Token 用量统计
 
 科研工具的可信度取决于**降级与不确定性是否可见**。本项目为此提供：
 
-### 证据链报告（`report`，schema v1）
+### 证据链报告（`report`，schema v2）
 
 每次提取附带结构化审计报告，可在不重跑模型的情况下回答全部"为什么"：
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "mode": { "requested": "auto", "used": "zonation_chart", "source": "vision",
             "auto": { "mode": "zonation_chart", "source": "vision" } },
   "input": { "image_sha256": "…", "runs": 1 },
@@ -152,16 +152,32 @@ SQLite 历史库（PROV-O 溯源导出） · Token 用量统计
   ],
   "warnings": [],
   "timescale": { "ics_version": "ICS v2024/12" },
-  "provenance": { "model": "…", "max_tokens": 16000, "prompt_sha256": "…" }
+  "provenance": { "model": "…", "max_tokens": 16000, "prompt_sha256": "…" },
+  "coverage": { "table": "species_ranges", "row_count": 12,
+                "contracted_rows": 12, "by_response_kind": {…},
+                "by_reason_code": {…}, "decisions": […], "ledger": {…} },
+  "other_keys": []
 }
 ```
 
+v2 在 v1 的基础上新增 `coverage`（覆盖契约账本：每个被要求回答的格子
+是 extracted / not_drawn / uncertain，及机器可读的 reason_codes 明细）与
+`other_keys`（被折叠进 `rows.other` 的未跟踪键名）。解析方应以
+`schema_version` 字段判别，不要假设固定为 1。
+
 ### 年代标尺版本锁定
 
-所有阶对齐与年代归属基于内置 **ICS v2024/12 国际年代地层表**（98 个单位，
+所有阶对齐与年代归属基于内置 **ICS v2024/12 国际年代地层表**（109 个单位，
 12 系无缝拼接，含不变量测试与 Macrostrat 交叉验证），报告中的 `timescale.ics_version`
 字段显式标注版本——论文使用时可直接注明所依据的标尺版本。已知的 v2026-06
 官方更新（Olenekian 底 250.8、Anisian 底 247.0、Wuchiapingian 底 259.857）尚待采纳。
+
+AUDIT-2026-10-22：桌面端与浏览器端此前加载不同的表（98 行 vs 109 行），
+导致同一张图两端的发表结果不同——最严重的是桌面端把 "Late Pleistocene"
+解析为**更新世整世**（FAD 2.58 Ma，而真值为 0.129 Ma，偏老 20 倍）。
+现已将 109 行表提升为两端唯一的规范表（`ics_2024.json` 与 `ics_current.json`
+逐字节一致），并补齐早/中/晚更新世亚世的解析。`tests/test_ics_transport_table_parity.py`
+自此作为两端永久的对齐守卫。
 
 ### 学名验证（可选，ICZN 安全）
 
@@ -345,7 +361,7 @@ Range-chart Analyzer/
 │   ├── json_utils.py          #   容错 JSON 解析（6 级回退 + 截断修复）
 │   ├── chart_mode.py          #   图表类型自动识别（共享启发式）
 │   ├── names.py               #   学名模糊验证（GBIF 后端）
-│   ├── report.py              #   证据链报告（schema v1）
+│   ├── report.py              #   证据链报告（schema v2）
 │   ├── redraw.py              #   延限图重绘校验（matplotlib 可选）
 │   ├── capabilities.py        #   模式成熟度注册表
 │   ├── aggregate.py           #   多轮众数合并 + 嵌合检测

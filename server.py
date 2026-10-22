@@ -599,6 +599,99 @@ def _history_store_singleton():
         return _HISTORY_STORE_SINGLETON_CACHE
 
 
+def _write_cache_hit_history(cache_hit, mode, mode_source, provider,
+                             max_tokens, chart_lang, image_b64):
+    """Record a CACHE-SERVED extraction in the audit DB. Best-effort.
+
+    AUDIT-2026-10-22: the single-run cache-hit path used to `return` before
+    any history write, on the reasoning that "they're already a previous
+    audit record". But the previous record captures the FIRST request's
+    decisions, not this one's: who re-ran the figure, when, and under which
+    mode decision. The mode is the sharp edge — a cached entry written under
+    `mode: "auto"` can be served to a request that named the mode by hand
+    (and vice versa), and only this request's record can say which decision
+    produced the served result.
+
+    The record is deliberately lightweight: no raw response (the original
+    extraction's record already carries it), and a `cached: True` stamp in
+    request_meta so an audit query can tell a served result from a live one.
+    """
+    store = _history_store_singleton()
+    if store is None:
+        return
+    try:
+        from rca_core.image_hash import compute_image_sha256_from_b64
+        from rca_core.prompt import prompt_version_for_mode
+        meta = {
+            "mode": mode,
+            "mode_source": mode_source or "",
+            "max_tokens": max_tokens,
+            "chart_lang": chart_lang,
+            "prompt_version": prompt_version_for_mode(mode),
+            "runs": 1,
+            "cached": True,
+        }
+        if provider is not None:
+            meta["model"] = provider.model
+            meta["endpoint"] = provider.endpoint
+            meta["api_format"] = provider.api_format.value
+        sha = ""
+        if image_b64:
+            try:
+                sha = compute_image_sha256_from_b64(image_b64)
+            except Exception:
+                sha = ""
+        if not sha:
+            meta["image_sha256_missing"] = True
+        meta.setdefault("image_sha256", sha)
+        rec = HistoryRecord(
+            timestamp=time.time(),
+            source_file="server:" + (provider.endpoint if provider else ""),
+            image_thumbnail=None,
+            image_width=0,
+            image_height=0,
+            provider_id=(provider.id if provider else "") or "",
+            provider_name=(provider.name if provider else "") or "",
+            model=(provider.model if provider else "") or "",
+            mode=mode,
+            runs=1,
+            result=cache_hit if isinstance(cache_hit, dict) else {},
+            raw="",
+            confidence=_safe_confidence_dict(cache_hit),
+            partial_failures=0,
+            duration_ms=0,
+            status_code=None,
+            notes="cache hit",
+            image_sha256=sha,
+            request_meta=meta,
+        )
+        store.add(rec, raw_responses=None)
+    except Exception as exc:
+        # Never propagate: the served result is the user-facing signal.
+        try:
+            sys.stderr.write("cache-hit history write failed: %s\n" % exc)
+        except Exception:
+            pass
+
+
+def _safe_confidence_dict(data):
+    """A confidence float out of a RESULT DICT (the cache-hit shape), or None.
+
+    ``_safe_confidence`` reads an ExtractResult; a served cache entry is a
+    plain dict, so a sibling reader was needed rather than a special case.
+    """
+    try:
+        v = (data or {}).get("confidence")
+        if isinstance(v, bool) or v is None:
+            return None
+        f = float(v)
+        if f != f:  # NaN
+            return None
+        return max(0.0, min(1.0, f))
+    except Exception:
+        return None
+
+
 def _write_history_record(result, mode, runs, provider, max_tokens,
                           chart_lang, partial_failures=0,
                           duration_ms=None, raws=None):
@@ -739,6 +832,11 @@ STATIC_ALLOWED_ENTRIES = (
     "js/viz.js",
     "js/history.js",
     "js/sharpen_worker.js",
+    # AUDIT-2026-10-22: the single JS authority for bed-label parsing
+    # (js/quality.js and js/minimax.js both read it). Registered explicitly
+    # for the same reason the others are: it survives a future tightening of
+    # the whitelist to per-file entries.
+    "js/bed_parser.js",
     # REVIEW-2026-09-20: "references" (604 MB of research-paper PDFs and
     # markdown notes, vendored for the docs/ pipeline) used to be on this list.
     # Nothing in the web frontend, in app/ (the PyWebView loading screen) or in
@@ -3087,6 +3185,17 @@ class Handler(BaseHTTPRequestHandler):
                     data=cache_hit, mode=mode, mode_used=mode,
                     mode_source=mode_source,
                     truncated=cached_truncated, warning=cached_warning)
+                # AUDIT-2026-10-22: the audit trail used to end at this
+                # return -- a served result recorded WHO extracted it the
+                # first time but not who re-ran it, when, or under which
+                # mode decision. The hit is now a (lightweight) history
+                # record of its own.
+                _write_cache_hit_history(
+                    cache_hit, mode=mode, mode_source=mode_source,
+                    provider=common["provider"],
+                    max_tokens=common["max_tokens"],
+                    chart_lang=common["chart_lang"],
+                    image_b64=common["image_b64"])
                 self._send_json(200, {"ok": True, "data": cache_hit,
                                       "cached": True,
                                       "truncated": cached_truncated,

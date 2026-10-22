@@ -220,6 +220,17 @@ globalThis.RCA_ICS_SERIES = {
   'miocene': {name: 'Miocene', stages: ['Aquitanian', 'Burdigalian', 'Langhian', 'Serravallian', 'Tortonian', 'Messinian'], bounds: null},
   'pliocene': {name: 'Pliocene', stages: ['Zanclean', 'Piacenzian'], bounds: null},
   // Pleistocene's named stages end at 0.129; the epoch runs to 0.0117.
+  // AUDIT-2026-10-22: the QUATERNARY SUBSERIES must come BEFORE the bare
+  // "pleistocene" entry -- the step-4 matcher is a word-boundary search and
+  // "\bpleistocene\b" ALSO matches inside "middle pleistocene". With the bare
+  // epoch first, "Middle Pleistocene" resolved to the EPOCH and published a
+  // FAD of 2.58 Ma instead of 0.774 Ma. Mirrors
+  // rca_core/standards/ics.py:_SERIES_STAGE_LISTS + _SERIES_EXPLICIT_BOUNDS.
+  'lower pleistocene': {name: 'Lower Pleistocene', stages: ['Gelasian'], bounds: [2.58, 0.774]},
+  'early pleistocene': {name: 'Lower Pleistocene', stages: ['Gelasian'], bounds: [2.58, 0.774]},
+  'middle pleistocene': {name: 'Middle Pleistocene', stages: ['Calabrian'], bounds: [0.774, 0.129]},
+  'upper pleistocene': {name: 'Upper Pleistocene', stages: ['Chibanian'], bounds: [0.129, 0.0117]},
+  'late pleistocene': {name: 'Late Pleistocene', stages: ['Chibanian'], bounds: [0.129, 0.0117]},
   'pleistocene': {name: 'Pleistocene', stages: ['Gelasian', 'Calabrian', 'Chibanian'], bounds: [2.58, 0.0117]},
   'early ordovician': {name: 'Lower Ordovician', stages: ['Tremadocian', 'Floian'], bounds: null},
   'middle ordovician': {name: 'Middle Ordovician', stages: ['Dapingian', 'Darriwilian'], bounds: null},

@@ -106,11 +106,30 @@ class TestOfflinePipeline:
         assert moved["Wuchiapingian"]["base_delta"] == pytest.approx(0.347)
         assert moved["Olenekian"]["base_delta"] == pytest.approx(0.9)
         assert moved["Induan"]["top_delta"] == pytest.approx(0.9)
-        assert "Rhuddanian" in diff["added"] and "Meghalayan" in diff["added"]
+        # AUDIT-2026-10-22: the canonical table was PROMOTED, so every name
+        # the toy fixture carries is already in the baseline and nothing is
+        # "added" any more. The "added" machinery is still exercised against a
+        # baseline that lacks them -- see
+        # test_added_names_are_reported_against_a_smaller_baseline below.
+        assert diff["added"] == []
         # nothing is deleted: a baseline name the upstream dropped is carried
         # forward instead, so stored range charts keep resolving it
         assert diff["removed"] == []
         assert "Stage 5" in diff["carried_forward"]
+
+    def test_added_names_are_reported_against_a_smaller_baseline(
+            self, tmp_path, mini_baseline):
+        """The "added" branch, against a baseline that lacks the new names.
+
+        The shipped canonical table was promoted on 2026-10-22, so against IT
+        the toy fixture adds nothing. The branch still has to work for the
+        next refresh, so it is exercised against a baseline that predates the
+        fixture's names.
+        """
+        summary, _ = run_fixture(tmp_path, FIXTURE_JSON, mini_baseline)
+        diff = summary["diff"]
+        assert "Rhuddanian" in diff["added"], diff["added"]
+        assert "Meghalayan" in diff["added"], diff["added"]
 
     def test_carried_forward_rows_are_marked_as_such(self, tmp_path):
         summary, out = run_fixture(tmp_path, FIXTURE_JSON, BASELINE)
@@ -391,7 +410,9 @@ class TestAlignmentCsvAndCli:
         assert "ics_version" in header and "retrieved_at" in header
         names = {row[0]: row for row in rows[1:]}
         status = {row[0]: row[2] for row in rows[1:]}
-        assert status["Rhuddanian"] == "new"
+        # AUDIT-2026-10-22: the canonical table was promoted, so Rhuddanian is
+        # in the baseline now and the fixture's copy AGREES with it.
+        assert status["Rhuddanian"] == "same"
         assert status["Wuchiapingian"] == "age-changed"
         assert status["Changhsingian"] == "same"
         assert status["Stage 5"] == "carried-forward"

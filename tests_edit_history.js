@@ -715,6 +715,10 @@ check('valid-stage-informal', S.rcaValidateCell(stageSpec, 'Stage IV', {}).ok ==
   && S.rcaValidateCell(stageSpec, 'Unnumbered Stage III', {}).ok === false,
   'quality.js allows informal stages, in exactly its own spelling');
 check('valid-stage-informal-regex-shared', (function () {
+  // AUDIT-2026-10-22: js/bed_parser.js is NOT in this list on purpose --
+  // it carries the bed-label readers, not the "informal stage name" rule,
+  // and it has no INFORMAL_STAGE_RE. The pair being compared is
+  // quality.js's rule and the editor's mirror of it.
   const src = ['js/quality.js', 'js/table.js'].map((f) => {
     const text = fs.readFileSync(path.join(__dirname, f), 'utf8');
     const m = text.match(/INFORMAL_STAGE_RE\s*=\s*(\/[^\n]*?\/[a-z]*)/);

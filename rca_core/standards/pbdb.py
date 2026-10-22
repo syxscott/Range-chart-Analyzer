@@ -934,6 +934,7 @@ def _validated_pbdb_ages(
     fallback_min_ma: Any,
     row_reso: str = "",
     section_reso: str = "",
+    allow_section_fallback: bool = True,
 ) -> tuple[Any, Any, str, str]:
     """Return PBDB ``(max_ma, min_ma, max_ma_reso, min_ma_reso)``.
 
@@ -946,6 +947,12 @@ def _validated_pbdb_ages(
     single because both ends come from the same age_range label.
     A caller that only cares about the numbers still gets the historical pair
     (both resos default to ``""``).
+
+    AUDIT-2026-10-22: ``allow_section_fallback=False`` withholds the
+    section-level pair entirely. It is set when the row claims a range of its
+    own that did not resolve: the section's age span is the SECTION's, and
+    publishing it as the taxon's FAD/LAD asserts a range the figure
+    contradicts.
     """
     if isinstance(row_reso, (tuple, list)):
         row_reso_older = str(row_reso[0] or "")
@@ -956,7 +963,7 @@ def _validated_pbdb_ages(
         if older_ma >= younger_ma:
             return older_ma, younger_ma, row_reso_older, row_reso_younger
         return "", "", "", ""
-    if fallback_max_ma not in (None, "") and fallback_min_ma not in (None, ""):
+    if allow_section_fallback and fallback_max_ma not in (None, "") and fallback_min_ma not in (None, ""):
         try:
             max_ma = float(fallback_max_ma)
             min_ma = float(fallback_min_ma)
@@ -967,7 +974,22 @@ def _validated_pbdb_ages(
     return "", "", "", ""
 
 
-def to_pbdb_occurrences(result):
+def to_pbdb_occurrences(result, warnings_out=None):
+    """Range-chart result -> PBDB occurrence records.
+
+    ``warnings_out`` (optional list) receives one dict per row the export
+    deliberately did NOT publish, mirroring ``exporter.to_xlsx``'s channel so
+    every export can say what it dropped. AUDIT-2026-10-22:
+
+    * a ``not_drawn`` row is the model's statement that the taxon was
+      EXAMINED and NOT found. Publishing it as an occurrence turns an
+      absence into a presence, so it is skipped and reported;
+    * a row whose OWN range endpoints do not resolve to ICS ages (bed
+      labels are the normal case for a range chart) must NOT inherit the
+      SECTION's age span: the taxon occupies a slice of the section, and
+      giving it the whole section asserts a range the figure contradicts.
+      The taxon's own labels are kept in ``notes`` so nothing is lost.
+    """
     occurrences = []
     species_ranges = result.get("species_ranges", []) or []
     sections = result.get("sections", []) or []
@@ -1044,6 +1066,24 @@ def to_pbdb_occurrences(result):
     for idx, row in enumerate(species_ranges):
         if not isinstance(row, dict): continue
         species = row.get("species", "")
+        # AUDIT-2026-10-22: a `not_drawn` row says the taxon was examined
+        # and NOT found, and an `uncertain` row says the NAME could not be
+        # read. Neither is a publishable occurrence: publishing one turns an
+        # absence into a presence, or publishes a record with no taxon. Both
+        # are REPORTED through warnings_out so the drop is never silent.
+        _kind = str(row.get("response_kind") or "").strip().lower()
+        if _kind in ("not_drawn", "uncertain"):
+            if warnings_out is not None:
+                warnings_out.append({
+                    "table": "species_ranges", "row_index": idx,
+                    "reason": _kind, "species": species,
+                    "section": row.get("section", ""),
+                    "detail": ("taxon examined and not found; not an occurrence"
+                               if _kind == "not_drawn" else
+                               "taxon name could not be read; not a publishable "
+                               "occurrence"),
+                })
+            continue
         if not species: continue
         section = row.get("section", "")
         sec_data = section_info.get(section, {})
@@ -1068,12 +1108,32 @@ def to_pbdb_occurrences(result):
         # resolved we fall back to the biozone label and the section-level
         # numeric age_range.
         e_stage, l_stage, e_ma, l_ma = _resolve_pbdb_bounds(row)
+        # AUDIT-2026-10-22: does the row CLAIM a range of its own? A row
+        # with endpoints that do not resolve to ICS ages (bed labels are the
+        # normal case for a range chart) occupies a SLICE of the section.
+        # Letting it inherit the section's age span publishes a range the
+        # figure contradicts: on the repo's own 41-taxon reference
+        # extraction, all 41 occurrences collapsed to one interval
+        # (Wuchiapingian-Induan) and the per-taxon resolution was gone.
+        # A row with NO endpoints at all makes no interval claim, so the
+        # section's interval is a defensible coarse statement for it.
+        row_base_raw = str(row.get("range_base") or "").strip()
+        row_top_raw = str(row.get("range_top") or "").strip()
+        row_claims_range = bool(row_base_raw or row_top_raw)
+        row_range_unresolved = row_claims_range and not (e_stage or l_stage)
         # REVIEW-2026-07-31: when per-row bounds don't resolve (bed labels
         # are the common case), fall back to the section's resolved
         # interval names instead of duplicating the biozone into both
         # interval fields (old C-2 semantic error).
-        early_interval = e_stage or sec_data.get("older_name", "") or biozone
-        late_interval = l_stage or sec_data.get("younger_name", "") or biozone
+        # AUDIT-2026-10-22: EXCEPT when the row claims a range of its own -
+        # then the section's interval is the SECTION's, not the taxon's, and
+        # publishing it as the taxon's is the flattening this guards.
+        if row_range_unresolved:
+            early_interval = ""
+            late_interval = ""
+        else:
+            early_interval = e_stage or sec_data.get("older_name", "") or biozone
+            late_interval = l_stage or sec_data.get("younger_name", "") or biozone
         # BORROW-2026-09-20: which rung of the chronostratigraphic ladder the
         # interval name actually sits on (stage / series / system / zone).
         # The biozone fallback is its own weakest case.
@@ -1093,6 +1153,8 @@ def to_pbdb_occurrences(result):
         # per-row bound with a section fallback because that can create a
         # scientifically invalid hybrid interval. Use a complete, ordered
         # per-row pair or a complete, ordered section-level pair; else blank.
+        # AUDIT-2026-10-22: the section-level pair is only allowed when the
+        # row makes no interval claim of its own.
         max_ma, min_ma, max_ma_reso, min_ma_reso = _validated_pbdb_ages(
             e_ma,
             l_ma,
@@ -1103,6 +1165,7 @@ def to_pbdb_occurrences(result):
                 _text_age_reso(row.get("range_top"), "younger"),
             ),
             section_reso=sec_data.get("age_reso", ""),
+            allow_section_fallback=not row_range_unresolved,
         )
         # BORROW-2026-09-20: three-part name split + abundance columns (see
         # the module header). taxon_name stays the verbatim source string.
@@ -1131,7 +1194,27 @@ def to_pbdb_occurrences(result):
             "latitude": str(lat) if lat is not None else "",
             "longitude": str(lon) if lon is not None else "",
             "biostratigraphic_zone": biozone,
-            "notes": f"author_year: {author_year}" if author_year else "",
+            # AUDIT-2026-10-22: `notes` is the one free-text slot the
+            # occurrence carries, and it reaches the published extensions
+            # sheet AND the upload sheet's `comments`. It now carries the
+            # two facts a consumer cannot get from the columns:
+            #   * the taxon's OWN range labels, when they could not be
+            #     dated (bed labels are the normal case) - so withholding
+            #     the age loses nothing;
+            #   * that the published interval is the SECTION's, not a
+            #     taxon range.
+            "notes": "; ".join(
+                [s for s in [
+                    f"author_year: {author_year}" if author_year else "",
+                    ("range: %s - %s (not datable to ICS; the section's age "
+                     "span is NOT this taxon's range)"
+                     % (row_base_raw, row_top_raw)) if row_range_unresolved else "",
+                    ("interval/age resolved from the SECTION, not from a "
+                     "taxon range") if (
+                         not row_claims_range
+                         and (early_interval or max_ma not in (None, ""))) else "",
+                ] if s]
+            ),
             # ----------------------------------------------------------------
             # BORROW-2026-09-20 (PBDB pbdbUpload-api upload-schema gaps). These
             # are APPENDED after the historical columns: the first 13 columns
@@ -1153,6 +1236,9 @@ def to_pbdb_occurrences(result):
             "abund_value": abund_value,
             "abund_unit": abund_unit,
             "comments": "",
+            # AUDIT-2026-10-22: the row's own endpoints, verbatim.
+            "range_base_label": row_base_raw,
+            "range_top_label": row_top_raw,
         }
         # FIX-2026-09-22 (item 4): ``comments`` is the ONLY free-text slot the
         # occurrence schema has, so it is where every curation decision the
@@ -1263,6 +1349,14 @@ PBDB_OCCURRENCE_FIELDS = [
     "species_name", "species_reso", "subspecies_name", "subspecies_reso",
     "early_interval_reso", "late_interval_reso", "max_ma_reso", "min_ma_reso",
     "abund_value", "abund_unit", "comments",
+    # AUDIT-2026-10-22: the taxon's OWN range labels, machine-readable. A
+    # range chart's endpoints are bed labels, which do not resolve to ICS
+    # ages -- so the occurrence's interval and Ma columns are (correctly)
+    # empty, and the only place the taxon's actual range survives is the
+    # prose in `notes`. These two columns carry it in a form a consumer can
+    # JOIN against its own bed-to-age calibration, which is what a
+    # researcher publishing a range chart to PBDB actually needs.
+    "range_base_label", "range_top_label",
 ]
 # The upstream property list, verbatim order, restricted to what this project
 # can fill: ``upload`` / ``plant_organ`` / ``plant_organ2`` are OMITTED because
@@ -1413,7 +1507,7 @@ def _write_lf(path, text):
         fh.write(text)
 
 
-def to_pbdb_csv(result, output_path):
+def to_pbdb_csv(result, output_path, warnings_out=None):
     """Write the PBDB sheets into *output_path* and return their paths.
 
     FIX-2026-09-22 (item 4): three files instead of two — the upload sheet
@@ -1435,7 +1529,7 @@ def to_pbdb_csv(result, output_path):
     # FileNotFoundError because the two writes below assumed the directory
     # already existed; ``to_wpd`` (exporter.py) has always made it.
     output_path.mkdir(parents=True, exist_ok=True)
-    occurrences = to_pbdb_occurrences(result)
+    occurrences = to_pbdb_occurrences(result, warnings_out=warnings_out)
     collections = to_pbdb_collections(result)
     # ``PBDB_*_FIELDS`` are the single source of truth: a key a builder adds
     # without being listed here would make DictWriter raise

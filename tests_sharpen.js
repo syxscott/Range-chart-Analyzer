@@ -27,6 +27,8 @@ const vm = require('vm');
 
 const ROOT = __dirname;
 const MINIMAX = path.join(ROOT, 'js', 'minimax.js');
+// AUDIT-2026-10-22: the single JS authority for bed-label parsing.
+const BED_PARSER = path.join(ROOT, 'js', 'bed_parser.js');
 const WORKER = path.join(ROOT, 'js', 'sharpen_worker.js');
 const MAX_PIXELS = 16000000;   // mirrors RCA_UNSHARP_MAX_PIXELS
 
@@ -162,6 +164,10 @@ function loadMinimax(globals) {
   }, globals || {});
   ctx.globalThis = ctx;
   vm.createContext(ctx);
+  // AUDIT-2026-10-22: js/bed_parser.js is loaded FIRST -- js/minimax.js's
+  // species normalizer asks it for the label ordinal (the endpoint-label /
+  // endpoint-index contradiction repair).
+  vm.runInContext(fs.readFileSync(BED_PARSER, 'utf8'), ctx, { filename: 'js/bed_parser.js' });
   vm.runInContext(fs.readFileSync(MINIMAX, 'utf8'), ctx, { filename: 'js/minimax.js' });
   return ctx;
 }

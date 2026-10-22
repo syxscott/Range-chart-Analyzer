@@ -625,15 +625,51 @@ class TestPbdbReso:
             assert _interval_reso(name) in _TIME_RESO_VOCAB
 
     def test_measured_section_age_is_flagged_as_measured(self):
+        # AUDIT-2026-10-22: a row with NO range endpoints of its own makes
+        # no interval claim, so the section's measured age is the honest
+        # coarse statement - and it must be flagged "measured" (the plate
+        # printed the number) rather than by a table lookup.
+        result = {
+            "sections": [{"name": "X", "age_range": "254.5-252.0 Ma"}],
+            "species_ranges": [{"species": "A", "section": "X"}],
+        }
+        occ = to_pbdb_occurrences(result)[0]
+        assert (occ["max_ma"], occ["min_ma"]) == ("254.5", "252.0")
+        assert occ["max_ma_reso"] == "measured" == occ["min_ma_reso"]
+        assert occ["early_interval_reso"] == "stage"  # 254.5 -> Wuchiapingian
+        # ... and the source is disclosed, so a consumer cannot read the
+        # section's span as a taxon range.
+        assert "SECTION" in occ["notes"]
+
+    def test_a_row_with_its_own_range_does_not_inherit_the_section_age(self):
+        # AUDIT-2026-10-22: the row claims Bed 3 - Bed 9. The section's
+        # 254.5-252.0 Ma span is the SECTION's; publishing it as the
+        # taxon's FAD/LAD asserts a range the figure contradicts. Measured on
+        # the repo's own 41-taxon reference extraction, this flattening made
+        # all 41 occurrences carry one identical interval.
         result = {
             "sections": [{"name": "X", "age_range": "254.5-252.0 Ma"}],
             "species_ranges": [{"species": "A", "section": "X",
                                 "range_base": "Bed 3", "range_top": "Bed 9"}],
         }
         occ = to_pbdb_occurrences(result)[0]
-        assert (occ["max_ma"], occ["min_ma"]) == ("254.5", "252.0")
-        assert occ["max_ma_reso"] == "measured" == occ["min_ma_reso"]
-        assert occ["early_interval_reso"] == "stage"  # 254.5 -> Wuchiapingian
+        assert occ["max_ma"] == "" and occ["min_ma"] == ""
+        assert occ["max_ma_reso"] == "" and occ["min_ma_reso"] == ""
+        assert occ["early_interval"] == "" and occ["early_interval_reso"] == ""
+        # the taxon's own labels survive, so nothing is lost
+        assert "Bed 3" in occ["notes"] and "Bed 9" in occ["notes"]
+
+    def test_a_not_drawn_row_is_not_published_as_an_occurrence(self):
+        # AUDIT-2026-10-22: "not_drawn" says the taxon was examined and NOT
+        # found. Publishing it would turn an absence into a presence.
+        result = {
+            "sections": [{"name": "X", "age_range": "254.5-252.0 Ma"}],
+            "species_ranges": [{"species": "A", "section": "X",
+                                "response_kind": "not_drawn"}],
+        }
+        warnings = []
+        assert to_pbdb_occurrences(result, warnings_out=warnings) == []
+        assert warnings and warnings[0]["reason"] == "not_drawn"
 
     def test_lookup_ages_are_flagged_as_a_table_resolution(self):
         result = {
@@ -986,7 +1022,12 @@ class TestPbdbColumnOrder:
             "species_name", "species_reso", "subspecies_name",
             "subspecies_reso", "early_interval_reso", "late_interval_reso",
             "max_ma_reso", "min_ma_reso", "abund_value", "abund_unit",
-            "comments"}
+            "comments",
+            # AUDIT-2026-10-22: the taxon's own bed labels, machine-readable.
+            # A range chart's endpoints do not resolve to ICS ages, so the
+            # occurrence's interval and Ma columns are empty; these carry the
+            # endpoints a consumer can join against its own calibration.
+            "range_base_label", "range_top_label"}
 
     def test_the_two_sheets_together_lose_nothing(self):
         # FIX-2026-09-22 (C2): the upload sheet is a strict SUBSET of the

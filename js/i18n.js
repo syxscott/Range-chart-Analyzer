@@ -379,6 +379,8 @@ const RCA_I18N = {
     'quality.stage_order_reversed': '剖面 {section} 的阶段顺序反了：{detail}',
     'quality.bed_index_order_invalid': '部分岩性/地层块的 bed_index 顺序无效',
     'quality.bed_index_order_swapped': '已自动交换上/下 bed_index 以修正顺序',
+    'quality.endpoint_label_index_swap': '有 {count} 行的印刷端点标签与 bed 索引相互矛盾，已自动交换端点文本以与索引一致',
+    'quality.response_kind_divergent': '有 {count} 行的多次提取对是否绘出范围结论不一，已按优先级合并并记录原始投票',
     'quality.missing_section_ref': '物种的剖面引用未知',
     'quality.biozone_order_violation': 'Steno 定律违反：{species} 的生物带 {younger_biozone}（较新）出现在更老的 {older_biozone} 之下',
     // BORROW-2026-09-20 (A) — 提取契约文案，镜像 rca_core/i18n.py。
@@ -773,6 +775,8 @@ RCA_I18N.en = {
   'quality.stage_order_reversed': 'Stage order reversed in section {section}: {detail}',
   'quality.bed_index_order_invalid': 'Some blocks have invalid bed index order',
   'quality.bed_index_order_swapped': 'Top/base bed indices swapped automatically',
+  'quality.endpoint_label_index_swap': '{count} row(s) had printed endpoint labels that contradicted the bed indices; the endpoint text was swapped to match',
+  'quality.response_kind_divergent': '{count} row(s): the runs disagreed about whether a range is drawn; merged by precedence and the votes recorded',
   'quality.missing_section_ref': 'Some species reference an unknown section',
   'quality.biozone_order_violation': "Steno's Law violation: {species} in biozone {younger_biozone} (younger) appears below {older_biozone} (older)",
   // FIX-2026-09-22 (item 5): the coverage-ledger / reason-code catalog was
@@ -1152,6 +1156,8 @@ RCA_I18N.ja = {
   'quality.stage_order_reversed': 'セクション {section} のステージ順が逆：{detail}',
   'quality.bed_index_order_invalid': '一部の岩相/地層ブロックの bed_index 順が無効',
   'quality.bed_index_order_swapped': '上/下 bed_index を自動的に入れ替えました',
+  'quality.endpoint_label_index_swap': '{count} 行で印刷された端点ラベルと bed インデックスが矛盾していたため、端点テキストをインデックスに合わせて入れ替えました',
+  'quality.response_kind_divergent': '{count} 行で範囲が描かれているかどうかの実行間の結論が割れたため、優先順位で統合し投票を記録しました',
   'quality.missing_section_ref': '一部の種が未知のセクションを参照しています',
   'quality.biozone_order_violation': 'Steno の法則違反：種 {species} の生層帯 {younger_biozone}（新しい）がより古い {older_biozone} の下に出現',
   // FIX-2026-09-22 (item 5): ja mirror of the completed coverage-ledger /

@@ -99,7 +99,7 @@ const ctx = { console, TextEncoder, TextDecoder, URL, structuredClone };
 ctx.globalThis = ctx; ctx.window = ctx;
 vm.createContext(ctx);
 for (const f of ['js/config.js', 'js/json-utils.js', 'js/ics_table.js',
-                 'js/reason-codes.js', 'js/quality.js', 'js/aggregate.js']) {
+                 'js/reason-codes.js', 'js/bed_parser.js', 'js/quality.js', 'js/aggregate.js']) {
   new vm.Script(fs.readFileSync(path.join(ROOT, f), 'utf8'),
                 { filename: f }).runInContext(ctx);
 }

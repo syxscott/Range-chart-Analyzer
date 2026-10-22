@@ -322,7 +322,7 @@ function loadAllScripts(ctx) {
     // to load before quality.js / aggregate.js, which call into it for the
     // ledger and the response_kind / reason_codes merge rules.
     'js/reason-codes.js',
-    'js/quality.js',
+    'js/bed_parser.js', 'js/quality.js',
     'js/aggregate.js',
     'js/table.js',
     'js/export.js',

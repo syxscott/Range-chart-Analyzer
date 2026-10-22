@@ -142,7 +142,8 @@ class TestExtractPageUiStates(unittest.TestCase):
             page = win.extract_page
             edit_buttons = (page.btn_add_row, page.btn_del_row,
                             page.btn_discard, page.btn_apply_edits)
-            all_buttons = (page.btn_export, page.btn_export_xlsx) + edit_buttons
+            all_buttons = (page.btn_export, page.btn_export_xlsx,
+                           page.btn_export_standards) + edit_buttons
 
             # 1. Fresh page: everything disabled AND the edit row not shown.
             #    `isHidden()` (not `isVisible()`) is the right probe here: it

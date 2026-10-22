@@ -232,78 +232,27 @@ function _parseBedN(value) {
 // whose bed labels are full-width digits was scored on the desktop while the
 // browser had no bed to check. [\p{Nd}] is exactly the class Python's \d
 // matches.
-const _BED_DIGITS = '[\\p{Nd}]';
-const _BED_FULL_RE = new RegExp('^Bed\\s*(' + _BED_DIGITS + '+)\\s*([a-zA-Z]*)', 'iu');
-const _BARE_BED_RE = new RegExp('^(' + _BED_DIGITS + '+)\\s*([a-zA-Z]*)', 'u');
-const _BED_UNIT_RE = /^(ma|myr|mya|m\.y\.|m\.y\.?|ka|kyr|ga|gyr|yr|cm|mm|km|ft|a)$/i;
-const _BED_SUB_RE = /^[a-ln-z]$/i;
-
-function _subIsBedLabel(sub, hadBedWord) {
-  if (!sub) return true;                       // bare number after an explicit "Bed"
-  if (sub.toLowerCase() === 'm') return false; // metres, not a subscript
-  if (sub.length > 1 && _BED_UNIT_RE.test(sub)) return false;
-  if (hadBedWord) return true;
-  return _BED_SUB_RE.test(sub);
-}
-
-function _bedStrayResidue(s, end) {
-  const rest = s.slice(end).trim();
-  return Boolean(rest) && rest.charAt(0) !== '(' && rest.charAt(0) !== '[';
-}
+// AUDIT-2026-10-22: the strict bed parser and the label-ordinal reader now
+// live in js/bed_parser.js, which mirrors rca_core/bed_parser.py. They used
+// to be implemented HERE as well, and the JS side had no label-ordinal reader
+// at all -- so rca_core/extractor.py's endpoint-label/index repair had no
+// mirror, and the browser published INVERTED range endpoints for the same
+// model response the desktop corrected. One implementation, loaded first.
 
 /**
  * Fold a run of Unicode decimal digits to ASCII, so parseInt can read it.
  *
- * AUDIT-2026-10-01: the regexes above now match the same digits Python's \d
- * does, and that was only half of it -- parseInt("９") is NaN, so the match
- * produced bed_num: null instead of 9. NFKC covers the compatibility digits
- * (full-width ９ -> 9, the case that matters for a Chinese-language figure);
- * the remaining Nd scripts (Arabic-Indic, Devanagari, ...) are not
- * compatibility-equivalent and are folded by subtracting their block's zero
- * code point, found by probing rather than from a table.
+ * AUDIT-2026-10-22: the implementation moved to js/bed_parser.js, which
+ * mirrors rca_core/bed_parser.py. This stays as the local name the rest of
+ * this file uses.
  */
 function _asciiDigits(s) {
-  const nfkc = String(s).normalize('NFKC');
-  let out = '';
-  for (const ch of nfkc) {
-    const cp = ch.codePointAt(0);
-    if (cp >= 0x30 && cp <= 0x39) { out += ch; continue; }
-    if (!/\p{Nd}/u.test(ch)) { out += ch; continue; }
-    // Find z such that z..z+9 are all Nd and ch sits inside it: the block zero.
-    let folded = ch;
-    for (let z = cp; z > cp - 10; z -= 1) {
-      let all = true;
-      for (let d = 0; d <= 9; d += 1) {
-        if (!/\p{Nd}/u.test(String.fromCodePoint(z + d))) { all = false; break; }
-      }
-      if (all) { folded = String.fromCodePoint(0x30 + (cp - z)); break; }
-    }
-    out += folded;
-  }
-  return out;
+  return rcaAsciiDigits(s);
 }
 
 /** Mirror of rca_core.bed_parser.parse_bed: {bed_num, bed_sub, raw} | null. */
 function rcaParseBed(value) {
-  if (value === undefined || value === null || value === '') return null;
-  if (typeof value === 'boolean') return null;
-  const s = String(value).trim();
-  if (!s) return null;
-  let m = _BED_FULL_RE.exec(s);
-  if (m) {
-    const sub = m[2];
-    if (!_subIsBedLabel(sub, true)) return null;
-    if (_bedStrayResidue(s, m[0].length)) return null;
-    return { bed_num: parseInt(_asciiDigits(m[1]), 10), bed_sub: sub.toLowerCase(), raw: s };
-  }
-  m = _BARE_BED_RE.exec(s);
-  if (m) {
-    const sub = m[2];
-    if (!_subIsBedLabel(sub, false)) return null;
-    if (_bedStrayResidue(s, m[0].length)) return null;
-    return { bed_num: parseInt(_asciiDigits(m[1]), 10), bed_sub: sub.toLowerCase(), raw: s };
-  }
-  return null;
+  return rcaParseBedCanonical(value);
 }
 
 /**
@@ -1307,6 +1256,34 @@ function scoreConsistency(data) {
         });
       }
     }
+  }
+
+  // (1b) AUDIT-2026-10-22: per-row pipeline flags. The normalizers and the
+  // merge write `endpoint_label_index_swap` (printed labels contradicted
+  // the model-assigned indices; the endpoints were transposed) and
+  // `response_kind_divergent` (the runs disagreed about whether the range
+  // is drawn) into the row's `_warning` -- and nothing surfaced either one,
+  // so a species whose FAD/LAD the pipeline had silently REWRITTEN looked
+  // exactly like one read off the plate. Mirrors
+  // rca_core/quality.py:_score_consistency (1b).
+  const speciesRowsC = (data && Array.isArray(data.species_ranges)) ? data.species_ranges : [];
+  let swapRows = 0;
+  let divergentRows = 0;
+  for (const row of speciesRowsC) {
+    if (!row || typeof row !== 'object') continue;
+    const flags = rcaWarningFlags(row._warning);
+    if (flags.indexOf('endpoint_label_index_swap') !== -1) swapRows += 1;
+    if (flags.indexOf('response_kind_divergent') !== -1) divergentRows += 1;
+  }
+  if (swapRows) {
+    score -= Math.min(0.2, 0.05 * swapRows);
+    issues.push({severity: 'warning', msg_key: 'quality.endpoint_label_index_swap',
+                 params: {count: String(swapRows)}});
+  }
+  if (divergentRows) {
+    score -= Math.min(0.2, 0.05 * divergentRows);
+    issues.push({severity: 'warning', msg_key: 'quality.response_kind_divergent',
+                 params: {count: String(divergentRows)}});
   }
 
   const species = (data && Array.isArray(data.species_ranges)) ? data.species_ranges : [];

@@ -156,6 +156,26 @@ def validate_export_invariants(
             required = spec.get("required", [])
             if table_id == "sections" and columnar:
                 required = ["id"]
+            # AUDIT-2026-10-22: a row the model marked `not_drawn` or
+            # `uncertain` legitimately has no name. The system prompt says so
+            # explicitly: "if a name is unclear, leave the `species` field
+            # empty and put 'unclear' in the per-row `note` field -- never
+            # invent a plausible-looking taxon name to fill a gap". Treating
+            # that as an export-blocking defect meant ONE illegible taxon
+            # label made the WHOLE workbook un-exportable, so the user's only
+            # way forward was to delete the row -- destroying the record that
+            # the cell was examined. The row is now reported as a warning
+            # instead, and the standards writers skip it and say so.
+            if table_id == "species_ranges":
+                _kind = str(row.get("response_kind") or "").strip().lower()
+                if _kind in ("not_drawn", "uncertain"):
+                    required = [k for k in required if k != "species"]
+                    warnings.append({
+                        "table": table_id, "row_index": ridx,
+                        "missing": "species", "severity": "warning",
+                        "response_kind": _kind,
+                        "detail": "row is %s, not a publishable occurrence" % _kind,
+                    })
             for key in required:
                 v = row.get(key)
                 if v is None or (isinstance(v, str) and not v.strip()):
@@ -2392,6 +2412,21 @@ def to_xlsx(
     wb = Workbook()
     wb.remove(wb.active)
 
+    # AUDIT-2026-10-22: a provenance sheet, when the result carries a
+    # report. First sheet, so it is the one a reader opens: which image,
+    # model, prompt version, run count and ICS chart produced the tables,
+    # and whether a human edited them.
+    prov_rows = _provenance_rows(data)
+    if prov_rows:
+        ws_p = wb.create_sheet(title="provenance")
+        ws_p.append(["field", "value"])
+        for cell in ws_p[1]:
+            cell.font = Font(bold=True)
+        for label, value in prov_rows:
+            ws_p.append([label, value])
+        ws_p.column_dimensions["A"].width = 22
+        ws_p.column_dimensions["B"].width = 72
+
     def _t(key: str) -> str:
         # Translate i18n keys (e.g. "sec.speciesRanges", "col.species") so the
         # sheet names and headers match the user's language instead of showing
@@ -2513,6 +2548,59 @@ def to_xlsx(
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _provenance_rows(data: dict[str, Any]) -> list[tuple[str, str]]:
+    """The (field, value) provenance block for an export, or [] when the
+    result carries no report.
+
+    AUDIT-2026-10-22: a published supplement must be able to answer which
+    image, model, prompt version, run count and chronostratigraphic chart
+    produced it, and whether a human edited it -- without this the file
+    cannot be re-derived or attributed, and an edited cell is
+    indistinguishable from raw model output. The extraction report already
+    carries every field; this just flattens the ones an export can name.
+    """
+    report = data.get("report") if isinstance(data.get("report"), dict) else {}
+    if not report:
+        return []
+    prov = report.get("provenance") if isinstance(report.get("provenance"), dict) else {}
+    inp = report.get("input") if isinstance(report.get("input"), dict) else {}
+    timescale = report.get("timescale") if isinstance(report.get("timescale"), dict) else {}
+    mode = report.get("mode") if isinstance(report.get("mode"), dict) else {}
+    trunc = report.get("truncation") if isinstance(report.get("truncation"), dict) else {}
+    pairs: list[tuple[str, str]] = []
+    for label, value in (
+        ("image_sha256", inp.get("image_sha256")),
+        ("model", prov.get("model")),
+        ("prompt_version", prov.get("prompt_version")),
+        ("mode_requested", mode.get("requested")),
+        ("mode_used", mode.get("used")),
+        ("extraction_runs", inp.get("runs")),
+        ("ics_version", timescale.get("ics_version")),
+        ("truncated", trunc.get("truncated")),
+        ("tool_version", prov.get("tool_version")),
+    ):
+        if value is None or value == "":
+            continue
+        pairs.append((label, str(value)))
+    # The edit history is the "is this cell the model's or the human's"
+    # signal; count whatever the payload recorded.
+    edits = data.get("edit_count", data.get("_edit_count"))
+    if edits is not None:
+        pairs.append(("human_edit_count", str(edits)))
+    # AUDIT-2026-10-22: the per-row `confidence` column is the MODEL'S OWN
+    # self-assessment, and nothing in this project calibrates it against
+    # correctness -- a row marked 0.9 has never been shown to be right 90% of
+    # the time. Shipping the number in a table without saying so invites a
+    # reader to treat it as a probability, so the export states what it is.
+    pairs.append((
+        "confidence_note",
+        "the per-row confidence column is the model's own self-report, not a "
+        "calibrated probability; this project publishes no calibration curve "
+        "for it",
+    ))
+    return pairs
 
 
 def to_newick_file(tree: dict[str, Any], path: str) -> None:

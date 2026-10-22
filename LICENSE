@@ -1,0 +1,52 @@
+Range Chart Analyzer (RCA)
+Copyright (c) 2026 syxscott and contributors
+
+SOFTWARE LICENSE
+================
+
+The extraction logic of this project is ported from the upstream project
+`RLPE-Radiolarian-Plate-Extractor`:
+
+    https://github.com/syxscott/RLPE-Radiolarian-Plate-Extractor
+
+This project inherits that project's license terms. The authoritative text
+lives with the upstream repository, linked above; this file states the terms
+in force here so that a reader does not have to guess:
+
+  * The software is provided for RESEARCH AND EDUCATIONAL USE ONLY.
+  * The upstream terms apply in full. Where this summary and the upstream
+    text differ, the upstream text governs.
+  * No warranty is given, to the extent permitted by law: the software is
+    provided "as is", and the authors accept no liability for any use made
+    of it, including in published work.
+
+Attribution is requested. If you use this tool in published work, please
+cite it as set out in CITATION.cff, and say which release you used.
+
+DATA LICENSE
+============
+
+The DATA this tool EXTRACTS AND EXPORTS is released under
+CC0 1.0 Universal (public domain dedication):
+
+    https://creativecommons.org/publicdomain/zero/1.0/
+
+This covers the occurrence records, the range charts, the occurrence
+matrices and the other tabular outputs -- the files you publish alongside a
+paper. It does not cover the figures the data were read from: those remain
+the property of their publishers, and it is the user's responsibility to
+have the right to publish what is derived from them.
+
+The "CC0" declaration above is what rca_core/standards/darwin_core.py
+writes into the `<distribution><license>` element of every Darwin Core
+Archive this tool produces, so the exported archive states the same terms
+this file does.
+
+WHAT IS NOT LICENSED
+====================
+
+Nothing in this repository grants any right over the sample figures under
+`_figtest/`, the reference payloads under `tests/fixtures/real_payloads/`,
+or any figure from the published literature. Those are research inputs
+with their own provenance, kept for reproducibility of the project's own
+evaluation.

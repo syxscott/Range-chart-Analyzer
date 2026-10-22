@@ -479,6 +479,43 @@ _add(
             {"species": "C", "range_top_idx": "2.7", "range_base_idx": 1},
         ],
     }),
+    # AUDIT-2026-10-22: the endpoint-LABEL / endpoint-INDEX contradiction.
+    #
+    # rca_core/extractor.py:2345-2358 repairs a row whose PRINTED labels and
+    # model-assigned indices disagree: the text is the transposed half, so it
+    # is swapped to match. The shape is the Diaz & Velez 2018 Fig. 5 sample
+    # style ("A1 (607 m)" .. "A21 (602 m)"), where A1 is the DEEPEST sample
+    # and therefore the OLD end.
+    #
+    # This case is here because the JS side had NO mirror of the repair at
+    # all: the desktop published the corrected endpoints and the browser
+    # published the INVERTED ones for the same model response -- and the
+    # browser did not notice, because js/quality.js's FAD/LAD check needs a
+    # number out of the label and "A5 (606 m)" yields null, so the row was
+    # never checked. The differential harness reported 0 divergences because
+    # no fixture covered the shape.
+    _case("range_chart", "rc_endpoint_label_index_swap", {
+        "species_ranges": [{
+            "species": "Neoalbaillella optima",
+            "section": "Pingdingshan",
+            "range_base": "A5 (606 m)", "range_base_idx": 1,
+            "range_top": "A1 (607 m)", "range_top_idx": 5,
+            "range_base_bed": "A5", "range_top_bed": "A1",
+            "confidence": 0.9,
+        }],
+    }),
+    # ... and the shapes that must NOT be "repaired": a label the ordinal
+    # reader cannot read, a range label, and a depth.
+    _case("range_chart", "rc_endpoint_label_index_no_repair", {
+        "species_ranges": [
+            {"species": "D", "section": "S", "range_base": "zone Z1",
+             "range_base_idx": 1, "range_top": "A1", "range_top_idx": 5},
+            {"species": "E", "section": "S", "range_base": "23-25",
+             "range_base_idx": 1, "range_top": "A1", "range_top_idx": 5},
+            {"species": "F", "section": "S", "range_base": "607 m",
+             "range_base_idx": 1, "range_top": "A1", "range_top_idx": 5},
+        ],
+    }),
     _case("range_chart", "rc_zone_type_ladder", {
         "biozones": [
             {"name": "Interval zonule", "age": "a"},

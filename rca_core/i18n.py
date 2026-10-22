@@ -576,6 +576,10 @@ TRANSLATIONS["zh"] = {
 
     # ----- XLSX export -----
     "export.xlsx": "导出 Excel (XLSX)",
+    "export.standards": "导出标准数据（Darwin Core / PBDB）",
+    "export.standardsDone": "已导出 Darwin Core Archive 与 PBDB 三表",
+    "export.standardsSkipped": "以下条目未写入标准导出（未绘出范围或名称不可读）：",
+    "export.standardsFailed": "标准导出失败",
     "export.json": "导出 JSON",
     "export.csv": "导出 CSV",
     "export.tsv": "复制 TSV",
@@ -642,6 +646,8 @@ TRANSLATIONS["zh"] = {
     "quality.stage_order_reversed": "剖面 {section} 的阶段顺序反了：{detail}",
     "quality.bed_index_order_invalid": "部分岩性/地层块的 bed_index 顺序无效",
     "quality.bed_index_order_swapped": "已自动交换上/下 bed_index 以修正顺序",
+    "quality.endpoint_label_index_swap": "有 {count} 行的印刷端点标签与 bed 索引相互矛盾，已自动交换端点文本以与索引一致",
+    "quality.response_kind_divergent": "有 {count} 行的多次提取对'是否绘出范围'结论不一，已按优先级合并并记录原始投票",
     "quality.missing_section_ref": "物种的剖面引用未知",
     # H2 fix (REVIEW-2026-11-07): quality.py:1005 emits this key on scorer
     # exception; it was defined in no language, so the badge showed the
@@ -994,6 +1000,10 @@ TRANSLATIONS["en"] = {
 
     # ----- XLSX export -----
     "export.xlsx": "Export Excel (XLSX)",
+    "export.standards": "Export standards data (Darwin Core / PBDB)",
+    "export.standardsDone": "Darwin Core Archive and the three PBDB sheets written",
+    "export.standardsSkipped": "Not written to the standards export (no range drawn, or the name could not be read):",
+    "export.standardsFailed": "Standards export failed",
     "export.json": "Export JSON",
     "export.csv": "Export CSV",
     "export.tsv": "Copy TSV",
@@ -1250,6 +1260,8 @@ TRANSLATIONS["en"] = {
     "quality.stage_order_reversed": "Stage order reversed in section {section}: {detail}",
     "quality.bed_index_order_invalid": "Some lithology / age-unit blocks have invalid bed index order",
     "quality.bed_index_order_swapped": "Top/base bed indices swapped automatically to restore order",
+    "quality.endpoint_label_index_swap": "{count} row(s) had printed endpoint labels that contradicted the bed indices; the endpoint text was swapped to match",
+    "quality.response_kind_divergent": "{count} row(s): the runs disagreed about whether a range is drawn; merged by precedence and the votes recorded",
     "quality.missing_section_ref": "Some species reference an unknown section",
     # H2 fix (REVIEW-2026-11-07): see zh entry — key was emitted but
     # undefined in all three locales.
@@ -1605,6 +1617,10 @@ TRANSLATIONS["ja"] = {
 
     # ----- XLSX export -----
     "export.xlsx": "Excel (XLSX) 出力",
+    "export.standards": "標準データ出力（Darwin Core / PBDB）",
+    "export.standardsDone": "Darwin Core Archive と PBDB 3 シートを書き出しました",
+    "export.standardsSkipped": "標準出力に書き込まれなかった項目（範囲未描出、または名称が読めず）：",
+    "export.standardsFailed": "標準データの書き出しに失敗しました",
     "export.json": "JSON 出力",
     "export.csv": "CSV 出力",
     "export.tsv": "TSV をコピー",
@@ -1845,6 +1861,8 @@ TRANSLATIONS["ja"] = {
     "quality.stage_order_reversed": "セクション {section} のステージ順が逆：{detail}",
     "quality.bed_index_order_invalid": "一部の岩相/地層ブロックの bed_index 順が無効です",
     "quality.bed_index_order_swapped": "上/下 bed_index を自動的に入れ替えて順序を修正しました",
+    "quality.endpoint_label_index_swap": "{count} 行で印刷された端点ラベルと bed インデックスが矛盾していたため、端点テキストをインデックスに合わせて入れ替えました",
+    "quality.response_kind_divergent": "{count} 行で範囲が描かれているかどうかの実行間の結論が割れたため、優先順位で統合し投票を記録しました",
     "quality.missing_section_ref": "一部の種が未知のセクションを参照しています",
     # H2 fix (REVIEW-2026-11-07): see zh entry — key was emitted but
     # undefined in all three locales.

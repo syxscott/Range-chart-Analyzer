@@ -52,7 +52,7 @@ const ROOT = process.env.RCA_REPO;
 const ctx = { console, TextEncoder, TextDecoder, URL };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
-for (const f of ['js/reason-codes.js', 'js/quality.js', 'js/ics_table.js']) {
+for (const f of ['js/reason-codes.js', 'js/bed_parser.js', 'js/quality.js', 'js/ics_table.js']) {
   new vm.Script(fs.readFileSync(path.join(ROOT, f), 'utf8')).runInContext(ctx);
 }
 if (typeof ctx.rcaPyRound !== 'function') {

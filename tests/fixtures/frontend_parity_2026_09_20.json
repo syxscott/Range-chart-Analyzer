@@ -7081,6 +7081,148 @@
   },
   {
    "group": "range_chart",
+   "id": "rc_endpoint_label_index_swap",
+   "payload": {
+    "species_ranges": [
+     {
+      "species": "Neoalbaillella optima",
+      "section": "Pingdingshan",
+      "range_base": "A5 (606 m)",
+      "range_base_idx": 1,
+      "range_top": "A1 (607 m)",
+      "range_top_idx": 5,
+      "range_base_bed": "A5",
+      "range_top_bed": "A1",
+      "confidence": 0.9
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "Neoalbaillella optima",
+      "section": "Pingdingshan",
+      "range_top": "A5 (606 m)",
+      "range_base": "A1 (607 m)",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "A5",
+      "range_base_bed": "A1",
+      "range_top_idx": 5,
+      "range_base_idx": 1,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": 0.9,
+      "note": "",
+      "_warning": "endpoint_label_index_swap"
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
+   "id": "rc_endpoint_label_index_no_repair",
+   "payload": {
+    "species_ranges": [
+     {
+      "species": "D",
+      "section": "S",
+      "range_base": "zone Z1",
+      "range_base_idx": 1,
+      "range_top": "A1",
+      "range_top_idx": 5
+     },
+     {
+      "species": "E",
+      "section": "S",
+      "range_base": "23-25",
+      "range_base_idx": 1,
+      "range_top": "A1",
+      "range_top_idx": 5
+     },
+     {
+      "species": "F",
+      "section": "S",
+      "range_base": "607 m",
+      "range_base_idx": 1,
+      "range_top": "A1",
+      "range_top_idx": 5
+     }
+    ]
+   },
+   "extra": null,
+   "python": {
+    "sections": [],
+    "species_ranges": [
+     {
+      "species": "D",
+      "section": "S",
+      "range_top": "A1",
+      "range_base": "zone Z1",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": 5,
+      "range_base_idx": 1,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     },
+     {
+      "species": "E",
+      "section": "S",
+      "range_top": "A1",
+      "range_base": "23-25",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": 5,
+      "range_base_idx": 1,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     },
+     {
+      "species": "F",
+      "section": "S",
+      "range_top": "A1",
+      "range_base": "607 m",
+      "biozone": "",
+      "author": "",
+      "year": "",
+      "author_year": "",
+      "range_top_bed": "",
+      "range_base_bed": "",
+      "range_top_idx": 5,
+      "range_base_idx": 1,
+      "endpoint_kind": "unknown",
+      "occurrence_mode": "unknown",
+      "confidence": null,
+      "note": ""
+     }
+    ],
+    "biozones": [],
+    "other_fossils": [],
+    "confidence": 0.0
+   }
+  },
+  {
+   "group": "range_chart",
    "id": "rc_zone_type_ladder",
    "payload": {
     "biozones": [
@@ -10384,7 +10526,7 @@
    "payload": "0 Ma",
    "extra": "younger",
    "python": {
-    "name": "Holocene",
+    "name": "Meghalayan",
     "ma": 0.0
    }
   },

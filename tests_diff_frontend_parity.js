@@ -76,7 +76,7 @@ const SCRIPTS = [
   // aggregate.js consult it at CALL time (typeof-guarded), so loading it here
   // is what activates the contract groups below.
   'js/reason-codes.js',
-  'js/quality.js',
+  'js/bed_parser.js', 'js/quality.js',
   'js/aggregate.js',
   'js/minimax.js',
   // AUDIT-2026-09-30: js/table.js was MISSING here, so this harness was not
@@ -596,18 +596,19 @@ const EXPECTED_DIVERGENCES = {
   // that tie: ICS 2024 ratifies no name for the span, so "Series 2", "Stage 3"
   // and "Stage 4" are ALL informal and dict order decided it.
   //
-  // This case is the residue of that fix and it is a TABLE-COVERAGE difference,
-  // not a logic one: js/ics_table.js is a 109-row superset that includes the
-  // Cenozoic stages, while rca_core/resources/ics_2024.json is the 98-row table
-  // and has no Cenozoic stage row at all. At exactly 0.0 Ma the browser's group
-  // holds both Meghalayan (a stage) and Holocene (a series), the stage wins,
-  // and the desktop -- having only Holocene -- answers Holocene. Before the fix
-  // the browser also said Holocene, but only because it happened to come first
-  // in the file. Reconciling this means syncing the two ICS tables, which is a
-  // data task for scripts/update_ics.py and is deliberately not bundled into a
-  // scoring fix. "Meghalayan" is the ICS 2024 name for the present day, so the
-  // browser answer is the better of the two.
-  ag_28: 'TABLE COVERAGE: at exactly 0.0 Ma js/ics_table.js has the Cenozoic stage Meghalayan (top 0.0) and ics_2024.json does not, so the new within-group Stage preference answers "Meghalayan" in the browser and "Holocene" on the desktop. Both are correct for their own table; see the Series 2 fix note above',
+  // AUDIT-2026-10-22: this case was a TABLE-COVERAGE difference -- js/ics_table.js
+  // was a 109-row superset while rca_core/resources/ics_2024.json was the 98-row
+  // table -- so at exactly 0.0 Ma the browser answered "Meghalayan" (a stage) and
+  // the desktop answered "Holocene" (a series).
+  //
+  // It was never only a coverage difference: the 98-row table had no
+  // "Late Pleistocene" row, so ics_resolve_age_bound("Late Pleistocene") fell
+  // through to the bare PLEISTOCENE EPOCH and published a FAD of 2.58 Ma
+  // instead of 0.129 Ma -- a factor of 20 -- in the Darwin Core and PBDB
+  // exports. The canonical table has been PROMOTED (ics_2024.json is now the
+  // 109-row table, byte-identical to ics_current.json), so both engines read
+  // one table and this case now AGREES. It is no longer a documented
+  // divergence; the entry is gone and the case is an ordinary pass.
   agstr_238: 'LATENT: same container filter, opposite direction -- a Python dict repr leaking into a scientific field. The mirror of agstr_237',
 };
 

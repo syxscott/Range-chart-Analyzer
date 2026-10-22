@@ -1408,6 +1408,17 @@ class ExtractPage(ScrollArea):
         self.btn_export_xlsx.setToolTip(self._t("export.xlsx"))
         self.btn_export_xlsx.clicked.connect(self._export_xlsx)
         self.result_head.addWidget(self.btn_export_xlsx)
+        # AUDIT-2026-10-22: the standards export (Darwin Core Archive + the
+        # three PBDB sheets). The README has advertised these as deliverables
+        # and the writers existed, but they were reachable only from Python
+        # -- so the DEFAULT entry point (run.bat -> this GUI) could not
+        # produce the files the documentation told users to publish. The
+        # work is in rca_core/standards_export.py, which is Qt-free and
+        # tested; this button is a thin wrapper over it.
+        self.btn_export_standards = PushButton(FIF.SAVE, self._t("export.standards"))
+        self.btn_export_standards.setToolTip(self._t("export.standards"))
+        self.btn_export_standards.clicked.connect(self._export_standards)
+        self.result_head.addWidget(self.btn_export_standards)
         right_lay.addLayout(self.result_head)
 
         # AUDIT-2026-09-27 [item 2.5] (U-03): a real empty state. Before this
@@ -2005,6 +2016,8 @@ class ExtractPage(ScrollArea):
         self.btn_table_tsv.setEnabled(armed)
         self.btn_export.setEnabled(armed)
         self.btn_export_xlsx.setEnabled(armed and self._xlsx_available())
+        # AUDIT-2026-10-22: the standards export takes the same export gate.
+        self.btn_export_standards.setEnabled(armed)
 
     @staticmethod
     @functools.lru_cache(maxsize=1)
@@ -3563,6 +3576,51 @@ class ExtractPage(ScrollArea):
         cur = getattr(self, "_xlsx_worker", None)
         if worker is None or cur is worker:
             self._xlsx_worker = None
+
+    def _export_standards(self):
+        """Export the standards deliverables: a Darwin Core Archive and the
+        three PBDB upload sheets.
+
+        AUDIT-2026-10-22: these writers existed but were reachable only from
+        Python, so the desktop GUI -- the default entry point -- could not
+        produce the files the README tells users to publish. The work is in
+        rca_core/standards_export.py (Qt-free, tested); this is the wrapper.
+
+        A row the writers declined to publish (a ``not_drawn`` taxon, or one
+        whose name could not be read) is reported to the user rather than
+        dropped silently: a published dataset that is quietly missing taxa is
+        exactly the failure this export exists to prevent.
+        """
+        if not self.result:
+            return
+        from rca_core.standards_export import export_standards
+        out_dir = QFileDialog.getExistingDirectory(
+            self, self._t("export.standards"),
+        )
+        if not out_dir:
+            return
+        try:
+            report = export_standards(self.result, out_dir,
+                                      prefix=self._export_prefix())
+        except Exception as exc:
+            InfoBar.error("", str(exc), parent=self.win,
+                          position=InfoBarPosition.TOP, duration=5000)
+            return
+        if not report.get("ok"):
+            InfoBar.error("", self._t("export.standardsFailed"), parent=self.win,
+                          position=InfoBarPosition.TOP, duration=6000)
+            return
+        warnings = report.get("warnings") or []
+        if warnings:
+            names = ", ".join(
+                str(w.get("species") or w.get("reason") or "") for w in warnings[:5])
+            InfoBar.warning(
+                "", self._t("export.standardsSkipped") + " " + names,
+                parent=self.win, position=InfoBarPosition.TOP, duration=8000,
+            )
+        else:
+            InfoBar.success("", self._t("export.standardsDone"), parent=self.win,
+                            position=InfoBarPosition.TOP)
 
     def _export_json(self):
         if not self.result:

@@ -114,7 +114,7 @@ def _section_key(name: Any) -> str:
     return re.sub(r"\s+", " ", str(name)).strip().casefold()
 
 
-def to_darwin_core_occurrences(result: dict) -> list[dict]:
+def to_darwin_core_occurrences(result: dict, warnings_out=None) -> list[dict]:
     """Convert range_chart result to Darwin Core occurrence records.
 
     Returns list of dicts with DwC terms as keys:
@@ -126,6 +126,12 @@ def to_darwin_core_occurrences(result: dict) -> list[dict]:
     - lithostratigraphicTerms
     - occurrenceRemarks, occurrenceStatus
     - basisOfRecord ('MachineExtractedFromImage' for our use case)
+
+    ``warnings_out`` (optional list) receives one dict per row the export
+    deliberately did NOT publish, mirroring ``exporter.to_xlsx``'s channel.
+    AUDIT-2026-10-22: a ``not_drawn`` row states that the taxon was
+    EXAMINED and NOT found, so publishing it as an occurrence would turn an
+    absence into a presence. It is skipped and reported instead.
     """
     occurrences = []
     species_ranges = result.get("species_ranges", []) or []
@@ -153,6 +159,24 @@ def to_darwin_core_occurrences(result: dict) -> list[dict]:
         if not isinstance(row, dict):
             continue
         species = row.get("species", "")
+        # AUDIT-2026-10-22: a `not_drawn` row says the taxon was examined
+        # and NOT found, and an `uncertain` row says the NAME could not be
+        # read. Neither is a publishable occurrence: publishing one turns an
+        # absence into a presence, or publishes a record with no taxon. Both
+        # are REPORTED through warnings_out so the drop is never silent.
+        _kind = str(row.get("response_kind") or "").strip().lower()
+        if _kind in ("not_drawn", "uncertain"):
+            if warnings_out is not None:
+                warnings_out.append({
+                    "table": "species_ranges", "row_index": idx,
+                    "reason": _kind, "species": species,
+                    "section": row.get("section", ""),
+                    "detail": ("taxon examined and not found; not an occurrence"
+                               if _kind == "not_drawn" else
+                               "taxon name could not be read; not a publishable "
+                               "occurrence"),
+                })
+            continue
         if not species:
             continue
         section = row.get("section", "")
@@ -193,6 +217,21 @@ def to_darwin_core_occurrences(result: dict) -> list[dict]:
             signals.append(f"endpoint_kind={endpoint_kind}")
         if occurrence_mode:
             signals.append(f"occurrence_mode={occurrence_mode}")
+        # AUDIT-2026-10-22: say WHERE the published interval came from. A
+        # range chart's endpoints are bed labels, which do not resolve to ICS
+        # ages; the DwC writer already keeps the raw labels in
+        # earliestAgeOrLowestStage / latestAgeOrHighestStage and leaves
+        # fad_ma / lad_ma empty, but a consumer could still read the
+        # section-level `chronostratigraphicAge` as the taxon's age.
+        row_claims_range = bool(base_raw or top_raw)
+        if row_claims_range and not (earliest_stage or latest_stage):
+            signals.append(
+                "taxon range %s - %s (bed labels are not ICS ages; the "
+                "section's age span is NOT this taxon's range)"
+                % (base_raw, top_raw))
+        elif not row_claims_range and (earliest or latest):
+            signals.append(
+                "interval resolved from the SECTION, not from a taxon range")
         if signals:
             remarks = f"{remarks}; {'; '.join(signals)}"
         # REVIEW-2026-07-31: emit the ICS-resolved numeric FAD/LAD ages as
@@ -372,11 +411,51 @@ def _build_eml_xml(result: dict, n_occurrences: int) -> str:
     pub_date = _first_text(result, "export_date", "exported_at") or time.strftime(
         "%Y-%m-%d"
     )
-    # packageId must be a stable, unique URI-ish string for the archive;
-    # the content count + date makes it reproducible for a given export.
+    # AUDIT-2026-10-22: the packageId used to be date + ROW COUNT, so two
+    # DIFFERENT figures extracted the same day with the same row count got
+    # byte-identical ids (measured: two archives, one title "Pingdingshan",
+    # one "OtherSection", both `rca-dwc-a-2026-10-22-1`) -- and a repository
+    # keyed on packageId then treats them as one dataset. It is now seeded
+    # from the extraction's own image fingerprint when the report block has
+    # one, so the id identifies the FIGURE, not a coincidence of the
+    # calendar; the date+count form survives only as the no-provenance
+    # fallback, and an explicit dataset_id still wins.
+    _report = result.get("report") if isinstance(result.get("report"), dict) else {}
+    _report_input = _report.get("input") if isinstance(_report.get("input"), dict) else {}
+    _image_sha = str(_report_input.get("image_sha256") or "").strip()
+    if _image_sha:
+        _sha_key = "sha256-" + _image_sha[:32]
+    else:
+        _sha_key = ""
     package_id = _first_text(result, "dataset_id", "package_id") or (
-        f"rca-dwc-a-{pub_date}-{n_occurrences}"
+        "rca-dwc-a-%s-%s-%d" % (pub_date, _sha_key or ("rows-%d" % n_occurrences),
+                                n_occurrences)
     )
+    # AUDIT-2026-10-22: the methodStep used to be fixed prose. The model,
+    # prompt version, run count and ICS chart version are the four facts a
+    # published archive must be able to answer, and the report block already
+    # carries all of them -- so they are injected as machine-readable
+    # parameter values (EML's <parameter>) rather than staying prose-only.
+    _prov = _report.get("provenance") if isinstance(_report.get("provenance"), dict) else {}
+    _prov_lines = []
+    for _label, _key in (
+        ("extraction model", "model"),
+        ("prompt version", "prompt_version"),
+        ("extraction runs", "runs"),
+    ):
+        _val = str(_prov.get(_key) or "").strip()
+        if _val:
+            _prov_lines.append(
+                "            <parameter><name>%s</name><value>%s</value></parameter>\n"
+                % (escape(_label), escape(_val)))
+    _ics_version = str(
+        (_report.get("timescale") or {}).get("ics_version") or "").strip() if isinstance(
+        _report.get("timescale"), dict) else ""
+    if _ics_version:
+        _prov_lines.append(
+            "            <parameter><name>chronostratigraphic chart</name>"
+            "<value>%s</value></parameter>\n" % escape(_ics_version))
+    _prov_block = "".join(_prov_lines)
     contact_email = _first_text(result, "contact_email") or (
         "range-chart-analyzer@users.noreply.github.com"
     )
@@ -438,9 +517,15 @@ def _build_eml_xml(result: dict, n_occurrences: int) -> str:
         "stage labels plus its per-row confidence, so each record stays "
         "auditable by a human.</para></description>\n"
         "        <methodStep><description><para>Automated extraction "
-        "(basisOfRecord = MachineObservation), ICS 2024 chronostratigraphic "
+        "(basisOfRecord = MachineObservation), ICS chronostratigraphic "
         "age resolution, multi-run consensus with chimera filtering."
-        "</para></description></methodStep>\n"
+        "</para></description>\n"
+        + (_prov_block
+           if _prov_block else
+           "          <dataSource><title>extraction provenance not recorded "
+           "for this result (pre-report payload or cache-served copy)"
+           "</title></dataSource>\n")
+        + "        </methodStep>\n"
         "      </qualityControl>\n"
         "    </methods>\n"
         "    <distribution>\n"
@@ -487,13 +572,16 @@ def _dwca_cell(value: Any) -> str:
     return text.replace('"', "")
 
 
-def to_darwin_core_archive(result: dict, output_path: str) -> str:
+def to_darwin_core_archive(result: dict, output_path: str, warnings_out=None) -> str:
     """Create DwC-A ZIP file.
 
     Creates archive.zip with occurrence.txt, meta.xml and eml.xml.
     Returns the path to the created archive.
+
+    ``warnings_out`` (optional list) receives the records the occurrence
+    writer did not publish, so a dropped row is never silent.
     """
-    occurrences = to_darwin_core_occurrences(result)
+    occurrences = to_darwin_core_occurrences(result, warnings_out=warnings_out)
     output_path = Path(output_path)
     if output_path.is_dir():
         output_path = output_path / "DwC-A.zip"

@@ -847,6 +847,41 @@ def _score_consistency(data: dict[str, Any]) -> tuple[float, list[dict[str, str]
 
     species = data.get("species_ranges") or []
     if isinstance(species, list) and species:
+        # (1b) AUDIT-2026-10-22: per-row pipeline flags the user must see.
+        # The normalizers and the merge write `endpoint_label_index_swap`
+        # (the printed labels contradicted the model-assigned indices, so
+        # the endpoints were transposed) and `response_kind_divergent`
+        # (the runs disagreed about whether the range is drawn at all)
+        # into the row's `_warning` -- and nothing surfaced either one, so
+        # a species whose FAD/LAD the pipeline had silently REWRITTEN
+        # looked exactly like one it had read off the plate. The web table
+        # highlights flagged rows; the quality report is the desktop's
+        # channel for the same signal.
+        _swap_rows = 0
+        _divergent_rows = 0
+        for sp in species:
+            if not isinstance(sp, dict):
+                continue
+            flags = _warning_flags(sp.get("_warning"))
+            if "endpoint_label_index_swap" in flags:
+                _swap_rows += 1
+            if "response_kind_divergent" in flags:
+                _divergent_rows += 1
+        if _swap_rows:
+            score -= min(0.2, 0.05 * _swap_rows)
+            issues.append({
+                "severity": "warning",
+                "msg_key": "quality.endpoint_label_index_swap",
+                "params": {"count": str(_swap_rows)},
+            })
+        if _divergent_rows:
+            score -= min(0.2, 0.05 * _divergent_rows)
+            issues.append({
+                "severity": "warning",
+                "msg_key": "quality.response_kind_divergent",
+                "params": {"count": str(_divergent_rows)},
+            })
+
         # (2) FAD <= LAD per row.
         # REVIEW-2026-07-31: age/stage bounds ("300 Ma", "Wuchiapingian")
         # are validated numerically in _score_accuracy; the bed-index

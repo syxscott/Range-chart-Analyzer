@@ -1623,8 +1623,12 @@ const RCA_MODE_ROOT_KEYS = {
   // an empty list means "never flag", so a mode missing here would let an
   // unusable payload pass the guard silently. Mirrors the root_keys_inline
   // tuples in rca_core/modes.py.
+  // AUDIT-2026-10-22: 'taxon_rows' and 'cell_status' were missing here
+  // while the Python side declared them, so the browser would have
+  // rejected a payload the desktop accepts. The two per-mode lists are
+  // pinned to each other by tests/test_known_root_keys_union.py.
   occurrence_matrix:  ['columns', 'legend', 'occurrences', 'strat_rows',
-                       'confidence'],
+                       'taxon_rows', 'cell_status', 'confidence'],
   generic_table:      ['columns', 'rows', 'legend', 'notes', 'confidence'],
 };
 
@@ -1880,17 +1884,47 @@ function rcaNormalizeSpeciesInto(sp, target, warnings, axes) {
     const t = topIdx; topIdx = baseIdx; baseIdx = t;
     idxWarnings.push('index_order_swap');
   }
+  // AUDIT-2026-10-22: mirror of rca_core/extractor.py:2345-2358. When the
+  // PRINTED endpoint labels and the model-assigned endpoint indices
+  // contradict each other, the text is the transposed half and the indices
+  // are right, so the text is swapped to match.
+  //
+  // Without this the two surfaces published DIFFERENT range endpoints for
+  // the same model response: the desktop corrected the row, the browser
+  // kept the inverted one -- and the browser did not notice, because
+  // js/quality.js's FAD/LAD check needs a NUMBER out of the label
+  // ("A5 (606 m)" yields null) and so never checked the row at all.
+  // Measured on the Diaz & Velez 2018 Fig. 5 label style.
+  let rangeTop = rcaStringifyScalar(sp ? sp.range_top : null);
+  let rangeBase = rcaStringifyScalar(sp ? sp.range_base : null);
+  let topBed = rcaStringifyScalar(sp ? sp.range_top_bed : '');
+  let baseBed = rcaStringifyScalar(sp ? sp.range_base_bed : '');
+  if (baseIdx !== null && topIdx !== null && baseIdx !== topIdx) {
+    const ordBase = rcaLabelOrdinal(rangeBase || baseBed);
+    const ordTop = rcaLabelOrdinal(rangeTop || topBed);
+    const kindBase = rcaOrdinalKind(rangeBase || baseBed);
+    const kindTop = rcaOrdinalKind(rangeTop || topBed);
+    if (ordBase !== null && ordTop !== null
+        && ordBase !== ordTop
+        && kindBase !== null && kindTop !== null && kindBase === kindTop
+        // opposite signs: the labels say one order, the indices the other
+        && ((ordBase > ordTop) !== (baseIdx > topIdx))) {
+      const t = rangeTop; rangeTop = rangeBase; rangeBase = t;
+      const b = topBed; topBed = baseBed; baseBed = b;
+      idxWarnings.push('endpoint_label_index_swap');
+    }
+  }
   const row = {
     species: rcaStringifyScalar(sp ? sp.species : null),
     section: rcaStringifyScalar(sp ? sp.section : null),
-    range_top: rcaStringifyScalar(sp ? sp.range_top : null),
-    range_base: rcaStringifyScalar(sp ? sp.range_base : null),
+    range_top: rangeTop,
+    range_base: rangeBase,
     biozone: rcaStringifyScalar(sp ? sp.biozone : null),
     author: rcaStringifyScalar(sp ? sp.author : ''),
     year: rcaStringifyScalar(sp ? sp.year : ''),
     author_year: rcaStringifyScalar(rcaPyOr(sp ? sp.author_year : null, '')),
-    range_top_bed: rcaStringifyScalar(sp ? sp.range_top_bed : ''),
-    range_base_bed: rcaStringifyScalar(sp ? sp.range_base_bed : ''),
+    range_top_bed: topBed,
+    range_base_bed: baseBed,
     range_top_idx: topIdx,
     range_base_idx: baseIdx,
     endpoint_kind: rcaNormalizeEndpointKind(sp ? sp.endpoint_kind : null),

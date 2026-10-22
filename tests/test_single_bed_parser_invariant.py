@@ -60,19 +60,15 @@ ALLOWED_PRIVATE_PARSERS = {
     },
     "js/quality.js": {
         "_parseBedN": "mirror of quality._parse_bed_n, same reason",
-        "_BARE_BED_RE": "its regex",
         # The browser's subscript-aware parser, added 2026-10-01 as a faithful
         # port of rca_core/bed_parser.py. It IS a second implementation, so the
         # list is not enough on its own: TestValue below runs the same label
         # matrix through rcaParseBed and through the Python parser and requires
         # them to agree value for value.
-        "_BED_FULL_RE": "internals of rcaParseBed (the browser's port)",
-        "_BED_SUB_RE": "internals of rcaParseBed",
-        "_BED_UNIT_RE": "internals of rcaParseBed (the unit rejection)",
-        "_subIsBedLabel": "internals of rcaParseBed",
-        "_bedStrayResidue": "internals of rcaParseBed",
-        "_BED_DIGITS": "the \\p{Nd} class Python's \\d matches; "
-                        "internals of rcaParseBed",
+        # AUDIT-2026-10-22: the subscript-aware parser and its internals moved
+        # to js/bed_parser.js, which mirrors rca_core/bed_parser.py. rcaParseBed
+        # stays here as a delegating wrapper so this file's callers are
+        # unchanged; the IMPLEMENTATION is now single-sourced.
     },
     "rca_core/exporter.py": {
         "_parse_bed": "module-level alias kept for tests that monkey-patch "
@@ -182,7 +178,12 @@ class TestStructure:
         found = {}
         for path in sorted(list((REPO / "rca_core").glob("*.py"))
                            + list((REPO / "js").glob("*.js"))):
-            if path.name == "bed_parser.py":
+            # The shared module itself is not a private parser. AUDIT-2026-10-22
+            # added js/bed_parser.js as the JS twin of rca_core/bed_parser.py:
+            # the strict parser moved out of js/quality.js into it, and the
+            # label-ordinal reader (which the endpoint-label/index repair
+            # needs) lives there too.
+            if path.name in ("bed_parser.py", "bed_parser.js"):
                 continue
             rel, names = _module_level_defs(path)
             names -= NOT_PARSERS.get(rel, set())
@@ -298,6 +299,10 @@ const vm = require('vm');
 const fs = require('fs');
 const ctx = vm.createContext({ console, Math, JSON, String, Number });
 ctx.window = ctx; ctx.globalThis = ctx;
+// AUDIT-2026-10-22: js/bed_parser.js is loaded FIRST -- js/quality.js's
+// rcaParseBed delegates to it.
+vm.runInContext(fs.readFileSync(process.argv[4], 'utf8'), ctx,
+                { filename: 'js/bed_parser.js' });
 vm.runInContext(fs.readFileSync(process.argv[3], 'utf8'), ctx,
                 { filename: 'js/quality.js' });
 if (typeof ctx.rcaParseBed !== 'function') {
@@ -330,7 +335,8 @@ def js_parse_bed():
         s = Path(td) / "labels.json"
         s.write_text(json.dumps(LABELS, ensure_ascii=True), encoding="utf-8")
         r = subprocess.run(
-            ["node", str(d), str(s), str(REPO / "js" / "quality.js")],
+            ["node", str(d), str(s), str(REPO / "js" / "quality.js"),
+             str(REPO / "js" / "bed_parser.js")],
             capture_output=True, text=True, encoding="utf-8")
         assert r.returncode == 0, f"js/quality.js did not evaluate: {r.stderr[:400]}"
         return json.loads(r.stdout)

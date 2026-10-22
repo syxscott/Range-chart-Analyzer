@@ -1,53 +1,27 @@
-"""AUDIT-2026-10-01 [item 33]: the two transports load DIFFERENT ICS tables.
+"""AUDIT-2026-10-01 [item 33]: the two transports must load the SAME ICS table.
 
-This test does not fix the divergence -- the age table is a research data file
-and promoting it is the maintainer's call.  It pins the gap so the gap is a
-named, asserted fact instead of a year-old silence.
+HISTORY. This module originally pinned a DIVERGENCE: ``ics.py`` loaded
+``ics_2024.json`` (98 entries) while ``js/ics_table.js`` shipped
+``ics_current.json`` (109 entries), and the module asserted the gap so it
+could not rot into silence.
 
-What is true right now (measured, not inferred):
+AUDIT-2026-10-22: the promote has happened.  The gap was not a capability
+difference -- it CORRUPTED DATA.  Because the 98-row table had no
+``Late Pleistocene`` row, ``ics_resolve_age_bound("Late Pleistocene")`` fell
+through to the bare ``Pleistocene`` EPOCH and published a FAD of **2.58 Ma
+instead of 0.129 Ma** -- a factor of 20 too old -- straight into the
+``max_ma`` column of the Darwin Core and PBDB exports.  The browser had the
+109-row table and got it right, so the SAME figure published from the desktop
+and from the web carried ages that differed by a factor of 20.  Six
+stage-boundary ages also resolved to different stage NAMES per transport.
 
-* ``rca_core/standards/ics.py:53`` loads ``resources/ics_2024.json`` --
-  98 entries, and NOT ONE row carries an ``ics_version`` stamp or Macrostrat
-  provenance.
-* ``js/ics_table.js`` loads ``resources/ics_current.json`` -- 109 entries,
-  every row stamped ``ICS v2024/12`` with ``source``/``license``/
-  ``retrieved_at``/``source_id``.
-* ``scripts/update_ics.py`` writes the fetched table to ``ics_current.json``
-  and promotes it to ``ics_2024.json`` ONLY with an explicit
-  ``--write-canonical``.  The script's own version-coherence contract refuses
-  to promote a table whose rows lack the stamp -- which is exactly
-  ``ics_2024.json``.  Git dates the split: ``ics_current.json`` was refreshed
-  2026-09-20, ``ics_2024.json`` last changed 2026-09-07.  The promote never
-  happened.
-* For the 98 entries the two share, EVERY ``base_ma``/``top_ma`` is
-  identical.  So there is no value drift; the loss is the 11 stages only in
-  the fetched file, and they are the whole Silurian subseries.
+``rca_core/resources/ics_2024.json`` is now the promoted 109-row table
+(byte-identical to ``ics_current.json``, every row carrying its
+``ics_version`` / ``source`` / ``license`` / ``retrieved_at`` provenance).
 
-User-visible effect: a chart printing ``Gorstian`` resolves to 426.7 Ma in the
-browser and to ``None`` in the desktop app.  This project digitises
-radiolarian / conodont range charts, where Silurian conodont zonation
-(Llandovery -> Rhuddanian / Telychian / Aeronian, Wenlock -> Homerian /
-Sheinwoodian, Ludlow -> Gorstian / Ludfordian) is routine.
-
-Why no existing test caught it: ``tests/test_ics_invariants.py::TestJsMirror``
-pins ``js/ics_table.js`` against ``ics_current.json`` and its comment declares
-"both ends now ship ics_current.json" -- but it never asserts WHICH file the
-Python import path reads, so it passes while the desktop transport ships the
-stale table.  This module is the missing half.
-
-REMEDY (maintainer decision, not taken here): promote the already-validated
-2026-09-20 snapshot, i.e. make ``ics_2024.json`` a copy of
-``ics_current.json``.  Verified safe before it was proposed: both files have
-the same two "orphan" boundaries and they are the legitimate bottom of the
-chart (538.8 Ma = base of the Cambrian, 0.0 Ma = the present -- the second one
-just sits under a different stage name, Meghalayan having replaced Holocene in
-the 2018 chart), identical load-bearing anchors (PTB 251.902, KPG 66.0, base
-Cretaceous 143.1, base Quaternary 2.58), and identical field/era/period
-consistency.  Running ``scripts/update_ics.py --write-canonical`` instead would
-re-fetch from the network and could land a different vintage.
-
-When the promote happens, update ``_EXPECTED_MISSING`` below to empty and this
-module becomes the standing guard that the two transports stay in step.
+This module is now the STANDING GUARD the original docstring promised: the two
+transports must agree, row for row and age for age, so the split can never
+reopen.  ``_EXPECTED_MISSING`` is empty because nothing is missing.
 """
 from __future__ import annotations
 
@@ -65,13 +39,10 @@ REPO = Path(__file__).resolve().parent.parent
 RESOURCES = REPO / "rca_core" / "resources"
 
 #: Exactly the stages the browser can date and the desktop cannot, as measured
-#: 2026-10-01.  If this list is empty the promote has happened and the
-#: assertions below become the permanent parity guard.
-_EXPECTED_MISSING = [
-    "Aeronian", "Gorstian", "Greenlandian", "Homerian", "Late Pleistocene",
-    "Ludfordian", "Meghalayan", "Northgrippian", "Rhuddanian", "Sheinwoodian",
-    "Telychian",
-]
+#: 2026-10-01.  EMPTY since the 2026-10-22 promote: the canonical table now
+#: carries all 109 rows, and the assertions below are the permanent parity
+#: guard that keeps it that way.
+_EXPECTED_MISSING = []
 
 #: The stages a micropalaeontologist's range chart is most likely to print.
 _SILURIAN = ("Rhuddanian", "Telychian", "Aeronian",
@@ -83,36 +54,49 @@ def fetched() -> dict:
     return json.loads((RESOURCES / "ics_current.json").read_text(encoding="utf-8"))
 
 
-def test_the_two_transports_load_different_tables(fetched):
+def test_the_two_transports_load_the_same_table(fetched):
     missing = sorted(set(fetched) - set(ics.ICS_2024))
     assert missing == _EXPECTED_MISSING, (
-        "the divergence set changed.  If a stage is NEW here it was added to "
-        "ics_2024.json -- good, shrink _EXPECTED_MISSING.  If one disappeared, "
-        "a stage was dropped from the fetched table, which is worth "
-        "investigating before anything else.  now=%r" % (missing,))
+        "the transports diverged again.  If a stage is NEW here it was added "
+        "to the fetched table but not promoted -- run scripts/update_ics.py "
+        "--write-canonical.  If one disappeared, a stage was dropped from the "
+        "fetched table.  now=%r" % (missing,))
+    extra = sorted(set(ics.ICS_2024) - set(fetched))
+    assert extra == [], (
+        "the canonical table carries rows the fetched table does not: %r -- "
+        "the promote and the refresh are out of step" % (extra,))
 
 
-def test_the_silurian_subseries_is_undatable_on_the_desktop(fetched):
-    """The cost of the divergence, named in geological terms."""
-    # _SILURIAN is written in ICS order (oldest first) because that is how a
-    # range chart's axis reads; the comparison is sorted so the failure message
-    # is stable and diffable.
+def test_the_silurian_subseries_is_datable_on_both_transports(fetched):
+    """The cost of the divergence, named in geological terms -- now repaired.
+
+    Before the promote the desktop could not date a Ludlow conodont zone at
+    all, and the Quaternary subseries were worse: "Late Pleistocene" resolved
+    to the PLEISTOCENE EPOCH, publishing a FAD of 2.58 Ma instead of 0.129 Ma.
+    """
     silent = sorted(s for s in _SILURIAN if s not in ics.ICS_2024)
-    assert silent == sorted(set(_EXPECTED_MISSING) & set(_SILURIAN)), (
-        "expected the Silurian subseries to be missing from the Python table; "
-        "now missing=%r" % (silent,))
-    for stage in silent:
-        assert ics.ICS_2024.get(stage) is None
-        row = fetched[stage]
-        assert isinstance(row.get("base_ma"), (int, float)), (
-            "%s has no base_ma in the fetched table either -- the gap is not "
-            "a missing promote" % stage)
+    assert silent == [], (
+        "the Silurian subseries fell out of the canonical table: %r" % (silent,))
+    for stage in _SILURIAN:
+        row = ics.ICS_2024.get(stage)
+        assert row is not None, stage
+        assert isinstance(row.get("base_ma"), (int, float)), stage
+        # ... and it must now date on the desktop too.
+        assert ics.ics_resolve_age_bound(stage) != (None, None), (
+            "%s is in the table but does not resolve" % stage)
+    # the Quaternary case that corrupted a published FAD
+    assert ics.ics_resolve_age_bound("Late Pleistocene", prefer="older") == (
+        "Late Pleistocene", 0.129), (
+        "'Late Pleistocene' must resolve to its own subseries, not to the "
+        "Pleistocene epoch (2.58 Ma) -- the epoch fallback published a FAD "
+        "that was 20x too old")
 
 
 def test_shared_entries_agree_exactly(fetched):
-    """No value drift: the loss is the 11 stages, nothing else."""
+    """No value drift, and now nothing is missing either."""
     shared = set(ics.ICS_2024) & set(fetched)
-    assert len(shared) == 98, "the shared stage count changed (%d)" % len(shared)
+    assert len(shared) == len(fetched) == 109, (
+        "the shared stage count changed (%d of %d)" % (len(shared), len(fetched)))
     for name in sorted(shared):
         a, b = ics.ICS_2024[name], fetched[name]
         for field in ("base_ma", "top_ma"):
@@ -205,57 +189,65 @@ def test_the_shipped_archive_carries_no_age_for_an_undatable_stage(
 #: transports emit different ranks for the same number.
 #: Famennian is the control: it is in both tables, so both must agree.
 _AGE_TO_STAGE = [
-    (443.1, "Llandovery", "Hirnantian"),   # Silurian base / Hirnantian top
-    (438.6, "Llandovery", "Aeronian"),
-    (432.9, "Wenlock", "Llandovery"),
-    (430.6, "Wenlock", "Homerian"),
-    (426.7, "Ludlow", "Gorstian"),
-    (372.15, "Famennian", "Famennian"),   # control
+    (443.1, "Rhuddanian"),   # Silurian base
+    (438.6, "Llandovery"),
+    (432.9, "Sheinwoodian"),
+    (430.6, "Wenlock"),
+    (426.7, "Gorstian"),
+    (439.5, "Aeronian"),
+    (442.0, "Rhuddanian"),
+    (0.05, "Late Pleistocene"),
+    (0.013, "Late Pleistocene"),
+    (0.0, "Meghalayan"),
+    (372.15, "Famennian"),   # control
 ]
 
 
 def test_age_to_stage_name_agrees_across_transports():
-    """The reverse lookup is a second, independent symptom of the same gap.
+    """The two transports must name the SAME stage for the same age.
 
-    Read the JS table out of js/ics_table.js (globalThis.RCA_ICS_TABLE) rather
-    than trusting a name here -- an earlier probe guessed the export wrong and
-    reported 8/8 divergence including the control, which is how a broken probe
-    announces itself.
+    Before the promote they did not: at 426.7 Ma the desktop said "Ludlow"
+    (a series) and the browser said "Gorstian" (a stage), and at 0.0 Ma the
+    desktop said "Holocene" and the browser said "Meghalayan".  Those names
+    are what a zonation or correlation workflow publishes, so the divergence
+    reached the output VALUE, not just a lookup result.
+
+    The JS side is evaluated with the SHIPPED resolver
+    (``js/quality.js:_icsStageFromAge``) rather than a hand-written probe:
+    the real function implements the interior/base/top boundary order and the
+    "a stage beats a series" preference, and a naive probe cannot reproduce
+    it.
     """
     import subprocess
 
     js = (
         "var fs=require('fs'),vm=require('vm');"
-        "var src=fs.readFileSync('js/ics_table.js','utf8');"
         "var ctx=vm.createContext({console:console});"
-        "vm.runInContext(src,ctx);"
-        "var t=ctx.RCA_ICS_TABLE;"
-        "if(!t)throw new Error('js/ics_table.js exports no RCA_ICS_TABLE');"
+        "vm.runInContext(fs.readFileSync('js/ics_table.js','utf8'),ctx);"
+        "vm.runInContext(fs.readFileSync('js/quality.js','utf8'),ctx);"
+        "if(typeof ctx._icsStageFromAge!=='function')"
+        "  throw new Error('js/quality.js exports no _icsStageFromAge');"
         "var ages=[%s];"
-        "var out=[];for(var i=0;i<ages.length;i++){var m=ages[i],best=null;"
-        "  for(var k in t){var r=t[k];"
-        "    if(r.top_ma<=m&&m<=r.base_ma){best=k;break;}}"
-        "  out.push(best);}"
+        "var out=[];for(var i=0;i<ages.length;i++){"
+        "  out.push(ctx._icsStageFromAge(ctx.RCA_ICS_TABLE,ages[i]));}"
         "process.stdout.write(JSON.stringify(out));"
-        % ",".join(repr(float(ma)) for ma, _p, _j in _AGE_TO_STAGE)
+        % ",".join(repr(float(ma)) for ma, _n in _AGE_TO_STAGE)
     )
     proc = subprocess.run(["node", "-e", js], cwd=str(REPO),
                           capture_output=True, text=True,
                           encoding="utf-8", errors="replace")
-    assert proc.returncode == 0, "could not evaluate js/ics_table.js: %s" % (
+    assert proc.returncode == 0, "could not evaluate js/quality.js: %s" % (
         (proc.stderr or proc.stdout)[:400],)
     js_stages = json.loads(proc.stdout)
     assert len(js_stages) == len(_AGE_TO_STAGE)
 
-    for (ma, py_expected, js_expected), js_got in zip(_AGE_TO_STAGE, js_stages):
-        # The control must agree on BOTH sides whatever the gap is.
+    for (ma, expected), js_got in zip(_AGE_TO_STAGE, js_stages):
         py_got = ics.ics_stage_from_age(ma)
-        assert js_got == js_expected, (
-            "js/ics_table.js stopped resolving %.2f Ma to %r (got %r) -- the "
-            "mirror moved, re-read the table before trusting this file"
-            % (ma, js_expected, js_got))
-        assert py_got == py_expected, (
-            "python resolved %.2f Ma to %r, expected %r.  If the promote has "
-            "landed this becomes a REAL fix requirement: the two transports "
-            "must name the same stage." % (ma, py_got, py_expected))
+        assert js_got == expected, (
+            "js/quality.js resolved %.2f Ma to %r, expected %r -- the mirror "
+            "moved, re-read the table before trusting this file"
+            % (ma, js_got, expected))
+        assert py_got == expected, (
+            "python resolved %.2f Ma to %r, expected %r.  The two transports "
+            "must name the same stage." % (ma, py_got, expected))
 

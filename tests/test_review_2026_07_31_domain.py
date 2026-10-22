@@ -124,8 +124,21 @@ class TestSeriesLabelResolution:
         assert occ["fad_ma"] == "" and occ["lad_ma"] == ""
 
     def test_pbdb_section_stage_name_fallback(self):
-        """C-3 gap: a section with a stage/series-only age_range now
-        produces numeric max_ma/min_ma via ICS resolution."""
+        """C-3 gap: a section with a stage/series-only age_range resolves to
+        numeric max_ma/min_ma via ICS -- ON THE COLLECTION.
+
+        AUDIT-2026-10-22: the C-3 fix resolved the section's age, and the
+        result was then written onto EVERY OCCURRENCE row as the taxon's own
+        FAD/LAD. The row says "Bed 3 - Bed 9" -- a slice of the section --
+        and the export published the whole section's span (259.51 - 251.9 Ma)
+        as the taxon's range. Measured on the repo's own 41-taxon reference
+        extraction, all 41 occurrences collapsed to one identical interval and
+        the per-taxon resolution was gone.
+
+        The section's age belongs to the SECTION, so it is on the collection
+        record; the taxon's own age is not derivable from a bed label, so the
+        occurrence row carries none and says so.
+        """
         from rca_core.standards.pbdb import to_pbdb_occurrences, to_pbdb_collections
         result = {
             "sections": [{"name": "Section A",
@@ -137,15 +150,19 @@ class TestSeriesLabelResolution:
         }
         occs = to_pbdb_occurrences(result)
         occ = occs[0]
-        assert float(occ["max_ma"]) == pytest.approx(259.51, abs=0.01)
-        assert float(occ["min_ma"]) == pytest.approx(251.9, abs=0.01)
-        assert occ["early_interval"] == "Wuchiapingian"
-        assert occ["late_interval"] == "Changhsingian"
+        # the SECTION's resolved age is on the collection record
         cols = to_pbdb_collections(result)
         assert float(cols[0]["max_ma"]) == pytest.approx(259.51, abs=0.01)
         assert float(cols[0]["min_ma"]) == pytest.approx(251.9, abs=0.01)
         assert cols[0]["early_interval"] == "Wuchiapingian"
         assert cols[0]["late_interval"] == "Changhsingian"
+        # ... and NOT on the taxon's row, whose range is Bed 3 - Bed 9
+        assert occ["max_ma"] == "" and occ["min_ma"] == ""
+        assert occ["max_ma_reso"] == "" and occ["min_ma_reso"] == ""
+        assert occ["early_interval"] == "" and occ["late_interval"] == ""
+        # the taxon's own labels survive, and the row says why there is no age
+        assert "Bed 3" in occ["notes"] and "Bed 9" in occ["notes"]
+        assert "NOT this taxon's range" in occ["notes"]
 
     def test_pbdb_epoch_label_resolution(self):
         """'Pleistocene' section age_range resolves to 2.588-0.0117."""

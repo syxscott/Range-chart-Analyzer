@@ -252,6 +252,12 @@ def extract_balanced_json_array(text: str) -> str | None:
 _KNOWN_ROOT_KEYS: frozenset[str] = frozenset({
     # range_chart (RANGE_CHART_ROOTS)
     "sections", "species_ranges", "biozones", "other_fossils", "confidence",
+    # axis_calibration -- BORROW-2026-09-20 (A): the optional figure-level
+    # root the four contract modes carry, so a payload that is ONLY a
+    # calibration still qualifies as a payload. AUDIT-2026-10-22: it was
+    # missing from this union as well, which is the same class of gap the
+    # occurrence_matrix roots were.
+    "axis_calibration",
     # columnar_section (_KNOWN_COLUMNAR_ROOT_KEYS)
     "fossil_legend", "lithology_legend", "cross_beds", "overall_confidence",
     # abundance_diagram (_KNOWN_ABUNDANCE_ROOT_KEYS)
@@ -274,6 +280,19 @@ _KNOWN_ROOT_KEYS: frozenset[str] = frozenset({
     "groups", "points", "outliers", "statistics",
     # phylogenetic_tree (inline tuple in _normalize_phylogenetic_tree_into)
     "metadata", "nodes", "root_ids", "legend",
+    # occurrence_matrix (modes.MODES: root_keys_inline)
+    #
+    # AUDIT-2026-10-22: these were MISSING, and the set's own docstring
+    # claims it is the union of every per-mode ROOTS constant -- so it was
+    # not. The consequence is not cosmetic: a TRUNCATED occurrence-matrix
+    # reply whose only roots are `columns` and `occurrences` did not
+    # qualify as a payload, so the JSON recovery chain returned ONE INNER
+    # OBJECT (`{'key': 'a', 'cells': ['x']}`) instead of the array, and
+    # the whole matrix was lost. The same payload with a `legend` key
+    # alongside repaired correctly -- which is why no test caught it.
+    "columns", "occurrences", "strat_rows", "taxon_rows", "cell_status",
+    # generic_table (modes.MODES: root_keys_inline)
+    "rows", "notes",
 })
 
 
