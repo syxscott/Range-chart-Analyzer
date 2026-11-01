@@ -47,7 +47,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # tests/standalone/ -> repository root (three levels up).
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-REPO = os.path.dirname(os.path.dirname(REPO))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, REPO)
 

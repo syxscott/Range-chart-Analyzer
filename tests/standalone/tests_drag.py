@@ -4,8 +4,7 @@ from __future__ import annotations
 import os, sys
 
 # tests/standalone/ -> repository root (three levels up).
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-root = os.path.dirname(os.path.dirname(REPO))
+root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, root)
 
 _pass = 0

@@ -8,8 +8,7 @@ import sys
 import threading
 
 # tests/standalone/ -> repository root (three levels up).
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ROOT = os.path.dirname(os.path.dirname(REPO))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
 

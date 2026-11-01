@@ -8,9 +8,7 @@ import sys
 import tempfile
 
 # tests/standalone/ -> repository root (three levels up).
-# tests/standalone/ -> repository root (three levels up).
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-REPO = os.path.dirname(os.path.dirname(REPO))
 sys.path.insert(0, REPO)
 
 import rca_core.llm as L  # noqa: E402

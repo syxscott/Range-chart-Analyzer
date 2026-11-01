@@ -11,9 +11,7 @@ import re
 import sys
 
 # tests/standalone/ -> repository root (three levels up).
-# tests/standalone/ -> repository root (three levels up).
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-REPO = os.path.dirname(os.path.dirname(REPO))
 sys.path.insert(0, REPO)
 
 from rca_core import (
