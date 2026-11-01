@@ -25,7 +25,7 @@ PySide6-Fluent-Widgets>=1.11.3 ; python_version >= "3.9"
 # (~+50MB on top of PySide6) but optional: the rest of the Fluent GUI
 # works without it; double-clicking a history row will show a no-engine
 # fallback message instead of the rich result render.
-PySide6-Addons>=6.6 ; python_version >= "3.9"
+PySide6-Addons>=6.12.0 ; python_version >= "3.9"
 # XLSX export — enables the "Export Excel" button in the Fluent GUI and
 #   the `rca_core.exporter.to_xlsx` function. Optional: the rest of the
 #   app (CSV / JSON / TSV) works fine without it.
