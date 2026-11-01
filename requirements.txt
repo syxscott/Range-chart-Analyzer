@@ -39,4 +39,4 @@ matplotlib>=3.5 ; python_version >= "3.8"
 #   fingerprint-derived obfuscation (any local user can recompute the
 #   key). Install both for real at-rest protection.
 cryptography>=41.0 ; python_version >= "3.8"
-keyring>=24.0 ; python_version >= "3.8"
+keyring>=25.7.0 ; python_version >= "3.8"
