@@ -22,6 +22,16 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   appending names to a list — which rebuilt the same trap. A file dropped into
   `tests/js/` now runs the moment it exists, and `scripts/repo_health.py`
   fails the weekly sweep if one is ever added somewhere unwired.
+- **Optional-dependency floor raised, and the `python_version` markers with
+  it.** Dependabot moved every pin to a current release (Pillow 9→12.3,
+  PySide6 6.6→6.12, PySide6-Addons 6.6→6.12, PySide6-Fluent-Widgets
+  1.5→1.11.3, openpyxl 3.1→3.1.5, keyring 24→25.7). Two of those refuse to
+  install below Python 3.10 on their own, while the markers still said 3.8 /
+  3.9 — so on an older interpreter `pip install -r requirements.txt` would
+  have failed with "no matching distribution" instead of skipping the optional
+  package. All ten markers now read `>= "3.10"`, matching the floor the README
+  and CI already documented, and a PyPI cross-check confirms every marker is
+  at or above the pinned package's own `requires_python`.
 
 ### Added
 
