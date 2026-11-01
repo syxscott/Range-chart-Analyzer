@@ -2477,6 +2477,50 @@ check('fix28-ics-cn-stage-unknown-still-rejected', S.rcaIcsLookupStage('不是�
   S.rcaTableEdits.clearSelection();
 }
 
+// ---- (7b) the remap must keep the SURVIVOR's mark, not the deleted one's ----
+//
+// (7) above cannot tell those two apart. Both implementations leave exactly
+// one mark on flat row 0, because the deleted section's old flat index and the
+// survivor's NEW flat index are the same number — so an implementation that
+// restores the DEAD section's mark, or one that restores the survivor's, both
+// produce [[0,'pattern']]. (It did in fact ship that way: the first version
+// keyed marks by `_src[0]`, the section's position, which is precisely what
+// the remap exists because it changes.)
+//
+// Give the two sections edits on DIFFERENT fields and the answers diverge: a
+// positional key resurrects S1's `pattern` mark on S2, while the section-id
+// key correctly leaves S2's `range_top_idx` mark. Checked against a control
+// that overrides nestedMarkKey back to `_src.join('|')` — the run reports
+// WRONG there and RIGHT here, so this assertion discriminates rather than
+// merely passing.
+{
+  const aD = {
+    chart_mode: 'columnar_section',
+    sections: [
+      { id: 'S1', name: 'S1',
+        lithology_blocks: [{ pattern: 'mud', range_top_idx: 3, range_base_idx: 1 }],
+        age_units: [], samples: [] },
+      { id: 'S2', name: 'S2',
+        lithology_blocks: [{ pattern: 'sand', range_top_idx: 4, range_base_idx: 2 }],
+        age_units: [], samples: [] },
+    ],
+  };
+  freshEdits(aD);
+  const lbCfg = cfgOf(aD, 'lithology_blocks');
+  S.rcaTableEdits.editCell('lithology_blocks', 0, fieldCol(lbCfg, 'pattern'), 'clay');
+  // The SPEC field is 'top_idx'; the MODEL key it writes is 'range_top_idx' —
+  // fieldCol addresses cfg.edit, getEditedCells reports the model name.
+  S.rcaTableEdits.editCell('lithology_blocks', 1, fieldCol(lbCfg, 'top_idx'), 9);
+  S.rcaTableEdits.deleteRow('sections', 0);   // drop S1; S2 becomes flat row 0
+  const cellsD = S.rcaTableEdits.getEditedCells('lithology_blocks');
+  check('fix28-remap-keeps-the-survivors-field',
+    cellsD.length === 1 && cellsD[0][0] === 0 && cellsD[0][1] === 'range_top_idx'
+      && aD.sections[0].id === 'S2',
+    'a deleted section\'s mark must die with its section — got ' + canonical(cellsD));
+  S.rcaTableEdits.clearEdited();
+  S.rcaTableEdits.clearSelection();
+}
+
 // ===========================================================================
 
 console.log('\n--- ' + pass + ' passed, ' + fail + ' failed ---');

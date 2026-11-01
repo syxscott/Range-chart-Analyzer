@@ -395,8 +395,10 @@ node tests/js/tests_aggregate.js                            # 聚合逻辑
 node tests/js/tests_frontend_perf.js                        # 真实浏览器性能/大表回归
 ```
 
-- **规模**：Python ≈1,100 项、Node ≈900 项（含三端 parity 锁、ICS 数据不变量、
-  金标离线管线门槛、截断修复真机夹具、GUI Qt 测试）；
+- **规模**（2026-11-01 实测，非估算）：pytest 4,360 项（137 项跳过）、15 个 Node 套件
+  共 2,576 项断言、17 个脚本式 Python 套件（以退出码为准）；另有差分 parity
+  1,363 个用例与真实浏览器性能 43 项。含三端 parity 锁、ICS 数据不变量、
+  金标离线管线门槛、截断修复真机夹具、GUI Qt 测试；
 - **CI**：GitHub Actions 在 Python 3.10 / 3.12 + Node 上运行上述套件；
 - **金标门槛**：`tests/test_gold_smoke.py` 离线运行 `safe_json_loads → normalize →
   eval_metrics` 并断言精度/召回阈值；预录响应由

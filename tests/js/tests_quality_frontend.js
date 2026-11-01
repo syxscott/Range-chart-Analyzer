@@ -495,6 +495,7 @@ function issuesOf(result, key) {
   // NOT all 26: the shared parser treats 'm' as the metre unit ("23 m"), so
   // 23m must come back null. Measured against rca_core.bed_parser, which
   // answers None for exactly the same inputs.
+  let lastSeen = 0;
   check('fix6: every accepted sub-bed sits strictly between its bed and the next',
     (() => {
       let seen = 0;
@@ -507,8 +508,13 @@ function issuesOf(result, key) {
           seen += 1;
         }
       }
-      return seen === 100;   // 4 beds x 25 letters (a-z minus 'm')
-    })());
+      // 4 beds x 25 letters (a-z minus 'm'). Assigned rather than returned so
+      // a failure can say HOW MANY were accepted — a bare false would send the
+      // next reader hunting for an off-by-one in the interval test.
+      lastSeen = seen;
+      return seen === 100;
+    })(),
+    'accepted ' + lastSeen + ' of the expected 100 (4 beds x 25 letters)');
   check("fix6: 'm' is the metre unit, not a sub-bed", pos('23m') === null,
     String(pos('23m')));
   // Prefix and case are the parser's business, not this function's; it must

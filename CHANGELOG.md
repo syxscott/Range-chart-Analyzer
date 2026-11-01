@@ -44,14 +44,16 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The 2026-10-28 sweep: ~20 defects across eight `js/` modules and
   `server.py`, found by mirroring behaviour against the Python twin.** Grouped
   by where they lived, because the grouping is the useful part:
-  - *`js/quality.js` mirror drift (four rules).* Steno-biozone ordering routes
+  - *`js/quality.js` mirror drift (five rules).* Steno-biozone ordering routes
     bed labels through the subscript-aware `bed_position` instead of
     `_parseBedN` (23a and 23c were scoring as the same bed, which both
     invented and forgave reversals); an age alias is claimed only when EXACTLY
     one matches, matching `ics.py`'s fall-through; the stage-order check counts
     each VIOLATION as one failed check instead of awarding a proportional
     fraction per section; a non-object `chimera_warnings` entry renders
-    verbatim instead of deducting silently.
+    verbatim instead of deducting silently; and each dimension now has its own
+    exception guard, so one scorer throwing scores that dimension 0.0 and
+    emits `quality.scoring_failed` instead of taking the whole badge down.
   - *Table editor.* Nested sub-table marks are re-derived across a `sections`
     splice; a value edit relinks the linked canvas instead of leaving it on the
     pre-edit snapshot; an IME composition in flight is no longer treated as a

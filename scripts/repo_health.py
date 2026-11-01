@@ -27,6 +27,7 @@ Design rules:
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import sys
@@ -82,6 +83,58 @@ def tracked_files() -> list[Path]:
         return [p for p in REPO.rglob("*") if p.is_file() and ".git" not in p.parts]
 
 
+def _split_shell_text(text: str) -> tuple[str, list[str]]:
+    """Split workflow text into (runnable body, case-block exclusions).
+
+    Two things in a workflow look like coverage but are not, and both made an
+    earlier version of this check vacuous:
+
+      * a `case ... continue ;;` arm is an EXCLUSION. `tests_real_corpus.py` is
+        skipped by CI on purpose and was reported as wired because its own
+        skip pattern counted as a mention.
+      * a `#` comment is prose. ci.yml discusses several suites by name —
+        including the ones it deliberately does not run — so comments must not
+        satisfy "this harness is invoked".
+
+    Returns the text with case blocks and comment lines removed, plus the
+    exclusion patterns found inside the case blocks.
+    """
+    body, excludes, depth = [], [], 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if depth == 0:
+            if re.match(r'case\s+.*\bin$', stripped):
+                depth = 1
+                continue
+            if stripped.startswith('#'):
+                continue
+            body.append(line)
+            continue
+        if stripped.startswith('esac'):
+            depth = 0
+            continue
+        # `*tests_core.py|*tests_onboarding.py) continue ;;`
+        m = re.match(r'([^\s()]+)\)', stripped)
+        if m:
+            excludes.extend(part for part in m.group(1).split('|') if part)
+    return '\n'.join(body), excludes
+
+
+def _glob_match(rel: str, pattern: str) -> bool:
+    """Glob match that does NOT let `*` cross a path separator.
+
+    fnmatch does cross it, and that turned `*.js` — which appears in this
+    repo's workflows as prose about the tests — into "matches every JavaScript
+    file anywhere", a vacuous pass for the whole check. Real pathname expansion
+    is the point here: `tests/js/tests_*.js` must cover tests/js and must not
+    cover js/.
+    """
+    r, p = rel.split('/'), pattern.split('/')
+    if len(r) != len(p):
+        return False
+    return all(fnmatch.fnmatchcase(a, b) for a, b in zip(r, p))
+
+
 def check_harnesses_are_wired() -> None:
     workflow_dir = REPO / ".github" / "workflows"
     if not workflow_dir.is_dir():
@@ -101,20 +154,23 @@ def check_harnesses_are_wired() -> None:
         if re.fullmatch(r"tests_.*\.(py|js)", p.name)
     )
 
-    # A harness counts as wired when its name appears literally OR when some
-    # glob in a workflow covers it. The second form matters because the CI
-    # steps now iterate `tests/js/tests_*.js` and `tests/standalone/tests_*.py`
-    # precisely so that a new file cannot be forgotten — matching only literal
-    # filenames here would flag every harness in the repo.
-    import fnmatch
-
-    globs = set(re.findall(r"[A-Za-z0-9_./-]*\*[A-Za-z0-9_./*-]*\.(?:py|js)", ci_text))
+    body, excludes = _split_shell_text(ci_text)
+    globs = set(re.findall(
+        r"[A-Za-z0-9_./-]*\*[A-Za-z0-9_./*-]*\.(?:py|js)", body))
 
     def wired(path: Path) -> bool:
         rel = path.relative_to(REPO).as_posix()
-        if path.name in ci_text or rel in ci_text:
+        # 1. Named outright in a run line — `python tests/standalone/tests_core.py`
+        #    counts even though a loop elsewhere excludes it.
+        if path.name in body or rel in body:
             return True
-        return any(fnmatch.fnmatch(rel, g) for g in globs)
+        # 2. Fed to a loop but then skipped by a case arm. Shell `case`
+        #    matches with `*` crossing `/`, unlike the `for f in` glob above,
+        #    so this uses plain fnmatch on the whole relative path.
+        if any(fnmatch.fnmatchcase(rel, x) for x in excludes):
+            return False
+        # 3. Covered by a pathname-expansion glob.
+        return any(_glob_match(rel, g) for g in globs)
 
     unwired = [p for p in harnesses if not wired(p)]
     for p in unwired:
@@ -183,6 +239,18 @@ def check_version_agreement() -> None:
 # 404 from GitHub. Only relative links that look like paths are checked --
 # bare words and anchors are ignored, and `docs/` is included because that is
 # where the long reports live.
+#
+# KNOW THE LIMIT (measured 2026-11-01): this covers TWO links in the whole
+# repository. That is not a bug in the regex -- the docs simply reference files
+# in backticks, not as links. There are 1,099 backticked path-like tokens, 340
+# of which do not resolve, and almost all of those are bare basenames
+# (`table.js` for `js/table.js`) that are legitimate prose shorthand. Widening
+# the check to cover them would drown the weekly issue in false positives.
+#
+# `docs/` is also, deliberately, NOT checked for stale PATHS: those files are
+# dated review records. `js/table-edit.js` in a 2026-09 report was correct when
+# it was written, and rewriting it would falsify the record. The live document
+# is README.md, and its five explicit paths do resolve.
 # --------------------------------------------------------------------------
 LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 

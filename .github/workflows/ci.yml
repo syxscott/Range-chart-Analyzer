@@ -102,6 +102,19 @@ jobs:
       - name: Run tests_core standalone (exit code reflects failures)
         run: python tests/standalone/tests_core.py
 
+      # The same file again, under pytest, and this is not redundant.
+      #
+      # The `__main__` driver calls its test functions in one unguarded
+      # sequence: the first exception ends the run and every later test is
+      # silently unexecuted (the exit code still fails, so the gate holds —
+      # only the diagnosis is lost). Before the 2026-11-01 layout change both
+      # modes ran in ONE invocation, `pytest tests/ tests_core.py`, which was
+      # possible only because the file sat outside tests/. Merging them is no
+      # longer possible (see the note on the full-suite step), so the
+      # per-test isolation gets its own invocation instead of being dropped.
+      - name: Run tests_core under pytest (per-test isolation)
+        run: python -m pytest tests/standalone/tests_core.py -q --tb=short
+
       # Every Node suite, by directory walk rather than by hand-written list.
       #
       # REVIEW-2026-09-10 and AUDIT-2026-09-27 both found the same rot: a new
