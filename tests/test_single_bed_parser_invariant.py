@@ -161,7 +161,17 @@ NOT_PARSERS = {
     "rca_core/bed_parser.py": {"_row_key", "bed_position"},  # it IS the parser
     "rca_core/quality.py": {"_subbed_inverted"},             # asks the shared one
     "js/quality.js": {"rcaParseBed", "rcaSubbedInverted",
-                      "rcaEditRowKey", "rcaEditAlignRows"},
+                      "rcaEditRowKey", "rcaEditAlignRows",
+                      # FIX-2026-10-28: the JS twin of
+                      # rca_core.bed_parser.bed_position — it CALLS
+                      # rcaParseBed and only turns the sub-bed letter into a
+                      # fractional position ("23d" -> 23.109...). Same three
+                      # branches as the Python side (empty sub, non a-z first
+                      # letter, the +0.5/26 offset), so it cannot disagree
+                      # about what a bed IS, which is the only thing this
+                      # invariant is about. It was flagged by the name
+                      # heuristic alone, exactly like bed_position was.
+                      "_bedPosition"},
     # Tick GENERATION from a numeric range, not a label parser: it takes
     # (lo, hi, maxN) numbers and rounds them.
     "js/viz.js": {"rcaVizBedTicks"},

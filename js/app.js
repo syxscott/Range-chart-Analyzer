@@ -316,14 +316,26 @@
   // `range_chart_*`. It now calls the SAME predicates js/table.js dispatches
   // on (which are the `_looks_*` mirrors of rca_core/exporter.py), in the
   // SAME order, so the filename can never contradict the file's contents.
+  //
+  // FIX-2026-10-28: `rcaLooksOccurrenceMatrix` (table.js:192) and
+  // `rcaLooksPaleomap` (table.js:88) joined table.js's dispatch after this
+  // mirror was written but never made it here, so occurrence-matrix and
+  // paleomap results exported as `range_chart_result.json` — and, worse, an
+  // occurrence result carrying abundance-like rows exported as
+  // `abundance_diagram_*`. The order below IS rcaTableConfigs' dispatch order
+  // (zonation → occurrence_matrix → abundance → columnar → phylo → paleomap →
+  // range_chart fallback): occurrence MUST stay tested BEFORE abundance, which
+  // is exactly why the partially-migrated matrix answer is not mislabeled.
   function rcaResultFilePrefix(result) {
     if (!result) return 'range_chart_';
     if (rcaLooksZonationChart(result)) return 'zonation_chart_';
+    if (rcaLooksOccurrenceMatrix(result)) return 'occurrence_matrix_';
     if (rcaLooksAbundance(result)) return 'abundance_diagram_';
     if (rcaLooksColumnar(result) || rcaLooksColumnarEmptySections(result)) {
       return 'columnar_section_';
     }
     if (rcaLooksPhylogeneticTree(result)) return 'phylogenetic_tree_';
+    if (rcaLooksPaleomap(result)) return 'paleomap_';
     return 'range_chart_';
   }
 
@@ -668,12 +680,18 @@
     btns.forEach((b) => {
       if (b.getAttribute('data-value') === sel.value) checked = b;
     });
-    let taken = false;
+    // FIX-2026-10-28: the `isChecked || !taken` form handed tabindex=0 to the
+    // FIRST button whenever no tabbable had been seen yet, so a selected
+    // non-first option produced TWO tab stops (the selected one and the
+    // first). Same pattern as applyLangButtons above: only trust the
+    // checked probe when it found something, and fall back to the first
+    // button otherwise — exactly one entry point either way.
+    let tabbableTaken = false;
     btns.forEach((b) => {
       const isChecked = b === checked;
       b.setAttribute('aria-checked', isChecked ? 'true' : 'false');
-      const tabbable = isChecked || !taken;
-      if (tabbable) taken = true;
+      const tabbable = checked ? isChecked : !tabbableTaken;
+      if (tabbable) tabbableTaken = true;
       b.setAttribute('tabindex', tabbable ? '0' : '-1');
     });
   }
@@ -1480,14 +1498,16 @@
         enhance: !!state._enhance && !state._frontendEnhanced,
       };
 
-      // Phase 1: analyze (LLM call). For single-run use 'analyzing';
-      // multi-run gets a per-run counter below. Use the structured form
-      // so a language switch mid-extraction re-translates the prefix.
-      setBusyLabel(
-        runs > 1
-          ? { i18nKey: 'loading.analyzing', params: { done: 0, total: runs } }
-          : { i18nKey: 'loading.analyzing' }
-      );
+      // Phase 1: analyze (LLM call). Use the PLAIN 'analyzing' label here;
+      // the per-run {done}/{total} counter is attached ONLY on the direct
+      // path below (which re-issues the structured label once it knows the
+      // transport). FIX-2026-10-28: the counter used to be attached before
+      // the transport branch, so a backend multi-run displayed "0/N" —
+      // permanently — and setBusyLabel revealed #run-progress for a bar that
+      // could never advance: the server performs the N runs and the client
+      // never sees per-run signals, and index.html documents #run-progress
+      // as direct-mode-only ("stays .hidden in backend mode").
+      setBusyLabel({ i18nKey: 'loading.analyzing' });
 
       if (connMode === 'backend') {
         // The server performs the N runs and merges; pass runs through.
@@ -2350,11 +2370,32 @@
     style.setProperty('--rca-rows-unit', RCA_ROW_UNITS[RCA_LANG] || RCA_ROW_UNITS.en);
   }
 
+  // FIX-2026-10-28: #api-key-toggle carries data-i18n="settings.show" in
+  // index.html, so rcaApplyI18n unconditionally rewrites its label to
+  // 显示/Show on every language switch — even while the key is currently
+  // VISIBLE and the button reads 隐藏/Hide. The label is a function of the
+  // input's type, not of the language alone, so both the click handler below
+  // and switchLang (after its i18n pass) go through this one helper and can
+  // never disagree about the wording.
+  function applyApiKeyToggleLabel() {
+    const input = $('api-key');
+    const toggle = $('api-key-toggle');
+    if (!input || !toggle) return;
+    toggle.textContent = input.type === 'text' ? t('settings.hide') : t('settings.show');
+  }
+
   function switchLang(lang) {
     rcaSetLang(lang);
     rcaApplyI18n(document);
     applyLangButtons();
     applyDocLangAttr();
+    // FIX-2026-10-28: the selection bar's row unit lives in a CSS custom
+    // property (applyRowsUnit), which the static-DOM i18n walk never sees —
+    // same refresh group as the document language attribute.
+    applyRowsUnit();
+    // FIX-2026-10-28: rcaApplyI18n just clobbered the API-key toggle's label
+    // from its data-i18n attribute; re-derive it from the actual input state.
+    applyApiKeyToggleLabel();
     // syncFooterRuntime() writes the textContent directly (and also updates
     // the data-i18n attribute), so it bypasses rcaApplyI18n's static-DOM
     // walk — we must call it explicitly to pick up the new translation.
@@ -2464,7 +2505,9 @@
       const input = $('api-key');
       const showing = input.type === 'text';
       input.type = showing ? 'password' : 'text';
-      $('api-key-toggle').textContent = showing ? t('settings.show') : t('settings.hide');
+      // FIX-2026-10-28: label wording lives in one helper so switchLang's
+      // post-i18n re-apply cannot drift from what the click writes.
+      applyApiKeyToggleLabel();
     });
 
     // M2 (REVIEW-2026-09-20): a click handler receives the MouseEvent, and

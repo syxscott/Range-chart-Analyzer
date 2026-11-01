@@ -439,7 +439,16 @@ from rca_core.aggregate import (  # noqa: E402
     WIRED_MODES,
     merge_results,
 )
-from rca_core.llm import ApiFormat, LlmProvider  # noqa: E402
+
+# FIX-2026-10-28: normalize_reasoning_effort is the SAME validator the
+# provider-config path uses for a reasoning_effort field (drop anything that
+# is not one of rca_core.llm.REASONING_LEVELS); the /api/extract handler now
+# applies it to a per-request `effort` override.
+from rca_core.llm import (  # noqa: E402
+    ApiFormat,
+    LlmProvider,
+    normalize_reasoning_effort,
+)
 
 
 def _safe_score_range_chart(data):
@@ -2976,6 +2985,30 @@ class Handler(BaseHTTPRequestHandler):
                     "error_body": why,
                 })
                 return
+
+        # FIX-2026-10-28: per-request reasoning-effort override. The web
+        # frontend picks an effort level, but until now the POST body dropped
+        # it and the server took the level only from the provider config
+        # (`_stable_reasoning_effort(prov)`), so a backend-mode user who chose
+        # effort=low silently ran at the provider default — effort=max on
+        # M3.1, the exact configuration that times out on a dense figure.
+        #
+        # Validation mirrors the provider-config field exactly:
+        # `normalize_reasoning_effort` keeps only the REASONING_LEVELS names
+        # (stripped, lowercased) and DROPS anything else — the same
+        # safe-failure an invalid value in a provider record gets, never a
+        # 400. Absent / empty / invalid keeps today's behavior byte-for-byte
+        # (the provider's own default applies).
+        #
+        # The override lands on the request-local provider BEFORE `common`
+        # is built, so every downstream reader sees the effective value from
+        # one place: the wire patch (`_reasoning_request_patch`), the auto
+        # classification call, and BOTH cache-key sites (single-run and
+        # multi-run read `_stable_reasoning_effort(common["provider"])`) —
+        # two requests differing only by effort can no longer collide.
+        _req_effort = normalize_reasoning_effort(req.get("effort"))
+        if _req_effort and provider is not None:
+            provider.reasoning_effort = _req_effort
 
         try:
             # M5: clamp to [MIN, MAX] so a client can't demand 99M tokens.

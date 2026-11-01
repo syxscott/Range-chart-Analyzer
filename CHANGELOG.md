@@ -41,6 +41,42 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The 2026-10-28 sweep: ~20 defects across eight `js/` modules and
+  `server.py`, found by mirroring behaviour against the Python twin.** Grouped
+  by where they lived, because the grouping is the useful part:
+  - *`js/quality.js` mirror drift (four rules).* Steno-biozone ordering routes
+    bed labels through the subscript-aware `bed_position` instead of
+    `_parseBedN` (23a and 23c were scoring as the same bed, which both
+    invented and forgave reversals); an age alias is claimed only when EXACTLY
+    one matches, matching `ics.py`'s fall-through; the stage-order check counts
+    each VIOLATION as one failed check instead of awarding a proportional
+    fraction per section; a non-object `chimera_warnings` entry renders
+    verbatim instead of deducting silently.
+  - *Table editor.* Nested sub-table marks are re-derived across a `sections`
+    splice; a value edit relinks the linked canvas instead of leaving it on the
+    pre-edit snapshot; an IME composition in flight is no longer treated as a
+    commit (Enter during Chinese input committed half a character); Esc is
+    consumed by the cell before the document handler sees it.
+  - *Transport.* Error messages are mirrored from a falsy or non-object error
+    without throwing; the SSRF gate accepts the trailing-dot FQDN form
+    (`localhost.`) instead of failing open; reasoning-effort prose is
+    parameterised like the backend transport.
+  - *`server.py`.* A per-request `effort` override is honoured. The web
+    frontend had been sending it and the handler had been dropping it, so a
+    backend-mode user who chose `low` silently ran at `max` — the configuration
+    that times out on a dense figure.
+  - *i18n.* `rcaApplyI18n` no longer clobbers the API-key toggle's label (the
+    button carries `data-i18n` for a different string than the one it shows);
+    label wording moved into one helper so a language switch cannot
+    half-update it.
+- **The nested-mark remap keyed marks by the very index it exists to keep
+  track of.** It captured `_src[0]` — the section's POSITION — then re-derived
+  flat indices after the splice, so deleting section 0 rewrote the survivor's
+  `_src` from [1,…] to [0,…] and the captured key stopped resolving: the
+  survivor's mark was dropped, and the DELETED section's mark was restored
+  onto the survivor's row. Keyed on `section_id` now, which survives the
+  splice. Three assertions in `tests_edit_history.js` had been red on this
+  since the code was written.
 - **`pytest tests/ tests/standalone/tests_core.py` runs 46 tests, not 4,406.**
   Measured while re-pointing CI: when an explicitly-named file lives inside a
   directory passed on the same command line, pytest collects that file alone

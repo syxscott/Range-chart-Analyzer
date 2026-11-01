@@ -2317,12 +2317,24 @@ const RCA_INFORMAL_STAGE_RE = /^\s*(?:unnumbered|unnamed|stage|series)\s+[\dxvi]
 
 // Resolve a stage / period label against the bundled ICS tables. Reuses what
 // js/ics_table.js already ships instead of growing a second gazetteer:
-// RCA_ICS_TABLE (stage -> ma bounds), RCA_ICS_PERIOD_NAMES +
+// RCA_ICS_TABLE (stage -> ma bounds), RCA_ICS_CN_STAGES (Chinese STAGE alias
+// -> canonical stage), RCA_ICS_PERIOD_NAMES +
 // RCA_ICS_CN_PERIOD_NAMES (alias -> canonical period).
 function rcaIcsLookupStage(name) {
   const raw = String(name === null || name === undefined ? '' : name).trim();
   if (!raw) return null;
   const lower = raw.toLowerCase();
+  // FIX-2026-10-28: quality.js/viz.js consume ics_table.js's RCA_ICS_CN_STAGES
+  // ('长兴阶' -> 'Changhsingian'), but this validator only knew the English
+  // table plus the PERIOD aliases — a Chinese stage name straight from the
+  // extraction prompt was rejected as edit.badStage while the same label
+  // placed fine on the chart. Same `raw` (trimmed, case as-is) the CN period
+  // alias check below uses: CJK has no case to fold.
+  const cnStages = (typeof globalThis !== 'undefined' && globalThis.RCA_ICS_CN_STAGES)
+    ? globalThis.RCA_ICS_CN_STAGES : null;
+  if (cnStages && Object.prototype.hasOwnProperty.call(cnStages, raw)) {
+    return cnStages[raw];
+  }
   const table = (typeof globalThis !== 'undefined' && globalThis.RCA_ICS_TABLE)
     ? globalThis.RCA_ICS_TABLE : null;
   if (table) {
@@ -3027,6 +3039,10 @@ const rcaTableEdits = {
     const list = this.data && this.data[key];
     if (!Array.isArray(list) || rowIdx < 0 || rowIdx >= list.length) return null;
     const item = rcaClone(list[rowIdx]);
+    // FIX-2026-10-28: nested sub-table keys are FLAT indices — re-derive them
+    // from their _src provenance across this splice (see
+    // captureNestedFlatMarks).
+    const nestedMarks = this.captureNestedFlatMarks();
     list.splice(rowIdx, 1);
     // FE-FIX-2026-09-21 (audit item 5): the old `shiftEdited(fromRow, -1)`
     // moved the DELETED row's own marks onto the previous row (rows >= rowIdx
@@ -3039,6 +3055,7 @@ const rcaTableEdits = {
     this.shiftEdited(tableId, rowIdx + 1, -1);
     this.dropSelectionRow(tableId, rowIdx);
     this.shiftSelection(tableId, rowIdx + 1, -1);
+    this.restoreNestedFlatMarks(nestedMarks);
     return { type: 'rowDelete', tableId: tableId, row: rowIdx, item: item };
   },
 
@@ -3053,6 +3070,9 @@ const rcaTableEdits = {
     // anything beyond fails closed so the stack can classify the action.
     if (rowIdx < 0 || rowIdx > list.length) return false;
     const at = rowIdx;
+    // FIX-2026-10-28: same flat-index re-derivation as deleteRow — the
+    // re-inserted section pushes every later section's sub-rows down.
+    const nestedMarks = this.captureNestedFlatMarks();
     list.splice(at, 0, rcaClone(item));
     this.shiftEdited(tableId, at, +1);
     this.shiftSelection(tableId, at, +1);
@@ -3062,6 +3082,7 @@ const rcaTableEdits = {
     if (restored) {
       for (const f of restored) this.setCellEdited(tableId, at, f);
     }
+    this.restoreNestedFlatMarks(nestedMarks);
     return true;
   },
 
@@ -3085,8 +3106,14 @@ const rcaTableEdits = {
     // explicit-index unit tests exercise the registry verb directly and pin
     // the flag-shift semantics, a future non-tail UI insert must extend this
     // function, not silently reuse it.
+    // FIX-2026-10-28: for `sections`, even a tail append shifts nothing, but
+    // a mid-list insert moves every later section's nested sub-rows —
+    // re-derive their flat keys across the splice (a tail append skips the
+    // work entirely).
+    const nestedMarks = (at < list.length) ? this.captureNestedFlatMarks() : null;
     list.splice(at, 0, template);
     this.shiftEdited(tableId, at, +1);
+    this.restoreNestedFlatMarks(nestedMarks);
     return { type: 'rowAdd', tableId: tableId, row: at, item: rcaClone(template) };
   },
 
@@ -3095,6 +3122,8 @@ const rcaTableEdits = {
     const list = this.data && this.data[key];
     if (!Array.isArray(list) || rowIdx < 0 || rowIdx >= list.length) return false;
     const removed = rcaClone(list[rowIdx]);
+    // FIX-2026-10-28: same flat-index re-derivation as deleteRow.
+    const nestedMarks = this.captureNestedFlatMarks();
     list.splice(rowIdx, 1);
     // FE-FIX-2026-09-21 (audit item 5, same phantom-shift rule as deleteRow):
     // the removed row's own marks die with it (stashed for the redo, see
@@ -3103,6 +3132,7 @@ const rcaTableEdits = {
     this.shiftEdited(tableId, rowIdx + 1, -1);
     this.dropSelectionRow(tableId, rowIdx);
     this.shiftSelection(tableId, rowIdx + 1, -1);
+    this.restoreNestedFlatMarks(nestedMarks);
     return removed;
   },
 
@@ -3141,6 +3171,93 @@ const rcaTableEdits = {
       moved[next] = true;
     }
     this._selection[tableId] = moved;
+    return this;
+  },
+
+  // FIX-2026-10-28: shiftEdited / shiftSelection above only move the keys of
+  // the table whose LIST was spliced. The nested columnar sub-tables
+  // (lithology_blocks / age_units / samples) key their `_edited` / `_selection`
+  // by FLATTENED row index — rcaColumnarSubTableRows concatenates every
+  // section's sub-rows in sections order — so a sections insert / delete used
+  // to leave every nested key on its PRE-change flat index and
+  // rcaEditSyncDirtyDom painted the red frames on the wrong rows. These two
+  // bookend a sections-list mutation: capture each nested row's identity
+  // BEFORE the splice, then re-derive the flat indices from the NEW list after
+  // it. A mark whose section is gone drops — exactly the rows that ceased to
+  // exist. UI-only marks: captureAll() keeps diffing snapshot vs live and is
+  // untouched by this.
+  //
+  // THE IDENTITY IS THE SECTION ID, NOT `_src[0]`. `_src` is
+  // `[section index, subKey, sub-row index]`, and the index is POSITIONAL —
+  // the one thing this remap exists because it changes. Keying the capture by
+  // it made capture and restore agree only when nothing moved: deleting
+  // section 0 rewrote the survivor's `_src` from [1,…] to [0,…], so the
+  // captured [1,…] no longer resolved, the survivor's mark was dropped, and
+  // (worse) the DELETED section's mark — whose [0,…] now pointed at the
+  // survivor — was restored onto the wrong row. The flat row carries the
+  // section's own `id` as `section_id`, which survives the splice. Sections
+  // without an id fall back to the positional index, which is no worse than
+  // the old behaviour and cannot happen for data the exporter produced.
+  nestedMarkKey(frow) {
+    if (!frow) return null;
+    const src = frow._src;
+    if (!Array.isArray(src)) return null;
+    const sid = frow.section_id ? String(frow.section_id) : '';
+    const owner = sid !== '' ? sid : '#' + src[0];
+    return owner + '|' + src[1] + '|' + src[2];
+  },
+  captureNestedFlatMarks() {
+    const out = [];
+    if (!rcaIsDict(this.data)) return out;
+    for (const tid of ['lithology_blocks', 'age_units', 'samples']) {
+      const edited = this._edited[tid];
+      const sel = this._selection[tid];
+      const hasEdited = !!edited && Object.keys(edited).length > 0;
+      const hasSel = !!sel && Object.keys(sel).length > 0;
+      if (!hasEdited && !hasSel) continue;
+      const flat = rcaRowsForTable(this.data, tid);
+      const entries = [];
+      if (hasEdited) {
+        for (const pair of this.getEditedCells(tid)) {
+          const key = this.nestedMarkKey(flat[pair[0]]);
+          if (key) entries.push({ key: key, field: pair[1] });
+        }
+      }
+      const selKeys = [];
+      if (hasSel) {
+        for (const raw of Object.keys(sel)) {
+          const r = rcaPyInt(raw);
+          const key = (r !== null) ? this.nestedMarkKey(flat[r]) : null;
+          if (key) selKeys.push(key);
+        }
+      }
+      out.push({ tableId: tid, entries: entries, selKeys: selKeys });
+    }
+    return out;
+  },
+  restoreNestedFlatMarks(captured) {
+    for (const cap of captured || []) {
+      const flat = rcaRowsForTable(this.data, cap.tableId);
+      const at = {};
+      for (let i = 0; i < flat.length; i += 1) {
+        const key = this.nestedMarkKey(flat[i]);
+        if (key) at[key] = i;
+      }
+      const edited = {};
+      for (const e of cap.entries) {
+        const ni = at[e.key];
+        if (ni !== undefined) edited[rcaEditDirtyKey(ni, e.field)] = true;
+      }
+      if (Object.keys(edited).length) this._edited[cap.tableId] = edited;
+      else delete this._edited[cap.tableId];
+      const sel = {};
+      for (const key of cap.selKeys) {
+        const ni = at[key];
+        if (ni !== undefined) sel[String(ni)] = true;
+      }
+      if (Object.keys(sel).length) this._selection[cap.tableId] = sel;
+      else delete this._selection[cap.tableId];
+    }
     return this;
   },
 
@@ -3616,6 +3733,12 @@ function rcaEditCommitCell(cell, textOverride) {
     rcaEditPaintCell(cell, ref, target.cellValue(res.action.model, ref.spec));
     rcaEditPublishAction(res.action);
     rcaEditSyncDirtyDom();
+    // FIX-2026-10-28: a VALUE edit kept the canvas on its old snapshot — only
+    // the structural path (rcaEditRerender) relinked, so editing range_base
+    // moved the table's red frame but left the bar exactly where it was.
+    // species_ranges is the only table the canvas draws (see
+    // rcaEditVizTracksTable); commit-only, never per keystroke.
+    if (rcaEditVizTracksTable(ref.tableId)) rcaEditVizRelink();
   }
   if (RCA_EDIT_DOM.editing && RCA_EDIT_DOM.editing.cell === cell) {
     RCA_EDIT_DOM.editing = null;
@@ -3774,10 +3897,9 @@ function rcaEditRerender() {
   // middle row) leave the linked canvas laid out against the OLD row set -
   // row_index joins then point at the WRONG bar. Re-run the pure layout
   // over the live model and redraw (the mounted stage is reused).
-  if (typeof globalThis !== 'undefined' && globalThis.rcaViz &&
-      typeof globalThis.rcaViz.relink === 'function') {
-    try { globalThis.rcaViz.relink(rcaTableEdits.live()); } catch (_e) { /* viz absent */ }
-  }
+  // FIX-2026-10-28: folded into rcaEditVizRelink, the shared guarded entry
+  // the value-edit paths now call too.
+  rcaEditVizRelink();
   return true;
 }
 
@@ -3950,9 +4072,27 @@ function rcaEditVizTracksTable(tableId) {
   return tableId === 'species_ranges';
 }
 
+// FIX-2026-10-28: one never-throwing relink entry for the value-edit paths
+// (rcaEditCommitCell, rcaTableEditAfterHistory's cellEdit branch) — same
+// guarded shape rcaEditRerender already used inline. The layout is recomputed
+// from the live model, so a changed range_top / range_base / confidence /
+// species changes what the canvas DRAWS (bar extents, placements, even which
+// rows are unplaceable), not just what the DOM cell shows. Absent viz (unit
+// tests, table-only build) stays a silent no-op.
+function rcaEditVizRelink() {
+  if (typeof globalThis === 'undefined' || !globalThis.rcaViz
+      || typeof globalThis.rcaViz.relink !== 'function') return false;
+  try { globalThis.rcaViz.relink(rcaTableEdits.live()); return true; } catch (_e) { return false; }
+}
+
 // ---- row highlight / locate ----------------------------------------------
 
-let RCA_TABLE_HIGHLIGHT_ROW = null;
+// FIX-2026-10-28: the state used to hold the bare row NUMBER, and the clear
+// path resolved it against whichever table the NEXT call named — highlight
+// species_ranges row 1, then locate a biozones row, and the species <tr>
+// kept its `rca-row-active` forever because the clear looked in the wrong
+// table. The table id now travels with the row.
+let RCA_TABLE_HIGHLIGHT_ROW = null;   // null | { tableId, row }
 
 // Public: paint the "this row is being reviewed" state. `idx` is the row index
 // inside `tableId` (defaults to the table the user last touched). app.js and
@@ -3963,13 +4103,13 @@ function rcaTableHighlightRow(idx, tableId) {
   const tid = tableId || RCA_EDIT_DOM.lastTable
     || (root ? (rcaTableEdits.dirtyTables()[0] || (rcaTableConfigs(rcaTableEdits.live())[0] || {}).id) : null);
   if (!root || !tid) return false;
-  const prev = rcaEditOne(root, '[data-table="' + tid + '"] '
-    + 'tr[data-row="' + (RCA_TABLE_HIGHLIGHT_ROW === idx ? '' : RCA_TABLE_HIGHLIGHT_ROW) + '"]');
-  if (RCA_TABLE_HIGHLIGHT_ROW !== null && RCA_TABLE_HIGHLIGHT_ROW !== undefined) {
-    const old = rcaEditRowEl(tid, RCA_TABLE_HIGHLIGHT_ROW);
+  // FIX-2026-10-28: clear the REMEMBERED (tableId, row) pair, not
+  // (tid, rememberedRow) — switching tables must leave zero residue on the
+  // old table's <tr>.
+  const prev = RCA_TABLE_HIGHLIGHT_ROW;
+  if (prev && prev.row !== null && prev.row !== undefined) {
+    const old = rcaEditRowEl(prev.tableId, prev.row);
     rcaEditClass(old, 'rca-row-active', false);
-  } else if (prev) {
-    rcaEditClass(prev, 'rca-row-active', false);
   }
   if (idx === null || idx === undefined) {
     RCA_TABLE_HIGHLIGHT_ROW = null;
@@ -3981,7 +4121,7 @@ function rcaTableHighlightRow(idx, tableId) {
   }
   const row = rcaEditRowEl(tid, idx);
   rcaEditClass(row, 'rca-row-active', true);
-  RCA_TABLE_HIGHLIGHT_ROW = idx;
+  RCA_TABLE_HIGHLIGHT_ROW = { tableId: tid, row: idx };
   RCA_EDIT_DOM.lastTable = tid;
   rcaEditScrollIntoView(row);
   rcaEditVizFocus(idx, tid);
@@ -4061,6 +4201,15 @@ function rcaEditHandleKey(ev) {
   const cell = rcaEditRefFromCell(target) ? target : null;
 
   if (cell) {
+    // FIX-2026-10-28: an IME composition in flight (Chinese input; the app's
+    // default locale is zh) reports isComposing / keyCode 229 — the Enter,
+    // Esc, Tab and arrow keys below belong to the COMPOSER then (picking a
+    // candidate, cancelling it), not to the cell grid. Consuming them
+    // committed the half-typed pinyin / threw the composition away mid-word.
+    // `false` is this function's documented "not handled" value (see the
+    // header comment): the event stays un-preventDefaulted and the browser's
+    // own IME handling proceeds.
+    if (ev.isComposing || ev.keyCode === 229) return false;
     if (key === 'Enter' && !ev.shiftKey) { ev.preventDefault && ev.preventDefault(); return rcaEditNavigate(cell, +1, 0); }
     if (key === 'Enter' && ev.shiftKey) { ev.preventDefault && ev.preventDefault(); return rcaEditNavigate(cell, -1, 0); }
     if (key === 'Escape' || key === 'Esc') { ev.preventDefault && ev.preventDefault(); return rcaEditRevertCell(cell); }
@@ -4359,12 +4508,28 @@ function rcaTableEditAttach(root, data, opts) {
   const ns = rcaVizNs();
   if (!RCA_EDIT_DOM.unsubHover && ns && typeof ns.onRowHover === 'function') {
     RCA_EDIT_DOM.unsubHover = ns.onRowHover((idx) => {
+      // FIX-2026-10-28: onRowHover's row_index is a species_ranges row index
+      // (js/viz.js rcaVizLayout builds its bars from species_ranges ONLY),
+      // but this callback handed it RCA_EDIT_DOM.lastTable — a value any
+      // hover/focus in ANY other table rewrites — so a canvas hover could
+      // light a biozones <tr> instead of the bar's own row. The canvas's
+      // row space is always 'species_ranges', in both branches.
       if (idx === null || idx === undefined) {
-        const old = rcaEditRowEl(RCA_EDIT_DOM.lastTable, RCA_TABLE_HIGHLIGHT_ROW);
-        rcaEditClass(old, 'rca-row-active', false);
+        // Class removal only — the viz's own pointer-leave already restored
+        // its focus/pin state, so a clearFocus here would only fight it
+        // (same consumer contract the FE-FIX-2026-09-21 stub pinned). The
+        // canvas may only ever have lit a species_ranges row, so only that
+        // table's remembered highlight is released, via its OWN tableId
+        // (fix 5) — a locate highlight on another table survives.
+        const st = RCA_TABLE_HIGHLIGHT_ROW;
+        if (st && st.tableId === 'species_ranges'
+            && st.row !== null && st.row !== undefined) {
+          rcaEditClass(rcaEditRowEl(st.tableId, st.row), 'rca-row-active', false);
+          RCA_TABLE_HIGHLIGHT_ROW = null;
+        }
         return;
       }
-      rcaTableHighlightRow(idx, RCA_EDIT_DOM.lastTable);
+      rcaTableHighlightRow(idx, 'species_ranges');
     });
   }
   rcaEditSyncSelectionDom(root);
@@ -4402,13 +4567,35 @@ function rcaTableEditAfterHistory(action, direction) {
   if (structural) rcaEditRerender();
   else {
     const cfg = rcaTableEdits.cfg(action.tableId);
-    const col = cfg && rcaPyInt(action.col);
+    // FIX-2026-10-28: resolve the repaint column through the action's FIELD
+    // first — H3's optional species_ranges columns (author_year / note /
+    // range_top_bed / ...) render only while SOME row carries a value, so a
+    // re-render can have REMOVED the column the action was recorded under
+    // (clear the last author_year, undo -> the column is no longer in
+    // cfg.edit). The old code trusted action.col alone, found no such cell,
+    // and the undo became a silent no-op: the model moved, the screen did
+    // not. Field gone from the editable set (or a stale col with no matching
+    // cell) now falls back to the full re-render — the registry is refreshed
+    // with the live configs there, which is also what un-drifts action.col.
+    const spec = (cfg && action.field !== undefined && action.field !== null)
+      ? rcaTableEdits.specByField(action.tableId, action.field) : null;
+    const col = spec ? cfg.edit.indexOf(spec) : (cfg ? rcaPyInt(action.col) : null);
     const cell = (cfg && col !== null) ? rcaEditCellEl(action.tableId, action.row, col) : null;
     const ref = cell ? rcaEditRefFromCell(cell) : null;
-    if (cell && ref) {
-      const spec = ref.spec;
-      rcaEditPaintCell(cell, ref, rcaTableEdits.resolveCell(ref.tableId, ref.row, spec)
-        .cellValue(spec.model || spec.field, spec));
+    // ...and the node must still BE the action's field: after a shrink the
+    // stale index can be occupied by a DIFFERENT surviving column, and
+    // painting that would repaint an innocent cell while the restored column
+    // (which has no node at all) stayed invisible.
+    if (cell && ref && rcaEditFieldOf(ref.spec) === action.field) {
+      const spec2 = ref.spec;
+      rcaEditPaintCell(cell, ref, rcaTableEdits.resolveCell(ref.tableId, ref.row, spec2)
+        .cellValue(spec2.model || spec2.field, spec2));
+      // FIX-2026-10-28: undoing a VALUE edit on the canvas's own table must
+      // relink too, or the bar stays at the pre-undo placement (same reason
+      // rcaEditCommitCell relinks on the way in).
+      if (rcaEditVizTracksTable(action.tableId)) rcaEditVizRelink();
+    } else if (RCA_EDIT_DOM.root) {
+      rcaEditRerender();
     }
   }
   rcaEditAnnounce((direction === 'redo' ? rcaEditT('edit.redo') : rcaEditT('edit.undo'))

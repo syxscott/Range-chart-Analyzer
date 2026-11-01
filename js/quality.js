@@ -269,6 +269,28 @@ function rcaSubbedInverted(topRaw, baseRaw) {
   return top.bed_sub < base.bed_sub;
 }
 
+/**
+ * A bed's position on a continuous scale, subscript included.
+ * Mirror of rca_core/bed_parser.py:bed_position: "23" -> 23, "23a" ->
+ * 23.019..., "23z" -> 23.98..., "24" -> 24. Monotonic in the letter and
+ * strictly inside (bed_num, bed_num + 1), so a sub-bed can never be confused
+ * with a different bed.
+ *
+ * FIX-2026-10-28: rcaParseBedCanonical (the js bed_parser) already exposes
+ * {bed_num, bed_sub}; this adds the positional value Python computes from the
+ * same parse, so a sort that used to collapse "23a" and "23c" onto the bare
+ * integer can order them. Returns null whenever the label is not a bed.
+ */
+function _bedPosition(value) {
+  const info = rcaParseBed(value);
+  if (!info) return null;
+  const sub = String(info.bed_sub || '').toLowerCase();
+  if (!sub) return info.bed_num;
+  const first = sub.charAt(0);
+  if (first < 'a' || first > 'z') return info.bed_num;
+  return info.bed_num + (first.charCodeAt(0) - 97 + 0.5) / 26.0;
+}
+
 function _clamp01(x) { return Math.min(1.0, Math.max(0.0, x)); }
 
 // ---------------------------------------------------------------------------
@@ -433,6 +455,28 @@ function _icsParseAgeRange(stages, text) {
       if (m.index === re.lastIndex) re.lastIndex += 1;  // empty-match guard
     }
   }
+  // FIX-2026-10-28: register the Chinese stage aliases into the match set,
+  // mirroring rca_core/standards/ics.py:393-397 (_STAGE_PATTERNS += the
+  // _CN_STAGE_ALIASES entries whose target is in the table). They were only
+  // consulted by _resolveAgeBound's own step 2, so a Chinese age_range —
+  // "吴家坪阶-长兴阶" — parsed to [] here: the stage-order check could not see
+  // a reversed Chinese section at all. No word-boundary lookarounds: CJK has
+  // no word boundaries (Python registers these with a bare re.escape), and
+  // every hit maps to its CANONICAL stage name so the dedup below folds an
+  // alias against its English spelling exactly like Python's name-keyed
+  // `seen` set.
+  const cnAliases = (typeof globalThis !== 'undefined' && globalThis.RCA_ICS_CN_STAGES)
+    ? globalThis.RCA_ICS_CN_STAGES : {};
+  for (const alias of Object.keys(cnAliases)) {
+    const stage = cnAliases[alias];
+    if (!stage || !stages[stage]) continue;
+    const re = new RegExp(_regExpEscape(alias), 'gi');
+    let m;
+    while ((m = re.exec(s)) !== null) {
+      matches.push({ idx: m.index, name: stage });
+      if (m.index === re.lastIndex) re.lastIndex += 1;  // empty-match guard
+    }
+  }
   // Python sorts by position only — a STABLE sort, so two names starting at
   // the same offset keep their table order. Array#sort is stable in ES2019+.
   matches.sort((a, b) => a.idx - b.idx);
@@ -582,12 +626,22 @@ function _resolveAgeBound(text, prefer) {
   // 2. Chinese stage-name alias. REVIEW-2026-09-20: the alias resolves to that
   // very stage, so it takes the SAME bound rule as step 3 (base/top by
   // prefer), not the old midpoint.
+  // FIX-2026-10-28: claim the text only when EXACTLY ONE alias matches,
+  // mirroring rca_core/standards/ics.py:695-704 (FIX-2026-10-01 there). The
+  // old loop returned on the FIRST alias found in dict order, so a Chinese
+  // RANGE collapsed onto one stage — "吴家坪阶-长兴阶" answered Wuchiapingian
+  // for BOTH prefer="older" and prefer="younger". With the aliases now fed
+  // into _icsParseAgeRange below, step 3 resolves the range with the same
+  // max-of-bases / min-of-tops rule the English path uses, so anything with
+  // two or more alias hits falls through instead of short-circuiting.
   const cnStages = globalThis.RCA_ICS_CN_STAGES || {};
+  const cnHits = [];
   for (const alias of Object.keys(cnStages)) {
-    if (s.indexOf(alias) !== -1) {
-      const st = cnStages[alias];
-      if (stages[st]) return { name: st, ma: _stageBound(stages[st], wantOlder) };
-    }
+    if (s.indexOf(alias) !== -1) cnHits.push([alias, cnStages[alias]]);
+  }
+  if (cnHits.length === 1) {
+    const st = cnHits[0][1];
+    if (stages[st]) return { name: st, ma: _stageBound(stages[st], wantOlder) };
   }
 
   // 3. ICS stage name(s) -> order-independent range bounds.
@@ -1064,29 +1118,23 @@ function scoreAccuracy(data) {
       // stage against itself and against a stage the text never juxtaposed.
       const found = _icsParseAgeRange(stages, ageRange);
       if (found.length < 2) continue;
-      // M6 (REVIEW-2026-08-19): Proportional accuracy — every adjacent
-      // pair contributes one check, and `passed` reflects the fraction
-      // of valid pairs. The previous all-or-nothing binary ("0 or 1")
-      // under-counted a section with 2 inversions in a 4-stage sequence
-      // (would still read 0/1). Mirror rca_core/quality.py:
-      // _score_cross_era_accuracy.
-      let stageViolations = 0;
-      let stageChecks = 0;
+      // FIX-2026-10-28: mirror rca_core/quality.py:731-734 — each VIOLATION
+      // is one failed check (`checks += 1; passed += 0`) and a clean section
+      // adds NOTHING. The old mirror awarded one check per section with a
+      // proportional pass fraction, so a correctly ordered multi-stage
+      // section EARNED a free accuracy pass here that Python never gives,
+      // diluting real deductions elsewhere in this dimension.
       for (let i = 0; i < found.length - 1; i += 1) {
         const cmp = icsAgeCompare(found[i], found[i + 1]);
         if (cmp === null) continue;
-        stageChecks += 1;
         if (cmp > 0) {
-          stageViolations += 1;
+          checks += 1;
+          passed += 0;
           issues.push({
             severity: 'warning', msg_key: 'quality.stage_order_reversed',
             params: {section: secName, detail: found[i] + ' above ' + found[i + 1]}
           });
         }
-      }
-      if (stageChecks > 0) {
-        checks += 1;
-        passed += stageViolations > 0 ? Math.max(0.0, 1.0 - stageViolations / stageChecks) : 1.0;
       }
     }
   }
@@ -1248,11 +1296,23 @@ function scoreConsistency(data) {
   if (Array.isArray(chimeraWarnings) && chimeraWarnings.length > 0) {
     score -= Math.min(0.5, 0.1 * chimeraWarnings.length);
     for (const w of chimeraWarnings.slice(0, 5)) {
-      if (w && typeof w === 'object') {
+      // FIX-2026-10-28: a non-object entry used to be skipped silently, yet
+      // its 0.1 deduction above was still taken — the operator lost score
+      // and got no message. Mirror rca_core/quality.py:841-846: a dict is
+      // rendered from its `row` field exactly as before; anything else is
+      // shown as itself (str(row_desc)[:200]). (The i18n template of
+      // quality.chimera_dropped intentionally has no {row} placeholder.)
+      if (w && typeof w === 'object' && !Array.isArray(w)) {
         issues.push({
           severity: 'warning',
           msg_key: 'quality.chimera_dropped',
           params: { row: JSON.stringify(w.row || {}).slice(0, 200) },
+        });
+      } else {
+        issues.push({
+          severity: 'warning',
+          msg_key: 'quality.chimera_dropped',
+          params: { row: String(w).slice(0, 200) },
         });
       }
     }
@@ -1445,19 +1505,56 @@ function scoreConsistency(data) {
         // _score_steno_biozone.
         const secRow = sectsForBio.find((s) => s && s.name && String(s.name).trim() === secName);
         if (!secRow || !String(secRow.age_range || '').trim()) continue;
-        // Only rows with an actual bed position participate (Python
-        // excludes unpositioned rows rather than inventing an order).
-        const positioned = sps
-          .map(sp => ({ bed: _parseBedN(sp.range_top), sp }))
-          .filter(x => x.bed !== null)
-          .sort((a, b) => a.bed - b.bed)
-          .map(x => x.sp);
-        if (positioned.length < 2) continue;
-        for (let i = 0; i < positioned.length - 1; i += 1) {
-          // positioned is sorted by range_top ASC: positioned[i] sits
+        // FIX-2026-10-28: mirror rca_core/quality.py:1108-1151. The old
+        // mirror fed every range_top through _parseBedN and sorted by the
+        // leading integer, which is only a valid ordering for BED indices
+        // (larger index = higher = younger). Ages run the other way — a
+        // larger Ma is OLDER — so a section whose endpoints read
+        // "254.14 Ma" / "259.5 Ma" was sorted 254 < 259 and every correctly
+        // ordered pair came out reversed (false biozone_order_violation),
+        // while a real reversal between two rows on the SAME bed index was
+        // lost to the tie. Route through _looksLikeAge exactly like the
+        // FAD/LAD branch of scoreAccuracy already does: ages position at
+        // -Ma (young first), beds at the subscript-aware _bedPosition so
+        // "23a" and "23c" do not collapse; a section mixing both notations
+        // has no single ordering scale and is skipped.
+        const positioned = [];
+        const kinds = new Set();
+        for (const sp of sps) {
+          const rawTop = sp ? sp.range_top : undefined;
+          if (_looksLikeAge(rawTop)) {
+            const ageR = _resolveAgeBound(rawTop, 'younger');
+            if (!ageR || ageR.ma === null || ageR.ma === undefined) continue;
+            kinds.add('age');
+            positioned.push({ pos: -ageR.ma, sp });
+            continue;
+          }
+          if (_parseBedN(rawTop) === null) continue;
+          kinds.add('bed');
+          const pos = _bedPosition(rawTop);
+          if (pos === null) continue;
+          positioned.push({ pos, sp });
+        }
+        // Unpositioned rows are excluded rather than invented; a mixed
+        // bed/age section has no single ordering scale.
+        if (positioned.length < 2 || kinds.size > 1) continue;
+        // Stable tie-break by species label so equal positions do not
+        // depend on the input row order (the pair loop below compares
+        // neighbours).
+        positioned.sort((a, b) => {
+          if (a.pos !== b.pos) return a.pos - b.pos;
+          const aName = String(a.sp.species || '');
+          const bName = String(b.sp.species || '');
+          if (aName < bName) return -1;
+          if (aName > bName) return 1;
+          return 0;
+        });
+        const orderedSps = positioned.map(x => x.sp);
+        for (let i = 0; i < orderedSps.length - 1; i += 1) {
+          // orderedSps is sorted by position ASC: orderedSps[i] sits
           // LOWER in the section (older stratigraphic position).
-          const lowerSp = positioned[i];
-          const upperSp = positioned[i + 1];
+          const lowerSp = orderedSps[i];
+          const upperSp = orderedSps[i + 1];
           const lowerBz = String(lowerSp.biozone || '').trim();
           const upperBz = String(upperSp.biozone || '').trim();
           if (!lowerBz || !upperBz) continue;
@@ -1674,20 +1771,45 @@ function scoreRangeChart(data) {
     };
   }
 
-  const [cScore, cIssues] = scoreCompleteness(data);
-  const [aScore, aIssues] = scoreAccuracy(data);
-  const [kScore, kIssues] = scoreConsistency(data);
-  const [sScore, sIssues] = scoreStructure(data);
+  // FIX-2026-10-28: mirror rca_core/quality.py:1599-1611 — each dimension is
+  // scored inside its own guard ("fail closed: scoring must never block
+  // extraction"). A scorer that throws used to propagate out of
+  // scoreRangeChart and the whole badge disappeared; now the failed
+  // dimension scores 0.0 and emits quality.scoring_failed while the other
+  // three still grade.
+  const dimensions = [
+    ['completeness', W_COMPLETENESS, scoreCompleteness],
+    ['accuracy', W_ACCURACY, scoreAccuracy],
+    ['consistency', W_CONSISTENCY, scoreConsistency],
+    ['structure', W_STRUCTURE, scoreStructure],
+  ];
+  const weightedScores = [];
+  const allIssues = [];
+  for (const [dimension, weight, scorer] of dimensions) {
+    let dimensionScore;
+    let dimensionIssues;
+    try {
+      const out = scorer(data);
+      dimensionScore = out[0];
+      dimensionIssues = out[1];
+    } catch (exc) {
+      dimensionScore = 0.0;
+      dimensionIssues = [{
+        severity: 'warning',
+        msg_key: 'quality.scoring_failed',
+        params: {
+          dimension: dimension,
+          error_type: (exc && exc.name) ? exc.name : 'Error',
+        },
+      }];
+    }
+    weightedScores.push(weight * _clamp01(dimensionScore));
+    for (const di of dimensionIssues) allIssues.push(di);
+  }
 
-  const composite = (
-    W_COMPLETENESS * cScore
-    + W_ACCURACY    * aScore
-    + W_CONSISTENCY * kScore
-    + W_STRUCTURE   * sScore
-  );
+  const composite = weightedScores.reduce((a, b) => a + b, 0);
   const clamped = _clamp01(composite);
 
-  const allIssues = [...cIssues, ...aIssues, ...kIssues, ...sIssues];
   // Python's round(composite, 4) is correct-decimal ties-to-even, not
   // round-half-away-from-zero; rcaPyRound (js/reason-codes.js) reproduces it.
   // Degrades to the historical Math.round when that file is not loaded.

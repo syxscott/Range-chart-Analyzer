@@ -1577,9 +1577,17 @@ function rcaVizDrawHover() {
     tip += '  [' + (bar.reason || 'unplaceable') + ']';
   }
   ctx.font = Math.round(11 * dpr) + 'px ' + rcaVizToken('--font-mono', 'monospace');
+  // FIX-2026-10-28: a tooltip wider than the canvas used to win the inner
+  // Math.max — W - tw - 2 went negative, so tx followed it off the left edge
+  // and the box was painted (partly) outside the canvas. Truncate the text
+  // FIRST (same ellipsis rule the bar labels use, rcaVizClip), THEN clamp the
+  // box with the outer bound winning: tx can never leave [2, W - tw - 2].
+  if (ctx.measureText(tip).width + 12 * dpr > W - 4) {
+    tip = rcaVizClip(ctx, tip, Math.max(0, W - 4 - 12 * dpr));
+  }
   var tw = ctx.measureText(tip).width + 12 * dpr;
   var th = 18 * dpr;
-  var tx = Math.min(W - tw - 2, Math.max(2, bar.x * W));
+  var tx = Math.max(2, Math.min(W - tw - 2, bar.x * W));
   var ty = y0 > th + 4 ? y0 - th - 3 : y0 + h + 3;
   ctx.fillStyle = rcaVizToken('--bg-white', '#ffffff');
   ctx.globalAlpha = 0.94;
@@ -1819,6 +1827,14 @@ function rcaVizOnBlur() {
 function rcaVizOnDocumentKeyDown(ev) {
   var S = RCA_VIZ_STATE;
   if (!ev || (ev.key !== 'Escape' && ev.key !== 'Esc')) return;
+  // FIX-2026-10-28: a table cell editor consumes Esc FIRST (rcaEditHandleKey
+  // preventDefaults and reverts the cell); this document-level listener still
+  // sees the same bubbled event and used to release the canvas pin with it —
+  // one keypress, two unrelated reverts. A consumed event is not this
+  // widget's Esc. The listener stays document-level on purpose (see
+  // rcaVizWire): it must also catch pins released while the canvas itself
+  // has no keyboard focus.
+  if (ev.defaultPrevented) return;
   if (S.pinned === null && S.focus === null) return;
   // Esc releases the PIN as well as a plain focus.
   S.pinned = null;
@@ -2034,8 +2050,15 @@ function rcaVizLocateTo(row_index) {
   var frames = 0;
   var tick = function () {
     if (!S.flash || S.flash.token !== token) return; // superseded: stand down
+    // FIX-2026-10-28: the loop used to end at frames > 14 — ~233 ms at 60 Hz,
+    // so the 1200 ms `until` below was never reached and 定位's flash died in
+    // under a quarter second (only the 80 ms setTimeout fallback kept the
+    // old promise). Terminate on the CLOCK; the frame count stays purely as
+    // a runaway safety cap (well past 1200 ms even at 240 Hz).
     frames += 1;
-    if (frames > 14) { S.flash = null; rcaVizDrawHover(); return; }
+    if (Date.now() >= S.flash.until || frames > 300) {
+      S.flash = null; rcaVizDrawHover(); return;
+    }
     rcaVizDrawHover();
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(tick);
     else if (typeof setTimeout === 'function') setTimeout(tick, 80);

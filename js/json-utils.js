@@ -232,7 +232,12 @@ function promoteWrapper(parsed) {
       const promoted = Object.assign({}, parsed);
       delete promoted[key];
       for (const k of Object.keys(inner)) {
-        if (!(k in promoted)) promoted[k] = inner[k];
+        // FIX-2026-10-28: own keys only. `k in promoted` walks the prototype
+        // chain, so an inner key named like an Object.prototype member
+        // ("constructor", "toString", "valueOf") was silently skipped while
+        // Python's _promote_wrapper (rca_core/json_utils.py, setdefault
+        // semantics over the inner dict's own keys) promotes it.
+        if (!Object.prototype.hasOwnProperty.call(promoted, k)) promoted[k] = inner[k];
       }
       return promoted;
     }

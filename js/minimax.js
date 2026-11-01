@@ -1700,8 +1700,49 @@ function rcaRootUnrelated(parsed, data, mode) {
 // transport and the backend transport (`rcaCallBackend`, which forwards the
 // server's `warning` verbatim) surfaced two different strings for one run.
 // The tag still travels — inside `data._warnings`, exactly like Python.
-const RCA_TRUNCATION_WARNING = 'Result may be truncated (model hit max_tokens). '
-  + 'Try raising the max_tokens setting and re-running.';
+//
+// FIX-2026-10-28: the prose itself had drifted AGAIN. The backend transport
+// carries the parameterized sentence Python's shared `_truncation_warning`
+// builds (rca_core/extractor.py:1496-1523, FIX-2026-10-16 — "the model used
+// N of the M max_tokens allowed for this run (the program ceiling is K)"),
+// while this file still emitted the old fixed two-sentence string. Mirror the
+// Python function verbatim: same wording, same three numbers, same
+// "an unreported number" fallback when the usage block is missing, and the
+// same run-allowed / program-ceiling distinction (RCA_CONFIG.maxMaxTokens is
+// pinned to Python's MAX_MAX_TOKENS — see js/config.js).
+//
+// Mirror of extractor.py:_usage_int (1474-1493): one integer out of a
+// provider usage block, or null. Providers disagree on the spelling
+// (`output_tokens` vs `completion_tokens`) and any of them may omit the
+// block entirely, so every read is defensive. A reported 0 is a real
+// reading and is returned as 0, not as null.
+function rcaUsageInt(usage, key) {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return null;
+  let raw;
+  if (Object.prototype.hasOwnProperty.call(usage, key)) {
+    raw = usage[key];
+  } else if (key === 'output_tokens') {
+    raw = usage.completion_tokens;
+  } else {
+    return null;
+  }
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Mirror of extractor.py:_truncation_warning (1496-1523). `usage` is the
+// raw provider usage block from the response payload; `runMaxTokens` is the
+// max_tokens THIS run was given (the wire value — the direct transport sends
+// `maxTokens || 4000`, exactly what the caller passed in).
+function rcaTruncationWarning(usage, runMaxTokens) {
+  const outTokens = rcaUsageInt(usage, 'output_tokens');
+  return 'Result may be truncated: the model used '
+    + (outTokens === null ? 'an unreported number' : String(outTokens))
+    + ' of the ' + (runMaxTokens || 4000)
+    + ' max_tokens allowed for this run (the program ceiling is '
+    + RCA_CONFIG.maxMaxTokens + '). Raising max_tokens and re-running '
+    + 'recovers the missing rows.';
+}
 
 // Mirror of the shared `_ok_result` contract: given the normalized data and the
 // raw parse, return the reason the run must be reported as an error, or "" for
@@ -3427,13 +3468,19 @@ function rcaIsPrivateIpv6Host(inner) {
  *   * Redirects are not followed (`redirect: 'manual'` on both POSTs), so a
  *     `302 Location: http://169.254.169.254/` cannot bypass this list the way
  *     it bypassed urllib before _NoRedirect existed.
+ *   * FIX-2026-10-28: the trailing-dot FQDN form (`localhost.`) is what a
+ *     browser actually resolves to loopback, but it matched no rule below —
+ *     the literal set, the `.localhost` and `.internal` suffix checks all
+ *     saw "localhost." and passed, so the API key went out. The trailing
+ *     dots are stripped on entry, before every check (an all-dots host
+ *     still fails closed through the empty-host rule).
  * Fail-closed: an empty / unparseable hostname is blocked, matching the
  * "unresolvable name is unsafe" rule of rca_core/ssrf.py.
  * @param {string} hostname - lowercased `URL.hostname` (brackets kept for IPv6)
  * @returns {boolean} true when the direct path must not be used
  */
 function rcaIsSsrfBlockedHost(hostname) {
-  const host = String(hostname || '').toLowerCase();
+  const host = String(hostname || '').toLowerCase().replace(/\.+$/, '');
   if (!host) return true;
   if (host.charAt(0) === '[' && host.slice(-1) === ']') {
     return rcaIsPrivateIpv6Host(host.slice(1, -1));
@@ -3549,6 +3596,29 @@ async function rcaCallBackend(opts, base64) {
   // used to `return` inline.
   const postExtract = async (sessionToken, csrfToken) => {
     let resp;
+    // FIX-2026-10-28: the per-request reasoning effort now rides to the
+    // server. It used to be dropped here — server.py took the effort only
+    // from the server-side provider config (`_stable_reasoning_effort(prov)`),
+    // so a user who picked 经 backend + effort=low silently got the provider
+    // default (effort=max on M3.1, the timeout configuration). Sent ONLY when
+    // the caller supplied a non-empty value, so absent / "" keeps today's
+    // behavior byte-for-byte; the server drops invalid levels itself
+    // (normalize_reasoning_effort), mirroring how it treats its own config.
+    const extractBody = {
+      api_key: opts.apiKey,
+      image_b64: base64,
+      media_type: opts.mediaType || 'image/png',
+      caption: opts.caption || '',
+      chart_lang: opts.chartLang || 'auto',
+      endpoint: opts.baseUrl,
+      model: opts.model,
+      max_tokens: opts.maxTokens,
+      mode: opts.mode || 'range_chart',
+      runs: runs,
+      force_rerun: !!opts.force_rerun,
+      enhance: opts.enhance === true,
+    };
+    if (opts.effort) extractBody.effort = opts.effort;
     try {
       resp = await fetch('/api/extract', {
         method: 'POST',
@@ -3557,20 +3627,7 @@ async function rcaCallBackend(opts, base64) {
           'X-CSRF-Token': csrfToken,
           'X-Session-Token': sessionToken,
         },
-        body: JSON.stringify({
-          api_key: opts.apiKey,
-          image_b64: base64,
-          media_type: opts.mediaType || 'image/png',
-          caption: opts.caption || '',
-          chart_lang: opts.chartLang || 'auto',
-          endpoint: opts.baseUrl,
-          model: opts.model,
-          max_tokens: opts.maxTokens,
-          mode: opts.mode || 'range_chart',
-          runs: runs,
-          force_rerun: !!opts.force_rerun,
-          enhance: opts.enhance === true,
-        }),
+        body: JSON.stringify(extractBody),
         signal: controller.signal,
       });
     } catch (err) {
@@ -3852,7 +3909,10 @@ async function extractRangeChart(opts) {
   // plaintext proxy could slip through. Schemes are case-insensitive per
   // RFC 3986 §3.1.
   if (/^http:\/\//i.test(target)) {
-    console.error('Insecure proxy URL: HTTP is not allowed, falling back to direct connection');
+    // FIX-2026-10-28: the message said "falling back to direct connection"
+    // while the code below actually returns rcaCallBackend(...) — the local
+    // backend, exactly like the SSRF branch's wording. Log the truth.
+    console.error('Insecure proxy URL: HTTP is not allowed, falling back to backend');
     return rcaCallBackend(opts, base64);
   }
   // SSRF protection: block private/internal hostnames and cloud metadata
@@ -3990,7 +4050,15 @@ async function extractRangeChart(opts) {
     // Reachable without any misconfiguration: 自动 is the DEFAULT connection
     // path for auto mode, and the user has no way to know the mode was
     // rewritten underneath them.
+    // FIX-2026-10-28: this early return used to leak both the 120s `timer`
+    // (created above, before the classification round) and the `onExtAbort`
+    // listener on the caller's signal — cleanup existed only in the catch
+    // and success paths below, so a refused run left the timer armed (it
+    // would abort an unrelated future controller) and kept the caller's
+    // AbortSignal alive. Mirror the catch-path cleanup before returning.
     if (RCA_BROWSER_UNSUPPORTED_MODES[mode]) {
+      clearTimeout(timer);
+      if (opts.signal) opts.signal.removeEventListener('abort', onExtAbort);
       return {
         ok: false,
         errorKey: 'err.mode',
@@ -4312,7 +4380,10 @@ async function extractRangeChart(opts) {
       data,
       raw: rawText,
       truncated: !!truncated,
-      warning: RCA_TRUNCATION_WARNING + ' | rescued inner object: unusable',
+      // FIX-2026-10-28: parameterized prose, same as the backend transport
+      // (payload.usage + the wire max_tokens — see rcaTruncationWarning).
+      warning: rcaTruncationWarning(payload.usage, maxTokens || 4000)
+        + ' | rescued inner object: unusable',
       reason: 'rescued inner object: unusable',
     };
   }
@@ -4324,12 +4395,12 @@ async function extractRangeChart(opts) {
       data,
       raw: rawText,
       truncated: !!truncated,
-      warning: RCA_TRUNCATION_WARNING + ' | ' + unusable,
+      warning: rcaTruncationWarning(payload.usage, maxTokens || 4000) + ' | ' + unusable,
       reason: unusable,
     };
   }
   return {
     ok: true, data, raw: rawText, truncated,
-    warning: truncated ? RCA_TRUNCATION_WARNING : '',
+    warning: truncated ? rcaTruncationWarning(payload.usage, maxTokens || 4000) : '',
   };
 }

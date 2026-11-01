@@ -4,7 +4,7 @@
 // js/json-utils.js + js/prompt.js + js/aggregate.js + js/table.js +
 // js/export.js under a minimal in-memory DOM/stubs via vm.runInContext.
 //
-// Run with:  node tests_frontend.js
+// Run with:  node tests/js/tests_frontend.js
 'use strict';
 
 const fs = require('fs');
@@ -2448,9 +2448,14 @@ function test_h5_extract_range_chart_flip_to_error() {
   }).then((res) => {
     check('h5-range-extract-ok-false', res.ok === false);
     check('h5-range-extract-errorKey-err-parse', res.errorKey === 'err.parse');
+    // FIX-2026-10-28: the prose is now the parameterized sentence Python's
+    // shared _truncation_warning builds (no usage block in this fixture ->
+    // "an unreported number"; no maxTokens opt -> the 4000 wire default).
     check('h5-range-extract-warning-flag',
-      res.warning === 'Result may be truncated (model hit max_tokens). '
-      + 'Try raising the max_tokens setting and re-running.'
+      res.warning === 'Result may be truncated: the model used '
+      + 'an unreported number of the 4000 max_tokens allowed for this run '
+      + '(the program ceiling is 524288). Raising max_tokens and re-running '
+      + 'recovers the missing rows.'
       + ' | rescued inner object: unusable');
     check('h5-range-extract-data-warnings',
       res.data && Array.isArray(res.data._warnings)
@@ -2496,8 +2501,13 @@ const _h5C = trackAsync('h5-columnar-extract', test_h5_columnar_keeps_ok_true())
 function test_h5_shared_guard_matrix() {
   const ctx = buildContext();
   loadAllScripts(ctx);
-  const PROSE = 'Result may be truncated (model hit max_tokens). '
-    + 'Try raising the max_tokens setting and re-running.';
+  // FIX-2026-10-28: parameterized truncation prose (mirror of Python's
+  // shared _truncation_warning). The fixtures carry no usage block and the
+  // opts no maxTokens, so: "an unreported number" + the 4000 wire default.
+  const PROSE = 'Result may be truncated: the model used '
+    + 'an unreported number of the 4000 max_tokens allowed for this run '
+    + '(the program ceiling is 524288). Raising max_tokens and re-running '
+    + 'recovers the missing rows.';
   const TRUNC_NO_ROWS = PROSE + ' | truncated output rescued no usable records';
   const CASES = [
     // payload                        mode                 trunc  ok   warning
@@ -5404,6 +5414,271 @@ function test_effort_i18n_keys_exist_in_every_locale() {
   }
 }
 trackAsync('effort-i18n-keys-exist', test_effort_i18n_keys_exist_in_every_locale());
+
+// ---------------------------------------------------------------------------
+// FIX-2026-10-28: SSRF trailing-dot bypass, parameterized truncation prose,
+// promoteWrapper own-keys, null-safe error formatters, backend effort field.
+// ---------------------------------------------------------------------------
+
+// A hostname with a trailing dot ("localhost.") is the FQDN form browsers
+// resolve exactly like the bare name — localhost. answers on loopback — but
+// it used to match no rule in rcaIsSsrfBlockedHost: not in the literal set,
+// not the `.localhost` / `.internal` suffixes. The gate now strips trailing
+// dots on entry, so the FQDN form of every blocked name stays blocked while
+// the FQDN form of a public name stays public.
+function test_ssrf_trailing_dot_forms() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  check('ssrf-fqdn-gate-exists',
+    typeof ctx.rcaIsSsrfBlockedHost === 'function');
+  if (typeof ctx.rcaIsSsrfBlockedHost !== 'function') return;
+
+  const hostOf = (u) => { try { return new URL(u).hostname.toLowerCase(); } catch (_) { return ''; } };
+  const blocked = (u) => ctx.rcaIsSsrfBlockedHost(hostOf(u));
+
+  // Every blocked name, written the way a bypass attempt would write it.
+  const BLOCKED = [
+    ['http://localhost./v1', 'localhost FQDN'],
+    ['http://metadata./', 'metadata FQDN (cloud metadata answer on it)'],
+    ['https://llm.internal./', '.internal FQDN'],
+    ['https://ollama.localhost:11434./', '*.localhost FQDN'],
+    ['https://host.docker.internal./', 'docker alias FQDN'],
+    ['https://127.0.0.1./', 'loopback literal with a trailing dot'],
+    ['https://169.254.169.254./', 'metadata literal with a trailing dot'],
+  ];
+  for (const [url, why] of BLOCKED) {
+    check('ssrf-fqdn-blocks:' + why, blocked(url) === true, url);
+  }
+  // An all-dots host fails closed through the empty-host rule.
+  check('ssrf-fqdn-blocks:only-dots',
+    ctx.rcaIsSsrfBlockedHost('...') === true);
+
+  // The strip must stay precise: a trailing dot on a PUBLIC name is still
+  // public (FQDN spelling of example.com is example.com), and an embedded
+  // dot must not be touched.
+  const ALLOWED = [
+    ['http://example.com./', 'public name FQDN'],
+    ['https://api.minimaxi.com./', 'public provider FQDN'],
+    ['https://localhost.example.com./', 'lookalike suffix FQDN (not *.localhost)'],
+  ];
+  for (const [url, why] of ALLOWED) {
+    check('ssrf-fqdn-allows:' + why, blocked(url) === false, url);
+  }
+
+  // End to end: the direct transport must route a blocked FQDN endpoint to
+  // the same-origin backend instead of dialling it with the API key.
+  const calls = [];
+  ctx.fetch = async (url, init) => {
+    calls.push({ url, method: (init && init.method) || 'GET' });
+    return {
+      ok: true, status: 200,
+      json: async () => ({ ok: true, data: { species_ranges: [], sections: [] } }),
+      text: async () => '',
+    };
+  };
+  resetBackendSession(ctx);
+  return ctx.extractRangeChart({
+    dataUrl: 'data:image/png;base64,QUFB',
+    mode: 'range_chart',
+    baseUrl: 'https://metadata./v1',   // "metadata." — was NOT blocked pre-fix
+    apiKey: 'sk-secret', model: 'm', maxTokens: 100,
+    transport: 'direct',
+  }).then(() => {
+    check('ssrf-fqdn-direct-falls-back-to-backend',
+      calls.length > 0 && calls.every((c) => c.url === '/api/extract'), calls);
+    check('ssrf-fqdn-key-never-leaves-the-origin',
+      calls.every((c) => c.url.indexOf('metadata') === -1), calls);
+  });
+}
+trackAsync('ssrf-fqdn-trailing-dot', test_ssrf_trailing_dot_forms());
+
+// FIX-2026-10-28: the direct transport's truncation prose must be the same
+// parameterized sentence the backend transport carries from Python's shared
+// _truncation_warning — the used/allowed/ceiling numbers included, with the
+// "an unreported number" fallback when the usage block is missing and the
+// completion_tokens spelling honoured like Python's _usage_int.
+function test_truncation_warning_is_parameterized() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const run = (payload) => {
+    ctx.fetch = async () => ({
+      ok: true,
+      json: async () => payload,
+      text: async () => '',
+    });
+  };
+  // (a) usage reported -> the real number, next to the run's own allowance.
+  run({
+    content: [{ type: 'text', text: '{"_array_root":[{"zzz":1}]}' }],
+    stop_reason: 'max_tokens',
+    usage: { input_tokens: 10, output_tokens: 16058 },
+  });
+  return ctx.extractRangeChart({
+    dataUrl: 'data:image/png;base64,QUFB',
+    mode: 'range_chart',
+    baseUrl: 'https://example.com',
+    apiKey: 'k', maxTokens: 16000,
+  }).then((res) => {
+    check('truncation-prose-carries-used-tokens',
+      res.ok === true && res.truncated === true
+      && res.warning === 'Result may be truncated: the model used 16058 '
+        + 'of the 16000 max_tokens allowed for this run (the program ceiling '
+        + 'is 524288). Raising max_tokens and re-running recovers the '
+        + 'missing rows.',
+      res && res.warning);
+    // (b) OpenAI spelling falls back like Python's _usage_int.
+    run({
+      content: [{ type: 'text', text: '{"_array_root":[{"zzz":1}]}' }],
+      stop_reason: 'max_tokens',
+      usage: { completion_tokens: 777 },
+    });
+    return ctx.extractRangeChart({
+      dataUrl: 'data:image/png;base64,QUFB',
+      mode: 'range_chart',
+      baseUrl: 'https://example.com',
+      apiKey: 'k', maxTokens: 16000,
+    });
+  }).then((res) => {
+    check('truncation-prose-completion-tokens-fallback',
+      res.warning.indexOf('the model used 777 of the 16000 max_tokens') !== -1,
+      res && res.warning);
+    // (c) a run already AT the program ceiling says so with the numbers —
+    // current Python has no separate at-ceiling branch; the sentence is
+    // identical and the two numbers coincide (524288 of the 524288).
+    run({
+      content: [{ type: 'text', text: '{"_array_root":[{"zzz":1}]}' }],
+      stop_reason: 'max_tokens',
+      usage: { output_tokens: 524288 },
+    });
+    return ctx.extractRangeChart({
+      dataUrl: 'data:image/png;base64,QUFB',
+      mode: 'range_chart',
+      baseUrl: 'https://example.com',
+      apiKey: 'k', maxTokens: 524288,
+    });
+  }).then((res) => {
+    check('truncation-prose-at-ceiling-numbers',
+      res.warning === 'Result may be truncated: the model used 524288 '
+        + 'of the 524288 max_tokens allowed for this run (the program ceiling '
+        + 'is 524288). Raising max_tokens and re-running recovers the '
+        + 'missing rows.',
+      res && res.warning);
+  });
+}
+trackAsync('truncation-prose-parameterized', test_truncation_warning_is_parameterized());
+
+// FIX-2026-10-28: promoteWrapper must promote inner OWN keys even when they
+// are named like Object.prototype members ("constructor" / "toString" /
+// "valueOf") — Python's _promote_wrapper (setdefault over the inner dict's
+// own keys) promotes them, and `k in promoted` walked the prototype chain
+// and silently skipped exactly those.
+function test_promote_wrapper_own_prototype_named_keys() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  check('promote-wrapper-fn-exists', typeof ctx.promoteWrapper === 'function');
+  if (typeof ctx.promoteWrapper !== 'function') return;
+  const out = ctx.promoteWrapper({
+    data: { constructor: 'c', toString: 't', valueOf: 'v', normal: 1 },
+    keep: 2,
+  });
+  check('promote-wrapper-constructor-key-promoted',
+    Object.prototype.hasOwnProperty.call(out, 'constructor')
+    && out.constructor === 'c', out && out.constructor);
+  check('promote-wrapper-tostring-key-promoted',
+    Object.prototype.hasOwnProperty.call(out, 'toString')
+    && out.toString === 't', out && out.toString);
+  check('promote-wrapper-valueof-key-promoted',
+    Object.prototype.hasOwnProperty.call(out, 'valueOf')
+    && out.valueOf === 'v', out && out.valueOf);
+  check('promote-wrapper-normal-key-promoted',
+    out.normal === 1 && out.keep === 2);
+}
+
+test_promote_wrapper_own_prototype_named_keys();
+
+// FIX-2026-10-28: the public error formatters must not throw on
+// null/undefined inputs.
+function test_error_formatters_null_safe() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const U = ctx.RCAErrorUtils;
+  check('error-utils-exposed', !!U);
+  if (!U) return;
+
+  // normalizeError: an undefined message must coerce to "" instead of
+  // throwing on message.indexOf(body).
+  let ne = null;
+  try {
+    ne = U.normalizeError(500, 'body', undefined);
+  } catch (e) {
+    check('normalize-error-undefined-message-no-throw', false, String(e));
+  }
+  check('normalize-error-undefined-message-ran', !!ne);
+  check('normalize-error-undefined-message-coerced',
+    !!ne && ne.message === '' && ne.status === 500 && ne.body === 'body'
+    && ne.messageCarriesBody === false, ne);
+  check('normalize-error-null-message-no-throw',
+    (() => { try { U.normalizeError(null, '', null); return true; } catch (_e) { return false; } })());
+
+  // getDisplayMessage / formatError: a falsy error renders as "" instead of
+  // throwing on .messageCarriesBody / .status.
+  const dm = (() => { try { return U.getDisplayMessage(null); } catch (e) { return 'THREW: ' + e; } })();
+  check('get-display-message-null-empty-string', dm === '', dm);
+  const fe = (() => { try { return U.formatError(null); } catch (e) { return 'THREW: ' + e; } })();
+  check('format-error-null-empty-string', fe === '', fe);
+  const fep = (() => { try { return U.formatError(undefined, 'ctx'); } catch (e) { return 'THREW: ' + e; } })();
+  check('format-error-undefined-with-prefix-empty-string', fep === '', fep);
+  // The real path is untouched: a normalized error still formats.
+  const ok = U.formatError(U.normalizeError(429, 'slow down', ''), 'rate limited');
+  check('format-error-still-formats-normalized',
+    ok.indexOf('429') !== -1 && ok.indexOf('slow down') !== -1, ok);
+}
+
+test_error_formatters_null_safe();
+
+// FIX-2026-10-28: the backend POST body carries the caller's reasoning
+// effort when one was supplied, and OMITS the key entirely when it was not
+// (so the server's provider-config default applies untouched).
+function test_backend_post_body_carries_effort() {
+  const ctx = buildContext();
+  loadAllScripts(ctx);
+  const posts = [];
+  ctx.fetch = async (url, init) => {
+    if ((init && init.method) === 'POST') posts.push(JSON.parse(init.body));
+    return {
+      ok: true, status: 200,
+      json: async () => ({ ok: true, data: { species_ranges: [], sections: [] } }),
+      text: async () => '',
+    };
+  };
+  resetBackendSession(ctx);
+  const baseOpts = {
+    apiKey: 'sk', baseUrl: 'https://api.example.com', model: 'm',
+    maxTokens: 100, mode: 'range_chart', transport: 'backend',
+    dataUrl: 'data:image/png;base64,QUFB',
+  };
+  return ctx.extractRangeChart(Object.assign({}, baseOpts, { effort: 'low' }))
+    .then(() => {
+      check('effort-backend-post-carries-effort',
+        posts.length === 1 && posts[0].effort === 'low',
+        JSON.stringify(posts[0]));
+      resetBackendSession(ctx);
+      return ctx.extractRangeChart(Object.assign({}, baseOpts, { effort: '' }));
+    })
+    .then(() => {
+      check('effort-backend-post-omits-empty-effort',
+        posts.length === 2 && !('effort' in posts[1]),
+        JSON.stringify(posts[1]));
+      resetBackendSession(ctx);
+      return ctx.extractRangeChart(baseOpts);   // no effort field at all
+    })
+    .then(() => {
+      check('effort-backend-post-omits-absent-effort',
+        posts.length === 3 && !('effort' in posts[2]),
+        JSON.stringify(posts[2]));
+    });
+}
+trackAsync('effort-backend-post-body', test_backend_post_body_carries_effort());
 
 // Drain every registered async test before printing the summary. A fixed
 // timeout is not enough: assertions that resolve later would run after

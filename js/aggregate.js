@@ -21,6 +21,26 @@ function rcaAggNorm(s) {
   return t.toLowerCase();
 }
 
+// FIX-2026-10-28: a normalized string usable as ONE component of a string
+// dedup key. The JS key is a concatenation (it has no tuples), so a control
+// character that survives rcaAggNorm (JSON "\u0000" escapes pass Level-2
+// cleaning and materialize via JSON.parse; neither trim() nor \s+ touches
+// U+0000-U+001F) can impersonate the join separator or the \x1e/\x1f suffix
+// delimiters: parts ("a\u0000b","c") and ("a","b\u0000c") both joined to
+// "a\u0000b\u0000c" and merged two distinct rows. Stripping the whole
+// C0 range from every component makes the joined key injective, which is the
+// same guarantee Python gets for free from its tuple keys
+// (aggregate.py: _merge_primary_list / _merge_named_lists).
+// Documented residual divergence: two rows whose values differ ONLY by
+// control characters now share one key in the browser (and merge) while
+// Python's tuple key keeps them apart — invisible junk bytes are treated as
+// absent rather than as identity. Python stays unstripped (tuple keys are
+// immune), so rcaAggNorm / _norm themselves are NOT changed: the leaf
+// fixtures (agnorm_98, agqual_99, ...) pin them as-is.
+function rcaAggKeyPart(s) {
+  return rcaAggNorm(s).replace(/[\u0000-\u001f]/g, '');
+}
+
 // F-10 fix: mirror of Python _norm_iczn_author (aggregate.py:54).
 // Normalizes "Smith, 1950", "(Smith, 1950)", "Smith 1950", "Smith,1950"
 // to the same canonical form so they dedup together; year is preserved

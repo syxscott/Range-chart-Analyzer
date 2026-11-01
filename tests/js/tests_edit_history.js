@@ -2,7 +2,7 @@
 // tests_edit_history.js — 网页端表格编辑 + 撤销栈 (FE-BORROW-2026-09-20, 域T)
 // ===========================================================================
 //
-// Run with:  node tests_edit_history.js
+// Run with:  node tests/js/tests_edit_history.js
 //
 // Three coverage groups:
 //
@@ -2187,6 +2187,294 @@ check('history-after-table-order', idx.indexOf('js/table.js') < idx.indexOf('js/
     .test(S.rcaRenderResults(deep(FIX), '', { editable: true }));
   check('audit19-emitted-order-matches-css', firstCell,
     'the FIRST cell of an edit-mode tbody row is the checkbox — the CSS pinning follows it');
+}
+
+// ===========================================================================
+// 10. FIX-2026-10-28 — IME guard, CN stage lookup, highlight ownership,
+//     value-edit relink, undo with a shrunken column set, nested dirty remap
+// ===========================================================================
+
+// ---- (1) IME composition guard in rcaEditHandleKey --------------------------
+{
+  const a1 = deep(FIX);
+  const domI = buildDom(a1, ['species_ranges']);
+  S.rcaTableEditAttach(domI, a1, { editable: true });
+  H.clear();
+  const imeCell = cellOf(domI, 'species_ranges', 0, 0);
+  domI.dispatchEvent(mkEvent('focusin', imeCell));
+  imeCell.textContent = 'pinyin';   // uncommitted composition buffer
+  // isComposing Enter: the handler must report UNHANDLED (its documented
+  // `false`), leave defaultPrevented false, and neither commit, navigate,
+  // revert nor flag.
+  const imeEnter = mkEvent('keydown', imeCell, { key: 'Enter', isComposing: true });
+  const imeEnterRes = S.rcaEditHandleKey(imeEnter);
+  check('fix28-ime-enter-unhandled', imeEnterRes === false
+    && imeEnter.defaultPrevented === false
+    && a1.species_ranges[0].species === 'A'
+    && imeCell.textContent === 'pinyin'
+    && S.rcaHistory.depth() === 0
+    && cellOf(domI, 'species_ranges', 1, 0).focused === 0,
+    'composition Enter must not commit or navigate (keyCode-229 class)');
+  const imeEsc = mkEvent('keydown', imeCell, { key: 'Escape', keyCode: 229 });
+  const imeEscRes = S.rcaEditHandleKey(imeEsc);
+  check('fix28-ime-esc-229-unhandled', imeEscRes === false
+    && imeEsc.defaultPrevented === false
+    && imeCell.textContent === 'pinyin'
+    && !!S.RCA_EDIT_DOM.editing && S.RCA_EDIT_DOM.editing.cell === imeCell,
+    'a 229 Escape must not revert the composition buffer');
+  const imeArrow = mkEvent('keydown', imeCell, { key: 'ArrowDown', isComposing: true });
+  const imeArrowRes = S.rcaEditHandleKey(imeArrow);
+  check('fix28-ime-arrow-unhandled', imeArrowRes === false
+    && imeArrow.defaultPrevented === false
+    && cellOf(domI, 'species_ranges', 1, 0).focused === 0,
+    'arrows belong to the candidate window during composition');
+  const imeTab = mkEvent('keydown', imeCell, { key: 'Tab', keyCode: 229 });
+  const imeTabRes = S.rcaEditHandleKey(imeTab);
+  check('fix28-ime-tab-unhandled', imeTabRes === false
+    && imeTab.defaultPrevented === false
+    && a1.species_ranges[0].species === 'A'
+    && imeCell.textContent === 'pinyin',
+    'composition Tab must not commit through the focusout-style path');
+  // control: the same keys WITHOUT composition keep their old semantics.
+  imeCell.textContent = 'A*';
+  const plain = S.rcaEditHandleKey(mkEvent('keydown', imeCell, { key: 'Enter' }));
+  check('fix28-ime-control-still-commits', plain === true
+    && a1.species_ranges[0].species === 'A*' && S.rcaHistory.depth() === 1,
+    'the guard sits BEFORE the key dispatch; a real Enter commits as always');
+  H.clear();
+  S.rcaTableEditDetach();
+}
+
+// ---- (2) Chinese stage names resolve through RCA_ICS_CN_STAGES -------------
+check('fix28-ics-cn-stage-accepted', S.rcaIcsLookupStage('长兴阶') === 'Changhsingian'
+  && S.rcaIcsLookupStage('吴家坪阶') === 'Wuchiapingian'
+  && S.rcaIcsLookupStage(' 长兴阶 ') === 'Changhsingian'
+  && S.rcaValidateCell(stageSpec, '长兴阶', {}).ok === true
+  && S.rcaValidateCell(stageSpec, '印度阶', {}).ok === true,
+  'the stage validator must read the same gazetteer quality.js/viz.js use');
+check('fix28-ics-cn-stage-unknown-still-rejected', S.rcaIcsLookupStage('不是阶') === null
+  && S.rcaValidateCell(stageSpec, '不是阶', {}).key === 'edit.badStage'
+  && S.rcaIcsLookupStage('Aalenian') === 'Aalenian'
+  && S.rcaIcsLookupStage('jurassic') === 'Jurassic',
+  'the CN alias check may not loosen anything else');
+
+// ---- (4+5) highlight state carries the table id; the viz hover is pinned ----
+{
+  const aH = deep(FIX);
+  const domH = buildDom(aH, ['species_ranges', 'biozones']);
+  S.rcaTableEditAttach(domH, aH, { editable: true });
+  const srRow1 = rowOf(domH, 'species_ranges', 1);
+  const bzRow0 = rowOf(domH, 'biozones', 0);
+  check('fix28-highlight-sets', S.rcaTableHighlightRow(1, 'species_ranges') === true
+    && srRow1.classList.contains('rca-row-active'));
+  check('fix28-highlight-moves-without-residue', S.rcaTableHighlightRow(0, 'biozones') === true
+    && bzRow0.classList.contains('rca-row-active')
+    && !srRow1.classList.contains('rca-row-active'),
+    'the remembered (tableId, row) pair must be cleared in ITS table');
+  check('fix28-highlight-state-shape', (function () {
+    const st = S.__run('RCA_TABLE_HIGHLIGHT_ROW');
+    return st && st.tableId === 'biozones' && st.row === 0;
+  })(), canonical(S.__run('RCA_TABLE_HIGHLIGHT_ROW')));
+  S.rcaTableHighlightRow(0, 'biozones');   // same row again: idempotent
+  check('fix28-highlight-same-row-idempotent', bzRow0.classList.contains('rca-row-active')
+    && !srRow1.classList.contains('rca-row-active'));
+  check('fix28-clear-uses-remembered-table', S.rcaTableHighlightRow(null) === true
+    && !bzRow0.classList.contains('rca-row-active')
+    && S.__run('RCA_TABLE_HIGHLIGHT_ROW') === null);
+  // Canvas hover direction: the callback's row index is a species_ranges row
+  // index no matter what RCA_EDIT_DOM.lastTable says (any hover in any other
+  // table rewrites it).
+  let hoverCb = null;
+  const vizLog = [];
+  S.__ctx.rcaViz = {
+    onRowHover: (cb) => { hoverCb = cb; return function () { hoverCb = null; }; },
+    focusRow: (i) => { vizLog.push(['focusRow', i]); return true; },
+    clearFocus: () => { vizLog.push(['clearFocus']); return true; },
+    locateTo: (i) => { vizLog.push(['locateTo', i]); return true; },
+  };
+  S.rcaTableEditAttach(domH, aH, { editable: true });
+  check('fix28-hover-cb-registered', typeof hoverCb === 'function');
+  S.RCA_EDIT_DOM.lastTable = 'biozones';   // as if a biozones row was hovered
+  hoverCb(1);
+  check('fix28-viz-hover-lights-species-row', srRow1.classList.contains('rca-row-active')
+    && !bzRow0.classList.contains('rca-row-active')
+    && S.__run('RCA_TABLE_HIGHLIGHT_ROW').tableId === 'species_ranges',
+    'the canvas row space is species_ranges, never lastTable');
+  hoverCb(null);
+  check('fix28-viz-hover-clear-lights-none', !srRow1.classList.contains('rca-row-active')
+    && !bzRow0.classList.contains('rca-row-active')
+    && S.__run('RCA_TABLE_HIGHLIGHT_ROW') === null);
+  // A locate highlight on a NON-canvas table survives the canvas' own clear —
+  // the canvas may only release a highlight it set itself.
+  S.rcaEditLocateRow('biozones', 0);
+  hoverCb(null);
+  check('fix28-viz-clear-leaves-foreign-highlight', bzRow0.classList.contains('rca-row-active'),
+    'onRowHover(null) is species_ranges state, not a global clear');
+  delete S.__ctx.rcaViz;
+  S.rcaTableEditDetach();
+}
+
+// ---- (3) value edits relink the canvas; non-canvas tables do not ------------
+{
+  const aR = deep(FIX);
+  const domR = buildDom(aR, ['species_ranges', 'biozones']);
+  const relinkCalls = [];
+  S.__ctx.rcaViz = {
+    onRowHover: () => function () {},
+    focusRow: () => true,
+    clearFocus: () => true,
+    locateTo: () => true,
+    relink: (data) => { relinkCalls.push(data); return true; },
+  };
+  S.rcaTableEditAttach(domR, aR, { editable: true });
+  H.clear();
+  const spCell = cellOf(domR, 'species_ranges', 0, 0);
+  domR.dispatchEvent(mkEvent('focusin', spCell));
+  spCell.textContent = 'A*';
+  domR.dispatchEvent(mkEvent('keydown', spCell, { key: 'Enter' }));
+  check('fix28-commit-relinks-viz', relinkCalls.length === 1
+    && relinkCalls[0] === aR
+    && aR.species_ranges[0].species === 'A*', canonical(relinkCalls.length));
+  const bzCell = cellOf(domR, 'biozones', 0, 0);
+  domR.dispatchEvent(mkEvent('focusin', bzCell));
+  bzCell.textContent = 'Z9';
+  domR.dispatchEvent(mkEvent('keydown', bzCell, { key: 'Enter' }));
+  check('fix28-commit-off-canvas-no-relink', relinkCalls.length === 1
+    && aR.biozones[0].name === 'Z9',
+    'the canvas binds species_ranges only (rcaEditVizTracksTable)');
+  // undo / redo of a VALUE edit relinks only when the table is on the canvas.
+  H.undo();   // undoes the BIOZONES edit first (it sits on top of the stack)
+  check('fix28-undo-off-canvas-no-relink', relinkCalls.length === 1
+    && aR.biozones[0].name === 'Z1');
+  H.undo();   // the species VALUE edit -> relink via rcaTableEditAfterHistory
+  check('fix28-cell-undo-relinks-viz', relinkCalls.length === 2
+    && aR.species_ranges[0].species === 'A', canonical(relinkCalls.length));
+  H.redo();
+  check('fix28-cell-redo-relinks-viz', relinkCalls.length === 3
+    && aR.species_ranges[0].species === 'A*');
+  H.redo();   // the biozones redo stays off the canvas
+  check('fix28-redo-off-canvas-no-relink', relinkCalls.length === 3
+    && aR.biozones[0].name === 'Z9');
+  H.clear();
+  delete S.__ctx.rcaViz;
+  S.rcaTableEditDetach();
+}
+
+// ---- (6) cellEdit undo with the column gone -> full re-render ---------------
+{
+  const aC = deep(FIX);
+  aC.species_ranges[0].author_year = '2024';   // H3: the optional column renders
+  const domC = buildDom(aC, ['species_ranges']);
+  S.rcaTableEditAttach(domC, aC, { editable: true });
+  H.clear();
+  const ayCol = fieldCol(cfgOf(aC, 'species_ranges'), 'author_year');
+  const ayCell = cellOf(domC, 'species_ranges', 0, ayCol);
+  check('fix28-author-year-column-rendered', !!ayCell
+    && ayCell.getAttribute('data-field') === 'author_year', 'col=' + ayCol);
+  domC.dispatchEvent(mkEvent('focusin', ayCell));
+  ayCell.textContent = '';
+  domC.dispatchEvent(mkEvent('keydown', ayCell, { key: 'Enter' }));   // clear commits
+  check('fix28-author-year-cleared', !('author_year' in aC.species_ranges[0])
+    && H.depth() === 1);
+  // The app's next full render drops the now-empty column (H3 shrink).
+  S.rcaTableRerender();
+  const afterShrink = cellOf(domC, 'species_ranges', 0, ayCol);
+  check('fix28-author-year-column-shrunk', !afterShrink
+    || afterShrink.getAttribute('data-field') !== 'author_year',
+    afterShrink && afterShrink.getAttribute('data-field'));
+  const rer0 = domC.rerenders;
+  H.undo();   // model restores author_year; the OLD code repainted nothing
+  const backCell = cellOf(domC, 'species_ranges', 0, fieldCol(cfgOf(aC, 'species_ranges'), 'author_year'));
+  check('fix28-undo-shrunk-column-rerenders', H.depth() === 0
+    && aC.species_ranges[0].author_year === '2024'
+    && domC.rerenders === rer0 + 1
+    && !!backCell && backCell.textContent === '2024',
+    'a silent model-only no-op is exactly the bug — the undo must repaint');
+  // control: redo with the column STILL RENDERED stays a single-cell repaint.
+  const rer1 = domC.rerenders;
+  H.redo();
+  // Address the cell by its data-field, NOT by re-deriving the column from the
+  // model. The redo removed the last author_year, so rcaTableConfigs stops
+  // emitting that optional column and fieldCol answers -1 — which is exactly
+  // the point of "still addressable": the NODE survived because no re-render
+  // ran, while the model-derived column list did not. Looking the column up
+  // through the model asks the wrong question and can never find it here.
+  const backCell2 = domC.querySelector('tr[data-row="0"] [data-field="author_year"]');
+  check('fix28-redo-present-column-repaints-in-place', domC.rerenders === rer1
+    && !!backCell2
+    // The '-' is a ::before on .cell-empty, deliberately OUTSIDE the
+    // contenteditable: FE-FIX-2026-09-21 removed it from the text so a user
+    // could not press Enter and commit the literal "-". A repaint must
+    // therefore leave EMPTY text and the class that draws the placeholder —
+    // asserting textContent === '-' would be asserting the bug back in.
+    && backCell2.textContent === ''
+    && backCell2.classList.contains('cell-empty')
+    && !('author_year' in aC.species_ranges[0]),
+    'no re-render when the cell is still addressable');
+  H.clear();
+  S.rcaTableEditDetach();
+}
+
+// ---- (7) sections structural edits re-map the nested flat-keyed marks -------
+{
+  const aN = {
+    chart_mode: 'columnar_section',
+    sections: [
+      { id: 'S1', name: 'S1',
+        lithology_blocks: [{ pattern: 'mud', range_top_idx: 3, range_base_idx: 1 }],
+        age_units: [{ label: 'U1', range_top_idx: 3, range_base_idx: 1 }],
+        samples: [] },
+      { id: 'S2', name: 'S2',
+        lithology_blocks: [{ pattern: 'sand', range_top_idx: 4, range_base_idx: 2 }],
+        age_units: [{ label: 'U2', range_top_idx: 4, range_base_idx: 2 }],
+        samples: [] },
+    ],
+  };
+  freshEdits(aN);
+  const blkPatCol = fieldCol(cfgOf(aN, 'lithology_blocks'), 'pattern');
+  // Flat rows: lithology 0 = S1.b1, 1 = S2.b2; age_units 0 = S1.u1, 1 = S2.u2.
+  const ed0 = S.rcaTableEdits.editCell('lithology_blocks', 0, blkPatCol, 'clay');
+  const ed1 = S.rcaTableEdits.editCell('lithology_blocks', 1, blkPatCol, 'wack');
+  check('fix28-nested-marks-set', ed0.ok === true && ed1.ok === true
+    && S.rcaTableEdits.isCellEdited('lithology_blocks', 0, 'pattern')
+    && S.rcaTableEdits.isCellEdited('lithology_blocks', 1, 'pattern'));
+  S.rcaTableEdits.toggleRow('age_units', 1);
+  check('fix28-nested-selection-set', S.rcaTableEdits.selectedRows('age_units').join() === '1');
+  const delN = S.rcaTableEdits.deleteRow('sections', 0);
+  check('fix28-section-deleted', !!delN && delN.type === 'rowDelete'
+    && aN.sections.length === 1 && aN.sections[0].id === 'S2');
+  check('fix28-nested-dirty-remapped', (function () {
+    const cells = S.rcaTableEdits.getEditedCells('lithology_blocks');
+    return cells.length === 1 && cells[0][0] === 0 && cells[0][1] === 'pattern'
+      && S.rcaTableEdits.isCellEdited('lithology_blocks', 0, 'pattern')
+      && !S.rcaTableEdits.isCellEdited('lithology_blocks', 1, 'pattern');
+  })(), canonical(S.rcaTableEdits.getEditedCells('lithology_blocks'))
+    + ' — S2.b2 walked flat 1 -> 0 with its section; S1.b1 died with S1');
+  check('fix28-nested-selection-remapped',
+    S.rcaTableEdits.selectedRows('age_units').join() === '0');
+  // captureAll / export keep diffing snapshot vs live (UI marks only).
+  const capN = S.rcaTableEdits.captureAll();
+  check('fix28-nested-capture-untouched', isDict(capN.sections)
+    && Array.isArray(capN.sections._replaced) && capN.sections._replaced.length === 1
+    && eqJson(capN.sections._replaced[0].lithology_blocks,
+      [{ pattern: 'wack', range_top_idx: 4, range_base_idx: 2 }]),
+    canonical(capN.sections));
+  // And back: the re-inserted section pushes the survivor's keys down again.
+  check('fix28-undodelete-remaps-back', S.rcaTableEdits
+    .undoDeleteRow('sections', 0, delN.item) === true
+    && S.rcaTableEdits.isCellEdited('lithology_blocks', 1, 'pattern')
+    && !S.rcaTableEdits.isCellEdited('lithology_blocks', 0, 'pattern')
+    && S.rcaTableEdits.selectedRows('age_units').join() === '1'
+    && S.rcaTableEdits.getEditedCells('lithology_blocks').length === 1,
+    'the mark that died with S1 stays dead — only survivors re-map');
+  // undoAddRow (removing a section) re-maps the same way.
+  const back = S.rcaTableEdits.undoAddRow('sections', 0);
+  check('fix28-undoadd-remaps', back !== false
+    && S.rcaTableEdits.isCellEdited('lithology_blocks', 0, 'pattern')
+    && !S.rcaTableEdits.isCellEdited('lithology_blocks', 1, 'pattern')
+    && S.rcaTableEdits.selectedRows('age_units').join() === '0');
+  S.rcaTableEdits.clearEdited();
+  S.rcaTableEdits.clearSelection();
 }
 
 // ===========================================================================

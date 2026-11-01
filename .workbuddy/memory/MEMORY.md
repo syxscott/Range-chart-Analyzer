@@ -36,3 +36,11 @@
 - **打包（PyInstaller 6.22 实测，2026-10-18 发布 0.1.2）**：spec 里 UPX 需**三处同时设**才生效——`EXE(upx=True)`、`CONF['upx_available']=True`、`CONF['upx_dir']`（api.py:482/:1106/:663，onefile 走内嵌 PKG）。①对成品 archive 内层 UPX 是死路（PyInstaller 6 已 zlib 压缩 4334/4335 条目，双重压缩近零收益）；②`Analysis(upx_dir=, upx_exclude=)` **静默接受但完全无效**（日志 0 行、体积不变，别被骗）。排除：Qt6*/QtWebEngine/python3*.dll/MS 运行时/OpenSSL。成果 258.8→234.7MB（-9.3%）。**发布前必跑冒烟**：console 版 `server --port N --no-browser` + curl `/health`，windowed 版起 20s 查进程存活。
 - **"需在有 X 的机器上验证"之前，先查 CI 有没有那个环境**：2026-10-18 两个成员都标注"心跳/XLSX 需真 PySide6 机器确认"，而 CI 的 `qt` job 恰好就是（offscreen + 真 PySide6，`-k "gui or fluent"` 跑到 100%）。**先看 CI 再下结论**。
 - **CI 可移植性**：测试里禁止硬编码本机路径（曾硬编码某开发者 node 路径导致 CI FileNotFoundError）。用 `shutil.which` → 标准位置 → `pytest.skip(原因)`。
+
+## 2026-11-01 目录重构后的新布局（务必按此找文件）
+
+- 根目录从 63 → 22 个被跟踪文件：`tests/js/`（14 个 Node 套件）、`tests/standalone/`（17 个脚本式 Python 套件，退出码即断言）、`scripts/audit/`、`scripts/difffuzz/`、`docs/PLAN.md`。三端入口与配置仍在根。
+- 每个移动过的文件用**一个锚点常量**定位仓库根（JS `const REPO = path.resolve(__dirname,'..','..')`；PY `REPO|ROOT|root = dirname³(abspath(__file__))`）。**变量名沿用各文件原名的，不要统一改成 REPO**——`tests_drag/tests_worker` 用 `root`，`tests_server*`/`tests_modern_ui` 用 `ROOT`。
+- **🔴 `pytest <目录> <该目录内的文件>` 会静默丢掉整个目录**（实测：`a/ a/other.py` 只收集 other.py，exit 0）。旧命令 `pytest tests/ tests_core.py` 之所以正常，只因 tests_core.py 当时在仓库根之外。CI 现只传目录，tests_core 走独立脚本步骤。
+- **迁移/改写脚本禁止重复执行**：替换锚点时会命中自己上次写出的最内层调用，产出 `REPO = dirname(dirname(REPO))`（解析到 tests/）。修完必须用 AST 求值每个锚点断言等于仓库根，不能靠"跑一遍看着绿"。
+- 自动化：Dependabot（pip+actions）、CodeQL、`repo-health.yml` + `scripts/repo_health.py`（每周查：未接线 harness / 版本漂移 / 死链 / 根目录预算，开一条去重 issue）。

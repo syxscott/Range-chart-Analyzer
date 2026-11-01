@@ -48,6 +48,9 @@ const MIN_RETRY_DELAY_SECONDS = 1.0;
  * @returns {NormalizedError}
  */
 function normalizeError(status, bodyText, message) {
+    // FIX-2026-10-28: null/undefined must not throw on .indexOf below —
+    // coerce to the empty string (a missing transport message is no message).
+    message = String(message == null ? '' : message);
     const body = (bodyText || '').substring(0, MAX_ERROR_BODY_CHARS);
     // REVIEW-2026-11-07 (low): test the STORED (truncated) form, not the full
     // decoded text — mirrors _decode_body/normalize_http_error in
@@ -175,6 +178,10 @@ function isRetryable(error) {
  * @returns {string}
  */
 function getDisplayMessage(error) {
+    // FIX-2026-10-28: a falsy error must not throw on .messageCarriesBody —
+    // render as the empty string, the same text an all-empty normalized
+    // error ({status:null, body:'', message:''}) would produce.
+    if (!error) return '';
     let base;
     if (error.messageCarriesBody || !error.body) {
         base = error.message;
@@ -195,6 +202,9 @@ function getDisplayMessage(error) {
  * @returns {string}
  */
 function formatError(error, prefix) {
+    // FIX-2026-10-28: mirror getDisplayMessage — a falsy error renders as
+    // the empty string instead of throwing on .status / .messageCarriesBody.
+    if (!error) return '';
     const msg = getDisplayMessage(error);
     if (prefix && error.status !== null) {
         return `${prefix} (${error.status}): ${msg}`;

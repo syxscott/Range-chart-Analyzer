@@ -11,7 +11,7 @@
 //
 // Covered here: stage-name axis mapping, geometry-first placement, the
 // unplaceable list, the focus state machine (data-side alpha maths) and hover
-// hit testing. Run with:  node tests_viz.js
+// hit testing. Run with:  node tests/js/tests_viz.js
 'use strict';
 
 const fs = require('fs');
@@ -580,6 +580,13 @@ function makeStub2d(counters) {
   c.strokeRect = function () {
     counters.strokeRect = (counters.strokeRect || 0) + 1;
   };
+  // FIX-2026-10-28: record fillRect args too — the hover tooltip box is the
+  // layer's last fillRect, and its [tx, ty, tw, th] is how the in-bounds
+  // clamp is proven without a real canvas.
+  c.fillRect = function () {
+    counters.fillRect = (counters.fillRect || 0) + 1;
+    (counters.fillRectArgs = counters.fillRectArgs || []).push([].slice.call(arguments));
+  };
   c.fillText = function (text) {
     counters.fillText = (counters.fillText || 0) + 1;
     (counters.fillTextArgs = counters.fillTextArgs || []).push(String(text));
@@ -788,9 +795,21 @@ function test_fix20260921_render() {
   const stale = dom.rafQ.shift(); // first queued tick belongs to locateTo(0)
   stale();
   check('fix5-stale-loop-harms-nothing', !!S.flash && S.flash.row_index === 3);
-  let guard = 0;
-  while (dom.rafQ.length && guard++ < 60) dom.rafQ.shift()();
-  check('fix5-current-loop-still-ends', S.flash === null && guard < 60);
+  // FIX-2026-10-28: the loop now terminates on the CLOCK (S.flash.until), not
+  // on a frame count — the old frames > 14 cap killed the promised 1200 ms
+  // flash after ~233 ms at 60 Hz. Pumping far past 14 frames must keep the
+  // flash alive (rAF re-queues every tick; the drain below emulates that),
+  // and expiring `until` is what finally ends it — the frame cap is only a
+  // runaway guard now.
+  let pumped = 0;
+  while (dom.rafQ.length && pumped < 40) { dom.rafQ.shift()(); pumped += 1; }
+  check('fix28-flash-outlives-14-frames', !!S.flash && S.flash.row_index === 3
+    && pumped === 40, 'pumped=' + pumped + ' flash=' + JSON.stringify(S.flash));
+  S.flash.until = Date.now() - 1;
+  const queuedBeforeExpiry = dom.rafQ.length;
+  dom.rafQ.shift()();
+  check('fix28-flash-ends-on-until', S.flash === null && queuedBeforeExpiry > 0);
+  dom.rafQ.length = 0;
   // item 8 (draw side): a section-filtered row paints no strip and no label.
   dom.counters.strokeRect = 0;
   dom.counters.fillTextArgs = [];
@@ -841,6 +860,81 @@ function test_fix20260921_render() {
   VIZ.destroy();
 }
 
+// ============================================================================
+// 12. FIX-2026-10-28 — tooltip bounds/truncation (js/viz.js rcaVizDrawHover)
+//     and the document-Esc defaultPrevented contract.
+// ============================================================================
+function test_fix20261028_render() {
+  const dom = buildDomContext();
+  const ctx = dom.ctx;
+  loadAll(ctx);
+  const S = ctx.RCA_VIZ_STATE;
+  const VIZ = ctx.rcaViz;
+  const L = ctx.rcaVizLayout(BED_RESULT);
+  const host = dom.makeEl('div');
+  host.className = 'viz-host';
+  host.clientWidth = 600;
+  host.clientHeight = 300;
+  VIZ.render(host, BED_RESULT, null, {});
+  const stage = S.stage;
+  const hoverCv = S.hoverCv;
+  // Narrow canvas: every bar tooltip is wider than W — the exact shape that
+  // used to drive tx off the left edge (W - tw - 2 < 0 beat the clamp).
+  stage.clientWidth = 90; stage.offsetTop = 40; stage.offsetParent = host;
+  hoverCv.clientWidth = 90; hoverCv.clientHeight = 220;
+  VIZ.resize();
+  check('fix28-narrow-canvas-sized', hoverCv.width === 90 && stage.style.height !== '',
+    hoverCv.width + '/' + stage.style.height);
+  let cssH = parseInt(stage.style.height, 10) || 220;
+  const b0 = L.bars[0];
+  S.hover = null;
+  hoverCv.dispatch('mousemove', {
+    clientX: (b0.x + b0.w / 2) * 90,
+    clientY: (b0.y + b0.h / 2) * cssH,
+  });
+  check('fix28-narrow-hover-hits', S.hover === 0, String(S.hover));
+  // The hover layer's LAST fillRect is the tooltip box; its LAST fillText the
+  // tip. measureText is 6 px/char in the stub, so a 90 px canvas forces the
+  // truncation branch for any bar's "species  a → b  [source]" tip.
+  const box = (dom.counters.fillRectArgs || []).slice(-1)[0];
+  const tip = (dom.counters.fillTextArgs || []).slice(-1)[0] || '';
+  check('fix28-tooltip-in-bounds', !!box && box.length === 4
+    && box[0] >= 2 && box[0] + box[2] <= 90 + 1e-9, JSON.stringify(box));
+  check('fix28-tooltip-truncated', tip.indexOf('…') !== -1 && tip.length < 20,
+    JSON.stringify(tip));
+  // Wide canvas control: the same hover fits, so nothing may be truncated.
+  dom.counters.fillRectArgs = [];
+  dom.counters.fillTextArgs = [];
+  stage.clientWidth = 576;
+  hoverCv.clientWidth = 576;
+  VIZ.resize();
+  cssH = parseInt(stage.style.height, 10) || 220;
+  S.hover = null;
+  hoverCv.dispatch('mousemove', {
+    clientX: (b0.x + b0.w / 2) * 576,
+    clientY: (b0.y + b0.h / 2) * cssH,
+  });
+  const box2 = (dom.counters.fillRectArgs || []).slice(-1)[0];
+  const tip2 = (dom.counters.fillTextArgs || []).slice(-1)[0] || '';
+  check('fix28-wide-tooltip-untruncated', !!box2 && tip2.indexOf('…') === -1
+    && tip2.indexOf(b0.label) === 0
+    && box2[0] >= 2 && box2[0] + box2[2] <= 576 + 1e-9, JSON.stringify([tip2, box2]));
+  // FIX-2026-10-28 (document Esc): a PREVENTED Esc — the cell editor's
+  // rcaEditHandleKey already consumed it — must leave the pin alone; a plain
+  // Esc still releases it (same document-level attach as before).
+  hoverCv.dispatch('click', {
+    clientX: (b0.x + b0.w / 2) * 576,
+    clientY: (b0.y + b0.h / 2) * cssH,
+  });
+  check('fix28-pin-set-by-click', S.pinned === 0 && S.focus === 0);
+  dom.documentStub.dispatch('keydown', { key: 'Escape', defaultPrevented: true });
+  check('fix28-esc-consumed-keeps-pin', S.pinned === 0 && S.focus === 0,
+    'pinned=' + S.pinned);
+  dom.documentStub.dispatch('keydown', { key: 'Escape' });
+  check('fix28-esc-unconsumed-releases-pin', S.pinned === null);
+  VIZ.destroy();
+}
+
 // ---- run -------------------------------------------------------------------
 
 const ctx = buildContext();
@@ -856,6 +950,7 @@ test_hit_test(ctx);
 test_options(ctx);
 test_fix20260921_pure(ctx);
 test_fix20260921_render();
+test_fix20261028_render();
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
