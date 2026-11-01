@@ -10,7 +10,20 @@ Run:  QT_QPA_PLATFORM=offscreen python tests/standalone/tests_gui_fluent.py
 from __future__ import annotations
 
 import os
+import sys
 import time
+
+# tests/standalone/ -> repository root (three levels up).
+#
+# This file was the one harness with NO anchor, and it got away with it only
+# because it sat at the repo root: Python puts a script's own directory on
+# sys.path, so `import gui_fluent` resolved to the real module by accident.
+# One directory deeper and the first GUI step in CI died with
+# ModuleNotFoundError on both `rca_core` and `gui_fluent`. Stated explicitly
+# now, because "the script happens to live next to the package" is not a
+# property the file states and not one a future move can preserve.
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, REPO)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
