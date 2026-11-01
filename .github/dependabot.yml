@@ -1,0 +1,49 @@
+# Dependabot — opens PRs, never issues.
+#
+# Why grouped: this repo pins ~9 optional dependencies in requirements.txt.
+# Ungrouped, a weekly run against a stale lockfile-free list opens one PR per
+# package, which is exactly the kind of noise that gets a bot muted. One
+# grouped PR for minor/patch means the upgrade actually gets reviewed;
+# majors stay separate because they need a human decision about breakage.
+#
+# The Python side is deliberately conservative: `rca_core` runs on the
+# standard library alone, and every entry in requirements.txt is optional
+# (Pillow, sv_ttk, pywebview, PySide6, openpyxl, matplotlib, cryptography,
+# keyring). A major bump in any of them is a behaviour change in a GUI path
+# that CI cannot fully exercise, so it must not ride along silently.
+version: 2
+
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps"
+    groups:
+      python-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]

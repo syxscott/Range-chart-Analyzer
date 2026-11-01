@@ -374,10 +374,14 @@ Range-chart Analyzer/
 ├── js/                        # 浏览器端同源实现（minimax/aggregate/
 │                              #   table/quality/ics_table/i18n/…）
 ├── proxy/                     # 可选 CORS 代理（Cloudflare / Deno）
-├── tests/ + tests_core.py     # 1,100+ 项 pytest 用例
-├── tests_frontend.js 等       # 450+ 项 Node 用例（含 parity 锁）
-├── docs/                      # 审查报告与修复记录
-└── scripts/                   # 真实文献 E2E harness（key 走仓库外 env）
+├── tests/                     # pytest 套件（1,100+ 项）
+│   ├── js/                    #   Node 套件（parity 锁、编辑器、viz、性能）
+│   └── standalone/            #   脚本式套件（CI 以脚本退出码为准）
+├── docs/                      # 审查报告、修复记录与计划
+└── scripts/                   # E2E harness / 审计 / 差分模糊测试
+    ├── audit/                 #   镜像签名、执行顺序、网络依赖审计
+    ├── difffuzz/              #   五组 Python↔JS 差分模糊器
+    └── repo_health.py         #   每周健康巡检（未接线 harness / 版本漂移）
 ```
 
 ---
@@ -385,13 +389,13 @@ Range-chart Analyzer/
 ## 测试与持续集成
 
 ```bash
-python -m pytest tests/ tests_core.py -q      # Python 套件（CI 口径）
-python -m pytest tests/ tests_core.py tests_exporter_xlsx.py …   # 全量口径
-node tests_frontend.js                        # 前端 parity + 行为（358 项）
-node tests_aggregate.js                       # 聚合逻辑（60 项）
+python -m pytest tests/ tests/standalone/tests_core.py -q   # Python 套件（CI 口径）
+node tests/js/tests_frontend.js                             # 前端 parity + 行为
+node tests/js/tests_aggregate.js                            # 聚合逻辑
+node tests/js/tests_frontend_perf.js                        # 真实浏览器性能/大表回归
 ```
 
-- **规模**：Python ≈1,100 项、Node ≈450 项（含三端 parity 锁、ICS 数据不变量、
+- **规模**：Python ≈1,100 项、Node ≈900 项（含三端 parity 锁、ICS 数据不变量、
   金标离线管线门槛、截断修复真机夹具、GUI Qt 测试）；
 - **CI**：GitHub Actions 在 Python 3.10 / 3.12 + Node 上运行上述套件；
 - **金标门槛**：`tests/test_gold_smoke.py` 离线运行 `safe_json_loads → normalize →

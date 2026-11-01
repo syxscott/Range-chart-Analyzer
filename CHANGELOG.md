@@ -7,8 +7,37 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Repository layout: the root went from 63 tracked files to 22.** The
+  thirty-one `tests_*` harnesses that sat next to `main.py` now live under
+  `tests/js/` (Node) and `tests/standalone/` (the script-style Python suites
+  pytest never collected). The diff-fuzzers moved to `scripts/difffuzz/`, the
+  three audit scripts to `scripts/audit/`, and `PLAN.md` /
+  `OPTIMIZATION_PLAN.md` to `docs/`. Nothing was rewritten: every moved file
+  keeps its content and gains one anchor constant (`REPO`, resolved three
+  levels up) instead of patching each relative read.
+- **CI runs suites by glob, not by hand-maintained list.** Both historical
+  recurrences of "a suite landed and nothing executed it" were fixed by
+  appending names to a list — which rebuilt the same trap. A file dropped into
+  `tests/js/` now runs the moment it exists, and `scripts/repo_health.py`
+  fails the weekly sweep if one is ever added somewhere unwired.
+
+### Added
+
+- **Automation that files its own work:** Dependabot (grouped pip + Actions
+  PRs), CodeQL (`security-extended`, Python + JS), and a weekly repo-health
+  sweep that opens ONE deduplicated issue and closes it when the tree is clean.
+
 ### Fixed
 
+- **`pytest tests/ tests/standalone/tests_core.py` runs 46 tests, not 4,406.**
+  Measured while re-pointing CI: when an explicitly-named file lives inside a
+  directory passed on the same command line, pytest collects that file alone
+  and drops the directory — silently, exit 0. The old command only worked
+  because `tests_core.py` sat at the repo root, outside `tests/`. CI now names
+  the directory only and runs `tests_core.py` in the separate script-mode step
+  where its exit code is the gate.
 - **The PBDB export was publishing the SECTION's age span as every taxon's
   FAD and LAD.** A range chart's endpoints are bed labels, and they do not
   resolve to ICS ages — so `_resolve_pbdb_bounds` returned nothing and the

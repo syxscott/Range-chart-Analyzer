@@ -33,8 +33,8 @@ from rca_core.extractor import _axis_domain, normalize_result
 from rca_core.names import clean_name_for_lookup, looks_malformed_name
 
 ROOT = Path(__file__).resolve().parents[1]
-MIRROR_JS = ROOT / "tests_contract_mirror_2026_09_22.js"
-NAMES_JS = ROOT / "tests_names_i18n_fixes_2026_09_22.js"
+MIRROR_JS = ROOT / "tests" / "js" / "tests_contract_mirror_2026_09_22.js"
+NAMES_JS = ROOT / "tests" / "js" / "tests_names_i18n_fixes_2026_09_22.js"
 
 
 def _marker_json(source: str, begin: str, end: str, const: str) -> list:

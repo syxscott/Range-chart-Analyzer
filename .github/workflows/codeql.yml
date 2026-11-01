@@ -1,0 +1,64 @@
+# CodeQL — security scanning. Produces alerts in the Security tab, and for
+# pull requests the results surface inline as review comments.
+#
+# Both languages are scanned because the two halves of this project have very
+# different risk profiles and neither scan covers the other:
+#
+#   python      — server.py serves a local HTTP API with a CSRF token and an
+#                 SSRF allow-list; rca_core handles uploaded images and writes
+#                 exports. Path handling and request parsing are the hot spots.
+#   javascript  — js/minimax.js holds a client-side SSRF blacklist and the
+#                 direct-to-LLM transport; js/table.js builds HTML from model
+#                 output, so injection-adjacent sinks matter.
+#
+# No build step: CodeQL's Python and JS extractors are source-only, which is
+# why this job is cheap enough to run on a schedule and on every PR.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, Monday 02:00 UTC — catches newly published query packs and
+    # newly disclosed patterns in code that has not changed.
+    - cron: "0 2 * * 1"
+
+permissions:
+  security-events: write
+  packages: read
+  actions: read
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["python", "javascript-typescript"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # `security-extended` adds the higher-noise queries that find real
+          # issues in code like this (path traversal, regex injection, unsafe
+          # deserialization) at the cost of some false positives. Worth it for
+          # a repo whose threat model is "parses untrusted files and talks to
+          # untrusted URLs".
+          queries: security-extended
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

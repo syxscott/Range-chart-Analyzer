@@ -1,0 +1,97 @@
+# Repo health sweep — the one bot here that files an ISSUE rather than a PR.
+#
+# It exists because the specific failures it watches for are invisible to the
+# test suite by construction. `pytest` can only fail on files it is told to
+# run, so a harness that nothing invokes stays green forever — ci.yml's own
+# comments record that this exact rot has recurred three times ("Python side
+# REVIEW-2026-09-10, JS side this round, and root .py files here"). Version
+# drift and dead documentation links are the same class: no test asserts them,
+# so a human has to notice. This runs the noticing.
+#
+# Noise discipline:
+#   * ONE issue, updated in place, never one per finding or per run.
+#   * It closes itself when the sweep comes back clean.
+#   * Harnesses that legitimately cannot run in CI are listed with a reason in
+#     scripts/repo_health.py instead of being silently excluded.
+name: Repo health
+
+on:
+  schedule:
+    # Mondays 01:00 UTC = 09:00 Asia/Shanghai, ahead of the working week.
+    - cron: "0 1 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: repo-health
+  cancel-in-progress: false
+
+env:
+  ISSUE_TITLE: "Repository health sweep — weekly audit"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The checker is standard-library only on purpose: no install step, so
+      # a broken dependency tree can never make the health check itself fail.
+      - name: Run health checks
+        id: sweep
+        run: |
+          set +e
+          python scripts/repo_health.py > "$RUNNER_TEMP/report.md"
+          status=$?
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/report.md"
+
+      - name: Ensure the label exists
+        if: steps.sweep.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create repo-health \
+            --color 0E8A16 \
+            --description "Filed automatically by the weekly repo health sweep" \
+            2>/dev/null || true
+
+      - name: Open or update the tracking issue
+        if: steps.sweep.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          body="$(cat "$RUNNER_TEMP/report.md")"
+          existing="$(gh issue list --label repo-health --state open --json number,title \
+            --jq "[.[] | select(.title == \"$ISSUE_TITLE\")][0].number // \"\"")"
+
+          if [ -n "$existing" ]; then
+            echo "Updating issue #$existing"
+            gh issue comment "$existing" --body "$body"
+          else
+            echo "Opening a new tracking issue"
+            gh issue create --title "$ISSUE_TITLE" --label repo-health --body "$body"
+          fi
+
+      - name: Close the tracking issue when the sweep is clean
+        if: steps.sweep.outputs.status == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          existing="$(gh issue list --label repo-health --state open --json number,title \
+            --jq "[.[] | select(.title == \"$ISSUE_TITLE\")][0].number // \"\"")"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "This run came back clean — closing."
+            gh issue close "$existing"
+          else
+            echo "Clean, and no open issue to close."
+          fi

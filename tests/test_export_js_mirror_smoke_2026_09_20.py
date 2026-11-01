@@ -32,7 +32,7 @@ import pytest
 from rca_core.exporter import _wpd_num, _wpd_num_text, _wpd_slug
 
 ROOT = Path(__file__).resolve().parents[1]
-NODE_SMOKE = ROOT / "tests_export_parity.js"
+NODE_SMOKE = ROOT / "tests" / "js" / "tests_export_parity.js"
 EXPORT_JS = ROOT / "js" / "export.js"
 README = ROOT / "README.md"
 

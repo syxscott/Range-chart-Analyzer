@@ -56,8 +56,19 @@ jobs:
         with:
           node-version: "22"
 
+      # MEASURED 2026-11-01, and the reason this line names only the
+      # directory: `pytest tests/ tests/standalone/tests_core.py` runs 46
+      # tests, not 4,406. When an explicitly-named file lives INSIDE a
+      # directory passed on the same command line, pytest collects that file
+      # alone and silently drops the directory -- no warning, exit 0. It did
+      # work before the layout change purely because tests_core.py sat at the
+      # repo root, i.e. outside `tests/`. Minimal repro: a/ + a/other.py
+      # collects nothing, while a/ + ../other.py collects both.
+      #
+      # tests_core.py still runs in this job -- as a script, in its own step
+      # below, where its exit code is the gate. Do not "restore" it here.
       - name: Run full pytest suite
-        run: python -m pytest tests/ tests_core.py -q --tb=short
+        run: python -m pytest tests/ -q --tb=short
 
       # AUDIT-2026-09-29: F821 (undefined name) only, deliberately.
       #
@@ -89,43 +100,43 @@ jobs:
             --output-format concise
 
       - name: Run tests_core standalone (exit code reflects failures)
-        run: python tests_core.py
+        run: python tests/standalone/tests_core.py
 
-      - name: Run frontend JS tests
-        run: node tests_frontend.js
-
-      # REVIEW-2026-09-10: these suites existed but were never executed by CI,
-      # so they could rot unnoticed. They all pass today.
-      - name: Run remaining JS suites
+      # Every Node suite, by directory walk rather than by hand-written list.
+      #
+      # REVIEW-2026-09-10 and AUDIT-2026-09-27 both found the same rot: a new
+      # suite landed at the root and nothing executed it, so its assertions
+      # could never fail. Both fixes appended the missing names to a list --
+      # which rebuilt the trap each time, and the comment that said "a root
+      # *.js suite added later must be added here too" WAS the trap, written
+      # down. A glob cannot rot: a file dropped into tests/js/ runs the moment
+      # it exists, and scripts/repo_health.py fails the weekly sweep if one is
+      # ever added elsewhere.
+      #
+      # Two suites are excluded because this job lacks what they need:
+      #   tests_frontend_perf.js        — a real browser; it has its own job.
+      #   tests_diff_frontend_parity.js — its gate is a parsed divergence
+      #                                   count, so it keeps a dedicated step.
+      - name: Run every Node suite
         run: |
-          node tests_contrast.js
-          node tests_aggregate.js
+          set -e
+          for f in tests/js/tests_*.js; do
+            case "$f" in
+              *tests_frontend_perf.js|*tests_diff_frontend_parity.js) continue ;;
+            esac
+            echo "=== $f ==="
+            node "$f"
+          done
 
-      # AUDIT-2026-09-27: the same rot had recurred on the JS side - 9 of the
-      # 12 root Node suites were not executed anywhere, including
-      # tests_edit_history.js (334 assertions), tests_sharpen.js (175) and
-      # tests_viz.js (161), so a regression in the table editor, the sharpen
-      # worker or the linked canvas could land silently. They are all
-      # dependency-free `node <file>` scripts; run every one of them.
-      # A root *.js suite added later must be added here too.
-      - name: Run every remaining Node suite
+      - name: Run the differential parity harness
         run: |
-          node tests_viz.js
-          node tests_sharpen.js
-          node tests_edit_history.js
-          node tests_export_parity.js
-          node tests_contract_mirror_2026_09_22.js
-          node tests_names_i18n_fixes_2026_09_22.js
-          node tests_ui_fixes_2026_09_22.js
-          node tests_ui_fixes_2026_09_27.js
-          node tests_history_fixes_2026_09_21.js
-          # Differential harness: replays fixtures generated from rca_core
-          # through the JS normalizers. It prints a per-field table and always
-          # exits 0, so the gate is its summary line's divergence count
+          # Replays fixtures generated from rca_core through the JS
+          # normalizers. It prints a per-field table and always exits 0, so
+          # the gate is its summary line's divergence count
           # ("... N matched, M documented, K diverged"). Cases the team has
           # consciously parked appear as SKIP lines and count as "documented",
           # not "diverged", so a newly introduced divergence fails the build.
-          node tests_diff_frontend_parity.js | tee /tmp/parity.log
+          node tests/js/tests_diff_frontend_parity.js | tee /tmp/parity.log
           grep -E "[0-9]+ matched, [0-9]+ documented, [0-9]+ diverged" /tmp/parity.log
           if grep -qE "[1-9][0-9]* diverged" /tmp/parity.log; then
             echo "::error::Python/JS parity divergence detected"
@@ -143,20 +154,32 @@ jobs:
       # never collects these on its own. This is the third recurrence of that
       # exact rot (Python side REVIEW-2026-09-10, JS side this round, and
       # root .py files here).
-      - name: Run root-level Python test files
+      - name: Run standalone Python suites
         run: |
           set -e
-          for f in tests_bugfixes.py tests_db.py tests_editable.py \
-                   tests_exporter_xlsx.py tests_gui_fluent.py tests_history.py \
-                   tests_llm.py tests_logo.py tests_modern_ui.py tests_drag.py \
-                   tests_server.py tests_server_hardening.py tests_usage.py \
-                   tests_worker.py; do
+          # Glob, not a list, for the same reason as the Node suites above.
+          # Three exclusions:
+          #   tests_core.py        — runs under pytest above, and again below
+          #                          as a script (its exit code is the gate
+          #                          in that mode).
+          #   tests_real_corpus.py — needs outputs/lit2020*/ (299 MB of
+          #                          copyrighted figures, gitignored) plus a
+          #                          live API key.
+          #   tests_onboarding.py  — touches $HOME, so it gets a scratch HOME
+          #                          in the dedicated step below.
+          for f in tests/standalone/tests_*.py; do
+            case "$f" in
+              *tests_core.py|*tests_real_corpus.py|*tests_onboarding.py) continue ;;
+            esac
             echo "=== $f ==="
             python "$f"
           done
-          echo "=== tests_onboarding.py (scratch HOME) ==="
+
+      - name: Run tests_onboarding with a scratch HOME
+        run: |
+          set -e
           _scratch_home="$(mktemp -d)"
-          HOME="$_scratch_home" python tests_onboarding.py
+          HOME="$_scratch_home" python tests/standalone/tests_onboarding.py
           rm -rf "$_scratch_home"
 
       - name: Verify gold canned responses are committed
@@ -243,8 +266,8 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           set -e
-          for f in tests_gui_fluent.py tests_drag.py tests_history.py \
-                   tests_modern_ui.py; do
+          for f in tests/standalone/tests_gui_fluent.py tests/standalone/tests_drag.py tests/standalone/tests_history.py \
+                   tests/standalone/tests_modern_ui.py; do
             echo "=== $f ==="
             python "$f"
           done
@@ -257,9 +280,9 @@ jobs:
           # the real HOME the assertion sees `before is True` and fails. The
           # scratch HOME below is the fix the matrix job uses; this job
           # originally reused the real one and went red on its first run.
-          echo "=== tests_onboarding.py (scratch HOME) ==="
+          echo "=== tests/standalone/tests_onboarding.py (scratch HOME) ==="
           _scratch_home="$(mktemp -d)"
-          HOME="$_scratch_home" python tests_onboarding.py
+          HOME="$_scratch_home" python tests/standalone/tests_onboarding.py
           rm -rf "$_scratch_home"
 
   # UX-2026-10-18 (WEB-04): the browser performance / containment regression
@@ -317,4 +340,4 @@ jobs:
           # the column-drift and print-layout assertions, and --quick skips
           # exactly those. A quick-mode CI run would be a green run that
           # tested almost nothing.
-          node tests_frontend_perf.js
+          node tests/js/tests_frontend_perf.js

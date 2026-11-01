@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""Repo hygiene checks that no test covers, for the scheduled health bot.
+
+WHY THIS EXISTS
+---------------
+Every check here is something that has actually rotted in this repository and
+that the 4,000-test suite structurally cannot catch, because the suite only
+sees the files it is told to run:
+
+  * ci.yml's own comment records the recurring failure -- "AUDIT-2026-09-27: a
+    root *.py added later must be added here too ... This is the third
+    recurrence of that exact rot (Python side REVIEW-2026-09-10, JS side this
+    round, and root .py files here)." A test file that nothing invokes is
+    green forever and protects nothing. This is the highest-value check here.
+  * `rca_core.__version__` and the newest CHANGELOG section drifted apart at
+    least once; only a human reading the diff noticed.
+  * Docs kept pointing at files that had been renamed.
+
+Design rules:
+  * Standard library only. This runs on a bare runner with no install step,
+    so it must never import third-party code, and it must not import
+    rca_core either (that would drag in 228 modules for one string).
+  * Every finding says what to do, not just what is wrong.
+  * Exit 0 = clean, 1 = findings. The workflow turns findings into one
+    deduplicated issue rather than one per run.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+
+# Root-level tracked files above this are reported. The reorganisation of
+# 2026-11-01 took the root from 63 tracked files to ~21; the budget keeps it
+# there instead of letting scratch scripts accumulate again.
+ROOT_BUDGET = 28
+
+# Harnesses that deliberately have no CI job, each with the reason. Listing
+# them explicitly means a NEW unwired harness is still flagged, while these
+# stop generating the same weekly noise.
+UNWIRED_ALLOWED = {
+    "tests_real_corpus.py": (
+        "needs outputs/lit2020*/ — 299 MB of cropped figures from copyrighted "
+        "papers, gitignored — plus a live API key"
+    ),
+}
+
+findings: list[str] = []
+notes: list[str] = []
+
+
+def finding(check: str, detail: str, fix: str) -> None:
+    findings.append(f"**[{check}]** {detail}\n  → {fix}")
+
+
+# --------------------------------------------------------------------------
+# 1. Every test harness must be reachable from a workflow.
+#
+# A harness nobody runs is worse than no harness: it costs maintenance and
+# returns zero signal. This is the check that would have caught all three
+# historical recurrences on the day they happened.
+# --------------------------------------------------------------------------
+def tracked_files() -> list[Path]:
+    """Tracked files only, so gitignored scratch scripts never count.
+
+    Falls back to a filesystem walk when git is unavailable (the bot runs in
+    a checkout, but the script must also work from an exported tarball).
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=REPO, capture_output=True, check=True,
+        ).stdout.decode("utf-8", "replace")
+        return [REPO / p for p in out.split("\0") if p]
+    except (OSError, subprocess.CalledProcessError):
+        return [p for p in REPO.rglob("*") if p.is_file() and ".git" not in p.parts]
+
+
+def check_harnesses_are_wired() -> None:
+    workflow_dir = REPO / ".github" / "workflows"
+    if not workflow_dir.is_dir():
+        finding("wiring", "no .github/workflows directory", "restore CI")
+        return
+    ci_text = "\n".join(
+        p.read_text(encoding="utf-8", errors="replace")
+        for p in workflow_dir.glob("*.yml")
+    )
+
+    # Harnesses are the script-style suites that no runner discovers by
+    # convention: `tests_*.py` (pytest's python_files=test_*.py does not
+    # match them) and `tests_*.js` (plain node scripts). They live wherever
+    # the layout puts them, so the scan is name-based across the whole tree.
+    harnesses = sorted(
+        p for p in tracked_files()
+        if re.fullmatch(r"tests_.*\.(py|js)", p.name)
+    )
+
+    # A harness counts as wired when its name appears literally OR when some
+    # glob in a workflow covers it. The second form matters because the CI
+    # steps now iterate `tests/js/tests_*.js` and `tests/standalone/tests_*.py`
+    # precisely so that a new file cannot be forgotten — matching only literal
+    # filenames here would flag every harness in the repo.
+    import fnmatch
+
+    globs = set(re.findall(r"[A-Za-z0-9_./-]*\*[A-Za-z0-9_./*-]*\.(?:py|js)", ci_text))
+
+    def wired(path: Path) -> bool:
+        rel = path.relative_to(REPO).as_posix()
+        if path.name in ci_text or rel in ci_text:
+            return True
+        return any(fnmatch.fnmatch(rel, g) for g in globs)
+
+    unwired = [p for p in harnesses if not wired(p)]
+    for p in unwired:
+        reason = UNWIRED_ALLOWED.get(p.name)
+        if reason:
+            notes.append(f"{p.name}: not wired, allowed — {reason}")
+            continue
+        rel = p.relative_to(REPO).as_posix()
+        finding(
+            "wiring",
+            f"`{rel}` is a harness that no workflow invokes — it can never fail.",
+            f"add it to the appropriate job in .github/workflows/ci.yml",
+        )
+    notes.append(f"harnesses checked: {len(harnesses)}, wired: {len(harnesses) - len(unwired)}")
+
+
+# --------------------------------------------------------------------------
+# 2. Version / tag / CHANGELOG agreement.
+# --------------------------------------------------------------------------
+def check_version_agreement() -> None:
+    init = (REPO / "rca_core" / "__init__.py").read_text(encoding="utf-8")
+    m = re.search(r'__version__\s*=\s*"([^"]+)"', init)
+    if not m:
+        finding("version", "rca_core.__version__ not found", "restore the literal")
+        return
+    version = m.group(1)
+
+    changelog = REPO / "CHANGELOG.md"
+    if not changelog.is_file():
+        finding("version", "CHANGELOG.md missing", "restore it")
+        return
+    text = changelog.read_text(encoding="utf-8")
+
+    # The released version must have its own section; an unreleased one must
+    # sit under [Unreleased]. Either way the number has to appear somewhere,
+    # otherwise a bump shipped without notes.
+    if f"## [{version}]" not in text and f"## {version}" not in text:
+        if version not in text:
+            finding(
+                "version",
+                f"`__version__ = \"{version}\"` has no CHANGELOG entry at all.",
+                "add a `## [{v}]` section".format(v=version),
+            )
+        else:
+            notes.append(
+                f"version {version} appears in CHANGELOG but not as a section "
+                "(fine while unreleased)"
+            )
+
+    # Newest section heading, as a second opinion on "what shipped last".
+    headings = re.findall(r"^## \[(\d+\.\d+\.\d+)\]", text, re.M)
+    newest = headings[0] if headings else None
+    if newest and newest != version:
+        finding(
+            "version",
+            f"newest CHANGELOG section is {newest} but `__version__` is {version}.",
+            "bump one of them so the released notes match the code",
+        )
+    notes.append(f"version: {version}, newest CHANGELOG section: {newest}")
+
+
+# --------------------------------------------------------------------------
+# 3. Relative links in user-facing docs must resolve.
+#
+# Docs rot silently: a rename leaves the link intact and every reader gets a
+# 404 from GitHub. Only relative links that look like paths are checked --
+# bare words and anchors are ignored, and `docs/` is included because that is
+# where the long reports live.
+# --------------------------------------------------------------------------
+LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+
+
+def check_doc_links() -> None:
+    docs = [REPO / "README.md"] + sorted((REPO / "docs").glob("*.md"))
+    broken: list[tuple[str, str]] = []
+    checked = 0
+
+    for doc in docs:
+        if not doc.is_file():
+            continue
+        text = doc.read_text(encoding="utf-8", errors="replace")
+        for target in LINK_RE.findall(text):
+            target = target.strip()
+            if not target or target.startswith(("#", "http://", "https://", "mailto:")):
+                continue
+            # Strip an anchor and a title, e.g. `foo.md#bar "title"`.
+            path_part = target.split("#", 1)[0].split(" ", 1)[0]
+            if not path_part:
+                continue
+            # Ignore links that are not file references (no dot, no slash).
+            if "." not in path_part and "/" not in path_part:
+                continue
+            if path_part.startswith("file://") or path_part.endswith(".exe"):
+                continue
+            checked += 1
+            resolved = (doc.parent / path_part).resolve()
+            if not resolved.exists():
+                broken.append((doc.relative_to(REPO).as_posix(), target))
+
+    for doc, target in broken:
+        finding(
+            "docs",
+            f"`{doc}` links to `{target}`, which does not exist.",
+            "fix the path or drop the link",
+        )
+    notes.append(f"relative doc links checked: {checked}, broken: {len(broken)}")
+
+
+# --------------------------------------------------------------------------
+# 4. Root directory budget.
+# --------------------------------------------------------------------------
+def check_root_budget() -> None:
+    root_files = sorted(
+        p.name for p in tracked_files()
+        if p.parent == REPO and p.name != ".gitignore"
+    )
+    if len(root_files) > ROOT_BUDGET:
+        finding(
+            "layout",
+            f"{len(root_files)} tracked files sit at the repo root "
+            f"(budget {ROOT_BUDGET}): "
+            + ", ".join(f"`{n}`" for n in root_files[:12])
+            + (" …" if len(root_files) > 12 else ""),
+            "move test harnesses to tests/{js,standalone}/ and tools to scripts/",
+        )
+    notes.append(f"root files: {len(root_files)} / budget {ROOT_BUDGET}")
+
+
+def main() -> int:
+    for check in (
+        check_harnesses_are_wired,
+        check_version_agreement,
+        check_doc_links,
+        check_root_budget,
+    ):
+        try:
+            check()
+        except Exception as exc:  # noqa: BLE001 - a broken check must not mask the others
+            finding(check.__name__, f"crashed: {exc!r}", "fix the checker")
+
+    print("## Repository health sweep\n")
+    if findings:
+        print(f"**{len(findings)} finding(s).**\n")
+        for item in findings:
+            print(f"- {item}\n")
+    else:
+        print("All checks passed.\n")
+
+    print("<details><summary>Checks run</summary>\n")
+    for note in notes:
+        print(f"- {note}")
+    print("\n</details>")
+
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
