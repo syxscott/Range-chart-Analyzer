@@ -31,7 +31,7 @@ pywebview>=5.0 ; python_version >= "3.10"
 #   (python main.py --ui fluent). Large (~150MB); fully optional — the
 #   stdlib Tkinter GUI (python main.py) remains the default and the
 #   Fluent launcher falls back to it automatically if these are missing.
-PySide6>=6.6 ; python_version >= "3.10"
+PySide6>=6.12.0 ; python_version >= "3.10"
 PySide6-Fluent-Widgets>=1.11.3 ; python_version >= "3.10"
 # PySide6-Addons — pulls in QtWebEngineWidgets for the History detail
 # dialog (gui_fluent_history_detail.HistoryDetailDialog). Heavy
