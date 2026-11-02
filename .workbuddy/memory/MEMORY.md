@@ -44,3 +44,6 @@
 - **🔴 `pytest <目录> <该目录内的文件>` 会静默丢掉整个目录**（实测：`a/ a/other.py` 只收集 other.py，exit 0）。旧命令 `pytest tests/ tests_core.py` 之所以正常，只因 tests_core.py 当时在仓库根之外。CI 现只传目录，tests_core 走独立脚本步骤。
 - **迁移/改写脚本禁止重复执行**：替换锚点时会命中自己上次写出的最内层调用，产出 `REPO = dirname(dirname(REPO))`（解析到 tests/）。修完必须用 AST 求值每个锚点断言等于仓库根，不能靠"跑一遍看着绿"。
 - 自动化：Dependabot（pip+actions）、CodeQL、`repo-health.yml` + `scripts/repo_health.py`（每周查：未接线 harness / 版本漂移 / 死链 / 根目录预算，开一条去重 issue）。
+- **🔴 依赖 PR 的绿色 CI 只能证明 cryptography**：CI 装的是 `cryptography keyring openpyxl Pillow numpy PySide6*`（均不锁版本），**没有任何 workflow 读 `requirements.txt`**。所以 sv-ttk / pywebview / matplotlib 的 Dependabot PR 跑绿只说明 YAML 合法。判据：先查 PyPI `requires_python` 是否 ≤ marker 的 3.10，再建临时 venv 装新版、用**仓库真实入口**跑通（`redraw_range_chart` / `secrets_store.encrypt+decrypt` / `sv_ttk.set_theme+get_theme` / `webview.create_window` 签名）。
+- **同文件不同行的 Dependabot PR 仍会冲突**：diff 的 3 行上下文一旦覆盖到相邻行被改过就会 CONFLICTING（#3 vs #6、#13 vs #10 两次都是），`@dependabot rebase` 可自动解决。
+- pywebview 6.2.1 的 GTK 后端是**先 WebKit2 4.1、失败才退 4.0**（`webview/platforms/gtk.py:34-38`）；`webview.__version__` 已不存在，取版本用 `importlib.metadata`。
