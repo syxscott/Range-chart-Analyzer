@@ -32,6 +32,21 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   package. All ten markers now read `>= "3.10"`, matching the floor the README
   and CI already documented, and a PyPI cross-check confirms every marker is
   at or above the pinned package's own `requires_python`.
+- **Second dependency wave, and the Linux webkit advice it made incomplete.**
+  sv-ttk 2.5→2.6.1, pywebview 5.0→6.2.1, matplotlib 3.5→3.10.9,
+  cryptography 41→50.0.2. None of the four lifts the interpreter floor above
+  the `>= "3.10"` markers (each `requires_python` checked on PyPI). CI only
+  installs cryptography — unpinned, so it has been running 50.x for a while —
+  and never installs the other three, so their green PRs were not evidence.
+  Each was therefore exercised at the new version against the code that calls
+  it: `redraw_range_chart` rendered a PNG under matplotlib 3.10.9,
+  `secrets_store` round-tripped an envelope under cryptography 50.0.2, sv_ttk
+  set and read back both themes, and pywebview 6.2.1's `create_window` still
+  accepts the `url` / `width` / `height` / `min_size` arguments `app.py` passes.
+  The bump also exposed a stale instruction: pywebview 6 asks for WebKit2 4.1
+  first and only then falls back to 4.0 (`webview/platforms/gtk.py:34-38`), so
+  a comment that pointed Linux users at `libwebkit2gtk-4.0-dev` alone now
+  names 4.1.
 
 ### Added
 

@@ -54,7 +54,8 @@ def test_draglist_order_changed():
     # REVIEW-2026-11-07 (low): PySide6 is an OPTIONAL dependency — a bare
     # stdlib install has no PySide6, and this test used to hard-fail with
     # ModuleNotFoundError (the other optional-dep tests skip gracefully).
-    # CI installs requirements.txt, so the test still runs there.
+    # The qt job installs PySide6 explicitly (not via requirements.txt, which
+    # no workflow reads), so the test still runs there.
     try:
         import PySide6  # noqa: F401
     except ImportError:
