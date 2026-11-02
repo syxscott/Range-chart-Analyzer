@@ -26,7 +26,7 @@
 #          falls back to opening the local URL in the default browser.
 Pillow>=12.3.0 ; python_version >= "3.10"
 sv_ttk>=2.6.1  ; python_version >= "3.10"
-pywebview>=5.0 ; python_version >= "3.10"
+pywebview>=6.2.1 ; python_version >= "3.10"
 # PySide6 + qfluentwidgets: enable the modern Fluent desktop GUI
 #   (python main.py --ui fluent). Large (~150MB); fully optional — the
 #   stdlib Tkinter GUI (python main.py) remains the default and the
