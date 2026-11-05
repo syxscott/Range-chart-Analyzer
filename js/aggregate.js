@@ -829,11 +829,13 @@ const _PY_FLOAT_RE = /^[+-]?(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)
 // Python merge, silently turning a numeric sort into a lexicographic one.
 //
 // js/minimax.js already had rcaPyFloatTransliterate (FE-FIX-2026-09-22).
-// This is its twin, kept local because tests_aggregate.js loads aggregate.js
-// standalone and the project has no build step / module loader. The two are
-// pinned together by tests/js/tests_pyfloat_parity.js -- do not fix one
-// without fixing the other.
-function rcaPyFloatTransliterate(s) {
+// This is its twin, deliberately under a DIFFERENT global name: there is
+// no module system here, and tests/test_nonfinite_spelling.py forbids two
+// files defining the same global function -- <script> order would silently
+// decide which body runs. tests_aggregate.js loads aggregate.js standalone,
+// so the copy has to stay local. tests/js/tests_pyfloat_parity.js pins the
+// two behaviours together -- do not fix one without fixing the other.
+function rcaAggPyFloatTransliterate(s) {
   if (!/[^\x00-\x7F]/.test(s)) return s;   // ASCII fast path
   let out = '';
   for (const ch of s) {
@@ -852,7 +854,7 @@ function rcaPyFloat(v) {
   if (typeof v === 'number') return Number.isNaN(v) ? NaN : v;
   if (typeof v === 'boolean') return v ? 1 : 0;   // float(True) == 1.0
   if (typeof v !== 'string') return null;         // dict / list -> TypeError
-  const s = rcaPyFloatTransliterate(v.trim());
+  const s = rcaAggPyFloatTransliterate(v.trim());
   if (!s) return null;
   const low = s.toLowerCase();
   if (low === 'inf' || low === '+inf' || low === 'infinity' || low === '+infinity') return Infinity;

@@ -1,0 +1,102 @@
+name: Bug report
+description: Something produced wrong data, failed to start, or crashed
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Never paste an API key, a full provider config,
+        or an unpublished figure here.** `rca_core/redact.py` scrubs error
+        bodies, but it cannot scrub a screenshot.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: 'Run: python -c "import rca_core; print(rca_core.__version__)"'
+      placeholder: "0.1.4"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Windows .exe (GitHub release)
+        - Source clone, python main.py
+        - Source clone, pip install -r requirements.txt
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ui
+    attributes:
+      label: Which interface?
+      options:
+        - Fluent desktop (default)
+        - Tkinter desktop (--ui tk / gui)
+        - Browser / Web (server)
+        - Native window (--ui modern)
+        - Command line / API
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: OS and Python version
+      placeholder: "Windows 11 / Python 3.12.4"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: For data errors, please say which FIELD was wrong and what
+        the correct value should be. Scientific correctness is the highest
+        severity here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Smallest sequence that reproduces it. If a specific figure
+        triggers it, describe the figure type (you do not need to attach the
+        copyrighted image).
+    validations:
+      required: true
+
+  - type: input
+    id: mode
+    attributes:
+      label: Chart mode (if known)
+      placeholder: "range_chart / columnar_section / abundance_diagram / auto"
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output (redacted)
+      description: Paste any console output. Check `~/.range_chart_analyzer/rca.log`
+        if logging is enabled. Remove endpoints, keys and file paths you do not
+        want public.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I removed API keys and unpublished material from this report
+          required: true
+        - label: I searched existing issues first
+          required: true

@@ -183,7 +183,14 @@ a = Analysis(
 # "worked until I added UPX" breakage, the interpreter is kept
 # uncompressed so crash traces stay readable, and MS runtime / OpenSSL are
 # either signature-tight or verified by their stacks.
-UPX_DIR = r"C:\Users\Administrator\AppData\Local\Temp\upx-4.2.4-win64"
+# ARCH-REVIEW-2026-11-02 (devops A9): this used to be a hard-coded path into
+# one developer's Temp directory. Windows cleans Temp without warning, so
+# UPX silently stopped being applied and the artifact jumped back from
+# 185 MiB to ~234 MiB with no error anywhere -- and no CI job built the exe
+# that would have noticed. UPX is now OPT-IN via an env var; an unset var
+# means "build uncompressed", which is a decision, not an accident.
+import os as _os
+UPX_DIR = (_os.environ.get("RCA_UPX_DIR") or "").strip()
 UPX_EXCLUDE = [
     # Qt / WebEngine: compressed Chromium/Qt DLLs are the #1 "UPX broke my
     # build" report, and their zlib-deflated payload limits UPX's gain.
@@ -198,8 +205,7 @@ UPX_EXCLUDE = [
     "libcrypto-*.dll", "libssl-*.dll",
 ]
 
-import os as _os
-if _os.path.isfile(_os.path.join(UPX_DIR, "upx.exe")):
+if UPX_DIR and _os.path.isfile(_os.path.join(UPX_DIR, "upx.exe")):
     from PyInstaller.config import CONF
     CONF["upx_dir"] = UPX_DIR
     # api.py:482 / :1106 — `self.upx = CONF['upx_available'] and kwargs.get('upx')`.
@@ -207,7 +213,8 @@ if _os.path.isfile(_os.path.join(UPX_DIR, "upx.exe")):
     CONF["upx_available"] = True
     print("[spec] UPX enabled from %s" % UPX_DIR)
 else:
-    print("[spec] UPX dir not found — building UNCOMPRESSED: %s" % UPX_DIR)
+    print("[spec] UPX disabled (set RCA_UPX_DIR to a directory containing "
+          "upx.exe to enable) — building UNCOMPRESSED")
     UPX_DIR = None
     UPX_EXCLUDE = []
 

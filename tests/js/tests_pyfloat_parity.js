@@ -41,8 +41,9 @@ function load(rel) {
   return ctx;
 }
 
-// Separate contexts: both files declare rcaPyFloatTransliterate at top level,
-// and loading them into one context would silently overwrite the first.
+// Separate contexts: each file declares top-level helpers, and loading them
+// into one context would silently overwrite the first. aggregate.js names its
+// transliterator rcaAggPyFloatTransliterate precisely to avoid a global clash.
 const agg = load('js/aggregate.js');
 const mm = load('js/minimax.js');
 

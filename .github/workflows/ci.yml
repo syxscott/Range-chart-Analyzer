@@ -354,3 +354,77 @@ jobs:
           # exactly those. A quick-mode CI run would be a green run that
           # tested almost nothing.
           node tests/js/tests_frontend_perf.js
+
+  # ---------------------------------------------------------------------
+  # ARCH-REVIEW-2026-11-02 / GAP M2, M3: the green tick used to say nothing
+  # about the dependency set a user actually installs. No workflow read
+  # requirements.txt, and sv_ttk / pywebview / matplotlib had ZERO coverage:
+  # CHANGELOG.md said of their Dependabot PRs "their green PRs were not
+  # evidence". This job makes the CI dependency set equal to the user's.
+  # Single Python version on purpose -- this checks installation and API
+  # compatibility, not behaviour (the matrix job above does behaviour).
+  # ---------------------------------------------------------------------
+  deps:
+    name: optional dependencies install and work
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install the documented dependency set
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Every optional dependency imports
+        run: |
+          python - <<'PY'
+          import importlib
+          for name in ("PIL", "sv_ttk", "webview", "openpyxl",
+                       "matplotlib", "cryptography", "keyring", "numpy"):
+              importlib.import_module(name)
+              print(f"import {name}: OK")
+          PY
+
+      - name: Optional dependencies still expose the APIs the app calls
+        run: |
+          python - <<'PY'
+          import inspect
+          import io
+
+          # sv_ttk: gui.py calls set_theme("light"). Do NOT construct a Tk
+          # root here -- ubuntu-latest has no DISPLAY, and a headless Tk()
+          # failure would be a false red. The real set/get_theme round-trip
+          # was verified locally on 2026-11-02 (see requirements.txt comment).
+          import sv_ttk
+          assert callable(sv_ttk.set_theme) and callable(sv_ttk.get_theme)
+
+          # matplotlib: redraw_range_chart / the Usage page use Agg + savefig.
+          import matplotlib
+          matplotlib.use("Agg")
+          import matplotlib.pyplot as plt
+          fig, ax = plt.subplots()
+          ax.plot([0, 1], [0, 1])
+          buf = io.BytesIO()
+          fig.savefig(buf, format="png")
+          plt.close(fig)
+          assert len(buf.getvalue()) > 1000, "matplotlib produced no PNG"
+
+          # pywebview: app.py calls create_window(title, url=, width=,
+          # height=, min_size=) and webview.start(). A renamed kwarg must
+          # fail here rather than on a user's desktop.
+          import webview
+          params = inspect.signature(webview.create_window).parameters
+          for kw in ("url", "width", "height", "min_size"):
+              assert kw in params, f"webview.create_window lost {kw}"
+          assert callable(webview.start)
+          print("optional dependency APIs: OK")
+          PY
+
+      - name: Version / CHANGELOG / CITATION agree (every commit)
+        run: python scripts/release_check.py --check

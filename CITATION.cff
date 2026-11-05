@@ -9,8 +9,8 @@ abstract: >-
   every extraction, and exports Darwin Core, PBDB and ICS tables alongside
   CSV, TSV, JSON and XLSX.
 type: software
-version: 0.1.4
-date-released: "2026-10-22"
+version: 0.2.0
+date-released: "2026-11-06"
 license: "See LICENSE. The software inherits the upstream RLPE-Radiolarian-Plate-Extractor terms and is provided for research and educational use only. Data exported by the tool is released under CC0 1.0."
 repository-code: "https://github.com/syxscott/Range-chart-Analyzer"
 url: "https://github.com/syxscott/Range-chart-Analyzer"
@@ -37,7 +37,7 @@ preferred-citation:
   authors:
     - family-names: syxscott
   year: 2026
-  version: 0.1.4
+  version: 0.2.0
   doi: ""
   url: "https://github.com/syxscott/Range-chart-Analyzer"
   notes: >-

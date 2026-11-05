@@ -265,17 +265,23 @@ WebView 引擎不可用时自动回退浏览器打开，退出码仍为 0。
 
 ### 可选依赖
 
-| 包 | 用途 | 缺失时 |
-|---|---|---|
-| `openpyxl` | XLSX 导出 | 跳过该格式 |
-| `matplotlib` | 用量图表 + 延限图重绘校验 | 回退纯文本 |
-| `Pillow` | 缩略图 / 客户端压缩 / 图像增强 | 跳过相关功能 |
-| `PySide6 (+Fluent-Widgets)` | 现代 Fluent 桌面 GUI | 回退 Tkinter |
-| `pywebview` | 原生窗口模式 | 回退浏览器 |
-| `sv_ttk` | Tkinter Fluent 主题 | 回退原生主题 |
-| `cryptography` + `keyring` | API Key 静态加密 | 降级为混淆存储 |
+**缺失时不会崩溃，但有些降级会影响科学结论** —— 请特别看后两列。
+完整安装建议用固定上界：`pip install -r requirements.txt -c constraints.txt`。
+
+| 包 | 用途 | 缺失时（功能） | 对结果的影响 |
+|---|---|---|---|
+| `openpyxl` | XLSX 导出 | 跳过该格式 | 无 |
+| `matplotlib` | 用量图表 + **延限图重绘校验** | Usage 页回退纯文本；重绘校验**静默不执行** | ⚠️ **校验没跑，但没有任何提示**。若你打算用重绘校验核对结果，务必确认已安装 |
+| `numpy` | 规则网格几何检测（`rca_core/grid.py`）、occurrence matrix 两阶段 | 矩阵模式降级为单遍提问 | ⚠️ 几何验证失效，状态字段会写明「single_pass」，但精度下降 |
+| `cv2` | 倾斜校正 / 图像增强 | 回退 PIL 路径，不报错 | 手写、拍摄图版的小字识读可能变差；不单独安装（体积大） |
+| `Pillow` | 缩略图 / 客户端压缩 / 图像增强 | 跳过相关功能 | 无（不写入坏 blob） |
+| `PySide6 (+Fluent-Widgets)` | 现代 Fluent 桌面 GUI | 回退 Tkinter | 无 |
+| `pywebview` | 原生窗口模式 | 回退浏览器 | 无 |
+| `sv_ttk` | Tkinter Fluent 主题 | 回退原生主题 | 无 |
+| `cryptography` + `keyring` | API Key 静态加密 | 降级为混淆 / 文件密钥 | ⚠️ 打包版无控制台时 `RuntimeWarning` 不可见；用 `python main.py doctor` 查看真实加密方式 |
 
 核心提取与 CSV/JSON/TSV 导出**仅用标准库**；Python ≥ 3.10（CI 验证 3.10/3.12）。
+想快速体检「我到底装了哪些、哪些校验其实没跑」，运行 `python main.py doctor`。
 
 ---
 
@@ -410,14 +416,22 @@ node tests/js/tests_frontend_perf.js                        # 真实浏览器性
 
 ## 安全与隐私
 
-- **数据不出本机**：图片与请求由你的设备直接发往你配置的模型端点（或自建代理），
-  本项目不经过任何第三方服务。
+- **没有本项目自己的服务器，但也不是离线工具**：图片与请求由你的设备直接发往
+  **你配置的模型端点**（或你自建的代理），本项目不经过任何第三方服务。
+  ⚠️ `rca_core/llm.py` 内置 100+ 提供商预设，其中**包含第三方 API 中转站**。
+  选错预设意味着**未发表的论文图和你的付费 API Key 会一起发给一个陌生主机**——
+  请在选择前核对端点域名。详见 `SECURITY.md`。
 - **密钥本地存储**：GUI 存于 `~/.range_chart_analyzer.json`（可关闭记忆）；
-  Web 存于浏览器 `sessionStorage`；支持可选的静态加密。
+  Web 存于浏览器 `sessionStorage`；支持可选的静态加密（Fernet + OS 凭据库）。
 - **后端仅监听本机**：`server.py` 默认绑定 `127.0.0.1`；对外暴露时可启用
   CSRF / 会话 / 限流 / Origin 校验等加固（默认启用），SSRF 防护拦截内网与
-  云元数据地址。
+  云元数据地址。**注意：`RCA_ALLOW_PRIVATE=1` 会一次性关闭整个进程的私网检查**
+  （含 `169.254.169.254` 云元数据防护），且只在 import 时读取一次、不是按端点生效。
+  它用于连接本机 Ollama；在云主机上不要设置，改用防火墙规则。
 - **溯源完整**：每条历史记录含图像 SHA-256、请求元数据与证据链报告，可复核、可复现。
+  这是**数据侧**的可复现性；**环境侧**请用 `constraints.txt` 固定依赖版本，
+  否则三个月后重跑可能装到不同版本的 matplotlib / Pillow。
+- 安全漏洞请**私下报告**：见 `SECURITY.md`，不要开公开 issue。
 
 ---
 

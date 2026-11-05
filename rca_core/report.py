@@ -22,11 +22,16 @@ from typing import Any, Optional
 # an audit of one extraction should say which cells the chart answered, which
 # it explicitly left blank, and which nobody ever asked about.
 from .reason_codes import coverage_ledger, reason_code_rollup
+from .degradations import collect_degradations
 
 __all__ = ["build_extraction_report", "REPORT_SCHEMA_VERSION"]
 
 # v2 adds the ``coverage`` block (ledger + reason-code rollup + the rows that
 # carry a contract field). Consumers must read it as an optional key.
+# ARCH-REVIEW-2026-11-02: ``degradations`` is a second OPTIONAL v2 key --
+# one entry per optional dependency whose absence silently disabled a
+# capability (most importantly the range-chart redraw verification). It is
+# additive, so schema_version stays 2 and older readers ignore it.
 REPORT_SCHEMA_VERSION = 2
 
 # Top-level list keys we track row counts for, by mode family. Every other
@@ -321,4 +326,8 @@ def build_extraction_report(
             "ics_version": _ics_version(),
         },
         "provenance": request_meta or {},
+        # An empty list is the honest "everything verified" answer. A
+        # non-empty one tells the researcher which check did NOT run, so
+        # "verified" can never be confused with "not checked".
+        "degradations": collect_degradations(),
     }

@@ -1,0 +1,103 @@
+name: Build and smoke-test the Windows executables
+
+# ARCH-REVIEW-2026-11-02 (devops A2): the published artifact was NEVER
+# verified by any automatic check. ci.yml installs no PyInstaller, and
+# tests/test_payload_policy.py:72,115 skip with "needs a real build's xref
+# (CI does not build onefile)". A broken spec, a missing resource, or the
+# silent UPX-disabled fallback could only be discovered by a user double
+# clicking the exe.
+#
+# Deliberately NOT part of the pull_request gate: a onefile build takes
+# 10-20 minutes and ~250 MB of Qt. Run it manually before a release, and
+# automatically on every version tag. Keeping it out of ci.yml means a
+# Windows-specific build failure cannot block the Linux test matrix.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller==6.22.0
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Build both executables
+        # RCA_UPX_DIR is intentionally NOT set: PyInstaller 6 already
+        # zlib-compresses the archive, so UPX on the inner PKG is a
+        # near-zero-gain second compression (measured 2026-10-18), and
+        # downloading a Windows-only UPX binary in CI adds a failure mode.
+        # A release that WANTS UPX sets RCA_UPX_DIR locally and compares.
+        run: python -m PyInstaller --noconfirm RangeChartAnalyzer.spec
+
+      - name: Assert artifacts exist and are plausible
+        shell: pwsh
+        run: |
+          $names = @("RangeChartAnalyzer.exe", "RangeChartAnalyzer-console.exe")
+          foreach ($n in $names) {
+            $p = Join-Path "dist" $n
+            if (-not (Test-Path $p)) { throw "missing artifact: $p" }
+            $mb = [math]::Round((Get-Item $p).Length / 1MB, 1)
+            if ($mb -lt 20) { throw "$n is only $mb MiB - build looks truncated" }
+            Write-Host "$n : $mb MiB"
+          }
+
+      - name: Smoke test the console build (real HTTP server)
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path "dist/RangeChartAnalyzer-console.exe").Path
+          $p = Start-Process -FilePath $exe `
+              -ArgumentList "server","--port","8899","--no-browser" `
+              -PassThru
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 20; $i++) {
+              Start-Sleep -Seconds 2
+              try {
+                $r = Invoke-WebRequest "http://127.0.0.1:8899/health" `
+                     -UseBasicParsing -TimeoutSec 3
+                if ($r.StatusCode -eq 200) { $ok = $true; break }
+              } catch { }
+            }
+            if (-not $ok) { throw "health endpoint never answered 200" }
+            Write-Host "SMOKE OK: /health returned 200"
+          } finally {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Verify the packaged resources are actually present
+        shell: pwsh
+        run: |
+          # PyInstaller does not error when a datas= entry points at a file
+          # that moved; the exe starts and only fails when the user exports
+          # an ICS age. Assert the source files exist before the build is
+          # considered good.
+          $required = @(
+            "rca_core/resources/ics_2024.json",
+            "index.html"
+          )
+          foreach ($r in $required) {
+            if (-not (Test-Path $r)) { throw "required packaged resource missing: $r" }
+          }
+          Write-Host "packaged resources present"
+
+      - name: Run the payload policy checks against the real build
+        # The xref now exists, so the two skipif guards in
+        # tests/test_payload_policy.py resolve and the checks actually run.
+        run: python -m pytest tests/test_payload_policy.py -q --tb=short

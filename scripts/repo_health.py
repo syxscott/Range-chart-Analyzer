@@ -311,12 +311,114 @@ def check_root_budget() -> None:
     notes.append(f"root files: {len(root_files)} / budget {ROOT_BUDGET}")
 
 
+def check_release_contains_the_shipped_fixes() -> None:
+    """M1 (ACCEPTANCE-REVIEW): a published tag must actually carry the fixes.
+
+    v0.1.4 shipped without ``range_base_label`` / ``not_drawn`` in
+    rca_core/standards/pbdb.py, so its PBDB export published the SECTION's
+    age span as every taxon's FAD/LAD and treated "model looked, found
+    nothing" as a real occurrence. HEAD had both fixed for 22 commits while
+    the release page still offered the broken build. A tag existing is not
+    evidence that the tag contains the fixes -- read the tag's own bytes.
+
+    Gracefully skips on a shallow clone (no tags fetched).
+    """
+    import subprocess
+
+    def git(*args: str) -> str:
+        r = subprocess.run(["git", *args], cwd=REPO, capture_output=True,
+                           text=True, timeout=30)
+        return r.stdout.strip() if r.returncode == 0 else ""
+
+    tag = git("describe", "--tags", "--abbrev=0")
+    if not tag:
+        notes.append("release freshness: skipped (no tag reachable in this clone)")
+        return
+    head = git("rev-parse", "HEAD")
+    tag_commit = git("rev-parse", tag + "^{commit}")
+    if head == tag_commit:
+        notes.append(f"release freshness: {tag} == HEAD")
+        return
+    pbdb = git("show", tag + ":rca_core/standards/pbdb.py")
+    if not pbdb:
+        notes.append("release freshness: could not read tagged pbdb.py")
+        return
+    missing = [s for s in ("range_base_label", "not_drawn") if s not in pbdb]
+    if missing:
+        finding(
+            "release",
+            f"{tag} is behind HEAD and its pbdb.py lacks {missing} -- the "
+            "published build still has the known PBDB data-correctness defect",
+            "cut a new release; verify with "
+            "`python scripts/release_check.py --release-ready` after tagging",
+        )
+    else:
+        notes.append(f"release freshness: {tag} behind HEAD but has both fixes")
+
+
+def check_ci_covers_the_documented_dependency_set() -> None:
+    """M2/M3: CI must install what the user installs."""
+    ci = REPO / ".github" / "workflows" / "ci.yml"
+    if not ci.is_file():
+        finding("deps", "ci.yml missing", "restore the workflow")
+        return
+    text = ci.read_text(encoding="utf-8")
+    if "pip install -r requirements.txt" not in text:
+        finding(
+            "deps",
+            "no CI job installs requirements.txt, so the optional dependency "
+            "set (sv_ttk / pywebview / matplotlib / numpy) is unverified and "
+            "green Dependabot PRs prove only that the YAML is valid",
+            "add a deps job that runs pip install -r requirements.txt and "
+            "smoke-tests each optional package",
+        )
+    else:
+        notes.append("deps: CI installs the documented requirements.txt")
+
+
+def check_community_and_citation_files() -> None:
+    """M6: the minimum collaboration surface, plus CITATION.cff agreement."""
+    import re
+
+    required = (
+        "CONTRIBUTING.md", "SECURITY.md", "CITATION.cff",
+        ".github/ISSUE_TEMPLATE/bug_report.yml",
+        ".github/ISSUE_TEMPLATE/config.yml",
+    )
+    missing = [rel for rel in required if not (REPO / rel).is_file()]
+    if missing:
+        finding("community", "missing: " + ", ".join(missing),
+                "add the files; see docs/ACCEPTANCE-REVIEW-2026-11-02.md M6")
+    else:
+        notes.append("community: CONTRIBUTING / SECURITY / ISSUE_TEMPLATE / CITATION present")
+
+    init = (REPO / "rca_core" / "__init__.py").read_text(encoding="utf-8")
+    m = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', init, re.M)
+    cit_path = REPO / "CITATION.cff"
+    cit = cit_path.read_text(encoding="utf-8") if cit_path.is_file() else ""
+    if m:
+        version = m.group(1)
+        cit_versions = re.findall(r'^\s*version:\s*["\']?([^"\']+?)["\']?\s*$',
+                                  cit, re.M)
+        wrong = [v for v in cit_versions if v != version]
+        if wrong:
+            finding("citation",
+                    f"CITATION.cff version(s) {wrong} != __version__ {version}; "
+                    "a published citation would be self-contradictory",
+                    "sync CITATION.cff and run scripts/release_check.py --check")
+        else:
+            notes.append(f"citation: CITATION.cff agrees with __version__ {version}")
+
+
 def main() -> int:
     for check in (
         check_harnesses_are_wired,
         check_version_agreement,
         check_doc_links,
         check_root_budget,
+        check_release_contains_the_shipped_fixes,
+        check_ci_covers_the_documented_dependency_set,
+        check_community_and_citation_files,
     ):
         try:
             check()

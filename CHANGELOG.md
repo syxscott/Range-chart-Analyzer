@@ -7,6 +7,15 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-11-06
+
+> **This is the release that finally publishes the data-correctness fixes.**
+> v0.1.4 was built without `range_base_label` / `not_drawn` in
+> `rca_core/standards/pbdb.py`, so its PBDB export published the SECTION's
+> age span as every taxon's FAD/LAD and treated "the model looked but found
+> nothing" as a real occurrence. Both were fixed in HEAD 22 commits earlier.
+> If you exported PBDB data with v0.1.4 or earlier, re-export and re-check it.
+
 ### Changed
 
 - **Repository layout: the root went from 63 tracked files to 22.** The
@@ -47,12 +56,45 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   first and only then falls back to 4.0 (`webview/platforms/gtk.py:34-38`), so
   a comment that pointed Linux users at `libwebkit2gtk-4.0-dev` alone now
   names 4.1.
+- **Architecture, documented and guarded.** `docs/ARCHITECTURE.md` records the
+  real shape (three shells, 54 import edges, the Python/JS twin implementation,
+  `js/table.js`'s double life). A one-way `rca_core/budget.py` breaks the
+  `extractor ↔ matrix` cycle; `rca_core/capability_matrix.py` makes
+  "landed in only one of five endpoints" a declared, probe-checked fact.
+  `tests/test_cache_key_identity.py` stopped unioning all `make_key()` call
+  sites into one set -- that made its invariant vacuous for any NEW builder.
+- **Silent degradations are now visible.** The evidence-chain report carries a
+  `degradations` list (optional v2 key): missing matplotlib no longer looks
+  identical to a successful redraw verification. `python main.py doctor`
+  reports dependency gaps, the real encryption level and corrupt data files
+  without writing anything. A rotating, credential-redacted
+  `~/.range_chart_analyzer/rca.log` replaces the stderr that the windowed
+  build never displays.
+- **CI now installs what users install.** A `deps` job runs
+  `pip install -r requirements.txt` and smoke-tests every optional dependency;
+  `.github/workflows/build.yml` builds and smoke-tests the Windows executables
+  on tags/manual dispatch; `scripts/release_check.py` checks the three version
+  files on EVERY commit (and reads the tag's own bytes before a release).
+  `constraints.txt` pins the optional set for reproducible environments.
+  `scripts/repo_health.py` gained release-freshness, dependency-coverage,
+  community-file and CITATION-agreement checks.
 
 ### Added
 
 - **Automation that files its own work:** Dependabot (grouped pip + Actions
   PRs), CodeQL (`security-extended`, Python + JS), and a weekly repo-health
   sweep that opens ONE deduplicated issue and closes it when the tree is clean.
+- **Four architecture guards, each mutation-tested before being trusted:**
+  `test_rca_core_acyclic.py` (AST import graph incl. function-local imports,
+  ratchet on known cycles, no UI/web imports in core), `test_frontend_assets.py`
+  (the desktop dialog inlines `js/table.js`), `test_error_key_contract.py`
+  (server `err.*` ≤ minimax whitelist ≤ all three i18n locales),
+  `test_capability_matrix.py`. Plus `tests/js/tests_pyfloat_parity.js`,
+  `tests/test_diagnostics.py`, `tests/test_logging_setup.py`,
+  `tests/test_degradations.py`, `scripts/release_check.py`.
+- **Collaboration surface:** `CONTRIBUTING.md` (parity/contract rules),
+  `SECURITY.md` (private reporting, `RCA_ALLOW_PRIVATE` warning, third-party
+  relay caveat), and GitHub issue templates.
 
 ### Fixed
 
@@ -235,6 +277,22 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Anisian 246.7 -> 247.0, base Wuchiapingian 259.51 -> 259.857) is still
   NOT adopted: it needs `scripts/update_ics.py` to fetch the authoritative
   chart, and the deferral stays documented and version-stamped.
+- **`js/aggregate.js` diverged from Python `float()` on Unicode digits.**
+  `rcaPyFloat('１２７')` returned `null` while Python returned `127.0` and
+  `js/minimax.js` returned `127`, so a browser runs>1 merge could order the
+  same batch differently from the Python merge. Fixed with a local
+  transliterator (deliberately named `rcaAggPyFloatTransliterate` -- a second
+  global `rcaPyFloatTransliterate` would have made `<script>` order decide
+  which body runs, which `test_nonfinite_spelling.py` caught).
+- **`numpy` was missing from `requirements.txt`** although six modules import
+  it; users who installed the documented set silently lost the ruled-grid
+  geometry detector. Added `numpy>=1.26`, and `main.py:137` now recommends
+  `gir1.2-webkit2-4.1` instead of the stale 4.0.
+- **Two gold-fixture documentation drifts:** `tests/fixtures/gold/README.md`
+  claimed `pytest -m gold` ran "8 cases, weekly cron + release tag" (it selects
+  29 metric unit tests, and no such job exists); `test_gold_smoke.py`'s
+  docstring advertised recall ≥0.75 / f1 ≥0.7 while `SPECIES_GATES` enforces
+  0.55 / 0.6. Both now state what the code does.
 
 ## [0.1.4] — 2026-10-21
 

@@ -8,6 +8,7 @@ Usage:
     python main.py server        # launch the web server and open the browser
     python main.py server --port 8080 --no-browser
     python main.py modern        # native window via PyWebView (pip install pywebview)
+    python main.py doctor        # read-only install / dependency / data health report
 
 Default (no args) now launches the modern PySide6 + qfluentwidgets GUI.
 If those packages aren't installed, it automatically falls back to the
@@ -228,10 +229,12 @@ def main() -> int:
         "mode",
         nargs="?",
         default="default",
-        choices=["default", "gui", "tk", "server", "web", "modern", "fluent"],
+        choices=["default", "gui", "tk", "server", "web", "modern", "fluent",
+                 "doctor"],
         help="(default): modern Fluent GUI, falls back to Tkinter; "
              "gui/tk: force classic Tkinter GUI; server/web: browser + local "
-             "backend; modern: native window via PyWebView; fluent: modern GUI",
+             "backend; modern: native window via PyWebView; fluent: modern GUI; "
+             "doctor: read-only health report (no windows, no writes)",
     )
     parser.add_argument(
         "--ui",
@@ -254,9 +257,25 @@ def main() -> int:
         help="do not auto-open the browser (only meaningful in server/web mode)",
     )
     args = parser.parse_args()
-
     ui = args.ui or ""
     mode = args.mode
+
+    # Doctor is a read-only diagnostic: no DPI declaration, no GUI toolkit,
+    # no window, and above all no writes to the user's data directory.
+    # It must be reachable BEFORE any launcher would create that directory.
+    if mode == "doctor":
+        from rca_core.diagnostics import run_doctor
+        return run_doctor()
+
+    # Every other mode gets a rotating, redacted log file. Without this the
+    # six getLogger() callers in the repo wrote only to stderr, which does
+    # not exist in the windowed build -- so silent degradations had no
+    # evidence a user could attach to a bug report. See rca_core/logging_setup.py.
+    try:
+        from rca_core.logging_setup import setup_logging
+        setup_logging()
+    except Exception:  # noqa: BLE001 - logging must never block startup
+        pass
 
     # Warn about server flags that this mode will never look at, then keep
     # going — refusing to start a GUI over a stray flag would be worse.
