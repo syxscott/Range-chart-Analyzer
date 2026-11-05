@@ -1,5 +1,5 @@
 # Range Chart Analyzer runs on the Python standard library alone.
-# The three optional deps below improve the experience but are not required:
+# The optional deps below improve the experience but are not required:
 #
 # PYTHON FLOOR — 2026-11-01. Every marker below reads `python_version >= "3.10"`
 # because that is what this project actually supports (README: "Python ≥ 3.10,
@@ -16,6 +16,12 @@
 #
 # Pillow: enables the GUI image thumbnail preview and client-side downscaling
 #          of very large images.
+# numpy: enables the ruled-table geometry detector (rca_core/grid.py). Without
+#        it the occurrence-matrix mode falls back to a single-pass question and
+#        says so in the status, because "no geometry found" is exactly the
+#        condition under which claiming the cells were geometrically verified
+#        would be a lie. It was imported by six modules but missing from this
+#        file, so a user who installed the documented set never got it.
 # sv_ttk: swaps the Tkinter "clam" theme for a Windows 11 Fluent-style
 #          flat/modern skin (buttons, inputs, combobox, notebook tabs).
 #          Without it the app falls back to ttk's default clam theme.
@@ -29,6 +35,7 @@
 #          Without pywebview the modern mode falls back to opening the local
 #          URL in the default browser.
 Pillow>=12.3.0 ; python_version >= "3.10"
+numpy>=1.26 ; python_version >= "3.10"
 sv_ttk>=2.6.1  ; python_version >= "3.10"
 pywebview>=6.2.1 ; python_version >= "3.10"
 # PySide6 + qfluentwidgets: enable the modern Fluent desktop GUI

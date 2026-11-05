@@ -134,7 +134,8 @@ def launch_modern() -> int:
             f"[modern-ui] failed to load app.py ({exc.__class__.__name__}): {exc}\n"
             "Common cause: pywebview is installed but the platform WebView "
             "engine is unavailable (Windows: install Edge WebView2 Runtime; "
-            "Linux: install webkit2gtk-4.0).\n"
+            "Linux: install gir1.2-webkit2-4.1 -- pywebview 6 asks for "
+            "WebKit2 4.1 first and only falls back to 4.0).\n"
             "Fallback: run  python main.py gui  for the Tkinter GUI.",
             file=sys.stderr,
         )
