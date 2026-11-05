@@ -67,15 +67,20 @@ Because the inputs are clean, noise-free synthetic renders:
 
 ## CI Usage
 
-- `pytest -m gold_smoke` — 5 quick cases, every PR (these are
-  fixture-only — they do not call the LLM).
-- `pytest -m gold` — all 8 cases, weekly cron + release tag (also
-  fixture-only).
+- `pytest -m gold_smoke` — the 16 gated pipeline cases in
+  `test_gold_smoke.py`, fixture-only (no LLM call). They run as part of
+  the default suite; there is currently NO separate CI job or cron that
+  selects them by marker.
+- `pytest -m gold` — the 29 metric unit tests in `test_gold_metrics.py`
+  (NOT the 8 fixture cases; the two markers select disjoint file sets,
+  not a smoke ⊂ gold progression).
 - `RCA_OFFLINE_GOLD=1` — use cached responses, zero API cost.
 
-The "real" VLM-vs-fixture integration test that the docs reference
-(`test_gold_smoke.py`) is `@pytest.mark.skip(reason="Requires live
-LLM API")`. Until un-skipped, it does **not** run in CI.
+The "real" VLM-vs-fixture integration test that this section used to
+describe (`Requires live LLM API` skip) no longer exists in that form —
+`test_gold_smoke.py` runs offline against canned responses. The 8
+fixture cases themselves are exercised via `test_gold_smoke.py`'s
+default-run tests.
 
 ## What is missing
 

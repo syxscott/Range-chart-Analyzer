@@ -12,7 +12,12 @@ Pipeline under test per case:
     ground_truth.json
 
 Gates:
-  * range_chart:      species precision >= 0.7, recall >= 0.75, f1 >= 0.7
+  * range_chart:      species precision >= 0.7, recall >= 0.55, f1 >= 0.6
+                      (= SPECIES_GATES below; the docstring used to claim
+                      0.75/0.7, a stale copy of an earlier stricter gate —
+                      the code always enforced 0.55/0.6, sitting below the
+                      canned 0.75/0.6/0.667 with margin for pipeline
+                      regressions)
                       (canned degradation drops 1 row + typos 1 name)
   * abundance:        abundance_sum_error <= 0.05 (verbatim canned)
   * phylogenetic:     topology distance == 0 (verbatim canned)
