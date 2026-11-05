@@ -39,11 +39,12 @@ import pathlib
 import re
 import subprocess
 import sys
+from typing import NoReturn
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def _fail(msg: str) -> "NoReturn":  # type: ignore[valid-type]
+def _fail(msg: str) -> NoReturn:
     print(f"RELEASE CHECK FAILED: {msg}", file=sys.stderr)
     raise SystemExit(1)
 
