@@ -385,7 +385,7 @@ jobs:
         run: |
           python - <<'PY'
           import importlib
-          for name in ("PIL", "sv_ttk", "webview", "openpyxl",
+          for name in ("PIL", "sv_ttk", "webview", "openpyxl", "lxml",
                        "matplotlib", "cryptography", "keyring", "numpy"):
               importlib.import_module(name)
               print(f"import {name}: OK")
