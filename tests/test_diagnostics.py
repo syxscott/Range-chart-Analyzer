@@ -67,11 +67,34 @@ def test_doctor_flags_an_empty_fernet_key_file(tmp_path, monkeypatch):
 
 
 def test_doctor_is_reachable_from_the_launcher():
-    """The README and CONTRIBUTING.md both promise this exact command."""
+    """The README and CONTRIBUTING.md both promise this exact command.
+
+    Exit code is 0 on a fully provisioned machine and 1 when doctor has
+    something to report -- CI deliberately does NOT install matplotlib or
+    the GUI toolkits, so rc==1 there is CORRECT behaviour, not a failure.
+    Assert the command runs and produces the report, not that the host is
+    perfectly provisioned.
+    """
     import subprocess
     result = subprocess.run(
         [sys.executable, "main.py", "doctor"],
         cwd=ROOT, capture_output=True, text=True, timeout=60,
     )
-    assert result.returncode == 0, result.stderr
+    assert result.returncode in (0, 1), result.stderr
     assert "体检" in result.stdout
+    assert "matplotlib" in result.stdout
+    assert "encryption_status" in result.stdout
+
+
+def test_release_gate_survives_post_release_commits(tmp_path):
+    """A tag is a snapshot; new commits after a release must not fail the gate.
+
+    The first version of scripts/release_check.py required tag == HEAD, which
+    would turn the gate red the moment anyone committed docs or a fix after
+    publishing. The real invariants are: tag is an ancestor of HEAD, and the
+    tag's own bytes contain the PBDB fixes.
+    """
+    import subprocess
+    src = (ROOT / "scripts" / "release_check.py").read_text(encoding="utf-8")
+    assert "merge-base" in src and "--is-ancestor" in src
+    assert 'if head != tag_commit:' not in src, "the tag==HEAD rule came back"

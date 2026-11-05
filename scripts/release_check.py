@@ -114,8 +114,8 @@ def check_basic() -> str:
     return version
 
 
-def check_release_ready() -> None:
-    version = check_basic()
+def check_release_ready(version: str | None = None) -> None:
+    version = version or _version_from_init()
     tag = f"v{version}"
 
     def git(*args: str) -> str:
@@ -128,8 +128,21 @@ def check_release_ready() -> None:
 
     head = git("rev-parse", "HEAD")
     tag_commit = git("rev-parse", f"{tag}^{{commit}}")
-    if head != tag_commit:
-        _fail(f"{tag} points at {tag_commit[:8]} but HEAD is {head[:8]}")
+    # A tag is a SNAPSHOT, and commits land after a release (docs, fixes,
+    # housekeeping). Requiring tag == HEAD would make this gate red forever
+    # the moment anyone committed again. What actually matters:
+    #   (a) the tag is on HEAD's history, not a divergent branch, and
+    #   (b) the tag's own bytes contain the fixes (checked below).
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", tag_commit, head],
+        cwd=ROOT, capture_output=True, text=True)
+    if ancestor.returncode != 0:
+        _fail(f"{tag} ({tag_commit[:8]}) is not an ancestor of HEAD "
+              f"({head[:8]}) — the tag belongs to a different history")
+    behind = git("rev-list", "--count", f"{tag_commit}..{head}")
+    if behind and behind != "0":
+        print(f"note: {behind} commit(s) landed after {tag} "
+              "(normal post-release work)")
 
     # The released bytes must contain the two data-correctness fixes.
     pbdb = subprocess.run(
@@ -159,9 +172,9 @@ def main() -> int:
     args = ap.parse_args()
     if not (args.check or args.release_ready):
         ap.error("pass --check or --release-ready")
-    check_basic()
+    version = check_basic()
     if args.release_ready:
-        check_release_ready()
+        check_release_ready(version)
     return 0
 
 
