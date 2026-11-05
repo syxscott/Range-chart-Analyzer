@@ -14,7 +14,8 @@
 
 1. **测试套件本身质量高**——4,360 pytest / 0 失败、2,576 Node 断言、1,363 差分 parity 全绿，且历史上真的抓到过严重缺陷（三端 ICS 分叉偏老 20 倍、PBDB 把 section 年龄当每个分类单元的 FAD/LAD、pytest 收集静默失效）。**这份测试资产应被保护，而不是被重写。**
 2. **但"绿灯"存在三处系统性盲区**：① 准确率门禁只跑合成图，真实文献 E2E 不在 CI；② 可选依赖零覆盖，CI 绿灯不代表用户环境能跑；③ **发布版与 HEAD 差 22 个提交，数据正确性修复从未进入任何 release**。
-3. **本评审新发现两处文档与实现不一致**（详见 §2、§3），都是"文档承诺了 CI 会做的事，但 CI 没做" —— 与 CHANGELOG 自述的 "their green PRs were not evidence" 同一类问题。
+3. **本评审新发现两处文档与实现不一致**（详见 §4）：gold README 的 "CI Usage" 小节描述的 marker 语义与调度均与实际不符（本评审初稿曾误判为"`pytest -m gold` 选不出用例"，经本机实测**已修正**——实际选中 29 项，但选中的是另一个文件）；`test_gold_smoke.py` docstring 的阈值与 `SPECIES_GATES` 常量漂移。两类同属"文档承诺与实现不符"。
+4. **本机全量复跑**（pytest 8.3.4 / Python 3.13 / Windows）确认 137 项跳过的**分类健康**：Qt 门控约 72 项（CI qt job 覆盖）、床标签反例参数化 39 项（按设计跳过）、parity fall-through 7 项（文档化行为），无一属于"该跑没跑"。
 
 **总体成熟度判定：接近"可用的研究原型"，距"可放心用于真实数据并发表"缺 3 件事**（详见 §6 验收清单）。
 
@@ -33,22 +34,19 @@
 
 ---
 
-## 2. 137 项跳过测试的分类
+## 2. 137 项跳过测试的分类（含本机全量复跑实测）
 
-`pytest` 4,360 项 / **137 项跳过**。跳过不是问题，**跳过的理由是否与"用户会遇到的失败"对齐**才是问题。
+`pytest` 4,360 项 / **137 项跳过**。跳过不是问题，**跳过的理由是否与"用户会遇到的失败"对齐**才是问题。下表前 4 行按**本机全量复跑**（pytest 8.3.4 / Python 3.13 / Windows，`pytest tests/ -q -rs`）的 `-rs` 输出统计，其余按源码 grep。
 
-| 跳过原因 | 出现次数 | 用户会遇到吗 | 判定 |
+| 跳过原因 | 本机实测数 | 用户会遇到吗 | 判定 |
 |---|---|---|---|
-| `PySide6/qfluentwidgets unavailable` | 5 处 `@skipif`（`test_fluent_ui_2026_09_05.py`、`test_gui_2026_09_27.py`、`test_gui_progress_thinking_2026_10_19.py`、`test_gui_provider_wizard_effort_2026_10_19.py`、`test_provider_gui_cc_switch_2026_10_20.py`）+ `test_qt_payload.py` | **会** —— 但**CI 有独立的 `qt` job 装 PySide6 跑它们** | ✅ **合理**。这是刻意设计：matrix job 不装 Qt，`qt` job 装。已闭环 |
-| `Pillow is an optional dependency` | 3 处（`test_deskew_geometry_fixes_2026_09_22.py`、`test_geometry_deskew_2026_09_20.py` ×2） | **会** —— 但 **CI 装了 Pillow**（`pip install cryptography keyring openpyxl Pillow`） | ✅ **合理**。本地跳过、CI 跑 |
-| `cryptography not installed` | 4 处 `pytest.skip`（`test_encryption_status_contract.py` ×2、`test_providers_encryption.py` ×3） | **会** —— 但 **CI 装了 cryptography** | ✅ **合理** |
-| `node not available` | 2 处（`test_aggregate_nonfinite_confidence.py`、`test_aggregate_scalar_type_2026_10_17.py`、`test_quality_engine_parity.py`） | 开发者本地 | ✅ **合理**，CI 有 Node |
-| `needs a real build's xref (CI does not build onefile)` | 2 处（`test_payload_policy.py`） | **不会**（PyInstaller onefile 产物检查） | ⚠️ **可接受但有代价**：`RangeChartAnalyzer.spec` 与 UPX 调优（258.8→234.7MB）**无 CI 验证**，打包只在本地人工做 |
-| `the ICS table is unavailable` | `test_biozone_order_subscripts.py` | **会** —— 若 ICS 资源缺失 | ⚠️ **应视为 CI 失败而非跳过**。ICS 表是核心数据，`rca_core/resources/ics_2024.json` 缺失/损坏应让 CI 变红。**当前行为是跳过 → 绿灯** |
-| `POSIX mode bits are advisory on Windows` | `test_config_dir_permissions.py` | 否 | ✅ **合理** |
-| `the provenance column list is inline, not a constant` | `test_history_schema_migration.py` | 否 | ✅ **合理**（承认实现细节并跳过） |
-| `single-column table` | `test_apply_row_isolation.py` | 否 | ✅ **合理** |
-| `PySide6 not installed (optional dependency)` | `tests/standalone/tests_drag.py` | **会** | ⚠️ 脚本式套件，CI 的 `qt` job 有跑（`ci.yml:282-285` 跑 `tests_gui_fluent.py` `tests_drag.py` `tests_history.py` `tests_modern_ui.py`） | ✅ **合理** |
+| **Qt/PySide6 门控**（`test_provider_gui_cc_switch_2026_10_20.py` 16、`test_gui_progress_thinking_2026_10_19.py` 15、`test_gui_2026_09_27.py` 14、`test_gui_provider_wizard_effort_2026_10_19.py` 9、`test_qt_payload.py` 6、`test_fluent_ui_2026_09_05.py` 5、`test_gui_sprint_b.py` 4、`test_gui_fluent_low_fixes.py` 3、`test_gui_fluent_ssrf.py` 6 等，合计约 **72**） | ~72 | **会** —— 但**CI 有独立的 `qt` job 装 PySide6 跑它们** | ✅ **合理**。刻意设计：matrix job 不装 Qt，`qt` job 装 |
+| **床标签反例参数化**（`test_single_bed_parser_invariant.py:268`：`"'abc' is not a bed label; bed_position declines it"` 等，**39** 项） | 39 | 否 —— 这是**按设计跳过**：验证 `bed_position` 拒绝非床标签（`"253 Ma"`、`"9 9"`、全角 `９`、`-9` 等），被拒绝的输入跳过比较，属正常路径 | ✅ **合理**。这是**负向用例的跳过**，不是被遮蔽的能力缺失 |
+| **parity fall-through 文档化行为**（`test_table_configs_parity.py:262`："falls through to the range-chart/generic branch, where the browser keeps four empty editing shells on purpose"，**7** 项） | 7 | 否 | ✅ **合理**，skip 消息本身就是行为说明 |
+| 平台相关（`test_config_dir_permissions.py` 2 项 POSIX mode bits；`test_server_path_resolution.py` 2 项） | 4 | 否 | ✅ **合理** |
+| 打包相关（`test_payload_policy.py` ×2 "needs a real build's xref (CI does not build onefile)"） | 2 | **不会**（PyInstaller onefile 产物检查） | ⚠️ **可接受但有代价**：`RangeChartAnalyzer.spec` 与 UPX 调优（258.8→234.7MB）**无 CI 验证**，打包只在本地人工做 |
+| `test_history_schema_migration.py` 1 项（"provenance column list is inline"） | 1 | 否 | ✅ **合理** |
+| **ICS 缺失**（`test_biozone_order_subscripts.py` "the ICS table is unavailable"） | （本机未触发——ICS 资源在） | **会** —— 若 ICS 资源缺失 | ⚠️ **应视为 CI 失败而非跳过**。ICS 表是核心数据，`rca_core/resources/ics_2024.json` 缺失/损坏应让 CI 变红。**当前行为是跳过 → 绿灯** |
 
 ### 结论
 
@@ -80,47 +78,38 @@
 
 这两处是本评审的独立产出，**不在原简报的遗留债清单里**。
 
-### 4.1 ❌ `tests/fixtures/gold/README.md` 声称的 gold 门禁调度不存在
+### 4.1 ⚠️ `tests/fixtures/gold/README.md` 的 "CI Usage" 小节描述的 marker 语义与调度均与实际不符
+
+> **评审过程更正声明**：本节初稿曾断言"`pytest -m gold` 选不出任何用例"。**经本机实测（pytest 8.3.4），该断言错误**：`pytest -m gold` 实际选中 **29 项**（来自 `test_gold_metrics.py`）。错误原因：初稿只看了 `tests/` 目录文件列表的一角，未确认 `test_gold_metrics.py` 的存在（它命中 `conftest.py` 的 `elif "gold_metrics" in ...` 分支）。以下为修正后的结论——问题仍然存在，但形态不同。
 
 **README 原文**（"CI Usage" 小节）：
 
 > - `pytest -m gold_smoke` — 5 quick cases, every PR (these are fixture-only — they do not call the LLM).
-> - `pytest -m gold` — all 8 cases, **weekly cron + release tag** (also fixture-only).
+> - `pytest -m gold` — **all 8 cases, weekly cron + release tag** (also fixture-only).
 > - `RCA_OFFLINE_GOLD=1` — use cached responses, zero API cost.
 
-**实际**：
+**实测结果**（本机，pytest 8.3.4）：
 
 ```bash
-grep -n "schedule\|cron\|tags:" .github/workflows/ci.yml   # 零命中
+pytest -m gold_smoke --collect-only -q   # → tests/test_gold_smoke.py: 16
+pytest -m gold       --collect-only -q   # → tests/test_gold_metrics.py: 29
 ```
 
-`ci.yml` 的触发器只有 `push: branches[main]` 和 `pull_request:` —— **没有 schedule，没有 tag 触发**。
+三处不符：
 
-更严重的是 **`pytest -m gold` 这个 marker 实际上永远选不出东西**：
+1. **数字不符**：README 说 gold_smoke 是 "5 quick cases"、gold 是 "all 8 cases"。实际 gold_smoke 选中 **16** 项、gold 选中 **29** 项。且 `-m gold` 选中 `test_gold_metrics.py` —— 那是**纯 metric 单元测试**（文件头自述 "mock-based, no real LLM"），**不是** README 说的 "all 8 cases"（8 个金标 case 的流水线门禁在 `test_gold_smoke.py` 里，带 `gold_smoke` marker）。
+2. **调度不符**：README 说 gold 是 "weekly cron + release tag"。`grep -n "schedule\|cron\|tags:" .github/workflows/ci.yml` → **零命中**。`ci.yml` 触发器只有 `push: branches[main]` + `pull_request:`，仓库只有 `repo-health.yml` 有 cron（周一巡检，且不跑 pytest）。**"weekly cron + release tag" 是一个不存在的调度。**
+3. **语义不符的根因**：`tests/conftest.py:26-33` 按文件路径字符串匹配打 marker —— `"gold_smoke" in path → gold_smoke`，`elif "gold_metrics" in path → gold`。于是 `-m gold` 选中的是 metric 单元测试，而**真正持金标流水线门禁的 `test_gold_smoke.py` 只有 `gold_smoke` marker、没有 `gold` marker**。两个 marker 划出的是两个不相交的文件，README 把它们当成了一个递进关系（smoke ⊂ gold）。
 
-```python
-# tests/conftest.py:26-33
-if "gold_smoke" in str(item.fspath):
-    item.add_marker(pytest.mark.gold_smoke)
-elif "gold_metrics" in str(item.fspath):
-    item.add_marker(pytest.mark.gold)
-elif "gold" in str(item.fspath):
-    item.add_marker(pytest.mark.gold)
-```
+同节还有一处**过时描述**：README 写「The "real" VLM-vs-fixture integration test that the docs reference (`test_gold_smoke.py`) is `@pytest.mark.skip(reason="Requires live LLM API")`. Until un-skipped, it does **not** run in CI.」—— 但 `grep -rn "Requires live LLM API" tests/` **零命中**，`test_gold_smoke.py` 现在是未跳过的、真正在跑的离线门禁。这段描述的是已被重写掉的旧状态。
 
-marker 是**按文件路径字符串匹配**的。而 `tests/test_gold_smoke.py` 的路径里含 "gold_smoke" → 走第一个分支，**永远进不了 `elif "gold" in str(item.fspath)`**。所以：
-- `pytest -m gold_smoke` → 选中 `test_gold_smoke.py` 的 2 个参数化测试 ✅
-- `pytest -m gold` → **选不出任何用例**（`test_gold_metrics.py` 若存在才会命中 `gold_metrics` 分支）
-
-我核实过 `tests/fixtures/gold/README.md` 还写着「The "real" VLM-vs-fixture integration test that the docs reference (`test_gold_smoke.py`) is `@pytest.mark.skip(reason="Requires live LLM API")`. Until un-skipped, it does **not** run in CI.」—— 但 `grep -rn "Requires live LLM API" tests/` **零命中**，`test_gold_smoke.py` 现在是**未跳过的、真正在跑的**离线门禁。**这段 README 已经过时了**（它描述的是一个已经被重写掉的旧状态）。
-
-**影响**：一个科研用户（或维护者）照 README 跑 `pytest -m gold` 期待"8 个 case 全套"，**实际会得到 0 个用例**。这正是"可信度缺口"里的 C6（交付物说明与实现不符）的一个新实例。**修复成本 < 0.5 人日**。
+**影响**：照 README 操作的维护者会得到与文档承诺不同的测试集合（29 项单元测试而非 8 个金标 case），且"weekly cron + release tag"的门禁**根本不存在** —— 金标 gate 实际只在每次 PR 的 gold_smoke 里跑 16 项。这正是"绿灯比声称的弱"的又一实例。**修复成本 < 0.5 人日**。
 
 **建议**：
-1. 改 `tests/conftest.py` 的 marker 判定 —— 用显式 decorator 而不是路径字符串匹配，或把 `elif "gold" in ...` 改成 `elif "gold_metrics" in ... or "gold_full" in ...`。
-2. 在 `ci.yml` 真正加 `schedule: cron`（`repo-health.yml` 已有 cron 写法可抄）。
-3. 更新 `tests/fixtures/gold/README.md` 的 "CI Usage" 小节 —— 删掉不存在的 live-LLM 段落，改成"该测试已重写为离线门禁并在跑"。
-4. `pytest.ini` 里 `gold: full gold-standard tests (run weekly / release)` 的描述也是**同一条不存在的调度**的复述，需一并改。
+1. **给 `test_gold_smoke.py` 同时打上 `gold` marker**（或在 conftest 的第一个分支里 `item.add_marker(pytest.mark.gold_smoke); item.add_marker(pytest.mark.gold)`），让 README 的 "smoke ⊂ gold" 语义成立；
+2. 在 `ci.yml` 真正加 `schedule: cron`（`repo-health.yml` 已有 cron 写法可抄），或把 README 改成实际的调度事实；
+3. 更新 `tests/fixtures/gold/README.md` 的 "CI Usage" 小节 —— 修正 5/8/16/29 的数字，删掉不存在的 live-LLM 段落；
+4. `pytest.ini` 里 `gold: full gold-standard tests (run weekly / release)` 的描述同样与实际调度不符，需一并改。
 
 ### 4.2 ⚠️ gold 准确率门禁的文档阈值与实际阈值不一致
 
@@ -176,7 +165,7 @@ SPECIES_GATES = {"min_precision": 0.7, "min_recall": 0.55, "min_f1": 0.6}
 | **B-3 可选依赖零覆盖** | 🟠 **P1** | `sv_ttk`/`pywebview`/`matplotlib` 在 CI 零覆盖 | **CI 绿灯不代表用户环境能跑**。用户装完发现 Usage 页白屏 / 窗口打不开，回不到 CI 查 |
 | **B-4 三端能力落地不对称无检测** | 🟡 **P2** | fuzzy 仅 Web 端；ICS 曾 98 vs 109 行分叉 | 同一张图在两端产出**不同科学结论**（ICS 那次偏老 20 倍）。差分 parity 守的是"同端一致"，守不住"新能力三端都有" |
 | **B-5 打包产物无 CI 验证** | 🟡 **P2** | `test_payload_policy.py` 因 "CI does not build onefile" 跳过；无 PyInstaller job | `RangeChartAnalyzer.spec` 19.8KB + UPX 调优结果（258.8→234.7MB）**只由本地人工保证**。用户拿到打不开的 exe 时无拦截 |
-| **B-6 `gold` marker 选不出用例** | 🟡 **P2** | `conftest.py` 按路径字符串匹配，`test_gold_smoke.py` 永远命中第一个分支 | README 承诺的 `pytest -m gold` 实际选 0 个用例（见 §4.1） |
+| **B-6 gold marker 语义/调度与文档不符** | 🟡 **P2** | `pytest -m gold` 实选 29 项纯 metric 单元测试，而非 README 承诺的 8 个金标 case；"weekly cron + release tag" 调度不存在（见 §4.1） | 维护者照 README 跑 gold 期待全套金标门禁，实际得到的是另一组测试；8 个金标 case 实际只随 gold_smoke（每 PR 16 项）跑 |
 | **B-7 ICS 缺失被 skip 而非 fail** | 🟡 **P2** | `test_biozone_order_subscripts.py` "the ICS table is unavailable" → skip | 核心年代数据损坏/缺失时 CI **仍绿**。README 自述历史教训「"819 个测试全绿但年代数据损坏"」正是这类 |
 | **B-8 无 a11y 自动化断言** | ⚪ **P3** | `grep -rni "aria-\|a11y\|accessib"` 在 `tests/` 零命中 | 评审是一次性的；已点名的"视觉中文/读屏英文"双通道不一致未修（`docs/UI-REVIEW-WEB-2026-10-17.md:110`） |
 
@@ -196,7 +185,7 @@ SPECIES_GATES = {"min_precision": 0.7, "min_recall": 0.55, "min_f1": 0.6}
 | A-6 | 三个可选依赖各有至少一个冒烟断言 | `grep -q sv_ttk .github/workflows/ci.yml` && `grep -q pywebview ...` && `grep -q matplotlib ...` | ❌ |
 | A-7 | `CONTRIBUTING.md` / `SECURITY.md` / `ISSUE_TEMPLATE/` 存在 | 文件存在性检查（`repo_health.py` 已有同类 `finding()` 机制可复用） | ❌ |
 | A-8 | 桌面端接入 `names.fuzzy`（三端一致） | `grep -c "fuzzy" gui_fluent.py gui.py` > 0 | ❌ |
-| A-9 | `pytest -m gold` 能选出用例 | `pytest -m gold --collect-only -q` 输出数 > 0 | ❌ |
+| A-9 | gold marker 语义与 README 一致 | `pytest -m gold --collect-only -q` 选中的集合包含 `test_gold_smoke.py` 的 8 个金标 case（当前选中的是 29 项 metric 单元测试，不含金标 case） | ❌ |
 | A-10 | `test_gold_smoke.py` docstring 阈值与 `SPECIES_GATES` 一致 | docstring 写 recall 0.55 / f1 0.6 | ❌ |
 
 ### 阶段二：提效（约 10–15 人日）
@@ -226,7 +215,7 @@ SPECIES_GATES = {"min_precision": 0.7, "min_recall": 0.55, "min_f1": 0.6}
 |---|---|---|
 | **P0 阻断** | 已交付物产生**科学性错误** | B-1（v0.1.4 含 PBDB section-age / not_drawn 缺陷） |
 | **P1 严重** | 用户装完跑不起来，或拿不到可信的准确率 | B-2（无真实文献准确率门禁）、B-3（可选依赖零覆盖） |
-| **P2 重要** | 能力退化或承诺落空，但不影响出数 | B-4（三端不对称）、B-5（打包无验证）、B-6（gold marker 失效）、B-7（ICS 缺失 skip 而非 fail） |
+| **P2 重要** | 能力退化或承诺落空，但不影响出数 | B-4（三端不对称）、B-5（打包无验证）、B-6（gold marker 语义/调度与文档不符）、B-7（ICS 缺失 skip 而非 fail） |
 | **P3 改进** | 体验与一致性 | B-8（a11y）、docstring 阈值漂移、CITATION 双份维护 |
 
 **说明**：本仓库**没有** P0 级别的"代码缺陷导致线上事故"（无生产环境），但 B-1 是**事实上的 P0**——它已经在 GitHub Release 上，且会让下游用户的论文数据出错。
@@ -243,8 +232,8 @@ SPECIES_GATES = {"min_precision": 0.7, "min_recall": 0.55, "min_f1": 0.6}
 
    **为什么这条价值最高**：它把"人工记得检查"变成"每周一自动提醒"，且**复用已有机制，不新增 CI 基础设施**。这是本评审最推荐的单点改动。
 
-2. **给 gold 门禁一个真实的调度**（0.5 人日 + CI）
-   修 `conftest.py` 的 marker 判定 → 在 `ci.yml` 加 `schedule: cron`（抄 `repo-health.yml`）→ 更新 `tests/fixtures/gold/README.md` 的 "CI Usage" 小节 + `pytest.ini` 的 marker 描述。
+2. **给 gold marker 正确语义 + 真实调度**（0.5 人日 + CI）
+   给 `test_gold_smoke.py` 补 `gold` marker（让 `-m gold` 覆盖金标 case）→ 在 `ci.yml` 加 `schedule: cron`（抄 `repo-health.yml`）或如实修改文档 → 更新 `tests/fixtures/gold/README.md` 的 "CI Usage" 数字（5/8 → 16/29 实测值）+ `pytest.ini` 的 marker 描述。
 
 3. **把 ICS 缺失从 skip 改成 fail**（0.25 人日）
    核心数据缺失不应该让 CI 变绿。README 自述的历史教训正是这一类。
@@ -259,7 +248,7 @@ SPECIES_GATES = {"min_precision": 0.7, "min_recall": 0.55, "min_f1": 0.6}
 
 ## 9. 与其他评审的接口
 
-- **对 devops-engineer（任务 #3，发布与运维就绪度）**：本评审的 §4.1、§4.2、§5 的 B-6 与 §8-2 直接是"发布流程与门禁调度"问题；`pytest -m gold` 选不出用例这条建议你们直接接手。
+- **对 devops-engineer（任务 #3，发布与运维就绪度）**：本评审的 §4.1、§4.2、§5 的 B-6 与 §8-2 直接是"发布流程与门禁调度"问题；gold marker 语义修正（A-9）这条建议你们直接接手。
 - **对 system-architect（任务 #1，架构收口）**：§6 阶段二 B-6（"能力注册表 × 三端"一致性断言）是架构层的通用机制需求；§4.1 的 marker 判定设计（路径字符串匹配 vs 显式 decorator）也是同一类"注册表应显式声明"的问题。
 - **对 team-lead**：缺口裁定的结论已单独回传（MVP 三件事 / 成熟度检查项 / 优先级表 / 不建议做清单）。本评审**不推翻**那些结论，只补两条：(a) 新发现两处文档与实现不一致（§4.1、§4.2）；(b) 跳过的 137 项**分类健康**，不是问题源，不必投入。
 
@@ -274,16 +263,19 @@ git diff --stat v0.1.4..HEAD | tail -1                      # 105 files, +7119, 
 git show v0.1.4:rca_core/standards/pbdb.py | grep -c not_drawn    # 0
 git show v0.1.4:rca_core/standards/pbdb.py | grep -c range_base_label  # 0
 
-# §4.1 gold 调度不存在
-grep -n "schedule\|cron\|tags:" .github/workflows/ci.yml    # 零命中
+# §4.1 gold marker 实测（本机 pytest 8.3.4）
+pytest -m gold_smoke --collect-only -q   # → tests/test_gold_smoke.py: 16（README 称 5）
+pytest -m gold       --collect-only -q   # → tests/test_gold_metrics.py: 29（README 称 8 个金标 case）
+grep -n "schedule\|cron\|tags:" .github/workflows/ci.yml    # 零命中（"weekly cron" 不存在）
 grep -rn "Requires live LLM API" tests/                       # 零命中（README 过时）
 
 # §4.2 阈值不一致
 grep -n "SPECIES_GATES" tests/test_gold_smoke.py              # recall 0.55 / f1 0.6
 sed -n '15,16p' tests/test_gold_smoke.py                       # docstring: recall 0.75 / f1 0.7
 
-# §2 跳过分类
-grep -rn "pytest.mark.skipif\|pytest.skip(" --include=*.py tests/ -A2 | grep -i reason
+# §2 跳过分类（本机复跑）
+pytest tests/ -q --tb=no -rs | grep -o "SKIPPED \[[0-9]*\] [^:]*" | sed 's/SKIPPED \[[0-9]*\] //' | sort | uniq -c | sort -rn
+# → Qt 门控 ~72；test_single_bed_parser_invariant.py 39（负向参数化，按设计）；parity fall-through 7；...
 
 # §3 CI 覆盖矩阵
 grep -n "pip install" .github/workflows/*.yml
