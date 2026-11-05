@@ -305,7 +305,11 @@ def matrix_budgets_for(model: str, effort: str,
     # more call at the caller's timeout with its own retry. Without this the
     # path could overrun the budget at a SHORT timeout -- measured: at 30 s
     # the server's budget is 265 s and the path was allowed 600.
-    from .extractor import extraction_wall_clock_budget_sec
+    # ARCH-REVIEW-2026-11-02 P3-11: this used to be `from .extractor import
+    # extraction_wall_clock_budget_sec`, which closed a cycle because
+    # extractor.py imports extract_matrix_two_stage from here. A pure
+    # function with no dependencies belongs in its own module.
+    from .budget import extraction_wall_clock_budget_sec
     server_budget = extraction_wall_clock_budget_sec(caller_timeout)
     fallback = 2 * caller_timeout
     path = max(1, min(path, MAX_PATH_BUDGET_SEC, server_budget - fallback))

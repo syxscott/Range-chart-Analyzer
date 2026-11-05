@@ -191,27 +191,40 @@ def test_a_different_endpoint_still_separated_them_before_the_fix():
 
 
 def _key_field_sets():
-    """Every make_key() call site's field names, by module."""
-    out = {"extractor": set(), "server": set()}
+    """Every make_key() call site's field names, ONE ENTRY PER CALL SITE.
+
+    ARCH-REVIEW-2026-11-02 P0-2: the original helper UNIONED all call sites
+    in a module into one set. That made the invariant vacuous -- a newly
+    added key builder that omitted extra_headers/extra_body/effort could
+    never fail, because the older, correct call sites had already put those
+    names in the union. AUDIT-2026-10-01 [9.9] was exactly this bug class
+    (the classify key omitted both extras while its siblings had them).
+
+    Return [(module, lineno, field_set), ...] so each builder is checked
+    on its own.
+    """
+    out = []
     for label, path in (("extractor", EXTRACTOR), ("server", SERVER)):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if (isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "make_key"):
-                out[label] |= {k.arg for k in node.keywords if k.arg}
+                out.append((label, node.lineno,
+                            {k.arg for k in node.keywords if k.arg}))
     return out
 
 
 def test_no_cache_key_site_omits_the_identity_fields():
     """The general rule, so the next key builder cannot forget.
 
-    A first draft asserted this only for the classify key and would have passed
-    if a THIRD key builder were added without them.
+    Checked PER CALL SITE, not against a module-wide union. A first draft
+    asserted this only for the classify key; the second draft used a union
+    and would still have passed if a THIRD builder were added without them.
     """
-    fields = _key_field_sets()
-    for label, present in fields.items():
-        assert present, f"no make_key() call site found in {label}"
+    sites = _key_field_sets()
+    assert sites, "no make_key() call site found - AST probe went stale"
+    for label, lineno, present in sites:
         # REVIEW-2026-10-19: the reasoning effort belongs here too. It changes
         # the request shape the same way extra_body does -- it picks the
         # model's reasoning depth, and on MiniMax's M3.1 it decides whether
@@ -219,8 +232,14 @@ def test_no_cache_key_site_omits_the_identity_fields():
         # previous effort's answer.
         for required in ("extra_headers", "extra_body", "reasoning_effort"):
             assert required in present, (
-                f"a cache key in {label}.py omits {required}: {sorted(present)}"
+                f"{label}.py:{lineno} cache key omits {required}: "
+                f"{sorted(present)}"
             )
+        # A prompt upgrade must invalidate old answers, on every builder.
+        assert "prompt_version" in present, (
+            f"{label}.py:{lineno} cache key omits prompt_version; a prompt "
+            "change would keep serving replies produced by the old prompt"
+        )
 
 
 def test_the_helpers_live_next_to_make_key():

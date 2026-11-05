@@ -820,16 +820,47 @@ function rcaOrChainStr(row, k) {
 // ("_" digit) pairs. The exponent gets the same treatment, and the fraction
 // keeps a bare trailing "." because float("5.") is 5.0.
 const _PY_FLOAT_RE = /^[+-]?(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?$/;
+
+// P0-1 (ARCH-REVIEW-2026-11-02, reproduced by the lead): Python's float()
+// accepts ANY Unicode Nd decimal digit, so float("１２７") == 127.0 and
+// float("٥٠٠") == 500.0. This function did NOT transliterate, so a fullwidth
+// label fell through to null and rcaSortTuple put it in the STRING bucket --
+// the browser's runs>1 merge then ordered the same batch differently from the
+// Python merge, silently turning a numeric sort into a lexicographic one.
+//
+// js/minimax.js already had rcaPyFloatTransliterate (FE-FIX-2026-09-22).
+// This is its twin, kept local because tests_aggregate.js loads aggregate.js
+// standalone and the project has no build step / module loader. The two are
+// pinned together by tests/js/tests_pyfloat_parity.js -- do not fix one
+// without fixing the other.
+function rcaPyFloatTransliterate(s) {
+  if (!/[^\x00-\x7F]/.test(s)) return s;   // ASCII fast path
+  let out = '';
+  for (const ch of s) {
+    if (ch.charCodeAt(0) < 128 || !/\p{Nd}/u.test(ch)) { out += ch; continue; }
+    let cp = ch.codePointAt(0);
+    let value = 0;
+    while (value < 10 && /\p{Nd}/u.test(String.fromCodePoint(cp - 1))) {
+      cp -= 1; value += 1;
+    }
+    out += String(value);
+  }
+  return out;
+}
+
 function rcaPyFloat(v) {
   if (typeof v === 'number') return Number.isNaN(v) ? NaN : v;
   if (typeof v === 'boolean') return v ? 1 : 0;   // float(True) == 1.0
   if (typeof v !== 'string') return null;         // dict / list -> TypeError
-  const s = v.trim();
+  const s = rcaPyFloatTransliterate(v.trim());
   if (!s) return null;
   const low = s.toLowerCase();
   if (low === 'inf' || low === '+inf' || low === 'infinity' || low === '+infinity') return Infinity;
   if (low === '-inf' || low === '-infinity') return -Infinity;
   if (low === 'nan' || low === '+nan' || low === '-nan') return NaN;
+  // _PY_FLOAT_RE is the CPython-exact underscore grammar (\d(?:_?\d)*), so
+  // unlike minimax.js it needs no separate _rcaPyUnderscoresLegal pass: a
+  // trailing/leading/doubled underscore cannot match in the first place.
   if (!_PY_FLOAT_RE.test(s)) return null;
   const n = Number(s.replace(/_/g, ''));
   return Number.isFinite(n) || n === Infinity || n === -Infinity ? n : null;

@@ -12,6 +12,17 @@ translate. Mirrors the JS ``extractRangeChart`` contract.
 from __future__ import annotations
 
 from .modes import MODES as _MODE_SPECS
+# ARCH-REVIEW-2026-11-02 P3-11: matrix.py needs the budget function and this
+# module needs extract_matrix_two_stage from matrix.py. Importing the budget
+# back from here made a cycle, so it lives in rca_core/budget.py. Re-exported
+# so existing callers (and any module-level monkeypatch of the constants)
+# keep working.
+from .budget import (
+    SINGLE_RUN_MAX_ATTEMPTS,
+    SINGLE_RUN_DEADLINE_SLACK_SEC,
+    MULTI_RUN_TIMEOUT_SLACK_SEC,
+    extraction_wall_clock_budget_sec,
+)
 
 import base64
 import io
@@ -127,26 +138,6 @@ DEFAULT_MAX_EDGE = 4000
 #: outbound attempts. A budget derived from six was already too small for
 #: the two-stage path, and the reasoning levels made the calls slower still.
 #:
-#: It lives here, beside the extraction code that spends it, so the server
-#: and the matrix path cannot disagree about how much time there is.
-SINGLE_RUN_MAX_ATTEMPTS = 8
-SINGLE_RUN_DEADLINE_SLACK_SEC = 15
-MULTI_RUN_TIMEOUT_SLACK_SEC = 10
-
-
-def extraction_wall_clock_budget_sec(timeout_sec: int) -> int:
-    """Total wall-clock seconds ONE extraction may spend, for every caller.
-
-    ``timeout_sec`` per outbound attempt, times the worst-case number of
-    attempts, plus slack. The server's single-run and multi-run branches
-    both use this value, so a batch's slots -- which run concurrently -- are
-    bounded by ONE slot's budget and not by N of them added up.
-    """
-    return (timeout_sec * SINGLE_RUN_MAX_ATTEMPTS
-            + SINGLE_RUN_DEADLINE_SLACK_SEC
-            + MULTI_RUN_TIMEOUT_SLACK_SEC)
-
-
 def clamp_max_tokens(value):
     """Coerce a user-supplied max_tokens into [MIN, MAX]."""
     try:
