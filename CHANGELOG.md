@@ -5,7 +5,145 @@ All notable changes to Range Chart Analyzer are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] — 2026-11-07
+
+### Added
+
+- **`rca_core/pipeline.py`: the /api/extract orchestration, out of the HTTP socket.**
+  `Handler._handle_extract_body` was 997 lines with 18 `_send_json` exits and
+  17 early returns; it is now 24 lines that read the body, mark it consumed and
+  delegate. The move was **mechanical, not a rewrite**: 24 `deps.<name>`
+  substitutions, 18 `self._send_json` → `emit`, and three socket-level facts
+  lifted back into `server.py`, produced by
+  `scripts/audit/split_extract_handler.py` via AST-located text replacement.
+  Server-local collaborators arrive through a frozen `PipelineDeps` dataclass,
+  so `rca_core` still never imports the HTTP layer. Behaviour is locked by
+  `tests/test_extract_pipeline_parity.py`: 19 locally-terminating requests are
+  replayed against the real handler and compared **byte-for-byte** with a
+  golden recorded before the split (`scripts/audit/record_extract_baseline.py`).
+  One candidate golden case was removed after it turned out to reach a live
+  provider (real `request_id` / `latency_ms`) — a network-dependent golden is
+  not a golden.
+- **Deterministic axis measurement (geometry-engine PoC, FigDataX route).**
+  `rca_core/axis_detect.py` finds the axis line by projection, finds ticks as
+  periodic protrusions beside it (MAD-based peak threshold, over-thick
+  protrusions rejected as rules), traces a curve as the per-column median ink
+  row, and fits `data = slope * pixel + intercept` through the existing
+  `rca_core.geometry.fit_linear`. Verified on synthetic figures with known
+  answers: ticks within 2 px, curve within 4 px, recovered slope within 1e-3.
+  Deliberately does **not** read tick labels — OCR misreads (3/8, 1/l) would
+  masquerade as calibration error.
+- **Deterministic plate segmentation (the verifiable half of auto-ID).**
+  `rca_core/plate_segment.py` splits a plate on ink-free gutters, tightens each
+  cell to its ink bounding box, re-encodes the crop as PNG, and reports
+  `layout: grid|irregular|empty`. Irregular plates can be refused
+  (`drop_irregular=True`) so a classifier never receives two merged fossils
+  labelled as one specimen. Synthetic 3x3 plates: nine crops at pixel-exact
+  origins. **No classifier inference is provided** — the repo ships no weights
+  and no labelled radiolarian set, so a `predict()` would return a number with
+  nothing behind it.
+- **Fluent (the default desktop UI) can now verify names.** `names.verify`,
+  `names.fuzzy` and `check_name_grounding` are wired behind **explicit,
+  default-OFF** settings switches: a background `QThread` (no timer in
+  `run()`), 15 s per GBIF request / 60 s batch budget / 90 s grounding, stale
+  results dropped by a generation counter, failures surfaced as `errors` /
+  warnings and never as "clean". `not_performed` is rendered as "could not
+  check", matching `server.py`'s semantics. Both switches state in the UI that
+  they cost an extra network round-trip and one extra model call.
+- **`tests/standalone/conftest.py`**: the 17 script-style suites are now
+  collected by pytest as one item per file via a **subprocess**, so
+  `tests_gui_fluent.py`'s `os._exit(rc)` cannot kill the pytest process, each
+  suite gets a clean interpreter, and `python <file>` remains byte-identical.
+  Wired as `standalone_script` so the full-suite and `qt` job runs can exclude
+  it with `-m "not standalone_script"` (one execution path, not two).
+- **CI**: matrix gains Python 3.13; a separate `offline-smoke` job runs
+  `doctor` / `extract --help` / the stubbed CLI test behind a dead proxy;
+  `build.yml` gains a `paths`-limited `pull_request` trigger; new
+  `upx-check.yml` builds twice (with/without `RCA_UPX_DIR`) to measure UPX
+  independently, with no PR gate and no artifact upload.
+
+### Changed
+
+- **`extractor.py` 7,036 → 3,500 lines** by moving the ten mode normalizers
+  and their transitive helpers into `rca_core/modes_impl/` — 94 definitions
+  copied **verbatim** in original order (verified byte-for-byte against
+  `git show HEAD:rca_core/extractor.py`, one documented one-character
+  exception: `.bed_parser` → `..bed_parser`), plus 17 function bodies. The
+  shared module is a **leaf**: its only non-stdlib imports are
+  `rca_core.reason_codes` / `rca_core.row_flags`, both stdlib-only leaves.
+  `extractor.py` re-exports at the end of the file, one-way. `modes.py`'s
+  `normalizer_ref` now points at the new modules and
+  `tests/test_normalizer_refs_resolve.py` proves every ref resolves to the
+  same function object — while **locking the fact that dispatch still does not
+  read the field** (wiring it is owner decision G8).
+- **The acyclicity guard now scans subpackages.** `tests/test_rca_core_acyclic.py`
+  used `CORE.glob("*.py")`, so a module-level cycle between `extractor` and a
+  new `modes_impl/` submodule was invisible. It now uses `CORE.rglob("*.py")`
+  with point-path node names and level-aware relative-import resolution, and
+  asserts no module-level cycle with **zero waivers**. Mutation-tested: one
+  injected `from ..extractor import ...` turns both the ratchet and the
+  zero-waiver assertion red.
+- `rca_core/capability_matrix.py` requires a **per-endpoint waiver**; the
+  Fluent landings remove their waivers and `result_cache`'s probe gained the
+  stable `_cache_singleton_safe` symbol (`make_key` left `server.py` with the
+  handler split).
+- README's optional-dependency table, roadmap checkboxes and the new
+  `docs/OVERLAY-COORD-AUDIT.md` now state measured facts rather than plans.
+
+### Fixed
+
+- **`rca_core/db.py` could lower the on-disk schema version.** `_apply_migrations`
+  unconditionally wrote `_CURRENT_SCHEMA_VERSION` back, so opening a newer
+  database with an older build rewrote the version DOWN — later upgrades then
+  skipped their migrations while the new columns were already half-present.
+  Downgrades now run no migrations, leave the version untouched, emit a
+  `RuntimeWarning` + log line, expose `schema_warning`, and `doctor` reports it
+  (read-only, `mode=ro`) with a non-zero exit.
+- **A genuinely corrupt `rca.db` is preserved, not overwritten.** The old
+  recovery path re-opened and re-ran `_apply_setup()` unguarded, so
+  `executescript(SCHEMA)` raised straight out of `__init__` and the reopen
+  branch was unreachable for real corruption. `rca.db` is now renamed to
+  `rca.db.corrupt-<UTC>` (never deleted), a fresh database is created in its
+  place, and `recovery_note` carries the preserved path plus a backup warning.
+  Only true corruption signatures trigger it — a DDL error such as
+  `no such column` still raises `OperationalError`, so a legitimate error is
+  not disguised as a damaged file.
+- Two source-location assertions followed the code instead of being deleted:
+  `tests/test_review_2026_07_31_core.py` and
+  `tests/test_audit_2026_09_27.py` now parse
+  `rca_core/pipeline.py::run_extraction_request`, keeping the
+  "merged_usage before the audit write" and "import precedes use" invariants.
+- Five dangling `references/*` gitlinks (mode 160000 with no `.gitmodules`)
+  removed from the index — every `actions/checkout` post-step used to fail with
+  `No url found for submodule path ...` (exit 128 warning, green jobs).
+  The directories stay on disk and are now gitignored.
+- `SECURITY.md` gained an "After a fix ships" section: when to open an
+  advisory, an affected-version table template that **requires** an explicit
+  re-export answer, when a CVE is warranted, and the project-specific rule
+  that a data-correctness advisory must repeat the re-export guidance (v0.1.4's
+  PBDB defect is the worked example).
+
+### Known limitations
+
+- `rca_core/transport.py` was **not** created. A measured experiment on an
+  isolated copy proved that moving the transport primitives breaks
+  `tests/test_protocol_adapters_2026_10_20.py`'s
+  `test_the_adapters_reach_the_patched_transport`: `transport._post_json` is
+  the original object while `llm._post_json` is the fake, so the patch becomes
+  unreachable. The `llm ↔ protocols` cycle therefore stays, pinned to
+  function-local imports by evidence rather than waived by assertion.
+- `normalizer_ref` remains declarative (G8). `modes_impl/` is a real leaf, but
+  the two leaf imports are absolute `rca_core.*` imports, not literally
+  stdlib-only; a `modes_impl_acyclic` test pins the whitelist and proves both
+  leaves have no extractor dependency.
+- Fluent's two capability switches default to OFF, while `server.py`'s
+  grounding defaults to ON. That asymmetry is deliberate (extra cost) and is an
+  owner decision, not an oversight.
+- `INSERT OR REPLACE INTO _schema_version` can leave a second row when a
+  downgrade previously wrote a different value; not changed here because it is
+  outside the "do not break existing migration semantics" boundary.
+- Auto-identification inference, real-corpus E2E, and PySide6 on-device UI are
+  still not verified (see `docs/OWNER_DECISIONS.md`).
 
 ## [0.3.0] — 2026-11-07
 
