@@ -358,8 +358,20 @@ def _get_or_create_fernet_key() -> bytes:
             "read. Fix its permissions rather than generate a new key."
         )
     key = base64.urlsafe_b64encode(secrets.token_bytes(32))
+    # ARCH-REVIEW-2026-11-02 D1: losing fernet_key.fek makes EVERY stored
+    # API key permanently undecryptable. providers.json has five rotating
+    # backups, but they all contain ciphertext under this one key, so they
+    # are useless without it. Write ONE backup at creation time; never
+    # overwrite an existing backup (that would destroy the only good copy
+    # if a later process regenerates a key).
+    backup = path + ".bak"
     try:
         write_private_bytes(path, key, exclusive=True)
+        if not os.path.lexists(backup):
+            try:
+                write_private_bytes(backup, key, exclusive=True)
+            except (OSError, FileExistsError):
+                pass  # a backup from another process is fine
     except FileExistsError:
         raced = _read_private_bytes(path)
         if raced:

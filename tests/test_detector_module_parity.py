@@ -1,13 +1,19 @@
-r"""aggregate.py and exporter.py each carry their own mode detector.
+r"""aggregate.py and exporter.py used to each carry their own mode detector.
 
     _looks_columnar   in rca_core/aggregate.py and rca_core/exporter.py
     _looks_abundance  in rca_core/aggregate.py and rca_core/exporter.py
 
-Two modules independently answering "what shape is this result?". A
-disagreement would mean the aggregator and the exporter classify one payload
-differently -- the same shape as the exporter's copies drifting from
-js/table.js, which the table-config detector parity test covers. This pair is
-Python-to-Python and had no such test.
+ARCH-REVIEW-2026-11-02 A7 UNIFIED all six detectors into rca_core/shape.py.
+Both modules now re-export the SAME function objects under their old private
+names. The fixture-based behavioural tests below are unchanged and now pin
+that single implementation; test_all_detectors_now_share_one_implementation
+replaces the old "these must be separate copies" sentinel, which explicitly
+asked to be deleted once the refactor happened.
+
+Two modules independently answering "what shape is this result?" was the
+drift risk: a disagreement meant the aggregator and the exporter classified
+one payload differently -- the same shape as the exporter's copies drifting
+from js/table.js, which the table-config detector parity test covers.
 
 MEASURED: the two agree on all 8 gold fixtures and on all 22 trustworthy
 boundary shapes below. Zero disagreements. This commit is the guard, not a
@@ -182,17 +188,50 @@ def test_the_gold_set_covers_distinct_shapes():
     )
 
 
-def test_the_two_detector_pairs_are_separately_implemented():
-    """A guard that compares a function to itself proves nothing.
+def test_all_detectors_now_share_one_implementation():
+    """The old sentinel asked to be deleted when unification happened.
 
-    If either pair is ever unified -- which would be the right refactor -- the
-    identity check below flips and this file says so, instead of quietly
-    passing on a comparison of one implementation with itself.
+    The previous version of this test asserted that aggregate._looks_* and
+    exporter._looks_* were DIFFERENT function objects, on the grounds that
+    "a guard that compares a function to itself proves nothing". Its failure
+    message said: "delete this parity test and the refactor itself".
+
+    ARCH-REVIEW A7 did the refactor: all six detectors now live in
+    rca_core/shape.py and both modules re-export the same objects under
+    their old private names. Rather than deleting the guard, it is UPGRADED:
+    identity is now the REQUIRED state, and the behavioural fixture tests
+    above become stronger (they now pin the one shared implementation
+    rather than two copies that happened to agree today).
     """
-    for name in ("_looks_columnar", "_looks_abundance"):
-        a = getattr(AG, name)
-        e = getattr(EX, name)
-        assert getattr(a, "__code__", None) is not getattr(e, "__code__", None), (
-            f"{name} is now the SAME function object in both modules; delete "
-            f"this parity test and the refactor itself"
-        )
+    import rca_core.shape as shape
+
+    pairs = (
+        ("_looks_columnar", "looks_columnar"),
+        ("_looks_abundance", "looks_abundance"),
+        ("_looks_occurrence_matrix", "looks_occurrence_matrix"),
+        ("_looks_paleomap", "looks_paleomap"),
+        ("_looks_zonation_chart", "looks_zonation_chart"),
+        ("_looks_zonation", "looks_zonation_chart"),
+        ("_looks_phylogenetic_tree", "looks_phylogenetic_tree"),
+        ("_looks_phylogenetic", "looks_phylogenetic_tree"),
+    )
+    for private, public in pairs:
+        a = getattr(AG, private, None)
+        e = getattr(EX, private, None)
+        canonical = getattr(shape, public)
+        # Not every alias exists in every module; at least one must.
+        present = [f for f in (a, e) if f is not None]
+        assert present, f"neither module exports {private}"
+        for f in present:
+            assert f is canonical, (
+                f"{private} is no longer the shared rca_core.shape.{public} "
+                "implementation -- a local copy has crept back in"
+            )
+
+    # The registry must list every detector, so adding a seventh shape
+    # without wiring it into auto-detect is visible here.
+    assert set(shape.MODE_FOR_SHAPE.values()) == {
+        "looks_phylogenetic_tree", "looks_columnar",
+        "looks_occurrence_matrix", "looks_abundance",
+        "looks_zonation_chart", "looks_paleomap",
+    }

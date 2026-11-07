@@ -120,58 +120,18 @@ EXTRACT_TIMEOUT_SEC = 120
 
 
 def _collect_extraction_futures(futures, budget):
-    """Sprint B (REVIEW-2026-09-04): collect extraction futures under a
-    REAL whole-batch time budget.
+    """Tkinter adapter for rca_core.fanout.collect_extraction_futures.
 
-    The previous implementation iterated ``as_completed(futures)`` and
-    called ``fut.result(timeout=...)`` per future — but as_completed only
-    yields futures that have ALREADY finished, so the per-future timeout
-    was dead code and one stalled run pinned the whole batch forever.
-
-    All runs execute concurrently, so ONE budget equal to the per-request
-    LLM timeout (``timeout_sec``) plus a small grace window covers the
-    batch. Futures that overrun it are reported as ``err.timeout``
-    ExtractResults instead of being waited on indefinitely. Running
-    threads cannot be killed safely, so the caller must NOT join the
-    executor after this returns (use ``shutdown(wait=False)``).
-
-    Returns the flat list of ExtractResults. Deliberately Tk-free so the
-    timeout semantics are unit-testable without a display (see
-    tests/test_gui_sprint_b.py; Qt twin lives in gui_fluent.py).
+    ARCH-REVIEW A3: the timeout / failure-count / cancellation decisions
+    used to be duplicated here and in gui_fluent.py, and the copies had
+    drifted (only Fluent had cancellation and progress). The single
+    implementation now lives in rca_core/fanout.py. This adapter keeps the
+    ORIGINAL Tk contract -- a flat list of ExtractResults -- so every call
+    site and tests/test_gui_sprint_b.py keep working unchanged.
     """
-    results = []
-    pending = set(futures)
-    deadline = time.monotonic() + float(budget)
-    while pending:
-        remaining = deadline - time.monotonic()
-        done_set, pending = concurrent.futures.wait(
-            pending, timeout=max(0.0, remaining),
-            return_when=concurrent.futures.ALL_COMPLETED)
-        for fut in done_set:
-            try:
-                results.append(fut.result())
-            except Exception as exc:
-                # extract() never raises, but defend against unforeseen
-                # bugs in user code. Bug-12 fix: log so the exception
-                # class + traceback is recoverable when the user reports
-                # "nothing happened".
-                log.exception("extract future raised in worker thread")
-                results.append(ExtractResult(
-                    ok=False, error_key="err.http", raw=str(exc)))
-        if pending and deadline - time.monotonic() <= 0:
-            # Budget exhausted: cancel whatever has not started and
-            # report the still-running runs as timeouts.
-            n_timed_out = len(pending)
-            for unf in pending:
-                unf.cancel()
-            pending.clear()
-            for _ in range(n_timed_out):
-                results.append(ExtractResult(
-                    ok=False, error_key="err.timeout",
-                    error_body=f"per-future timeout after {budget:.0f}s",
-                ))
-            break
-    return results
+    from rca_core.fanout import collect_extraction_futures
+    return collect_extraction_futures(futures, budget, log=log)[0]
+
 
 # UI-Mod-1: 极简现代风 Palette (Morandi / "性冷淡"色系).
 # 深层石板灰主按钮 + 蓝灰点缀 + 冷白背景. 配合 sv_ttk 主题后整体
@@ -2527,7 +2487,54 @@ class RangeChartApp:
         except Exception:
             pass
         return None
+def _install_tk_error_boundary() -> None:
+    """Show uncaught exceptions with a stack, and copy the traceback.
+
+    ARCH-REVIEW E5: gui_fluent_diagnostics.install_error_boundary() has done
+    this for the Fluent GUI since 2026-10-18, but the Tkinter fallback had
+    no excepthook at all -- the user saw one line of the exception string
+    and nothing a maintainer could act on. Console output is also kept so
+    headless / no-clipboard environments still get the trace.
+    """
+    import sys
+    import traceback
+
+    previous = sys.excepthook
+
+    def hook(exc_type, exc, tb):
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        print(text, file=sys.stderr)
+        try:
+            # Clipboard is the only channel a windowed user can paste into
+            # an issue; messagebox alone cannot be copied.
+            holder = tk.Tk()
+            holder.withdraw()
+            holder.clipboard_clear()
+            holder.clipboard_append(text)
+            holder.update()
+            messagebox.showerror(
+                "Range Chart Analyzer",
+                "An unexpected error occurred. The full traceback has been "
+                "copied to the clipboard - paste it into a bug report.\n\n"
+                + str(exc)[:300],
+            )
+            holder.destroy()
+        except Exception:
+            try:
+                messagebox.showerror("Range Chart Analyzer", str(exc)[:300])
+            except Exception:
+                pass
+        # Chain to the previous hook so pytest / CI still sees the failure.
+        try:
+            previous(exc_type, exc, tb)
+        except Exception:
+            pass
+
+    sys.excepthook = hook
+
+
 def main():
+    _install_tk_error_boundary()
     root = tk.Tk()
     app = RangeChartApp(root)
     root.protocol("WM_DELETE_WINDOW", app.on_close)

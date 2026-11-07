@@ -2,9 +2,10 @@
 
 js/table.js's rcaLooksColumnar / rcaLooksAbundance / rcaLooksZonationChart /
 rcaLooksPhylogeneticTree / rcaLooksPaleomap / rcaLooksOccurrenceMatrix are
-documented mirrors of rca_core/exporter.py's _looks_columnar / _looks_abundance
-/ _looks_zonation_chart / _looks_phylogenetic_tree / _looks_paleomap /
-_looks_occurrence_matrix, and get_configs_for_result dispatches the whole export
+documented mirrors of rca_core/shape.py's looks_columnar / looks_abundance
+/ looks_zonation_chart / looks_phylogenetic_tree / looks_paleomap /
+looks_occurrence_matrix (re-exported by rca_core/exporter.py under the
+historical `_looks_*` aliases), and get_configs_for_result dispatches the whole export
 on them. If one side disagrees, the browser and the desktop write DIFFERENT SETS
 OF SHEETS for the same result -- the same class of divergence as the quality
 zonation branch fixed in b7f592b, one layer down.
@@ -18,8 +19,10 @@ AUDIT-2026-10-15: occurrence_matrix repeated that mistake. `_looks_occurrence_ma
 went into exporter.py with no PAIRS entry and no shape below, and the suite
 stayed green -- because the scope assertion was `len(PAIRS) == 5`, which pinned
 the hand-written list to its own length instead of to the detectors the code
-actually has. The count is gone; the set is now enumerated from the exporter
-module and from what js/table.js really defines.
+actually has. The count is gone; the set is now enumerated from
+rca_core.shape (the single Python implementation since 2026-11-07) and from
+what js/table.js really defines. The exporter aliases are checked for object
+identity so a second, divergent implementation cannot hide behind a re-export.
 
 Measured over 34 shapes: zero disagreements. So this is coverage, not a fix --
 and it is the coverage that would have caught a one-sided change to any of the
@@ -273,18 +276,31 @@ def test_every_detector_in_pairs_is_a_callable_on_both_sides():
     import inspect
 
     from rca_core import exporter as _exporter
+    from rca_core import shape as _shape
 
+    # 2026-11-07: the six detectors moved into rca_core/shape.py; aggregate.py
+    # and exporter.py now only re-export them under the historical `_looks_*`
+    # names. Enumerate the REAL implementation module, and additionally prove
+    # exporter's aliases are those very objects (not local copies). Without
+    # the identity check, a one-sided edit to exporter would pass this scope
+    # assertion while still dispatching exports differently.
     py_detectors = {
-        name for name, obj in vars(_exporter).items()
-        if name.startswith("_looks_") and inspect.isfunction(obj)
+        name for name, obj in vars(_shape).items()
+        if name.startswith("looks_") and inspect.isfunction(obj)
     }
     covered = {fn.__name__ for _, fn in PAIRS}
     assert py_detectors == covered, (
-        "every _looks_* detector in rca_core/exporter.py needs an entry in "
+        "every looks_* detector in rca_core/shape.py needs an entry in "
         f"PAIRS (with its js/table.js mirror). "
-        f"only in exporter: {sorted(py_detectors - covered)}; "
+        f"only in shape: {sorted(py_detectors - covered)}; "
         f"only in PAIRS: {sorted(covered - py_detectors)}"
     )
+    for name in py_detectors:
+        alias = "_" + name
+        assert getattr(_exporter, alias, None) is getattr(_shape, name), (
+            f"rca_core.exporter.{alias} must be the very same function object "
+            f"as rca_core.shape.{name}, not a second implementation"
+        )
     for js_name, py_fn in PAIRS:
         assert callable(py_fn), f"{py_fn} is not callable on the Python side"
 

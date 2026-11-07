@@ -332,72 +332,18 @@ def save_config(cfg: dict) -> None:
 # ---------------------------------------------------------------------------
 def _collect_extraction_futures(futures, budget, *, should_cancel=None,
                                 on_batch=None):
-    """Sprint B (REVIEW-2026-09-04): collect extraction futures under a
-    REAL whole-batch time budget.
+    """PySide6 adapter for rca_core.fanout.collect_extraction_futures.
 
-    The previous implementation iterated ``as_completed(futures)`` and
-    called ``fut.result(timeout=...)`` per future — but as_completed only
-    yields futures that have ALREADY finished, so the per-future timeout
-    could never fire and one stalled run pinned the whole batch forever.
-
-    All runs execute concurrently, so ONE budget equal to the per-request
-    LLM timeout (``timeout_sec``) plus a small grace window covers the
-    batch. Futures that overrun it are reported as ``err.timeout``
-    ExtractResults instead of being waited on indefinitely. Running
-    threads cannot be killed safely, so the caller must NOT join the
-    executor after this returns (use ``shutdown(wait=False)``).
-
-    Returns ``(results, cancelled)``. ``cancelled`` is True when
-    ``should_cancel`` fired between batches; every unfinished future was
-    cancel()ed and only the results collected so far are returned.
-    ``on_batch(done_count)`` runs after each completed batch so the caller
-    can stream progress.
-
-    Deliberately Qt-free so the timeout/cancel semantics are unit-testable
-    without a QApplication (see tests/test_gui_sprint_b.py).
+    ARCH-REVIEW A3: this used to be the superset copy (it had cancellation
+    and progress while the Tkinter copy did not). The single implementation
+    now lives in rca_core/fanout.py. This adapter keeps the ORIGINAL Fluent
+    contract -- ``(results, cancelled)`` -- unchanged.
     """
-    import concurrent.futures
-    results: list = []
-    pending = set(futures)
-    deadline = time.perf_counter() + float(budget)
-    while pending:
-        remaining = deadline - time.perf_counter()
-        done_set, pending = concurrent.futures.wait(
-            pending, timeout=max(0.0, remaining),
-            return_when=concurrent.futures.ALL_COMPLETED)
-        for fut in done_set:
-            try:
-                results.append(fut.result())
-            except Exception as exc:
-                # extract() never raises, but defend against unforeseen
-                # bugs in user code. Bug-12 fix: log so the exception
-                # class + traceback is recoverable.
-                log.exception("extract future raised in worker thread")
-                results.append(ExtractResult(
-                    ok=False, error_key="err.http", raw=str(exc)))
-        if on_batch is not None:
-            try:
-                on_batch(len(results))
-            except Exception:
-                pass
-        if pending and deadline - time.perf_counter() <= 0:
-            # Budget exhausted: cancel whatever has not started and
-            # report the still-running runs as timeouts.
-            n_timed_out = len(pending)
-            for unf in pending:
-                unf.cancel()
-            pending.clear()
-            for _ in range(n_timed_out):
-                results.append(ExtractResult(
-                    ok=False, error_key="err.timeout",
-                    error_body=f"per-future timeout after {budget:.0f}s",
-                ))
-            break
-        if pending and should_cancel is not None and should_cancel():
-            for unf in pending:
-                unf.cancel()
-            return results, True
-    return results, False
+    from rca_core.fanout import collect_extraction_futures
+    return collect_extraction_futures(
+        futures, budget, should_cancel=should_cancel,
+        on_batch=on_batch, log=log)
+
 
 
 class _Heartbeat:

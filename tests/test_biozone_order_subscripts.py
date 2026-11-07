@@ -49,10 +49,16 @@ SECTIONS = [{"name": "Sec A", "age_range": "150-160 Ma"}]
 OLDER_BZ = "Sinemurian"
 YOUNGER_BZ = "Olenekian"
 
-pytestmark = pytest.mark.skipif(
-    not getattr(Q, "_HAS_ICS", False),
-    reason="the ICS table is unavailable, so every pair is skipped",
-)
+# ACCEPTANCE-REVIEW-2026-11-02 B-7 / C2: the ICS chart is CORE DATA, not an
+# optional dependency. The old `skipif` meant a missing / corrupt
+# rca_core/resources/ics_2024.json still produced a GREEN CI run while every
+# age comparison silently measured nothing. Fail collection instead.
+if not getattr(Q, "_HAS_ICS", False):
+    raise AssertionError(
+        "ICS table (rca_core/resources/ics_2024.json) is missing or could "
+        "not be parsed. This is core data: a green run without it would "
+        "prove nothing about age ordering. Restore the resource."
+    )
 
 
 def _violations(a_top, b_top, a_bz, b_bz):

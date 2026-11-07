@@ -476,6 +476,12 @@ node tests/js/tests_frontend_perf.js                        # 真实浏览器性
 }
 ```
 
+> 上面是**模板**，不是可直接投稿的引用：`year` / `url` / `note` 请按你实际使用的
+> **release 版本**核对，并在 `note` 里写明版本号（例如 `v0.3.0`）。不要引用未发布的
+> 主干 commit。权威引用元数据是仓库根目录的 `CITATION.cff`（含 `version` 与
+> `date-released`）；发布前 `python scripts/release_check.py --check` 会核对它与
+> `rca_core.__version__`、CHANGELOG 是否一致。
+
 ---
 
 ## 许可

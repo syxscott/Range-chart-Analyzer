@@ -27,6 +27,11 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "gold_smoke" in str(item.fspath):
             item.add_marker(pytest.mark.gold_smoke)
+            # ACCEPTANCE-REVIEW B-6 / C3: `gold` used to select ONLY the 29
+            # pure metric unit tests, so `pytest -m gold` (the command the
+            # docs advertised for "all gold cases") never ran a single gold
+            # fixture case. Make `gold` the SUPERSET: smoke ⊂ gold.
+            item.add_marker(pytest.mark.gold)
         elif "gold_metrics" in str(item.fspath):
             item.add_marker(pytest.mark.gold)
         elif "gold" in str(item.fspath):

@@ -910,6 +910,19 @@ class ProviderPreset:
     endpoint_candidates: list[str] = field(default_factory=list)
 
     @property
+    def trusted(self) -> bool:
+        """Whether this preset points at the MODEL VENDOR's own endpoint.
+
+        SECURITY.md / GAP-ANALYSIS E1: the preset grid mixes ~100 official
+        endpoints with third-party API relays. Selecting a relay sends BOTH
+        the unpublished figure AND the user's paid API key to a host that
+        is not the model vendor. `category` already encodes this; exposing
+        it as a boolean lets the GUI render a warning without each frontend
+        re-implementing the classification (which would drift).
+        """
+        return self.category in ("official", "cn_official")
+
+    @property
     def capabilities(self):
         """What this preset's model can do, when the catalogue knows.
 

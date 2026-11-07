@@ -155,10 +155,11 @@ def _server_source() -> str:
 
 def test_server_cache_key_sites_use_the_strict_helper():
     src = _server_source()
-    sites = [m.start() for m in re.finditer(r"cache\.make_key\(", src)]
+    sites = [m.start() for m in re.finditer(r"build_extraction_key\(", src)]
     assert len(sites) == 2, (
-        "expected exactly the single-run and multi-run /api/extract key "
-        "sites; a new cache-key site must use prompt_version_for_cache_key")
+        "expected exactly the single-run and multi-run /api/extract "
+        "build_extraction_key calls; a new key site must use "
+        "prompt_version_for_cache_key")
     for start in sites:
         block = src[start:start + 900]
         assert "prompt_version=prompt_version_for_cache_key(mode)" in block, (

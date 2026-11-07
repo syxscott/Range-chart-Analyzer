@@ -17,6 +17,9 @@ from .modes import MODES as _MODE_SPECS
 # back from here made a cycle, so it lives in rca_core/budget.py. Re-exported
 # so existing callers (and any module-level monkeypatch of the constants)
 # keep working.
+# ARCH-REVIEW A9: the row-flag convention now lives in its own
+# module so grounding.py does not depend on the extractor.
+from .row_flags import add_row_flag as _add_row_flag
 from .budget import (
     SINGLE_RUN_MAX_ATTEMPTS,
     SINGLE_RUN_DEADLINE_SLACK_SEC,
@@ -1834,20 +1837,6 @@ _GEOMETRY_SEMANTIC_KEYS = {
 }
 
 
-def _add_row_flag(row: dict[str, Any], tag: str) -> None:
-    """Attach a ``_warning`` to a row using the extractor's own convention.
-
-    Single flag -> string, several -> list (same shape
-    ``aggregate._add_row_warning`` writes, so every consumer reads one format).
-    """
-    existing = row.get("_warning")
-    if existing in (None, ""):
-        row["_warning"] = tag
-        return
-    flags = list(existing) if isinstance(existing, list) else [existing]
-    if tag not in flags:
-        flags.append(tag)
-    row["_warning"] = flags[0] if len(flags) == 1 else flags
 
 
 def _to_float_opt(value: Any) -> float | None:
@@ -6654,9 +6643,10 @@ def classify_chart_image(
     try:
         from .cache import (get_cache, stable_extra_body, stable_extra_headers,
                             stable_reasoning_effort)
+        from .cache import build_extraction_key
         from .prompt import prompt_version_for_mode as _pvm
         _cache = get_cache()
-        ckey = _cache.make_key(
+        ckey = build_extraction_key(
             endpoint=p.endpoint if p else "",
             model=p.model if p else "",
             api_format=p.api_format.value if p else "",

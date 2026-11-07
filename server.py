@@ -735,6 +735,15 @@ def _write_history_record(result, mode, runs, provider, max_tokens,
             if provider is not None:
                 meta["model"] = provider.model
                 meta["endpoint"] = provider.endpoint
+                # E2: an unpublished figure and the user's paid API key
+                # are sent to this host. Make the destination visible in
+                # the evidence chain instead of burying it in config.
+                from urllib.parse import urlparse as _urlparse
+                try:
+                    meta["target_host"] = (
+                        _urlparse(provider.endpoint).hostname or "")
+                except Exception:
+                    meta["target_host"] = ""
                 meta["api_format"] = provider.api_format.value
                 eb = provider.extra_body or {}
                 if "temperature" in eb:
@@ -3097,6 +3106,7 @@ class Handler(BaseHTTPRequestHandler):
         # They now live in rca_core.cache next to make_key, which is where the
         # next key builder will look.
         from rca_core.cache import stable_extra_body as _stable_extra_body
+        from rca_core.cache import build_extraction_key
         from rca_core.cache import stable_extra_headers as _stable_extra_headers
         # REVIEW-2026-10-19: the reasoning effort changes the request shape
         # the same way extra_body does -- it picks the model's reasoning
@@ -3146,7 +3156,7 @@ class Handler(BaseHTTPRequestHandler):
                     # request, making the single-run cache命中率 ≈ 0).
                     prov = common["provider"]
                     try:
-                        ckey = cache.make_key(
+                        ckey = build_extraction_key(
                             endpoint=prov.endpoint if prov else "",
                             model=prov.model if prov else "",
                             api_format=prov.api_format.value if prov else "",
@@ -3440,13 +3450,14 @@ class Handler(BaseHTTPRequestHandler):
         # "v3" fallback (see the single-run key site above).
         from rca_core.prompt import prompt_version_for_cache_key
         prov = common["provider"]
+        from rca_core.cache import build_extraction_key
         cache = _cache_singleton_safe()
         slot_keys: list = []
         for run_idx in range(runs):
             slot_ckey = None
             if cache is not None:
                 try:
-                    slot_ckey = cache.make_key(
+                    slot_ckey = build_extraction_key(
                         endpoint=prov.endpoint if prov else "",
                         model=prov.model if prov else "",
                         api_format=prov.api_format.value if prov else "",

@@ -1,0 +1,446 @@
+{
+  "schema_version": 1,
+  "pairs": [
+    [
+      "rcaLooksColumnar",
+      "looks_columnar"
+    ],
+    [
+      "rcaLooksAbundance",
+      "looks_abundance"
+    ],
+    [
+      "rcaLooksPhylogeneticTree",
+      "looks_phylogenetic_tree"
+    ],
+    [
+      "rcaLooksZonationChart",
+      "looks_zonation_chart"
+    ],
+    [
+      "rcaLooksPaleomap",
+      "looks_paleomap"
+    ],
+    [
+      "rcaLooksOccurrenceMatrix",
+      "looks_occurrence_matrix"
+    ]
+  ],
+  "cases": [
+    {
+      "label": "null",
+      "payload": null,
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "empty object",
+      "payload": {},
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "plain range chart",
+      "payload": {
+        "species_ranges": [
+          {
+            "species": "A"
+          }
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "columnar id sections",
+      "payload": {
+        "sections": [
+          {
+            "id": "C1",
+            "top": 10
+          }
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": true,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "range-chart name sections",
+      "payload": {
+        "sections": [
+          {
+            "name": "Measured A"
+          }
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "columnar empty sections",
+      "payload": {
+        "sections": []
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "columnar first row not dict",
+      "payload": {
+        "sections": [
+          "oops"
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "abundance empty placeholder",
+      "payload": {
+        "abundances": []
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "abundance populated",
+      "payload": {
+        "abundances": [
+          {
+            "taxon": "A",
+            "pct": 20
+          }
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": true,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "abundances not a list",
+      "payload": {
+        "abundances": "nonsense"
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "phylo nodes id+parent",
+      "payload": {
+        "nodes": [
+          {
+            "id": "n1",
+            "parent": null
+          }
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": true,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "phylo nodes missing parent",
+      "payload": {
+        "nodes": [
+          {
+            "id": "n1"
+          }
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "phylo nodes empty",
+      "payload": {
+        "nodes": []
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "zonation correlations",
+      "payload": {
+        "correlations": [
+          {
+            "from_zone": "A"
+          }
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": true,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "zonation zone rank rows",
+      "payload": {
+        "zones": [
+          {
+            "rank": 1,
+            "name": "Z1"
+          }
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": true,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "zonation zonation descriptor",
+      "payload": {
+        "zones": [
+          {
+            "zonation": "A"
+          }
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": true,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "zonation descriptors only",
+      "payload": {
+        "zonations": [
+          {
+            "name": "A"
+          }
+        ],
+        "zones": []
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": true,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "paleomap continents",
+      "payload": {
+        "continents": [
+          {
+            "name": "Pangea"
+          }
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": true,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "paleomap empty fossil_sites",
+      "payload": {
+        "fossil_sites": []
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "paleomap first row not dict",
+      "payload": {
+        "continents": [
+          "oops"
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "occurrence matrix occurrences",
+      "payload": {
+        "occurrences": [
+          {
+            "taxon": "A",
+            "locality": "L1"
+          }
+        ],
+        "columns": []
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": true
+      }
+    },
+    {
+      "label": "occurrence matrix gated taxon_rows",
+      "payload": {
+        "occurrences": [],
+        "taxon_rows": [
+          {
+            "taxon": "A"
+          }
+        ],
+        "columns": []
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": true
+      }
+    },
+    {
+      "label": "generic table columns only",
+      "payload": {
+        "columns": [
+          {
+            "name": "a"
+          }
+        ],
+        "rows": [
+          [
+            "1"
+          ]
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": false,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": false,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    },
+    {
+      "label": "mixed abundance and zonation",
+      "payload": {
+        "abundances": [
+          {
+            "taxon": "A"
+          }
+        ],
+        "zones": [
+          {
+            "rank": 1
+          }
+        ]
+      },
+      "expected": {
+        "rcaLooksColumnar": false,
+        "rcaLooksAbundance": true,
+        "rcaLooksPhylogeneticTree": false,
+        "rcaLooksZonationChart": true,
+        "rcaLooksPaleomap": false,
+        "rcaLooksOccurrenceMatrix": false
+      }
+    }
+  ]
+}

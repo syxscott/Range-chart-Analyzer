@@ -575,7 +575,7 @@ def _short(text: Any, limit: int = 160) -> str:
 def flag_unverified_rows(data: Any, unverified: Iterable[str]) -> dict[str, int]:
     """Tag every row whose name the verifier did not find in the figure.
 
-    Uses ``extractor._add_row_flag`` rather than assigning ``_warning``
+    Uses ``rca_core.row_flags.add_row_flag`` rather than assigning ``_warning``
     directly: that field is a bare string when one flag fires and a list when
     several do, and a plain assignment would silently destroy whatever the
     normaliser or the order-repair pass already recorded on the row.
@@ -595,10 +595,11 @@ def flag_unverified_rows(data: Any, unverified: Iterable[str]) -> dict[str, int]
     if not wanted or not isinstance(data, dict):
         return {}
 
-    # Imported lazily: quality.py imports this module for the result shape,
-    # and extractor.py pulls in PIL / llm / prompt. Keeping the edge lazy
-    # means nothing that only reads a GroundingResult pays for it.
-    from .extractor import _add_row_flag
+    # ARCH-REVIEW A9: this used to be `from .extractor import
+    # _add_row_flag`, a private-symbol dependency that pulled in the
+    # whole extractor (PIL / llm / prompt). The convention now lives in
+    # the zero-dependency rca_core/row_flags.py.
+    from .row_flags import add_row_flag
 
     flagged: dict[str, int] = {}
     for table_key, row_keys in NAME_SOURCES:
@@ -617,7 +618,7 @@ def flag_unverified_rows(data: Any, unverified: Iterable[str]) -> dict[str, int]
                 continue
             for row_key in dict_keys:
                 if _match_key(row.get(row_key)) in wanted:
-                    _add_row_flag(row, GROUNDING_ROW_FLAG)
+                    add_row_flag(row, GROUNDING_ROW_FLAG)
                     hits += 1
                     break
         if hits:

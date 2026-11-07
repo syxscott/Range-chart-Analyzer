@@ -377,6 +377,70 @@ _singleton: ResultCache | None = None
 _singleton_lock = threading.Lock()
 
 
+# ARCH-REVIEW-2026-11-02 A2 / P0-2. Three call sites used to spell out
+# `make_key(**fields)` by hand, with THREE DIFFERENT field sets. `make_key`
+# accepts arbitrary keyword arguments, so omitting a field is SILENT: no
+# error, no warning, just a cache key that ignores that part of the request.
+# AUDIT-2026-10-01 [item 9.9] recorded exactly that incident -- the chart
+# classification key omitted extra_headers / extra_body, so two providers
+# differing only in Authorization shared one cached verdict, and `mode=auto`
+# derived the wrong prompt / normalizer / merge schema from it.
+#
+# The different field sets today are mostly INTENTIONAL (a classification
+# request has no max_tokens or media_type; a multi-run slot needs run_idx),
+# so this factory keeps them optional. What it removes is the possibility of
+# a NEW call site forgetting a REQUIRED field.
+CACHE_KEY_FIELDS = frozenset({
+    "endpoint", "model", "api_format", "extra_headers", "extra_body",
+    "reasoning_effort", "prompt_version", "max_tokens", "chart_lang",
+    "mode", "image_b64", "caption", "media_type", "run_idx",
+})
+
+# Fields EVERY key must carry. tests/test_cache_key_identity.py checks this
+# per call site; keeping the declaration next to the factory makes both
+# sides of the contract visible in one place.
+CACHE_KEY_REQUIRED = frozenset({
+    "endpoint", "model", "api_format", "extra_headers", "extra_body",
+    "reasoning_effort", "prompt_version", "mode", "image_b64",
+    "caption", "chart_lang",
+})
+
+
+def build_extraction_key(*, endpoint, model, api_format, extra_headers,
+                         extra_body, reasoning_effort, prompt_version,
+                         mode, image_b64, caption, chart_lang,
+                         max_tokens=None, media_type=None,
+                         run_idx=None) -> str:
+    """The ONE way to build a cache key for a model call.
+
+    Optional fields are passed as ``None`` and dropped by ``make_key``, so
+    the resulting keys are BYTE-IDENTICAL to the three hand-written call
+    sites this replaced (verified by tests/test_extraction_key_factory.py).
+    A classification call omits max_tokens / media_type / run_idx; a
+    multi-run slot supplies run_idx; a single extraction omits run_idx.
+    """
+    fields = {
+        "endpoint": endpoint,
+        "model": model,
+        "api_format": api_format,
+        "extra_headers": extra_headers,
+        "extra_body": extra_body,
+        "reasoning_effort": reasoning_effort,
+        "prompt_version": prompt_version,
+        "max_tokens": max_tokens,
+        "chart_lang": chart_lang,
+        "mode": mode,
+        "image_b64": image_b64,
+        "caption": caption,
+        "media_type": media_type,
+        "run_idx": run_idx,
+    }
+    assert set(fields) == CACHE_KEY_FIELDS, "cache key field set drifted"
+    missing = CACHE_KEY_REQUIRED - {k for k, v in fields.items() if v is not None}
+    assert not missing, f"required cache key fields are None: {sorted(missing)}"
+    return ResultCache.make_key(**fields)
+
+
 def get_cache() -> ResultCache:
     """Return the process-wide cache singleton."""
     global _singleton

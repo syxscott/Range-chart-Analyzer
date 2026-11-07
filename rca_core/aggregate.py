@@ -11,6 +11,16 @@ auto-detect between range-chart and columnar-section using the row shape
 """
 
 from __future__ import annotations
+# ARCH-REVIEW A7: single source for the shape decisions (see rca_core/shape.py).
+from .shape import (
+    looks_abundance as _looks_abundance,
+    looks_columnar as _looks_columnar,
+    looks_phylogenetic_tree as _looks_phylogenetic,
+    looks_zonation_chart as _looks_zonation,
+    looks_paleomap as _looks_paleomap,
+    looks_occurrence_matrix as _looks_occurrence_matrix,
+)
+
 
 from .modes import WIRED_MODE_NAMES as _REGISTRY_WIRED_MODES
 
@@ -804,94 +814,12 @@ if WIRED_MODES - _REGISTRY_WIRED_MODES:
         % sorted(WIRED_MODES - _REGISTRY_WIRED_MODES))
 
 
-def _looks_abundance(data: Optional[dict]) -> bool:
-    """Mirror of rca_core.exporter._looks_abundance. An abundance-diagram
-    result carries a non-empty ``abundances`` list (unique to that mode).
-    Empty list is ignored because it can be an uninitialized placeholder."""
-    if not data:
-        return False
-    ab = data.get("abundances")
-    return isinstance(ab, list) and len(ab) > 0
 
 
-def _looks_columnar(data: Optional[dict]) -> bool:
-    """Mirror of rca_core.exporter._looks_columnar kept private to this
-    module so the auto-detect stays schema-only and avoids any circular
-    import back through exporter / extractor."""
-    if not data:
-        return False
-    sects = data.get("sections")
-    if not isinstance(sects, list) or not sects:
-        return False
-    first = sects[0]
-    return isinstance(first, dict) and ("id" in first)
 
 
-def _looks_phylogenetic(data: Optional[dict]) -> bool:
-    """REVIEW-2026-08-17 (P2): phylo detection.
-
-    The phylo extractor emits ``nodes`` (primary rows deduped by id)
-    plus a single ``metadata`` dict and a ``root_ids`` list. The shape
-    is unique to phylo — without this detector, phylo data was silently
-    merged as range_chart when no explicit ``schema=`` was passed."""
-    if not data:
-        return False
-    nodes = data.get("nodes")
-    if not isinstance(nodes, list) or not nodes:
-        return False
-    first = nodes[0]
-    # M2 fix (REVIEW-2026-11-07): require BOTH id and parent so this
-    # detector agrees with exporter._looks_phylogenetic_tree and the JS
-    # mirror. The normalizer always writes both keys (parent=None for
-    # roots), so normalized data is unaffected; only hand-crafted payloads
-    # lacking ``parent`` change classification (range-chart fallback, the
-    # same result the exporter would have given).
-    return isinstance(first, dict) and "id" in first and "parent" in first
 
 
-def _looks_occurrence_matrix(data: Optional[dict]) -> bool:
-    """A taxon x locality matrix carries a populated ``occurrences`` list.
-
-    This branch was added with the mode (2026-10-15) after a test caught the
-    consequence of forgetting it: merge_results with schema=None fell through
-    to RANGE_CHART_SCHEMA, whose primary_list_key is ``species_ranges`` - a key
-    this payload does not have. The merge then produced NOTHING for the real
-    rows and returned a single deep copy of the first run, so two different
-    localities of the same genus silently collapsed into one record. A missing
-    auto-detect branch is not a degradation here, it is data loss.
-
-    AUDIT-2026-10-16: ``taxon_rows`` joins it as a SECOND signal, because the
-    ``gated`` cell strategy empties ``occurrences`` BY DESIGN and a gated
-    payload was therefore invisible to auto-detection.
-    ``js/aggregate.js::rcaAutoDetectKeymap`` had the identical omission, and
-    js/app.js:1318 feeds this function's answer straight into the merge, so a
-    browser merge of gated results silently merged them as range charts while
-    the desktop did the same for a different reason.
-
-    Measured before changing anything (two gated runs, one input, both routes):
-
-      auto-detect -> range chart : ``columns`` merged to 2 of 3 labels
-      forced OCCURRENCE_MATRIX   : ``columns`` merged to 3 of 3 labels
-
-    so the occurrence route is strictly better for the header list. What the
-    range-chart route "kept" that this one does not is four PHANTOM empty
-    lists - ``species_ranges``, ``sections``, ``biozones``,
-    ``other_fossils`` - that no matrix result has anything to put in. Both
-    routes preserve ``taxon_rows`` and ``legend`` identically. The misroute was
-    real and this change costs nothing measurable.
-
-    What it does NOT fix: ``taxon_rows`` is carried from the first run rather
-    than merged, so a taxon only the second run reported is still lost. That is
-    a schema ``list_keys`` question, measured separately, and it is not what
-    this branch is about.
-    """
-    if not data:
-        return False
-    occ = data.get("occurrences")
-    if isinstance(occ, list) and occ and isinstance(occ[0], dict):
-        return True
-    taxa = data.get("taxon_rows")
-    return bool(isinstance(taxa, list) and taxa and isinstance(taxa[0], dict))
 
 
 def _auto_detect_schema(results):
@@ -922,11 +850,33 @@ def _auto_detect_schema(results):
     if not results:
         return RANGE_CHART_SCHEMA
     n = len(results)
+    # ARCH-REVIEW A8: `paleomap` has NO MergeSchema (see the WIRED_MODES
+    # comment above) because it carries continents / fossil_sites /
+    # data_points rather than any primary list a schema knows about. The old
+    # code fell through to RANGE_CHART_SCHEMA, which returned ok=True while
+    # dropping EVERY mode-specific row. Silence is the bug here: refuse.
+    if (any(_looks_paleomap(r) for r in results)
+            and not any(_looks_columnar(r) or _looks_abundance(r)
+                        or _looks_phylogenetic(r)
+                        or _looks_occurrence_matrix(r)
+                        or _looks_zonation(r) for r in results)):
+        raise ValueError(
+            "merge_results(schema=None): payload looks like a paleomap, but "
+            "paleomap has no MergeSchema. Auto-detecting it as range_chart "
+            "would silently drop continents / fossil_sites / data_points "
+            "while returning ok=True. Pass an explicit schema, or do not "
+            "merge this mode."
+        )
     counts = [
         (PHYLOGENETIC_TREE_SCHEMA, sum(1 for r in results if _looks_phylogenetic(r))),
         (COLUMNAR_SECTION_SCHEMA, sum(1 for r in results if _looks_columnar(r))),
         (OCCURRENCE_MATRIX_SCHEMA, sum(1 for r in results if _looks_occurrence_matrix(r))),
         (ABUNDANCE_DIAGRAM_SCHEMA, sum(1 for r in results if _looks_abundance(r))),
+        # ARCH-REVIEW A8: zonation_chart HAS a schema (ZONATION_CHART_SCHEMA)
+        # but had no auto-detect branch, so a zonation payload merged as a
+        # range chart -- its `zones` primary rows vanished. Last in the
+        # preference order so it cannot change an existing mixed verdict.
+        (ZONATION_CHART_SCHEMA, sum(1 for r in results if _looks_zonation(r))),
     ]
     # Declared preference order, filtered to shapes that were seen at all.
     ranked = [(sch, c) for sch, c in counts if c > 0]

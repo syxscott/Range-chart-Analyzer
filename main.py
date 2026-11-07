@@ -9,6 +9,9 @@ Usage:
     python main.py server --port 8080 --no-browser
     python main.py modern        # native window via PyWebView (pip install pywebview)
     python main.py doctor        # read-only install / dependency / data health report
+    python main.py extract --image FIG.png --out OUTDIR
+    python main.py extract --image DIR/ --mode auto --out OUTDIR
+    python main.py backup --out rca-backup.zip
 
 Default (no args) now launches the modern PySide6 + qfluentwidgets GUI.
 If those packages aren't installed, it automatically falls back to the
@@ -221,8 +224,19 @@ def _ignored_server_flags(args, mode: str, ui: str) -> list:
 
 
 def main() -> int:
+    # The headless extraction CLI has its OWN argparse (--image / --out /
+    # --mode / ...), so it must be dispatched BEFORE this parser, which
+    # would reject those flags. GAP-ANALYSIS B1 / ACCEPTANCE B-2.
+    if len(sys.argv) > 1 and sys.argv[1] == "extract":
+        from rca_core.cli import run_cli
+        return run_cli(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "backup":
+        from rca_core.backup import run_backup
+        return run_backup(sys.argv[2:])
+
     parser = argparse.ArgumentParser(
-        description="Range Chart Analyzer launcher",
+        description="Range Chart Analyzer launcher "
+                    "(also: python main.py doctor | python main.py extract --help)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

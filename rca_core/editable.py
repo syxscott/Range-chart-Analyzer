@@ -28,7 +28,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from .exporter import COL_TYPES, _find_cfg, get_config
+from .exporter import COL_TYPES, find_cfg, get_config
 
 _LIST_KEYS = (
     "sections", "species_ranges", "biozones",
@@ -115,7 +115,7 @@ def new_row_template(list_key: str, data: dict[str, Any] | None = None) -> Any:
     """
     if list_key in _SCALAR_LIST_KEYS:
         return ""
-    cfg = _find_cfg(list_key, data) if data else get_config(list_key)
+    cfg = find_cfg(list_key, data) if data else get_config(list_key)
     if cfg is None:
         return {}
     tpl = _template_from_cfg(cfg, list_key)

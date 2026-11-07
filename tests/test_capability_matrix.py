@@ -7,8 +7,9 @@ Each endpoint is grepped for the capability's stable symbol; the measured
 set must equal the declared set.
 
 When you wire an existing capability into a new endpoint, update
-rca_core/capability_matrix.py in the SAME commit (and edit its ``reason``
-to reflect what is still unwired). When you ADD a capability, add a row --
+rca_core/capability_matrix.py in the SAME commit (move it into ``landed`` and
+DELETE its now-stale ``waivers`` entry, then edit ``reason``). When you ADD a
+capability, add a row AND a waiver for every endpoint you did not wire --
 an undeclared capability is exactly the hole this file exists to remove.
 """
 from __future__ import annotations
@@ -21,7 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from rca_core.capability_matrix import (  # noqa: E402
-    CAPABILITIES, ENDPOINTS, ENDPOINT_FILES,
+    CAPABILITIES, ENDPOINTS, ENDPOINT_FILES, missing_waivers, unwired,
 )
 
 
@@ -51,6 +52,45 @@ def test_every_capability_declares_and_explains_its_gaps() -> None:
         assert spec.get("reason"), (
             f"{name}: some endpoints are unwired but no reason is recorded"
         )
+
+
+def test_every_unwired_endpoint_has_its_own_waiver() -> None:
+    """A blanket `reason` can hide ONE endpoint's gap. 2026-11-07.
+
+    Every endpoint that has not landed a capability must carry its own
+    written waiver, and a wired endpoint must NOT carry a stale one. This is
+    the check that turns "we did not do it" into per-endpoint, reviewable data.
+    """
+    assert missing_waivers() == [], "\n".join(missing_waivers())
+    for name, spec in CAPABILITIES.items():
+        assert set(spec["waivers"]) == set(unwired(name)), (
+            f"{name}: waivers do not cover exactly the unwired endpoints"
+        )
+
+
+def test_waiver_contract_detects_a_missing_waiver() -> None:
+    """The guard must be able to fail, not merely describe a happy state."""
+    import rca_core.capability_matrix as cm
+
+    spec = cm.CAPABILITIES["names.verify"]
+    saved = spec["waivers"]
+    try:
+        spec["waivers"] = dict(saved)
+        del spec["waivers"]["fluent"]
+        assert any("'fluent' is unwired with no waiver" in m
+                   for m in cm.missing_waivers()), (
+            "missing_waivers() did not notice a deleted Fluent waiver")
+        spec["waivers"]["fluent"] = "   "
+        assert any("waiver for 'fluent' is empty" in m
+                   for m in cm.missing_waivers()), (
+            "missing_waivers() did not notice a blank waiver")
+        spec["waivers"]["core"] = "stale"
+        assert any("has a waiver but IS wired" in m
+                   for m in cm.missing_waivers()), (
+            "missing_waivers() did not notice a stale wired-endpoint waiver")
+    finally:
+        spec["waivers"] = saved
+    assert cm.missing_waivers() == [], "waiver fixture was not restored"
 
 
 def test_declared_landings_match_the_code() -> None:

@@ -89,27 +89,16 @@ OTHER_ENDPOINT = Provider(endpoint="https://other.example.com",
 
 
 def _classify_key_field_names():
-    """The field names extractor.py's chart-classify make_key() ACTUALLY passes.
+    """The classification key's field set, declared by the factory.
 
-    Read from the source rather than transcribed. A first draft hardcoded the
-    eight field names in the test, which made the three collision tests
-    tautological: they exercised `make_key` with the fields the TEST chose, so
-    they stayed green when the product's key had none of them -- the
-    reverse-proof showed exactly 1 red instead of 4. A test that restates the
-    code it audits proves nothing about the code.
+    ARCH-REVIEW A2: the three hand-written make_key() call sites were
+    consolidated into rca_core.cache.build_extraction_key. The old helper
+    scraped extractor.py's AST for a `make_key` call with mode=chart_classify;
+    that call no longer exists by name. The factory's CACHE_KEY_REQUIRED is
+    now the SINGLE declaration, which is strictly better than scraping one
+    call site (a new call site could never be noticed).
     """
-    tree = ast.parse(EXTRACTOR.read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "make_key"):
-            continue
-        names = {k.arg for k in node.keywords if k.arg}
-        mode = next((ast.unparse(k.value) for k in node.keywords
-                     if k.arg == "mode"), "")
-        if "chart_classify" in mode:
-            return names
-    raise AssertionError("no chart_classify make_key() call site in extractor.py")
+    return set(cache_mod.CACHE_KEY_REQUIRED)
 
 
 # The values the product supplies for each field. Only the names decide which
@@ -126,17 +115,15 @@ _CLASSIFY_VALUES = {
     "image_b64": lambda p: "A" * 400,
     "caption": lambda p: "Fig. 1",
     "chart_lang": lambda p: "auto",
-    "max_tokens": lambda p: 500,
-    "media_type": lambda p: "image/png",
 }
 
 
 def _classify_key(p):
-    """Build the classify key the way the PRODUCT builds it."""
-    fields = _classify_key_field_names()
-    return ResultCache.make_key(
-        **{name: _CLASSIFY_VALUES[name](p) for name in fields}
-    )
+    """Build the classify key the way the PRODUCT builds it (via the factory)."""
+    fields = {name: _CLASSIFY_VALUES[name](p)
+              for name in _classify_key_field_names()}
+    return cache_mod.build_extraction_key(
+        **fields, max_tokens=None, media_type=None, run_idx=None)
 
 
 # --- the collision ------------------------------------------------------
@@ -190,56 +177,58 @@ def test_a_different_endpoint_still_separated_them_before_the_fix():
 # --- the invariant is enforced, not just satisfied by luck --------------
 
 
-def _key_field_sets():
-    """Every make_key() call site's field names, ONE ENTRY PER CALL SITE.
-
-    ARCH-REVIEW-2026-11-02 P0-2: the original helper UNIONED all call sites
-    in a module into one set. That made the invariant vacuous -- a newly
-    added key builder that omitted extra_headers/extra_body/effort could
-    never fail, because the older, correct call sites had already put those
-    names in the union. AUDIT-2026-10-01 [9.9] was exactly this bug class
-    (the classify key omitted both extras while its siblings had them).
-
-    Return [(module, lineno, field_set), ...] so each builder is checked
-    on its own.
-    """
+def _factory_call_sites():
+    """Every build_extraction_key() call, ONE ENTRY PER CALL SITE."""
     out = []
+    for label, path in (("extractor", EXTRACTOR), ("server", SERVER)):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "build_extraction_key"):
+                out.append((label, node.lineno,
+                            {k.arg for k in node.keywords if k.arg}))
+    return out
+
+
+def test_every_key_is_built_by_the_factory():
+    """No hand-written make_key(**fields) may exist outside cache.py."""
+    offenders = []
     for label, path in (("extractor", EXTRACTOR), ("server", SERVER)):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if (isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "make_key"):
-                out.append((label, node.lineno,
-                            {k.arg for k in node.keywords if k.arg}))
-    return out
+                offenders.append(f"{label}.py:{node.lineno}")
+    assert not offenders, (
+        "hand-written cache keys bypass the factory's required-field guard: "
+        + ", ".join(offenders))
+    assert _factory_call_sites(), "no factory call site found - AST probe stale"
 
 
 def test_no_cache_key_site_omits_the_identity_fields():
-    """The general rule, so the next key builder cannot forget.
+    """Checked PER CALL SITE, not against a module-wide union.
 
-    Checked PER CALL SITE, not against a module-wide union. A first draft
-    asserted this only for the classify key; the second draft used a union
-    and would still have passed if a THIRD builder were added without them.
+    ARCH-REVIEW A2: the union version was vacuous -- a new builder omitting
+    extra_headers / extra_body / reasoning_effort could never fail because
+    older correct sites had already put those names in the union.
     """
-    sites = _key_field_sets()
-    assert sites, "no make_key() call site found - AST probe went stale"
+    sites = _factory_call_sites()
+    assert sites, "no build_extraction_key() call site found - AST probe stale"
     for label, lineno, present in sites:
-        # REVIEW-2026-10-19: the reasoning effort belongs here too. It changes
-        # the request shape the same way extra_body does -- it picks the
-        # model's reasoning depth, and on MiniMax's M3.1 it decides whether
-        # the call answers at all -- so a key that omits it serves the
-        # previous effort's answer.
-        for required in ("extra_headers", "extra_body", "reasoning_effort"):
+        for required in cache_mod.CACHE_KEY_REQUIRED:
             assert required in present, (
                 f"{label}.py:{lineno} cache key omits {required}: "
                 f"{sorted(present)}"
             )
-        # A prompt upgrade must invalidate old answers, on every builder.
-        assert "prompt_version" in present, (
-            f"{label}.py:{lineno} cache key omits prompt_version; a prompt "
-            "change would keep serving replies produced by the old prompt"
-        )
+
+
+def test_factory_declares_a_complete_field_set():
+    assert cache_mod.CACHE_KEY_REQUIRED <= cache_mod.CACHE_KEY_FIELDS
+    assert "prompt_version" in cache_mod.CACHE_KEY_REQUIRED
+    for required in ("extra_headers", "extra_body", "reasoning_effort"):
+        assert required in cache_mod.CACHE_KEY_REQUIRED
 
 
 def test_the_helpers_live_next_to_make_key():

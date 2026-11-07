@@ -2340,17 +2340,6 @@ function rcaNormalizeResult(parsed) {
 }
 
 
-function rcaNormalizeResultOldDupA() {
-  // M1 (REVIEW-2026-08-19): other_fossils may be a string OR a dict
-  // shape (label/species/taxon). The previous asStr map silently turned
-  // dicts into '[object Object]'. Lift the first available label so
-  // researchers see the actual fossil name in the export.
-  const conf = 0;
-  return conf;
-}
-
-
-
 // Normalize the parsed columnar-section JSON into the strict result shape.
 // Mirror of rca_core.extractor.normalize_columnar_result.
 //

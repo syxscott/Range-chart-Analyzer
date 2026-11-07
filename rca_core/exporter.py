@@ -11,6 +11,21 @@ to a clear error message so the user knows which dep to install.
 """
 
 from __future__ import annotations
+# ARCH-REVIEW A7: the ONE implementation of each shape decision lives in
+# rca_core/shape.py. Re-exported under the original private names so every
+# existing call site (and every test that pins them) keeps working.
+# ARCH-REVIEW A4: the label fallback rules live in i18n.py now.
+from .i18n import column_label as _col_label
+from .i18n import table_title_label as _title_label
+from .shape import (
+    looks_abundance as _looks_abundance,
+    looks_columnar as _looks_columnar,
+    looks_phylogenetic_tree as _looks_phylogenetic_tree,
+    looks_zonation_chart as _looks_zonation_chart,
+    looks_paleomap as _looks_paleomap,
+    looks_occurrence_matrix as _looks_occurrence_matrix,
+)
+
 
 import copy
 import csv
@@ -311,76 +326,12 @@ def validate_export_invariants(
 
 # Each config: id, i18n title key, list of column i18n keys, and a row
 # extractor producing cell values in column order.
-def _looks_columnar(data: dict[str, Any] | None) -> bool:
-    """Heuristic: if data.sections is present and its first item has an 'id'
-    field (column-label) rather than a 'name' (measured-section), it's a
-    columnar-section result. Mirrors js/table.js.
-    """
-    if not data:
-        return False
-    sects = data.get("sections")
-    if not isinstance(sects, list):
-        return False
-    if not sects:
-        return False
-    first = sects[0]
-    # "id" is the definitive columnar marker (it holds the column-label
-    # value). Even if "name" is also present (LLM being verbose), the
-    # presence of "id" is sufficient to classify as columnar. Range-chart
-    # sections use "name" (measured-section name) and never have "id".
-    return isinstance(first, dict) and ("id" in first)
 
 
-def _looks_abundance(data: dict[str, Any] | None) -> bool:
-    """Heuristic: an abundance-diagram result carries an ``abundances`` list
-    (the per-(taxon, level) rows). Mirrors js/table.js.
-
-    An empty list (`abundances: []`) is NOT enough to call this an
-    abundance result — every freshly-extracted object schema includes an
-    empty `abundances` placeholder before the model fills it in, so
-    accepting empty lists misroutes pure range-chart results to the
-    abundance renderer. Require at least one entry plus a non-empty
-    `abundances` list to disambiguate.
-    """
-    if not data:
-        return False
-    ab = data.get("abundances")
-    return isinstance(ab, list) and len(ab) > 0
 
 
-def _looks_phylogenetic_tree(data: dict[str, Any] | None) -> bool:
-    """Heuristic: a phylogenetic-tree result carries a ``nodes`` list
-    with parent/id structure and optionally ``root_ids``."""
-    if not data:
-        return False
-    nodes = data.get("nodes")
-    if not isinstance(nodes, list) or not nodes:
-        return False
-    first = nodes[0]
-    return isinstance(first, dict) and "id" in first and "parent" in first
 
 
-def _looks_zonation_chart(data: dict[str, Any] | None) -> bool:
-    """Heuristic: a zonation / correlation chart result carries a
-    non-empty ``correlations`` list, or a non-empty ``zones`` list of
-    zone-rank rows (``rank`` / ``zonation`` markers) that no other mode
-    emits. UI-REVIEW-2026-09-05 (radiolarian biochronology charts)."""
-    if not data:
-        return False
-    corr = data.get("correlations")
-    if isinstance(corr, list) and len(corr) > 0:
-        return True
-    zones = data.get("zones")
-    if isinstance(zones, list) and len(zones) > 0:
-        first = zones[0]
-        if isinstance(first, dict) and ("rank" in first or "zonation" in first):
-            return True
-    # A payload whose zonation column descriptors are populated is a
-    # zonation chart even when every zone row was unreadable.
-    zns = data.get("zonations")
-    if isinstance(zns, list) and len(zns) > 0:
-        return True
-    return False
 
 
 def _range_chart_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -759,27 +710,6 @@ def _nonempty(v: Any) -> bool:
     return bool(v) if isinstance(v, (list, dict, str)) else v is not None
 
 
-def _looks_paleomap(data: dict[str, Any] | None) -> bool:
-    """True when the payload carries paleomap-shaped tables.
-
-    AUDIT-2026-09-27 [item 4.2]. Mirrors js/table.js.
-
-    The trigger is any paleomap-exclusive key that actually holds rows. The
-    exclusivity matters: `metadata` / `confidence` overlap every mode, and
-    a range chart may legitimately carry a `note`. Being strict on the key
-    NAME but not on its CONTENT is what made the old behaviour wrong in both
-    directions -- it classified 7 real responses with 24 populated tables as
-    "no tables at all", and let 7 genuinely empty range charts through as
-    tabular.
-    """
-    if not isinstance(data, dict) or not data:
-        return False
-    for k in ("continents", "oceans_seas", "tectonic_features",
-              "biogeographic_realms", "paleolatitude_indicators", "fossil_sites"):
-        v = data.get(k)
-        if isinstance(v, list) and v and isinstance(v[0], dict):
-            return True
-    return False
 
 
 def _paleomap_tables(data: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -907,34 +837,8 @@ def _nonempty_or_none(configs: list[dict[str, Any]],
             out.append(c)
     return out
 
-def _col_label(key: str) -> str:
-    """`col.<snake_key>` when that translation exists, else a readable literal.
-
-    A generic table has arbitrary columns, so it cannot ship an i18n key per
-    possible column. Where a translation already exists (col.group,
-    col.coordinates, ...) it is used, so the generic tables look native; the
-    rest fall back to a humanised label, and ``Translator.t`` returns an
-    unknown key verbatim, so a literal renders as itself.
-    """
-    from .i18n import TRANSLATIONS
-    camel = re.sub(r"_([a-z])", lambda m: m.group(1).upper(), key)
-    i18n_key = "col." + camel
-    en = TRANSLATIONS.get("en") or {}
-    if i18n_key in en:
-        return i18n_key
-    words = re.split(r"[_\-]+", key)
-    return " ".join(w[:1].upper() + w[1:] for w in words if w)
 
 
-def _title_label(key: str) -> str:
-    """Readable table title; the same verbatim-fallback trick as _col_label."""
-    from .i18n import TRANSLATIONS
-    camel = re.sub(r"_([a-z])", lambda m: m.group(1).upper(), key)
-    for pref in ("sec.", "table."):
-        if (pref + camel) in (TRANSLATIONS.get("en") or {}):
-            return pref + camel
-    words = re.split(r"[_\-]+", key)
-    return " ".join(w[:1].upper() + w[1:] for w in words if w)
 
 
 def _generic_tables(data: dict[str, Any],
@@ -1040,43 +944,6 @@ def get_configs_for_result(data: dict[str, Any] | None) -> list[dict[str, Any]]:
     return _generic_tables(data, set())
 
 
-def _looks_occurrence_matrix(data: dict[str, Any] | None) -> bool:
-    """A taxon x locality matrix carries a populated ``occurrences`` list.
-
-    The discriminator is ``occurrences``, NOT ``columns``. This looked like a
-    harmless choice until a cross-mode collision test caught what it costs:
-    ``normalize_generic_table_result`` ALSO emits ``columns``, so keying on it
-    classified every generic_table result as an occurrence matrix. The exporter
-    then returned THIS mode's three table configs, which do not include
-    ``rows`` — so the generic table's entire data set vanished from the export
-    while remaining visible in the browser (js/table.js falls through to its
-    own generic renderer). Data present on screen, absent from CSV/XLSX, and
-    `export_supported=True` in the registry asserting the opposite.
-
-    ``occurrences`` is genuinely unique: no other normalizer in the app emits
-    that key. An occurrence_matrix whose cells were not read falls through to
-    `_generic_tables`, which renders its ``columns`` and ``legend`` anyway —
-    degraded but not lost, which is the correct trade.
-    """
-    if not isinstance(data, dict):
-        return False
-    occ = data.get("occurrences")
-    if isinstance(occ, list) and occ and isinstance(occ[0], dict):
-        return True
-    # 2026-10-16: `taxon_rows` is accepted as a SECOND signal, and without it
-    # the `gated` cell strategy is invisible to the export. That strategy
-    # returns headers, taxon labels and the legend and deliberately no cell
-    # reading, so `occurrences` is empty BY DESIGN - keying on it alone sent
-    # every gated result to `_generic_tables`, which renders `columns` and
-    # `legend` and drops the taxon names. So the half of the figure the model
-    # reads best (measured 20/22 taxa, 7/8 authorities) would be the half the
-    # exported workbook cannot show.
-    #
-    # The key is as unique as `occurrences`: declared only in this mode's
-    # normalizer (`normalize_occurrence_matrix_result`), which is exactly the
-    # property `occurrences` was chosen for when `columns` proved to collide.
-    taxa = data.get("taxon_rows")
-    return bool(isinstance(taxa, list) and taxa and isinstance(taxa[0], dict))
 
 
 def _strat_values(row: dict[str, Any]) -> str:
@@ -1454,7 +1321,7 @@ def get_config(table_id: str) -> dict[str, Any] | None:
     return None
 
 
-def _find_cfg(table_id: str, data: dict[str, Any] | None) -> dict[str, Any] | None:
+def find_cfg(table_id: str, data: dict[str, Any] | None) -> dict[str, Any] | None:
     """Resolve a table config: first the shape-matched configs (so the
     multi-run agreement column and columnar/range/abundance routing apply),
     then a cross-shape fallback so tables whose shape can't be inferred
@@ -1465,6 +1332,10 @@ def _find_cfg(table_id: str, data: dict[str, Any] | None) -> dict[str, Any] | No
         if c["id"] == table_id:
             return c
     return get_config(table_id)
+
+# Back-compat alias: tests/test_xlsx_row_index.py pinned the private
+# name. ARCH-REVIEW A9 promotes find_cfg to public but keeps this.
+_find_cfg = find_cfg
 
 
 # Legacy alias kept for callers that imported TABLE_CONFIGS directly.
@@ -1570,7 +1441,7 @@ def _export_grid(
 
 def build_table_export(data: dict[str, Any], table_id: str, translate: Callable[[str], str]):
     """Return (headers, rows) for a table, using translated column labels."""
-    cfg = _find_cfg(table_id, data)
+    cfg = find_cfg(table_id, data)
     if not cfg:
         return [], []
     headers, text_rows, _raw = _export_grid(
@@ -1846,7 +1717,7 @@ def apply_table_edits(
     """
     if not isinstance(data, dict):
         return data
-    cfg = _find_cfg(table_id, data)
+    cfg = find_cfg(table_id, data)
     if not cfg:
         return data
     data_keys = cfg.get("data_keys") or cfg["cols"]
@@ -2230,7 +2101,12 @@ def result_to_json(data: dict[str, Any],
     do); the defaults exist so that a caller in a hurry degrades to an
     anonymous payload instead of an error dialog written in Python.
     """
+    from .export_notes import CONFIDENCE_NOTE, as_dict as _data_dict
     payload = {
+        # GAP-ANALYSIS A4 / B4: a reader must never mistake the model's
+        # self-reported confidence for a calibrated probability.
+        "confidence_note": CONFIDENCE_NOTE,
+        "data_dictionary": _data_dict()["columns"],
         "extracted_at": timestamp,
         "source_file": source_file,
         "result": data,
@@ -2594,12 +2470,8 @@ def _provenance_rows(data: dict[str, Any]) -> list[tuple[str, str]]:
     # correctness -- a row marked 0.9 has never been shown to be right 90% of
     # the time. Shipping the number in a table without saying so invites a
     # reader to treat it as a probability, so the export states what it is.
-    pairs.append((
-        "confidence_note",
-        "the per-row confidence column is the model's own self-report, not a "
-        "calibrated probability; this project publishes no calibration curve "
-        "for it",
-    ))
+    from .export_notes import CONFIDENCE_NOTE  # lazy: keep core import graph thin
+    pairs.append(("confidence_note", CONFIDENCE_NOTE))
     return pairs
 
 

@@ -1,6 +1,24 @@
-"""UI translations for the Tkinter GUI: Chinese / English / Japanese."""
+"""Three-language UI translations, shared by EVERY endpoint.
+
+ARCH-REVIEW-2026-11-02 A4: the old docstring said "UI translations for the
+Tkinter GUI". That was WRONG and misleading -- this module is consumed by
+rca_core/exporter.py (column / table labels in CSV, XLSX and PBDB exports),
+rca_core/report.py (evidence-chain strings), rca_core/__init__.py (public
+API) and gui_fluent_history_detail.py (the desktop history page). It has
+zero Tkinter imports. Calling it desktop-only invited somebody to "move it
+next to the Tk GUI", which would break the core exporters.
+
+This module is also the JS mirror's counterpart: js/i18n.js carries the
+same keys in zh / en / ja, pinned by tests/js/tests_contrast.js.
+
+The humanise fallback rules (``column_label`` / ``table_title_label``) live
+here too, next to the translations they fall back FROM. They used to sit in
+exporter.py and import TRANSLATIONS back from this module on every call.
+"""
 
 from __future__ import annotations
+
+import re
 
 TRANSLATIONS = {
     "zh": {},
@@ -1911,4 +1929,33 @@ class Translator:
         if key in TRANSLATIONS["en"]:
             return TRANSLATIONS["en"][key]
         return key
+
+# ---------------------------------------------------------------------------
+# Export-label fallback (ARCH-REVIEW A4). Moved from rca_core/exporter.py,
+# where each call did a function-local `from .i18n import TRANSLATIONS`.
+# A generic table has ARBITRARY column names, so it cannot ship one i18n key
+# per possible column: where a translation exists it is used, otherwise a
+# humanised literal is returned and Translator.t renders an unknown key
+# verbatim. Keeping the rule beside the catalogue makes that contract visible.
+# ---------------------------------------------------------------------------
+
+def column_label(key: str) -> str:
+    """`col.<camelKey>` when that translation exists, else a readable literal."""
+    camel = re.sub(r"_([a-z])", lambda m: m.group(1).upper(), key)
+    i18n_key = "col." + camel
+    en = TRANSLATIONS.get("en") or {}
+    if i18n_key in en:
+        return i18n_key
+    words = re.split(r"[_\-]+", key)
+    return " ".join(w[:1].upper() + w[1:] for w in words if w)
+
+
+def table_title_label(key: str) -> str:
+    """Readable table title; the same verbatim-fallback trick as column_label."""
+    camel = re.sub(r"_([a-z])", lambda m: m.group(1).upper(), key)
+    for pref in ("sec.", "table."):
+        if (pref + camel) in (TRANSLATIONS.get("en") or {}):
+            return pref + camel
+    words = re.split(r"[_\-]+", key)
+    return " ".join(w[:1].upper() + w[1:] for w in words if w)
 
