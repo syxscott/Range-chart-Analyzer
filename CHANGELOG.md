@@ -7,6 +7,140 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-07
+
+> **The architecture convergence release.** v0.2.0 put the data-correctness
+> fixes inside a tag. This release takes the decisions that were implemented in
+> TWO or THREE places and gives each one a single owner -- then pins that
+> ownership with a test that fails, instead of a paragraph in a design doc.
+> No new extraction mode, no new model protocol, and no change to any pinned
+> export byte (CSV/TSV are still byte-for-byte locked).
+
+### Added
+
+- **Headless batch extraction: `python main.py extract`.** Extracting 20 (or
+  200) figures used to require a GUI or a running HTTP server. `rca_core/cli.py`
+  is an adapter over the same `ProviderStore` / `resolve_auto_mode` / `extract`
+  / `build_extraction_report` the three shells use, so CLI output cannot
+  diverge from GUI output structurally. Stable deduplicated ordering, one
+  self-describing `<stem>.json` per image, per-figure failure isolation, and a
+  nonzero exit code on any failure. Each JSON carries `confidence_note` and
+  `data_dictionary` inline -- one file per figure, no sidecar to lose.
+- **`python main.py backup`** (`rca_core/backup.py`): zips
+  `~/.range_chart_analyzer/` including `fernet_key.fek`, writes a manifest,
+  and warns that the archive is equivalent to the password. The master key is
+  now also copied to `fernet_key.fek.bak` at creation time.
+- **Detector parity from a generated fixture.** `scripts/gen_detector_parity.py`
+  computes expected verdicts with the REAL `rca_core.shape` (not hand-written
+  booleans); `tests/js/tests_detector_parity.js` replays 24 payloads x 6
+  detectors = 144 assertions against the browser mirrors, and
+  `tests/test_detector_parity_fixture.py` fails when the fixture is stale.
+- **Source-identity locks for the twin JS helpers.**
+  `tests/js/tests_shared_js_parity.js` locks `rcaWarningFlags` /
+  `rcaEditWarningFlags` (in `js/quality.js` and `js/table.js`) and the two
+  Unicode-transliteration helpers byte-for-byte AND behaviourally. Extracting
+  them into a shared file was rejected: `index.html` loads plain
+  `<script defer>` files with no module system and the Fluent history page
+  inlines a subset of them, so a new file would silently not load on one path.
+  See `docs/DECISIONS.md` (A1/A5).
+- **Three architecture guards that are proven able to fail.**
+  `tests/test_rca_core_acyclic.py` now checks the import graph in two layers:
+  the full-graph ratchet (1 known lazy cycle) AND a strict "module-level
+  imports are acyclic, no waivers" assertion, plus a test that pins both edges
+  of the waived cycle to function-local imports. `rca_core/capability_matrix.py`
+  gained `missing_waivers()`: every unwired endpoint needs its OWN written
+  waiver, and a stale waiver for a wired endpoint is a CI failure. Both guards
+  were mutation-tested (a promoted import and a synthetic cycle each turn the
+  suite red).
+- **Decision records**: `docs/DECISIONS.md` (what was unified, what was
+  deliberately NOT, and why), `docs/DATA_DICTIONARY.md` (column semantics and
+  the confidence disclaimer), `docs/OWNER_DECISIONS.md` (the items an AI must
+  not decide on the owner's behalf: Roadian base, overlay shape, licence SPDX,
+  deployment form, real-corpus E2E).
+
+### Changed
+
+- **One cache-key factory.** `rca_core/cache.py::build_extraction_key` replaces
+  three hand-written `make_key(...)` call sites (single-run, multi-run,
+  classification). `CACHE_KEY_FIELDS` / `CACHE_KEY_REQUIRED` make a missing
+  `prompt_version`, `extra_headers`, `extra_body` or `reasoning_effort` an
+  assertion failure instead of a silent cache collision.
+  `tests/test_extraction_key_factory.py` proves all three key families are
+  byte-identical to the old ones.
+- **One fan-out collector.** `rca_core/fanout.py::collect_extraction_futures`
+  owns the timeout / cancellation / progress logic that Tkinter and Fluent each
+  implemented; both GUIs are now thin adapters keeping their original return
+  contracts.
+- **One shape detector.** `rca_core/shape.py` is the sole Python home of the
+  six `_looks_*` decisions; `aggregate.py` and `exporter.py` re-export aliases.
+  `tests/test_detector_module_parity.py` now demands object identity, and
+  `tests/test_table_config_detectors_parity.py` was updated to enumerate the
+  new source (with an alias-identity check) rather than being deleted.
+- **Safer schema auto-detection.** `merge_results(schema=None)` now recognises
+  zonation charts instead of collapsing their rows, and raises an explicit
+  `ValueError` for paleomap payloads (there is no `MergeSchema` for them)
+  instead of silently applying `RANGE_CHART_SCHEMA` and dropping lines.
+- **Smaller, honest core API.** `rca_core/i18n.py` lost its "Tkinter-only"
+  docstring and gained `column_label()` / `table_title_label()`; `exporter.py`
+  gained a public `find_cfg()` with `_find_cfg` kept as an alias;
+  `grounding.py` no longer reaches into `extractor._add_row_flag` (now
+  `rca_core/row_flags.py`). `js/minimax.js` lost a dead duplicate normalizer.
+- **Export semantics travel with the data.** `rca_core/export_notes.py` is the
+  single source of the confidence disclaimer and the machine-readable column
+  dictionary, consumed by `result_to_json`, XLSX provenance and the CLI.
+  `report["degradations"]` now lists optional-dependency checks that did NOT
+  run, so a report can no longer look fully validated when numpy / cv2 / lxml
+  were absent.
+- **Provider transparency.** `ProviderPreset.trusted` distinguishes the 42
+  official presets from the 67 aggregator / specialty / third-party ones;
+  `server.py` records `target_host` in `request_meta`; Tkinter installs an
+  uncaught-exception boundary that prints and copies the traceback; CI parses
+  `proxy/*.js` and pins `pytest`/`ruff` versions.
+- **Test hygiene.** `pytest -m gold` is now a 45-test superset of
+  `gold_smoke` (was 29 vs 16 with overlapping-but-different semantics); a
+  missing ICS resource now FAILS `test_biozone_order_subscripts.py` instead of
+  skipping the core data; gold fixture README/docstring thresholds were
+  corrected to the measured values.
+
+### Fixed
+
+- **Active bug: non-ASCII digits in the browser aggregator.** `js/aggregate.js`
+  `rcaPyFloat` accepted Python-style Unicode `Nd` digits inconsistently with
+  `js/minimax.js`. Both now transliterate identically; `tests_pyfloat_parity.js`
+  differentially checks 20 inputs (fullwidth, Arabic-Indic, underscores,
+  `inf` / `nan`) against a CPython oracle. The helper is named
+  `rcaAggPyFloatTransliterate` on purpose -- the global-namespace sentinel
+  rejects duplicate top-level function names.
+- **Post-v0.2.0 CI fallout**: `NoReturn` import (F821), `lxml` added to the
+  documented dependency set because `payload_policy.py` xrefs it from
+  openpyxl, and `doctor`'s launcher test no longer assumes rc==0 on a CI
+  machine without matplotlib/Qt.
+- **`release_check.py --release-ready`** no longer demands `tag == HEAD` (which
+  made the gate permanently red after the first post-release commit). It uses
+  `merge-base --is-ancestor` and reads the PBDB fix symbols from the TAG's OWN
+  bytes.
+- Two regressions introduced while converging the code were caught by the full
+  suite and fixed: the CLI was writing a redundant `<stem>.dictionary.json`
+  per image (dictionary is now inline), and the detector scope test was
+  enumerating pre-move alias names (now enumerates `rca_core.shape`).
+
+### Known limitations
+
+- Full `pytest tests/` on this Windows developer machine has ONE environment-
+  only failure, `test_non_ascii_csrf_token_rejected_cleanly` (WinError 10053
+  during request send, before the handler runs). It passes 3/3 in isolation,
+  reproduced on a clean HEAD stash, and never reproduces in CI. Running the
+  full suite with that one test deselected exits 0.
+- `rca_core/llm.py` <-> `protocols.py` remains a LAZY cycle (both directions
+  are function-local). It is now pinned by evidence, not just listed. Breaking
+  it with a `transport.py` would mean relocating ~12 transport functions that
+  tests patch through `llm._post_json` at call time -- a tidiness change, not
+  a correctness fix, and deliberately deferred.
+- The phase-3 splits are NOT in this release: `modes_impl/` (11 `normalize_*`),
+  `pipeline.py`, and decomposing `server.py::_handle_extract_body` (~995 lines).
+  Neither are real-corpus E2E, real-provider connectivity, PySide6 on-device UI,
+  or the owner decisions in `docs/OWNER_DECISIONS.md`.
+
 ## [0.2.0] — 2026-11-06
 
 > **This is the release that finally publishes the data-correctness fixes.**
