@@ -250,14 +250,20 @@ jobs:
 
       - name: Core paths work with no external network
         env:
+          # UPPERCASE ONLY — and this is not a style choice.
+          # GitHub Actions compares env keys case-INSENSITIVELY, so also
+          # defining http_proxy/https_proxy/all_proxy/no_proxy makes the whole
+          # workflow INVALID ("key is duplicated in env section") and the run
+          # dies with ZERO jobs before any step starts. Measured 2026-11-07:
+          # run 42377423622, 0s, no jobs, and PyYAML happily parsed the file
+          # because YAML itself is case-sensitive.
+          # The uppercase set is sufficient: Python's urllib compares these
+          # case-insensitively on Windows and lowercases each key before
+          # matching on Linux, so one spelling reaches every reader.
           HTTP_PROXY: "http://127.0.0.1:1"
           HTTPS_PROXY: "http://127.0.0.1:1"
           ALL_PROXY: "http://127.0.0.1:1"
           NO_PROXY: ""
-          http_proxy: "http://127.0.0.1:1"
-          https_proxy: "http://127.0.0.1:1"
-          all_proxy: "http://127.0.0.1:1"
-          no_proxy: ""
         run: |
           # 1) doctor 是只读体检，本就不联网。允许 rc 0 或 1（1 表示体检
           #    发现某项不满足，如缺少 keyring 后端），但输出必须含「体检」
@@ -542,3 +548,17 @@ jobs:
             node --check "$f" || exit 1
             echo "syntax OK: $f"
           done
+
+      # 2026-11-07: a green PyYAML parse is NOT evidence that GitHub accepts a
+      # workflow. YAML treats keys case-SENSITIVELY; GitHub Actions does not.
+      # A duplicated `HTTP_PROXY` + `http_proxy` pair in one `env:` block made
+      # ci.yml INVALID, and the run died with ZERO jobs in 0s while every
+      # local YAML parse and a 19-check structural assertion set passed. That
+      # is exactly the "verification method was wrong, so diligence produced
+      # false confidence" failure this repo keeps auditing, so the check that
+      # uses GitHub's real schema now runs on every commit.
+      - name: Lint the workflow files (actionlint)
+        run: |
+          bash <(curl -fsSL \
+            https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash)
+          ./actionlint -color
