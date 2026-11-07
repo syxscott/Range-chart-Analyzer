@@ -37,6 +37,11 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 45
+    # v0.4.1: a tag build publishes the exe, so THIS job needs write access
+    # to the Release. Scoped to the job, not the workflow: a PR build only
+    # reads the repository.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -52,13 +57,51 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
 
+      # v0.4.1: UPX is ON for every build. The old "near-zero gain" note
+      # conflated two different operations: re-compressing the already
+      # zlib'd PKG buys nothing, but compressing each .pyd BEFORE it enters
+      # the PKG buys a lot. Measured on this payload with lzma (UPX's -9
+      # algorithm): cv2.pyd 30.7 -> 20.7 MB, openblas 6.4 -> 3.6,
+      # _rust.pyd 3.3 -> 2.5, QtOpenGL.pyd 2.2 -> 1.2 -- roughly 15 MB
+      # across the non-Qt binaries. The spec's UPX_EXCLUDE keeps every
+      # Qt6*.dll, the interpreter, the MS runtime and OpenSSL out: that is
+      # exactly the class of binary behind "it worked until I added UPX".
+      - name: Download UPX
+        id: upx
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path upx-dl, upx-extract | Out-Null
+          gh release download v5.3.0 --repo upx/upx `
+            --pattern "upx-*-win64.zip" --dir upx-dl
+          if ($LASTEXITCODE -ne 0) { throw "gh release download failed ($LASTEXITCODE)" }
+          $zip = Get-ChildItem upx-dl -Filter "*.zip" | Select-Object -First 1
+          if (-not $zip) { throw "no UPX win64 zip downloaded from upx/upx" }
+          Expand-Archive -Path $zip.FullName -DestinationPath upx-extract -Force
+          $exe = Get-ChildItem upx-extract -Recurse -Filter upx.exe |
+                 Select-Object -First 1
+          if (-not $exe) { throw "upx.exe not found inside $($zip.Name)" }
+          "upx_dir=$($exe.DirectoryName)" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          & $exe.FullName --version
+
       - name: Build both executables
-        # RCA_UPX_DIR is intentionally NOT set: PyInstaller 6 already
-        # zlib-compresses the archive, so UPX on the inner PKG is a
-        # near-zero-gain second compression (measured 2026-10-18), and
-        # downloading a Windows-only UPX binary in CI adds a failure mode.
-        # A release that WANTS UPX sets RCA_UPX_DIR locally and compares.
-        run: python -m PyInstaller --noconfirm RangeChartAnalyzer.spec
+        env:
+          RCA_UPX_DIR: ${{ steps.upx.outputs.upx_dir }}
+        shell: pwsh
+        run: |
+          # GitHub's pwsh wrapper sets $ErrorActionPreference='stop'; native
+          # stderr (PyInstaller progress/warnings) would otherwise become a
+          # terminating ErrorRecord. The real gates are $LASTEXITCODE and the
+          # '[spec] UPX enabled' marker.
+          $ErrorActionPreference = "Continue"
+          python -m PyInstaller --noconfirm RangeChartAnalyzer.spec 2>&1 |
+            Tee-Object -FilePath build.log
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed ($LASTEXITCODE)" }
+          if (-not (Get-Content build.log -Raw).Contains("[spec] UPX enabled")) {
+            throw "RCA_UPX_DIR was set but no '[spec] UPX enabled' line appeared; the exe would ship uncompressed"
+          }
 
       - name: Assert artifacts exist and are plausible
         shell: pwsh
@@ -115,3 +158,36 @@ jobs:
         # The xref now exists, so the two skipif guards in
         # tests/test_payload_policy.py resolve and the checks actually run.
         run: python -m pytest tests/test_payload_policy.py -q --tb=short
+
+      # v0.4.1: the release used to be a tag with NO downloadable artifact
+      # (v0.4.0 shipped with an empty asset list). Every build now exposes
+      # the exe as a workflow artifact, so a release candidate can be
+      # downloaded and exercised before it is tagged.
+      - name: Upload the windowed executable as a workflow artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: RangeChartAnalyzer-win64
+          path: dist/RangeChartAnalyzer.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      # Only a tag publishes. `gh release view` fails on a tag that has no
+      # release yet (the normal case: the tag is pushed before the Release
+      # is written), so create it first and let the upload follow.
+      - name: Attach the executable to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $asset = "RangeChartAnalyzer-$tag-win64.exe"
+          Copy-Item dist/RangeChartAnalyzer.exe "dist/$asset"
+          $size = [math]::Round((Get-Item "dist/$asset").Length / 1MB, 1)
+          Write-Host "uploading $asset ($size MiB)"
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title "$tag" --generate-notes
+          }
+          gh release upload $tag "dist/$asset" --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload failed ($LASTEXITCODE)" }

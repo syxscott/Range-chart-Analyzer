@@ -121,6 +121,66 @@ def test_a_dll_something_imports_is_never_dropped():
     assert "pyside6/qt6core.dll" not in dropped
 
 
+def test_translation_assets_keep_only_the_displayed_locales():
+    """The 60 MB translation tree must shrink to the languages we ship.
+
+    PySide6 ships 304 ``*.qm`` catalogs and 53 Chromium locale packs under
+    ``translations/`` (60 MB raw, 13.9 MB inside the onefile -- 6% of the
+    download). QtWebEngine resolves exactly ONE pack from the system locale
+    and falls back to en-US; the app installs no QTranslator at all, so
+    every other catalog is unreachable.
+    """
+    datas = [
+        ("PySide6/translations/qtbase_zh_CN.qm", "x", "d"),
+        ("PySide6/translations/qt_zh_TW.qm", "x", "d"),
+        ("PySide6/translations/qtbase_de.qm", "x", "d"),
+        ("PySide6/translations/qtwebengine_locales/en-US.pak", "x", "d"),
+        ("PySide6/translations/qtwebengine_locales/zh-CN.pak", "x", "d"),
+        ("PySide6/translations/qtwebengine_locales/ml.pak", "x", "d"),
+        # Not a translation: must be untouched by this rule.
+        ("PySide6/resources/qtwebengine_resources.pak", "x", "d"),
+    ]
+    _b, drop_data, _report = qt_payload.analyse([], datas)
+    dropped = {d for d, _s, _t in drop_data}
+
+    assert "PySide6/translations/qtbase_zh_CN.qm" not in dropped
+    assert "PySide6/translations/qt_zh_TW.qm" not in dropped
+    assert "PySide6/translations/qtwebengine_locales/en-US.pak" not in dropped
+    assert "PySide6/translations/qtwebengine_locales/zh-CN.pak" not in dropped
+    assert "PySide6/translations/qtbase_de.qm" in dropped
+    assert "PySide6/translations/qtwebengine_locales/ml.pak" in dropped
+    assert "PySide6/resources/qtwebengine_resources.pak" not in dropped
+
+
+def test_the_real_translation_tree_loses_most_of_its_bytes():
+    """On the real Qt install, the rule must actually remove the bulk.
+
+    A rule that keeps Chinese and English is only worth its complexity if
+    those two are a small share; if a future Qt build ships five locales
+    this assertion is what says the saving claim went stale.
+    """
+    translations = PYSIDE6 / "translations"
+    if not translations.is_dir():
+        pytest.skip("this Qt build has no translations/ directory")
+
+    assets = [p for p in translations.rglob("*")
+              if p.is_file() and p.suffix.lower() in (".qm", ".pak")]
+    if not assets:
+        pytest.skip("no .qm/.pak assets in this Qt build")
+
+    total = sum(p.stat().st_size for p in assets)
+    kept = 0
+    for p in assets:
+        dest = "PySide6/" + p.relative_to(PYSIDE6).as_posix()
+        if not qt_payload._is_dead_translation(dest):
+            kept += p.stat().st_size
+
+    assert kept / total < 0.25, (
+        f"the rule keeps {kept/1e6:.1f} MB of {total/1e6:.1f} MB "
+        f"({100*kept/total:.0f}%) -- the saving claim is no longer true"
+    )
+
+
 def test_the_decision_leaves_the_kept_closure_closed():
     """Every surviving PE must have all of its imports still present.
 

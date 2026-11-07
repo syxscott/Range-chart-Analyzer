@@ -5,6 +5,66 @@ All notable changes to Range Chart Analyzer are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — 2026-11-07
+
+**No functional change.** This release exists because v0.4.0 was tagged with
+an empty asset list: the Release page offered nothing to download. It ships
+the actual executable, and it is materially smaller than the build v0.4.0
+would have produced.
+
+### Added
+
+- **A downloadable Windows executable on the GitHub Release.**
+  `RangeChartAnalyzer-v0.4.1-win64.exe` is attached by `build.yml` itself on
+  every `v*` tag (`gh release upload` after the existing build + smoke test),
+  so "the release has no artifact" cannot happen again without the build job
+  failing first. The console twin stays in `dist/` for diagnostics and is not
+  published: it carries an identical 200 MB payload.
+- **A workflow artifact on every build**, tag or not, so a release candidate
+  can be downloaded and exercised before it is tagged.
+
+### Changed
+
+- **The onefile shrank from 212.8 MB to 199.8 MB (-6.1%)** — measured on the
+  same machine, same interpreter, same dependency set. The cause is one rule
+  in `scripts/qt_payload.py`: of the 357 translation assets Qt installs
+  (`translations/`, 60 MB raw, **13.9 MB inside the archive**), only Chinese
+  and English are kept (0.88 MB). QtWebEngine resolves exactly one Chromium
+  locale pack from the system locale and falls back to `en-US`, and this app
+  installs no `QTranslator` at all — its three languages are its own
+  dictionaries — so the other 50 locales were unreachable on every machine.
+- **UPX is now enabled for CI builds**, inside the spec rather than as a
+  post-process. The earlier "UPX buys nothing" measurement was about
+  re-compressing the already-zlib'd PKG; compressing each `.pyd` *before* it
+  enters the PKG is a different operation. Measured with lzma (UPX's `-9`
+  algorithm) on this payload: `cv2.pyd` 30.7 → 20.7 MB, openblas 6.4 → 3.6,
+  `_rust.pyd` 3.3 → 2.5, `QtOpenGL.pyd` 2.2 → 1.2, roughly 15 MB across the
+  non-Qt binaries. `UPX_EXCLUDE` is unchanged and still keeps every
+  `Qt6*`/`Qt5*` DLL (including WebEngineCore), the CPython interpreter, the
+  MS runtime and OpenSSL out of UPX — the class of binary behind "it worked
+  until I added UPX".
+- **`build.yml` gained job-scoped `contents: write`** so only a tag build can
+  reach the Release; a PR build still reads the repository.
+
+### Removed
+
+- **`scripts/upx_compress.py`** — it could not have worked, and its comment
+  claimed the opposite. PyInstaller 6 zlib-deflates every archive entry
+  (`flag=1`), so its `flag == 0` filter selected almost nothing; the entries
+  it did touch were overwritten in place **without updating the TOC length**,
+  which corrupts the archive. It was replaced by the spec's own UPX path,
+  which PyInstaller applies while writing the PKG. Net: a plausible-looking
+  dead end is gone rather than left as an option someone might run.
+
+### Fixed
+
+- **Two comments that contradicted the code they sat next to.**
+  `RangeChartAnalyzer.spec` claimed UPX was a post-process (it is not — the
+  `upx=` kwarg on both `EXE()` calls is the live path), and `upx-check.yml`
+  framed UPX as a near-zero-gain second compression, which conflated PKG-level
+  re-compression with per-binary compression. Both now say what is true and
+  cite the measurement that changed the answer.
+
 ## [0.4.0] — 2026-11-07
 
 ### Added

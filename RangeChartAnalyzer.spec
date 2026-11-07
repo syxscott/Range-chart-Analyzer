@@ -374,15 +374,28 @@ if len(_report["dropped_binaries"]) > 10:
 a.binaries, a.datas = _a_bin, _a_dat
 
 # --- windowed build: the shipped artifact -------------------------------
-# 0.1.2 (2026-10-18): UPX is applied as a POST-PROCESS (scripts/upx_compress.py),
-# not here. Two reasons, both learned the hard way:
-#   1. UPX inside the spec compresses every binary it can see, including
-#      QtWebEngineCore and python313.dll. WebEngine crashes under compressed
-#      Chromium in some versions, and a compressed interpreter hides crash
-#      traces from Windows Error Reporting.
-#   2. A post-process can be A/B-verified: the un-UPX exe from dist/ stays
-#      on disk for comparison, and the smoke test runs against the
-#      compressed copy before it replaces anything.
+# v0.4.1 (2026-11-07): UPX is applied HERE, by PyInstaller, against the
+# curated `upx_exclude` list above — and it is ON in CI for every build.
+#
+# The 0.1.2 note in this file used to claim a POST-PROCESS
+# (scripts/upx_compress.py) was the safe route. It was not, for a reason
+# that only shows up if you read that script: PyInstaller 6 zlib-deflates
+# every archive entry (flag=1), so its `flag == 0` filter selected almost
+# nothing, and the entries it did touch were overwritten in place WITHOUT
+# updating the TOC length — which corrupts the archive. The script has
+# been removed rather than left as a plausible-looking dead end.
+#
+# What changed the math: the earlier "UPX buys nothing" measurement was
+# about re-compressing the already-zlib'd PKG. Compressing each .pyd
+# BEFORE it enters the PKG is a different operation. Measured with lzma:
+# cv2.pyd 30.7 -> 20.7 MB, openblas 6.4 -> 3.6, _rust.pyd 3.3 -> 2.5,
+# QtOpenGL.pyd 2.2 -> 1.2 (~15 MB across the non-Qt binaries).
+#
+# What keeps it safe: `UPX_EXCLUDE` is not a denylist of "things that
+# broke once", it is the class of binary that must never be compressed —
+# every Qt6*/Qt5* DLL (including WebEngineCore), the CPython interpreter,
+# the MS runtime and OpenSSL. UPX is opt-in via RCA_UPX_DIR so a local
+# build without a upx.exe still works and says so.
 exe = EXE(
     pyz,
     a.scripts,

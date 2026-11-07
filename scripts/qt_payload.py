@@ -60,6 +60,28 @@ DEAD_PLUGIN_FILES = (
     "imageformats/qpdf.dll",
 )
 
+# Translation assets kept. Everything else under
+# ``PySide6/translations/`` goes.
+#
+# PySide6 ships two translation families there and PyInstaller copies both
+# whole: 304 ``*.qm`` catalogs (15.9 MB raw) and 53 Chromium locale packs
+# (45.8 MB raw). Measured inside the 0.4.x onefile, they cost 13.9 MB of
+# the archive -- 6.5% of the whole download.
+#
+#   *.qm  -- Qt's own UI strings (file-dialog buttons, standard dialogs).
+#            A catalog is loaded only when QTranslator::load() is asked for
+#            that locale. This app installs no QTranslator: its three
+#            languages come from its own dictionaries (js/i18n.js and
+#            rca_core/i18n.py), so every Qt catalog is unreachable.
+#   *.pak -- Chromium locale bundles. QtWebEngine resolves exactly ONE from
+#            the system locale when a profile is created and falls back to
+#            en-US.pak, so the other ~50 are dead on every machine.
+#
+# Keep Chinese (the project's primary UI language) and English (both the
+# second language and Chromium's fallback), drop the rest.
+KEPT_QT_LOCALES = frozenset({"zh_cn", "zh_tw", "zh_hk", "en", "en_us", "en_gb"})
+
+
 # Data trees dropped whole. Lower-case: the comparison is case-folded.
 DEAD_DATA_PREFIXES = (
     "pyside6/qml/",            # the QML module tree
@@ -164,8 +186,36 @@ def _is_dead_plugin_file(dest: str) -> bool:
     return rel in DEAD_PLUGIN_FILES
 
 
+def _translation_locale(base_lower: str) -> str:
+    """The locale tag of a Qt translation asset.
+
+    ``qtbase_zh_CN.qm`` -> ``zh_cn``, ``en-US.pak`` -> ``en_us``,
+    ``ml.pak`` -> ``ml``. Qt catalog names are ``<module>_<lang>[_<REGION>]``
+    and Chromium packs are a bare or hyphenated locale, so the tag is the
+    last two underscore-separated 2-letter parts when both look like one.
+    """
+    stem = base_lower.rsplit(".", 1)[0].replace("-", "_")
+    parts = stem.split("_")
+    if len(parts) >= 2 and len(parts[-1]) == 2 and len(parts[-2]) == 2:
+        return parts[-2] + "_" + parts[-1]
+    return parts[-1]
+
+
+def _is_dead_translation(dest: str) -> bool:
+    """True for a translation asset in a locale this app cannot display."""
+    low = _norm(dest).lower()
+    if not low.startswith("pyside6/translations/"):
+        return False
+    base = low.rsplit("/", 1)[-1]
+    if not base.endswith((".qm", ".pak")):
+        return False
+    return _translation_locale(base) not in KEPT_QT_LOCALES
+
+
 def _is_dead_data(dest: str) -> bool:
     low = _norm(dest).lower()
+    if _is_dead_translation(dest):
+        return True
     return any(low.startswith(p) for p in DEAD_DATA_PREFIXES)
 
 
@@ -237,6 +287,11 @@ def analyse(binaries, datas):
         low = _norm(dest).lower()
         base = low.rsplit("/", 1)[-1]
         if _is_dead_plugin_file(dest):
+            drop_bin.append((dest, src, tc))
+            continue
+        # Translations are normally datas, but a build that classifies them
+        # as binaries must not smuggle 50 dead locales back in.
+        if _is_dead_translation(dest):
             drop_bin.append((dest, src, tc))
             continue
         if low.startswith("pyside6/") and "/" not in low[8:] and low.endswith(".dll"):

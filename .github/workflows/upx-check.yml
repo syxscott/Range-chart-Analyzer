@@ -3,20 +3,24 @@ name: UPX size A/B (manual verification only)
 # ---------------------------------------------------------------------------
 # 只用于独立复核，不作为发布门禁；也不参与任何 PR / push / tag 流程。
 #
-# PyInstaller 6 已对内层 PKG 的每个归档条目做 zlib 压缩
-# (RangeChartAnalyzer.spec 实测 4334/4335 个条目 flag=1)，再叠一层 UPX 属于
-# 近零收益的第二重压缩：UPX 的 LZMA 只够得上 DLL 里 zlib 压不到的 PE padding
-# 与重定位部分，而 Qt / WebEngine DLL 一律在 upx_exclude 里（经典
-# "worked until I added UPX" 破绽）。
+# 两种「再压一次」必须分开看：
+#   * 对整个 PKG 再叠一层 UPX —— PyInstaller 6 已对每个归档条目做 zlib
+#     压缩 (RangeChartAnalyzer.spec 实测 4334/4335 个条目 flag=1)，这一层
+#     是近零收益，不做。
+#   * 对进入 PKG **之前**的每个 .pyd / 第三方 DLL 单独 UPX —— 这不是同一
+#     件事。0.4.1 用 lzma（UPX -9 的算法）实测：cv2.pyd 30.7 -> 20.7 MB、
+#     openblas 6.4 -> 3.6、_rust.pyd 3.3 -> 2.5、QtOpenGL.pyd 2.2 -> 1.2，
+#     非 Qt 二进制合计约 -15 MB。build.yml 现在默认启用 UPX。
 #
-# 2026-10-18 实测的 258.8 -> 234.7 MB 体积下降来自「排除 Qt 冗余 / 精简
-# datas」，不是 UPX 的功劳；把那次收益记在 UPX 名下是误读。
+# 2026-10-18 那次 258.8 -> 234.7 MB 的体积下降确实来自「排除 Qt 冗余 /
+# 精简 datas」，不是 UPX 的功劳；但那次测的是另一条路径，不能用来否定
+# 上面这组数字。
 #
-# 因此本 workflow 只做一件事：用同一份 RangeChartAnalyzer.spec、在同一台
-# windows-latest runner 上构建两次 —— A 不设 RCA_UPX_DIR，B 下载官方 UPX
-# 并设置 RCA_UPX_DIR —— 把两个 RangeChartAnalyzer.exe 的体积与差值打到日志
-# 和 job summary，供人工独立判断 UPX 到底值不值。它不设体积断言、不阻断
-# 发布、不上传制品、不改动任何发布流程。
+# 因此本 workflow 保留为**独立复核**：同一份 spec、同一台 runner 上构建
+# 两次 —— A 不设 RCA_UPX_DIR，B 下载官方 UPX 并设置 RCA_UPX_DIR —— 把两个
+# RangeChartAnalyzer.exe 的体积与差值打到日志和 job summary。它不设体积
+# 断言、不阻断发布、不上传制品、不改动任何发布流程；build.yml 的数字若被
+# 怀疑，跑这个复现即可。
 #
 # 触发方式：workflow_dispatch ONLY（手动，不设 PR / push gate）。
 # ---------------------------------------------------------------------------
