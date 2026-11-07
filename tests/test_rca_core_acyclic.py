@@ -29,6 +29,17 @@ must be function-local (see test_known_cycle_edges_are_function_local). That
 is why extracting ``transport.py`` is a tidiness improvement, not a correctness
 fix, and why it is safe to defer it instead of moving ~12 transport functions
 that tests patch through ``llm._post_json`` at call time.
+
+2026-11-07 (Phase 3 / P1-4): THE SCAN IS NOW RECURSIVE. The old passes used
+``CORE.glob("*.py")``, which sees only top-level ``rca_core/*.py``. A new
+subpackage (``rca_core/modes_impl/``) was therefore invisible, so a design
+with ``modes_impl/_shared.py -> extractor`` plus ``extractor -> modes_impl``
+could have created a MODULE-LEVEL cycle that no guard detected. Both graph
+passes now use ``CORE.rglob("*.py")``, node names are dotted paths relative
+to ``rca_core/`` (e.g. ``extractor``, ``modes_impl._shared``), and relative
+import targets are resolved by ``level`` instead of
+``node.module.split(".")[0]``. ``KNOWN_CYCLES`` is unchanged: the recursive
+scan found NO additional cycle (verified, not assumed).
 """
 from __future__ import annotations
 
@@ -42,32 +53,88 @@ CORE = ROOT / "rca_core"
 # extraction_wall_clock_budget_sec into rca_core/budget.py (both modules
 # now depend one-way on budget). KNOWN_CYCLES shrank with it -- the ratchet
 # tightened instead of being deleted.
+# The 2026-11-07 recursive scan (root + subpackages) still finds exactly this
+# one cycle, so no waiver was added or removed.
 KNOWN_CYCLES = {
     frozenset({"llm", "protocols"}),
 }
 
 
-def _import_graph() -> dict[str, set[str]]:
-    graph: dict[str, set[str]] = {}
-    for path in sorted(CORE.glob("*.py")):
-        if path.name == "__init__.py":
-            # The package facade imports everything by design; including it
-            # would make every module look cyclic. It has no inbound relative
-            # imports, so it cannot participate in a cycle anyway.
+def _node_name(path: Path) -> str:
+    """Dotted node name relative to CORE: ``rca_core/modes_impl/_shared.py``
+    -> ``modes_impl._shared``; ``rca_core/extractor.py`` -> ``extractor``."""
+    return ".".join(path.relative_to(CORE).with_suffix("").parts)
+
+
+def _module_paths() -> list[tuple[str, Path]]:
+    """Every .py under CORE, recursively, minus package facades and caches."""
+    out: list[tuple[str, Path]] = []
+    for path in sorted(CORE.rglob("*.py")):
+        if path.name == "__init__.py" or "__pycache__" in path.parts:
+            # The package facades import everything by design; including them
+            # would make every submodule look cyclic. They have no inbound
+            # relative imports, so they cannot participate in a cycle anyway.
             continue
+        out.append((_node_name(path), path))
+    return out
+
+
+def _import_targets(node_name: str, node: ast.AST) -> list[str]:
+    """Resolve one Import/ImportFrom to rca_core-internal node names.
+
+    Relative imports are resolved by ``level`` against the importing module's
+    own package, NOT by ``node.module.split(".")[0]``::
+
+        extractor            + from .shape import ...            -> shape
+        extractor            + from .modes_impl.range_chart ...  -> modes_impl.range_chart
+        modes_impl._shared   + from ..extractor import ...       -> extractor
+        modes_impl.range_chart + from ._shared import ...        -> modes_impl._shared
+
+    Absolute ``from rca_core.X import`` / ``import rca_core.X`` are stripped
+    of the ``rca_core.`` prefix so they land on the same node names. Imports
+    of anything outside ``rca_core`` (stdlib, third party) are not graph edges.
+    ``from . import name`` / ``from .. import name`` are alias-aware.
+    """
+    out: list[str] = []
+    if isinstance(node, ast.ImportFrom):
+        pkg = node_name.split(".")[:-1]
+        if node.level:
+            base = pkg[:max(0, len(pkg) - (node.level - 1))]
+            if node.module:
+                out.append(".".join(base + node.module.split(".")))
+            else:
+                for alias in node.names:
+                    out.append(".".join(base + [alias.name]))
+        else:
+            module = node.module or ""
+            if module.startswith("rca_core."):
+                out.append(module[len("rca_core."):])
+            elif module == "rca_core":
+                out.extend(alias.name for alias in node.names)
+    elif isinstance(node, ast.Import):
+        for alias in node.names:
+            if alias.name.startswith("rca_core."):
+                out.append(alias.name[len("rca_core."):])
+    return [t for t in out if t]
+
+
+def _import_graph() -> dict[str, set[str]]:
+    """Full graph: every internal import, including function-local ones."""
+    graph: dict[str, set[str]] = {}
+    for name, path in _module_paths():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         deps: set[str] = set()
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.level and node.module:
-                target = node.module.split(".")[0]
-                if target != path.stem:
-                    deps.add(target)
-        graph[path.stem] = deps
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for target in _import_targets(name, node):
+                    if target != name:
+                        deps.add(target)
+        graph[name] = deps
     return graph
 
 
 def _edges_by_scope(path: Path) -> tuple[set[str], set[str]]:
-    """Split a module's relative imports into (import-time, deferred).
+    """Split a module's imports into (import-time, deferred), same targets.
 
     "Import-time" means the statement actually executes while the module is
     being imported: module body or a class body. Function bodies, lambda
@@ -76,6 +143,7 @@ def _edges_by_scope(path: Path) -> tuple[set[str], set[str]]:
     in the first set -- which is the conservative, correct choice for a
     deadlock guard.
     """
+    name = _node_name(path)
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     eager: set[str] = set()
     deferred: set[str] = set()
@@ -90,10 +158,11 @@ def _edges_by_scope(path: Path) -> tuple[set[str], set[str]]:
                 is_tc = isinstance(test, ast.Name) and test.id == "TYPE_CHECKING"
                 visit(child, in_func=in_func,
                       in_type_check=in_type_check or is_tc)
-            elif isinstance(child, ast.ImportFrom) and child.level and child.module:
-                target = child.module.split(".")[0]
-                if target != path.stem:
-                    (deferred if (in_func or in_type_check) else eager).add(target)
+            elif isinstance(child, (ast.Import, ast.ImportFrom)):
+                bucket = deferred if (in_func or in_type_check) else eager
+                for target in _import_targets(name, child):
+                    if target != name:
+                        bucket.add(target)
             else:
                 visit(child, in_func=in_func, in_type_check=in_type_check)
 
@@ -103,10 +172,8 @@ def _edges_by_scope(path: Path) -> tuple[set[str], set[str]]:
 
 def _import_time_graph() -> dict[str, set[str]]:
     graph: dict[str, set[str]] = {}
-    for path in sorted(CORE.glob("*.py")):
-        if path.name == "__init__.py":
-            continue
-        graph[path.stem] = _edges_by_scope(path)[0]
+    for name, path in _module_paths():
+        graph[name] = _edges_by_scope(path)[0]
     return graph
 
 
@@ -128,9 +195,39 @@ def _cycle_components(graph: dict[str, set[str]]) -> set[frozenset[str]]:
     return found
 
 
+def _targets_of(src: str, node_name: str) -> list[str]:
+    imp = ast.parse(src).body[0]
+    return _import_targets(node_name, imp)
+
+
+def test_relative_import_targets_are_resolved_by_level() -> None:
+    """Pin the resolution formula itself (the recursive scan's foundation)."""
+    assert _targets_of("from .shape import X", "extractor") == ["shape"]
+    assert _targets_of("from .modes_impl.range_chart import X", "extractor") \
+        == ["modes_impl.range_chart"]
+    assert _targets_of("from ..extractor import X", "modes_impl._shared") \
+        == ["extractor"]
+    assert _targets_of("from ._shared import X", "modes_impl.range_chart") \
+        == ["modes_impl._shared"]
+    assert _targets_of("from rca_core.extractor import X", "modes_impl._shared") \
+        == ["extractor"]
+    assert _targets_of("import rca_core.extractor", "modes_impl._shared") \
+        == ["extractor"]
+    assert _targets_of("from . import error_utils", "extractor") == ["error_utils"]
+
+
+def test_recursive_scan_sees_the_subpackages() -> None:
+    """The hole this pass closes: modes_impl/ nodes must be real graph nodes."""
+    graph = _import_graph()
+    assert "modes_impl._shared" in graph
+    assert "modes_impl.zonation_chart" in graph
+    assert "standards.ics" in graph
+    assert graph["modes_impl.zonation_chart"] == {"modes_impl._shared"}
+
+
 def test_rca_core_cycles_are_exactly_the_known_ones() -> None:
     graph = _import_graph()
-    assert len(graph) >= 30, "rca_core scan found too few modules - path wrong?"
+    assert len(graph) >= 30, "rca_core recursive scan found too few modules"
     cycles = _cycle_components(graph)
     assert cycles == KNOWN_CYCLES, (
         "rca_core import graph changed.\n"
@@ -148,7 +245,7 @@ def test_import_time_graph_is_strictly_acyclic() -> None:
     This is the property that actually prevents an import-time deadlock.
     The full-graph ratchet above also counts function-local imports, which
     are harmless at import time; this test is the one that would fail on a
-    genuinely dangerous new import.
+    genuinely dangerous new import. NOT relaxed for the recursive scan.
     """
     graph = _import_time_graph()
     cycles = _cycle_components(graph)
@@ -157,6 +254,31 @@ def test_import_time_graph_is_strictly_acyclic() -> None:
         f"risk): {sorted(map(sorted, cycles))}. Break it by moving the shared "
         "code into a leaf module both sides can import one-way."
     )
+
+
+def test_modes_impl_has_no_edge_back_to_extractor() -> None:
+    """Phase 3 / P1-4: zero reverse edges, on BOTH graphs.
+
+    ``extractor -> modes_impl._shared`` is allowed and expected (one-way
+    down). ``modes_impl.* -> extractor`` in either the full or the import-time
+    graph would recreate the module-level cycle the recursive scan exists to
+    catch.
+    """
+    full = _import_graph()
+    eager = _import_time_graph()
+    reverse: list[str] = []
+    for name in sorted(n for n in full if n.startswith("modes_impl.")):
+        for graph, label in ((full, "full"), (eager, "import-time")):
+            for target in sorted(graph.get(name, set())):
+                if target == "extractor" or target.startswith("extractor."):
+                    reverse.append(f"{name} -[{label}]-> {target}")
+    assert reverse == [], (
+        "modes_impl/ has a reverse edge to extractor: " + ", ".join(reverse)
+        + ". Fix the design; do not weaken test_import_time_graph_is_strictly_acyclic."
+    )
+    # And the allowed direction really is present.
+    assert "modes_impl._shared" in full["extractor"]
+    assert "modes_impl._shared" in eager["extractor"]
 
 
 def test_known_cycle_edges_are_function_local() -> None:
@@ -190,12 +312,13 @@ def test_core_layer_does_not_import_ui_or_web_frameworks() -> None:
 
     A single ``import tkinter`` or ``import http.server`` in here would make
     the headless CI path depend on a display / platform package. Verified
-    clean at ARCH-REVIEW-2026-11-02; this keeps it clean.
+    clean at ARCH-REVIEW-2026-11-02; this keeps it clean -- now recursively,
+    so a leak inside a subpackage is caught too.
     """
     forbidden = ("tkinter", "PySide6", "qfluentwidgets", "http.server",
                  "socketserver", "webview")
     offenders = []
-    for path in sorted(CORE.glob("*.py")):
+    for name, path in _module_paths():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             names: list[str] = []
@@ -203,7 +326,7 @@ def test_core_layer_does_not_import_ui_or_web_frameworks() -> None:
                 names = [a.name.split(".")[0] for a in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module:
                 names = [node.module.split(".")[0]]
-            for name in names:
-                if name in forbidden:
-                    offenders.append(f"{path.name}:{node.lineno} imports {name}")
+            for imported in names:
+                if imported in forbidden:
+                    offenders.append(f"{name}:{node.lineno} imports {imported}")
     assert not offenders, "UI/web dependency leaked into rca_core:\n  " + "\n  ".join(offenders)

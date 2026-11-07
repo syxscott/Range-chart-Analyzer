@@ -8,9 +8,11 @@ locks "same input -> same output on both engines", but it CANNOT tell that a
 new capability was wired into only one of the five endpoints. Two real
 incidents came from exactly that:
 
-  * GBIF name verification / fuzzy matching is wired into the browser only
-    (js/app.js, js/table.js); server.py and both desktop GUIs never call it.
+  * GBIF name verification / fuzzy matching was wired into the browser only
+    (js/app.js, js/table.js); server.py and both desktop GUIs never called it.
     README promised it as an ICZN safety net, and Fluent is the DEFAULT UI.
+    CAPABILITY-2026-11 wired Fluent as an explicit, default-OFF opt-in; the
+    historical incident is kept here because it is why this module exists.
   * The ICS transport table once had 98 entries on the desktop and 109 in
     the browser; the desktop parsed "Late Pleistocene" as the whole epoch
     (2.58 Ma instead of 0.129 Ma -- 20x too old).
@@ -63,59 +65,71 @@ ENDPOINT_FILES: dict[str, tuple[str, ...]] = {
 CAPABILITIES: dict[str, dict[str, Any]] = {
     "names.verify": {
         "probes": ("verify_names", "rcaNameIssuesFromGbif"),
-        "landed": frozenset({"core", "browser"}),
-        "reason": "GBIF verification is wired only into the browser "
-                  "(js/app.js, via the JS mirror rcaNameIssuesFromGbif). "
-                  "server.py, gui.py and the Fluent GUI never call "
-                  "rca_core.names.verify_names, so the default desktop UI "
-                  "lacks the ICZN safety net the README promises.",
+        "landed": frozenset({"core", "browser", "fluent"}),
+        "reason": "GBIF verification now runs in the browser (js/app.js via "
+                  "rcaNameIssuesFromGbif) AND in the default Fluent desktop "
+                  "UI (gui_fluent.py::_run_name_capabilities -> "
+                  "rca_core.names.verify_names, inside a QThread worker). "
+                  "Fluent's is an EXPLICIT, default-OFF opt-in because it "
+                  "costs extra network requests; the switch lives on the "
+                  "Settings page. server.py and gui.py still do not call it.",
         "waivers": {
             "server": "The server returns JSON to the browser, which runs the "
                       "GBIF lookup client-side; a server-side duplicate would "
                       "double the round-trip for every extraction.",
             "tk": "The zero-dependency Tk fallback renders plain tables and "
-                  "makes no outbound GBIF request by design.",
-            "fluent": "Fluent is the DEFAULT desktop UI and its result/history "
-                      "views never call verify_names. Wiring it needs an owner "
-                      "decision about an extra blocking network call "
-                      "(docs/OWNER_DECISIONS.md).",
+                  "makes no outbound GBIF request by design (G6 in "
+                  "docs/OWNER_DECISIONS.md freezes its feature surface).",
         },
     },
     "names.fuzzy": {
         "probes": ("fuzzy",),
-        "landed": frozenset({"core", "browser"}),
-        "reason": "Same as names.verify: fuzzy matching renders only in the "
-                  "browser table (js/table.js). The desktop endpoints have "
-                  "zero occurrences of the feature.",
+        "landed": frozenset({"core", "browser", "fluent"}),
+        "reason": "Fuzzy matching renders in the browser table (js/table.js) "
+                  "and now in the Fluent result panel: "
+                  "collect_candidate_names() feeds verify_names(), and "
+                  "name_issues() FUZZY suggestions are shown as candidates "
+                  "with the suggested canonical name (gui_fluent.py). "
+                  "Same default-OFF opt-in as names.verify. server.py and "
+                  "gui.py still do not build a name-suggestion UI.",
         "waivers": {
             "server": "Fuzzy suggestions are a rendering concern; the server "
                       "returns raw rows and never builds a name-suggestion UI.",
             "tk": "The Tk table has no suggestion widget; adding one would "
-                  "require a Tk-specific name index the core does not ship.",
-            "fluent": "The Fluent table has no suggestion widget; this is the "
-                      "same gap as names.verify and belongs to the same owner "
-                      "decision (docs/OWNER_DECISIONS.md).",
+                  "require a Tk-specific name index the core does not ship "
+                  "(G6 freezes the Tk fallback's feature surface).",
         },
     },
     "grounding": {
         "probes": ("check_name_grounding",),
-        "landed": frozenset({"core", "server"}),
+        "landed": frozenset({"core", "server", "fluent"}),
         "reason": "Name grounding (is the name actually PRINTED in the "
-                  "figure?) is invoked only by server.py. The two desktop "
-                  "endpoints and the browser never run it, so their results "
-                  "cannot distinguish a read name from a recalled one.",
+                  "figure?) is invoked by server.py and now by the default "
+                  "Fluent desktop UI (gui_fluent.py::_run_name_capabilities "
+                  "-> rca_core.grounding.check_name_grounding, on a QThread "
+                  "worker with a queued signal). Fluent's is an EXPLICIT, "
+                  "default-OFF opt-in because it costs a second vision-model "
+                  "call; failures degrade to 'could not check', never to a "
+                  "clean result, matching server.py's semantics. The browser "
+                  "and the Tk fallback still do not run it.",
         "waivers": {
             "browser": "The browser can call the provider directly; that path "
                        "bypasses the server-side grounding step entirely.",
             "tk": "The Tk shell calls extract() without the grounding pass; "
-                  "changing it affects the evidence-chain report.",
-            "fluent": "The Fluent shell calls extract() without the grounding "
-                      "pass; this is a scientific-correctness gap, not just a "
-                      "missing button (docs/OWNER_DECISIONS.md).",
+                  "changing it affects the evidence-chain report (G6 freezes "
+                  "the Tk fallback's feature surface).",
         },
     },
     "result_cache": {
-        "probes": ("make_key",),
+        # P0-1 (2026-11, concurrent handler split): the server's extraction
+        # body moved into rca_core/pipeline.py, which now calls
+        # rca_core.cache.build_extraction_key instead of ResultCache.make_key.
+        # `make_key` therefore disappeared from server.py, even though the
+        # server endpoint still lands the cache. ``_cache_singleton_safe`` is
+        # the stable, non-comment server-side symbol that survived the split
+        # (server.py: def + dependency injection). Both are kept so the probe
+        # works whether the handler lives in server.py or in the new module.
+        "probes": ("make_key", "_cache_singleton_safe"),
         "landed": frozenset({"core", "server"}),
         "reason": "The idempotent result cache is a server-side feature; "
                   "the browser talks to an API directly and the desktop "

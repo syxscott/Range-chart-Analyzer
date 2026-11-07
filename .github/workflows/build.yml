@@ -7,14 +7,28 @@ name: Build and smoke-test the Windows executables
 # silent UPX-disabled fallback could only be discovered by a user double
 # clicking the exe.
 #
-# Deliberately NOT part of the pull_request gate: a onefile build takes
-# 10-20 minutes and ~250 MB of Qt. Run it manually before a release, and
-# automatically on every version tag. Keeping it out of ci.yml means a
-# Windows-specific build failure cannot block the Linux test matrix.
+# A onefile build takes 10-20 minutes and ~250 MB of Qt, so it is NOT in
+# ci.yml (a Windows-only build failure must not block the Linux test matrix)
+# and its pull_request trigger is PATH-LIMITED to the files that can actually
+# change the artifact -- see `on.pull_request.paths` below. It runs
+# automatically on every version tag and manually before a release.
 on:
   workflow_dispatch:
   push:
     tags: ["v*"]
+  # P1-7 (2026-11-07): a *controlled* PR gate. Without `paths`, every PR --
+  # docs, front-end, tests -- would pay for a 10-20 min Windows build. Only
+  # PRs touching a real build input trigger it; everything else is covered
+  # by the Linux matrix in ci.yml. Keep this list in sync with the spec's
+  # inputs (RangeChartAnalyzer.spec + whatever it imports / bundles).
+  pull_request:
+    paths:
+      - "RangeChartAnalyzer.spec"
+      - "requirements.txt"
+      - "constraints.txt"
+      - "main.py"
+      - "rca_core/**"
+      - ".github/workflows/build.yml"
 
 permissions:
   contents: read

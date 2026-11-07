@@ -149,12 +149,20 @@ def test_contract_bump_invalidates_the_auto_path_key():
 # the server call sites (source-level; no server boot)
 # ---------------------------------------------------------------------------
 
-def _server_source() -> str:
-    return (ROOT / "server.py").read_text(encoding="utf-8")
+def _extraction_source() -> str:
+    """Source of the /api/extract orchestration.
+
+    v0.4.0: it moved VERBATIM from server.py::_handle_extract_body into
+    rca_core/pipeline.py::run_extraction_request. Reading server.py here would
+    find ZERO build_extraction_key sites -- and because the assertion below is
+    a COUNT (not an existence check), the test would fail loudly rather than
+    pass vacuously. Keep it a count.
+    """
+    return (ROOT / "rca_core" / "pipeline.py").read_text(encoding="utf-8")
 
 
 def test_server_cache_key_sites_use_the_strict_helper():
-    src = _server_source()
+    src = _extraction_source()
     sites = [m.start() for m in re.finditer(r"build_extraction_key\(", src)]
     assert len(sites) == 2, (
         "expected exactly the single-run and multi-run /api/extract "
@@ -173,7 +181,7 @@ def test_server_resolves_auto_before_building_the_key():
     """Ordering pin: every cache.make_key( site must appear AFTER the
     resolve_auto_mode() call inside the /api/extract handler, so `mode` is
     the RESOLVED mode when the key is built."""
-    src = _server_source()
+    src = _extraction_source()
     resolve_at = src.index("mode, classify_result = resolve_auto_mode(")
     for m in re.finditer(r"cache\.make_key\(", src):
         assert m.start() > resolve_at

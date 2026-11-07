@@ -24,18 +24,27 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 SERVER = REPO / "server.py"
+# v0.4.0: the /api/extract orchestration moved VERBATIM out of
+# server.py::Handler._handle_extract_body into
+# rca_core/pipeline.py::run_extraction_request. The CALL PATH assertions below
+# are about the code, not the file it lives in, so they follow it. The helper
+# itself (`_safe_ground_and_score`) still lives in server.py, which is why
+# `test_the_helper_exists_and_is_exported` keeps importing server.
+PIPELINE = REPO / "rca_core" / "pipeline.py"
 
 
 @pytest.fixture(scope="module")
-def server_ast():
-    return ast.parse(SERVER.read_text(encoding="utf-8"))
+def pipeline_ast():
+    return ast.parse(PIPELINE.read_text(encoding="utf-8"))
 
 
-def _handler(server_ast):
-    for fn in ast.walk(server_ast):
-        if isinstance(fn, ast.FunctionDef) and fn.name == "_handle_extract_body":
+def _handler(pipeline_ast):
+    for fn in ast.walk(pipeline_ast):
+        if isinstance(fn, ast.FunctionDef) and fn.name == "run_extraction_request":
             return fn
-    raise AssertionError("_handle_extract_body not found in server.py")
+    raise AssertionError(
+        "run_extraction_request not found in rca_core/pipeline.py; the "
+        "extraction orchestration was moved again -- re-derive these tests")
 
 
 class TestTheCheckIsReachableAtAll:
@@ -49,7 +58,7 @@ class TestTheCheckIsReachableAtAll:
             "no opt-out switch -- a second model call per extraction must be "
             "disableable by the caller")
 
-    def test_both_production_paths_call_the_grounded_helper(self, server_ast):
+    def test_both_production_paths_call_the_grounded_helper(self, pipeline_ast):
         """Extraction sites are grounded; cache sites are marked, never bare.
 
         Two of each, and the distinction is the point:
@@ -64,11 +73,31 @@ class TestTheCheckIsReachableAtAll:
         wiring left both cache sites on the bare helper, so a re-run of an old
         figure showed a clean-looking badge with no grounding verdict at all.
         """
-        fn = _handler(server_ast)
-        names = lambda f: [n for n in ast.walk(fn)          # noqa: E731
-                           if isinstance(n, ast.Call)
-                           and isinstance(n.func, ast.Name)
-                           and n.func.id == f]
+        fn = _handler(pipeline_ast)
+
+        def names(name):
+            """Calls to ``name(...)`` OR ``deps.name(...)``.
+
+            v0.4.0: the pipeline receives server-local helpers through
+            ``PipelineDeps``, so these call nodes became Attributes
+            (``deps._safe_ground_and_score``) instead of bare Names. Matching
+            both keeps the assertion about WHICH helper is called, not how the
+            call is spelled -- and a genuine switch back to the bare helper
+            still shows up as a non-zero count below.
+            """
+            out = []
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if isinstance(func, ast.Name) and func.id == name:
+                    out.append(node)
+                elif (isinstance(func, ast.Attribute) and func.attr == name
+                      and isinstance(func.value, ast.Name)
+                      and func.value.id == "deps"):
+                    out.append(node)
+            return out
+
         assert len(names("_safe_ground_and_score")) == 2, (
             "expected the grounded helper at both extraction scoring sites "
             "(single-run and merged runs>=2), found %d"
@@ -97,7 +126,7 @@ class TestTheCheckIsReachableAtAll:
         assert "clean" not in out["grounding"]
         assert out["grounding"]["reason"], "say WHY it was not checked"
 
-    def test_ground_names_is_bound_outside_the_single_run_branch(self, server_ast):
+    def test_ground_names_is_bound_outside_the_single_run_branch(self, pipeline_ast):
         """The NameError trap.
 
         ``ground_names`` was first bound inside ``if runs == 1:`` and then read
@@ -105,7 +134,7 @@ class TestTheCheckIsReachableAtAll:
         raises NameError on the first multi-run request -- the exact request
         shape nobody tests by hand.
         """
-        fn = _handler(server_ast)
+        fn = _handler(pipeline_ast)
         run_branches = []
         for node in ast.walk(fn):
             if (isinstance(node, ast.If)

@@ -1,0 +1,353 @@
+{
+  "cases": [
+    {
+      "body_consumed": false,
+      "exception": null,
+      "name": "trickled_body",
+      "request": null,
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.timeout\", \"error_body\": \"request body not received within the upload deadline\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "request body not received within the upload deadline",
+            "error_key": "err.timeout",
+            "ok": false
+          },
+          "status": 408
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "invalid_json",
+      "request": "not json at all",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.parse\", \"error_body\": \"Invalid JSON payload\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "Invalid JSON payload",
+            "error_key": "err.parse",
+            "ok": false
+          },
+          "status": 400
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "non_dict_json",
+      "request": "[1, 2, 3]",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.parse\", \"error_body\": \"JSON body must be an object\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "JSON body must be an object",
+            "error_key": "err.parse",
+            "ok": false
+          },
+          "status": 400
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "string_json",
+      "request": "\"hello\"",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.parse\", \"error_body\": \"JSON body must be an object\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "JSON body must be an object",
+            "error_key": "err.parse",
+            "ok": false
+          },
+          "status": 400
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "field_image_b64_not_str",
+      "request": "{\"image_b64\": 5}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.parse\", \"error_body\": \"field 'image_b64' must be a string\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "field 'image_b64' must be a string",
+            "error_key": "err.parse",
+            "ok": false
+          },
+          "status": 400
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "field_caption_not_str",
+      "request": "{\"caption\": []}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.parse\", \"error_body\": \"field 'caption' must be a string\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "field 'caption' must be a string",
+            "error_key": "err.parse",
+            "ok": false
+          },
+          "status": 400
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "field_extra_headers_not_dict",
+      "request": "{\"extra_headers\": []}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.parse\", \"error_body\": \"field 'extra_headers' must be an object\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "field 'extra_headers' must be an object",
+            "error_key": "err.parse",
+            "ok": false
+          },
+          "status": 400
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "field_extra_body_not_dict",
+      "request": "{\"extra_body\": \"x\"}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.parse\", \"error_body\": \"field 'extra_body' must be an object\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "field 'extra_body' must be an object",
+            "error_key": "err.parse",
+            "ok": false
+          },
+          "status": 400
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "field_mode_not_str",
+      "request": "{\"mode\": 3}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.parse\", \"error_body\": \"field 'mode' must be a string\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "field 'mode' must be a string",
+            "error_key": "err.parse",
+            "ok": false
+          },
+          "status": 400
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "empty_payload",
+      "request": "{}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.noImage\"}",
+          "kwargs": {},
+          "payload": {
+            "error_key": "err.noImage",
+            "ok": false
+          },
+          "status": 200
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "image_b64_bad_base64",
+      "request": "{\"image_b64\": \"!!!not-base64!!!\"}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.imageInvalidBase64\"}",
+          "kwargs": {},
+          "payload": {
+            "error_key": "err.imageInvalidBase64",
+            "ok": false
+          },
+          "status": 200
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "good_image_unsupported_mode",
+      "request": "{\"image_b64\": \"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==\", \"mode\": \"not_a_mode\"}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.badMode\", \"error_body\": \"unsupported mode 'not_a_mode'; supported modes: ['abundance_diagram', 'auto', 'columnar_section', 'occurrence_matrix', 'phylogenetic_tree', 'range_chart', 'zonation_chart']\", \"supported_modes\": [\"abundance_diagram\", \"auto\", \"columnar_section\", \"occurrence_matrix\", \"phylogenetic_tree\", \"range_chart\", \"zonation_chart\"]}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "unsupported mode 'not_a_mode'; supported modes: ['abundance_diagram', 'auto', 'columnar_section', 'occurrence_matrix', 'phylogenetic_tree', 'range_chart', 'zonation_chart']",
+            "error_key": "err.badMode",
+            "ok": false,
+            "supported_modes": [
+              "abundance_diagram",
+              "auto",
+              "columnar_section",
+              "occurrence_matrix",
+              "phylogenetic_tree",
+              "range_chart",
+              "zonation_chart"
+            ]
+          },
+          "status": 400
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "provider_not_dict",
+      "request": "{\"image_b64\": \"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==\", \"provider\": [1, 2]}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.parse\", \"error_body\": \"field 'provider' must be an object or null\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "field 'provider' must be an object or null",
+            "error_key": "err.parse",
+            "ok": false
+          },
+          "status": 400
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "provider_nested_bad_type",
+      "request": "{\"image_b64\": \"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==\", \"provider\": {\"endpoint\": 5}}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.parse\", \"error_body\": \"field 'provider.endpoint' must be a string\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "field 'provider.endpoint' must be a string",
+            "error_key": "err.parse",
+            "ok": false
+          },
+          "status": 400
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "no_api_key",
+      "request": "{\"image_b64\": \"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==\"}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.noKey\"}",
+          "kwargs": {},
+          "payload": {
+            "error_key": "err.noKey",
+            "ok": false
+          },
+          "status": 200
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "https_private_endpoint_blocked",
+      "request": "{\"image_b64\": \"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==\", \"api_key\": \"k\", \"endpoint\": \"https://10.0.0.1/v1\"}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.badEndpoint\", \"error_body\": \"host '10.0.0.1' resolves to a non-public address. Set RCA_ALLOW_PRIVATE=1 to override (not recommended).\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "host '10.0.0.1' resolves to a non-public address. Set RCA_ALLOW_PRIVATE=1 to override (not recommended).",
+            "error_key": "err.badEndpoint",
+            "ok": false
+          },
+          "status": 200
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "https_localhost_endpoint_blocked",
+      "request": "{\"image_b64\": \"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==\", \"api_key\": \"k\", \"endpoint\": \"https://127.0.0.1:1/v1\"}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.badEndpoint\", \"error_body\": \"host '127.0.0.1' resolves to a non-public address. Set RCA_ALLOW_PRIVATE=1 to override (not recommended).\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "host '127.0.0.1' resolves to a non-public address. Set RCA_ALLOW_PRIVATE=1 to override (not recommended).",
+            "error_key": "err.badEndpoint",
+            "ok": false
+          },
+          "status": 200
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "cleartext_endpoint_rejected",
+      "request": "{\"image_b64\": \"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==\", \"api_key\": \"k\", \"endpoint\": \"http://127.0.0.1:1/v1\"}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.badEndpoint\", \"error_body\": \"https required (cleartext API keys would leak)\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "https required (cleartext API keys would leak)",
+            "error_key": "err.badEndpoint",
+            "ok": false
+          },
+          "status": 200
+        }
+      ]
+    },
+    {
+      "body_consumed": true,
+      "exception": null,
+      "name": "extra_headers_not_dict_nested",
+      "request": "{\"image_b64\": \"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==\", \"api_key\": \"k\", \"provider\": {\"api_key\": \"k\", \"extra_headers\": \"oops\"}}",
+      "responses": [
+        {
+          "bytes": "{\"ok\": false, \"error_key\": \"err.parse\", \"error_body\": \"field 'provider.extra_headers' must be an object or null\"}",
+          "kwargs": {},
+          "payload": {
+            "error_body": "field 'provider.extra_headers' must be an object or null",
+            "error_key": "err.parse",
+            "ok": false
+          },
+          "status": 400
+        }
+      ]
+    }
+  ],
+  "handler": "_handle_extract_body"
+}

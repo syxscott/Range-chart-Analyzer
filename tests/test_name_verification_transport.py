@@ -1,45 +1,32 @@
-"""AUDIT-2026-10-01 [item 27]: GBIF name verification ships on ONE transport only.
+"""AUDIT-2026-10-01 [item 27] -> CAPABILITY-2026-11: the desktop fork closed.
 
-This file documents a gap rather than a contract.  It exists because the gap is
-invisible from the code: ``rca_core/names.py`` is 709 lines with 8 public
-functions, 7 test files exercise it, it was hardened specifically for the
-Python transport (a private opener to dodge GBIF's vhost 404, a 15 s
-per-request timeout, a 60 s wall-clock batch budget, local rejection of
-malformed names), and its three ``msg_key``s are translated in all three
-languages in both catalogs -- yet NO product code calls it.
+This file ORIGINALLY documented a gap: GBIF name verification shipped on ONE
+transport (the browser) and no product Python code called ``rca_core.names``.
+It said, verbatim: "WHEN THE DESKTOP IS WIRED UP, INVERT THIS FILE. The four
+'gap' tests are written to fail the moment a product caller appears, so the
+wiring cannot land silently and leave the documentation claiming a fork that
+no longer exists."
 
-Measured, not assumed (``git grep`` over every non-test ``.py``; the AST-level
-scan below repeats it without shelling out to git):
+The wiring has now landed (v0.3.0 + A-group work, 2026-11):
+``gui_fluent.py::_run_name_capabilities`` calls ``verify_names`` +
+``name_issues`` on a QThread worker and ``check_name_grounding`` for the
+second vision pass. It is an EXPLICIT, DEFAULT-OFF opt-in (extra GBIF requests
+and one extra model call cost money), so the browser remains the only path
+that verifies on EVERY extraction. Results are folded into the result dict as
+``name_candidates`` / ``name_issues`` / ``grounding`` and shown in the Fluent
+result panel.
 
-* the ONLY live GBIF round in the product is the browser's --
-  ``js/app.js`` builds ``https://api.gbif.org/v1/species/match?verbose=true``
-  and ``fetch``es it after every extraction (fail-silent, capped at 20 names);
-* the desktop GUI (``gui_fluent.py``, PySide6) and the local backend
-  (``server.py``) perform NO name verification at all;
-* ``js/app.js`` says in a comment that its three constants MIRROR this module.
-  That claim is true today, and ``test_browser_constants_mirror_python`` below
-  is what keeps it true.
+WHAT IS STILL OPEN (do not let the inversion hide it):
+  * ``rca_core/report.py`` / ``exporter.py`` / ``quality.py`` / ``server.py``
+    still neither emit nor attest name findings. The evidence-chain REPORT
+    does not yet reproduce the check; only the exported result JSON carries
+    the Fluent findings. That is a separate owner decision and is asserted
+    as a known residual gap below rather than silently forgotten.
+  * ``server.py`` still performs no GBIF verification; the browser does it
+    client-side. The capability matrix records that waiver.
 
-Consequences for research use, which is why this is filed rather than left as
-an observation:
-
-1. ``README.md`` lists 学名模糊验证(GBIF) under 科研可信度.  On the transport
-   most researchers use (the desktop app) that capability does not exist.
-2. The browser's findings are held in ``state._nameIssues`` -- assigned,
-   rendered, cleared.  Never serialised.  ``exporter.py`` / ``report.py`` /
-   ``quality.py`` / ``server.py`` contain no name-issue key at all, so the
-   audit report can neither reproduce nor attest the check.
-3. Even where it does run, it is a LIVE call at view time, so the same input
-   re-run later meets a different GBIF state.  A quality signal that is not in
-   the evidence chain cannot be part of a reproducible result -- the exact
-   distinction ``reason_codes.py`` exists to protect ("a silent omission has
-   to stay detectable as one").
-
-WHEN THE DESKTOP IS WIRED UP, INVERT THIS FILE.  The four "gap" tests are
-written to fail the moment a product caller appears, so the wiring cannot land
-silently and leave the documentation claiming a fork that no longer exists.
-``test_browser_constants_mirror_python`` is the exception: it is a real
-cross-engine invariant and should outlive the gap.
+``test_browser_constants_mirror_python`` is the real cross-engine invariant
+and outlives the gap.
 """
 from __future__ import annotations
 
@@ -117,49 +104,80 @@ def _imports_names_module() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# The gap, stated so it cannot be mistaken for coverage
+# The inverted contract: the desktop IS wired, and ONLY the desktop is wired
 # ---------------------------------------------------------------------------
 
-def test_python_product_has_no_caller_for_name_verification():
+def test_fluent_is_now_the_only_python_caller_for_name_verification():
+    """Inverted from ``...has_no_caller...``. The wiring must not land silently.
+
+    ``gui_fluent.py`` must import rca_core.names, and NO other product module
+    may do so — server.py / rca_core/* still leave GBIF to the browser. If a
+    second Python caller appears, this test names it so the capability matrix
+    and the transport docs can be updated in the same commit.
+    """
     hits = _imports_names_module()
-    assert hits == [], (
-        "a product module now imports rca_core.names -- the desktop/backend "
-        "fork this file documents is being closed.  Update this file and the "
-        "README, and decide whether the findings must also enter the evidence "
-        "chain (they currently are not serialised anywhere).\n  "
-        + "\n  ".join(hits))
+    files = {h.split(":", 1)[0].replace("\\", "/") for h in hits}
+    assert "gui_fluent.py" in files, (
+        "the Fluent desktop wiring disappeared; name verification is again "
+        f"unreachable from Python. hits={hits}")
+    unexpected = files - {"gui_fluent.py"}
+    assert not unexpected, (
+        "a NEW Python product caller for rca_core.names appeared — update the "
+        f"capability matrix and this file: {sorted(unexpected)}")
+    # The import must be a REAL call, not a dead import: the worker payload
+    # invokes verify_names + name_issues off the GUI thread.
+    src = (REPO / "gui_fluent.py").read_text(encoding="utf-8")
+    assert "verify_names(" in src and "name_issues(" in src
+    assert "_run_name_capabilities" in src
 
 
-def test_name_issues_never_reach_the_evidence_chain():
-    """The report cannot reproduce or attest a check it does not record."""
+def test_name_findings_are_in_the_fluent_result_but_not_yet_in_the_report():
+    """Inverted from ``...never_reach_the_evidence_chain``.
+
+    Fluent now folds the findings into ``self.result`` (so the exported JSON
+    carries them), but the evidence-chain REPORT / exporters / scorer still
+    do not attest them. Keep that residual gap visible instead of declaring
+    the audit chain complete.
+    """
+    fluent = (REPO / "gui_fluent.py").read_text(encoding="utf-8")
+    assert "name_issues" in fluent and "names.fuzzy" in fluent
+    assert 'data["name_issues"]' in fluent
+    assert 'data["grounding"]' in fluent
     for rel in ("rca_core/report.py", "rca_core/exporter.py",
-                "rca_core/quality.py", "server.py", "gui_fluent.py"):
+                "rca_core/quality.py", "server.py"):
         text = (REPO / rel).read_text(encoding="utf-8")
         for needle in ("name_issues", "names.fuzzy", "names.unmatched",
                        "names.ambiguous"):
             assert needle not in text, (
-                "%s now references %r -- name findings reached the audit "
-                "chain; update this file" % (rel, needle))
+                f"{rel} now references {needle!r} -- the evidence-chain gap "
+                "is being closed; update this file and the audit docs")
 
 
-def test_the_only_live_gbif_round_is_the_browsers():
+def test_browser_still_calls_gbif_and_fluent_has_a_python_transport():
+    """Inverted from ``test_the_only_live_gbif_round_is_the_browsers``."""
     app = (REPO / "js" / "app.js").read_text(encoding="utf-8")
     assert "api.gbif.org" in app and "fetch(GBIF_MATCH_URL" in app, (
-        "the browser stopped calling GBIF -- one more transport may now own "
-        "this, or the feature may be gone entirely.  Re-read this file.")
+        "the browser stopped calling GBIF -- re-read this file")
+    # Fluent's Python transport is opt-in (default OFF); the browser stays
+    # the only transport that verifies on EVERY extraction.
+    fluent = (REPO / "gui_fluent.py").read_text(encoding="utf-8")
+    assert "verify_names(" in fluent
+    assert "cfg.get(\"verify_names\", False)" in fluent
     for rel in ("rca_core/quality.py", "rca_core/report.py", "server.py"):
         assert "api.gbif.org" not in (REPO / rel).read_text(encoding="utf-8")
 
 
-def test_names_fuzzy_keys_are_translated_but_unreachable_on_python():
-    """9 catalog entries (3 keys x 3 languages) that no Python path emits."""
+def test_names_fuzzy_keys_are_translated_and_reachable_on_python():
+    """Inverted from ``...translated_but_unreachable_on_python``."""
     from rca_core.i18n import TRANSLATIONS
     for lang in ("zh", "en", "ja"):
         for key in ("names.fuzzy", "names.unmatched", "names.ambiguous"):
             text = TRANSLATIONS[lang].get(key)
             assert text and text != key, "%s/%s untranslated" % (lang, key)
-    # They resolve -- for a caller that does not exist.
     assert names_mod.name_issues is not None
+    fluent = (REPO / "gui_fluent.py").read_text(encoding="utf-8")
+    assert "name_issues(" in fluent, (
+        "the translated keys are again unreachable from a Python product path")
 
 
 # ---------------------------------------------------------------------------

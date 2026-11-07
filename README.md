@@ -451,10 +451,10 @@ node tests/js/tests_frontend_perf.js                        # 真实浏览器性
 
 ## 路线图
 
-- [ ] 丰度/地球化学模式的**几何引擎 PoC**（确定性 CV 测刻度与曲线像素，LLM 只读语义——FigDataX 路线）
-- [ ] 学名验证的 **UI 接线**（结果面板显示 `names.fuzzy` 候选）
-- [ ] 延限图 **overlay 标注**（把提取端点映射回原图坐标供复核）
-- [ ] 图版**自动鉴定**接入（scampi 开放权重 / RadiolarianClassifier 路线）
+- [x] 丰度/地球化学模式的**几何引擎 PoC**（确定性 CV 测刻度与曲线像素，LLM 只读语义——FigDataX 路线）——`rca_core/axis_detect.py`：直方图 Otsu 极性判定 → 轴投影找轴线 → 邻域突起峰值找刻度 → 每列中位墨迹描曲线；合成图真值验证（刻度 ≤2 px、曲线 ≤4 px）。**仍缺一步**：刻度标签→数据值需调用方给值或另做 OCR，本模块刻意不读数字（3/8、1/l 的误读会被误当成校准误差）。
+- [x] 学名验证的 **UI 接线**（结果面板显示 `names.fuzzy` 候选）——Fluent（默认桌面端）已接 `names.verify` / `names.fuzzy` / `check_name_grounding`，后台 QThread + 超时，**默认关闭**（会产生 GBIF 请求与一次额外模型调用）。
+- [ ] 延限图 **overlay 标注**（把提取端点映射回原图坐标供复核）——**实测结论（2026-11-07）**：`pos_0_999` 是归一化轴位置 0..999，`axis_calibration` 只存 `at_0`/`at_999` 的**数据值**、不含任何像素锚点，因此 `pos → 数据值` 是精确线性（60 个真实字段残差 <5e-7），`pos → 原图像素` **数据不足**。真 overlay 需新增像素锚点采集；半真 overlay 可直接在归一化坐标上标注。复现：`python scripts/audit/overlay_coord_probe.py`，详见 `docs/OVERLAY-COORD-AUDIT.md`。
+- [ ] 图版**自动鉴定**接入（scampi 开放权重 / RadiolarianClassifier 路线）——**前置的确定性图版分割已落地**（`rca_core/plate_segment.py`：gutters 切分 + 紧致 bbox + 不规则版式显式拒绝，合成图真值 bbox 逐像素验证）。**分类器推理未完成**：仓库无权重、无标注集，无法测量精度，因此不提供会返回标签的接口。
 - [ ] E2E 40 图升级为带人工核对基准的**公开回归门禁**
 - [ ] ICS v2026-06 标尺更新（Olenekian / Anisian / Wuchiapingian 三处界线）
 

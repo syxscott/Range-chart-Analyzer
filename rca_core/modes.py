@@ -134,7 +134,7 @@ class ModeSpec:
     keywords_phrase_res: tuple[re.Pattern[str], ...] = ()
 
     # --- code references (resolved lazily; never imported here) --------
-    #: "rca_core.extractor:normalize_result"
+    #: "rca_core.modes_impl.range_chart:normalize_result"
     normalizer_ref: str | None = None
 
     notes: str = ""
@@ -172,7 +172,7 @@ _add(ModeSpec(
     row_tables=("species_ranges",),
     keywords_ascii=("range chart", "range-chart"),
     keywords_cjk=("延限", "карта совмещения", "график совмещения"),
-    normalizer_ref="rca_core.extractor:normalize_result",
+    normalizer_ref="rca_core.modes_impl.range_chart:normalize_result",
     notes="Core mode; E2E-tested on literature range charts "
           "(species x sample matrices with abundance and plates).",
 ))
@@ -191,7 +191,7 @@ _add(ModeSpec(
     keywords_ascii=("column", "columns", "columnar", "col_section",
                     "col_sections"),
     keywords_cjk=("柱状", "柱状図", "柱状图"),
-    normalizer_ref="rca_core.extractor:normalize_columnar_result",
+    normalizer_ref="rca_core.modes_impl.columnar_section:normalize_columnar_result",
     notes="Lithologic columns with formation / thickness / legend.",
 ))
 
@@ -208,7 +208,7 @@ _add(ModeSpec(
     row_tables=("sites", "abundances", "zones"),
     keywords_ascii=("pollen", "abundance", "percentage diagram", "palyno"),
     keywords_cjk=("孢粉", "花粉", "丰度", "百分比"),
-    normalizer_ref="rca_core.extractor:normalize_abundance_result",
+    normalizer_ref="rca_core.modes_impl.abundance_diagram:normalize_abundance_result",
     notes="Down-core curves and profiles work well; pie charts, heatmaps "
           "and distribution maps degrade to empty output by design.",
 ))
@@ -229,7 +229,7 @@ _add(ModeSpec(
     keywords_ascii=("phylogen", "phylogram", "cladogram", "dendrogram",
                     "molecular phylogen"),
     keywords_cjk=("系统发育", "进化树", "系统树", "分子系统"),
-    normalizer_ref="rca_core.extractor:normalize_phylogenetic_tree_result",
+    normalizer_ref="rca_core.modes_impl.phylogenetic_tree:normalize_phylogenetic_tree_result",
     notes="Newick output with parent/id structure.",
 ))
 
@@ -255,7 +255,7 @@ _add(ModeSpec(
     keywords_phrase_res=(
         re.compile(r"\bcorrelation of\b[^.\n]{0,80}?\bzones?\b"),
     ),
-    normalizer_ref="rca_core.extractor:normalize_zonation_chart_result",
+    normalizer_ref="rca_core.modes_impl.zonation_chart:normalize_zonation_chart_result",
     notes="Biozonation / correlation charts (radiolarian biochronology); "
           "E2E recovered 32 zones + cross-framework correlations from a "
           "Triassic zonation figure.",
@@ -281,7 +281,7 @@ _add(ModeSpec(
                     "chemical stratigraphic"),
     keywords_cjk=("同位素", "化学地层", "化学地層", "地球化学",
                   "изотоп", "геохим"),
-    normalizer_ref="rca_core.extractor:normalize_chemical_stratigraphy_result",
+    normalizer_ref="rca_core.modes_impl.chemical_stratigraphy:normalize_chemical_stratigraphy_result",
     notes="Geochemical curves / age-distribution summaries; broad genre, "
           "expect partial yields.",
 ))
@@ -309,7 +309,7 @@ _add(ModeSpec(
                     "paleocontinent", "palaeocontinent"),
     keywords_cjk=("古地理", "古海洋", "古大陆", "板块重建",
                   "палеогеограф", "палеокарт", "палеоконтинент"),
-    normalizer_ref="rca_core.extractor:normalize_paleomap_result",
+    normalizer_ref="rca_core.modes_impl.paleomap:normalize_paleomap_result",
     notes="Palaeogeographic maps and locality figures. Present-day "
           "geological maps are honestly refused by the model.",
 ))
@@ -329,7 +329,7 @@ _add(ModeSpec(
                     "biplot", "crossplot", "cross plot"),
     keywords_cjk=("散点", "散布図", "точечная диаграмма", "рассеяни",
                   "рассеиван"),
-    normalizer_ref="rca_core.extractor:normalize_scatter_plot_result",
+    normalizer_ref="rca_core.modes_impl.scatter_plot:normalize_scatter_plot_result",
     notes="Scatter / biplot extraction; morphospace plots vary.",
 ))
 
@@ -371,7 +371,7 @@ _add(ModeSpec(
     # "localit" MUST be a stem or it never matches "locality"/"localities",
     # which is the word the caption actually prints.
     keywords_stems=("localit", "wellbore", "borehol"),
-    normalizer_ref="rca_core.extractor:normalize_occurrence_matrix_result",
+    normalizer_ref="rca_core.modes_impl.occurrence_matrix:normalize_occurrence_matrix_result",
     notes="Taxon x locality occurrence matrices with ordinal class letters "
           "and NO continuous axis. Sparse by contract: one row per FILLED "
           "cell, never per blank.",
@@ -400,7 +400,7 @@ _add(ModeSpec(
     # Deliberately NO keywords: this mode is never auto-detected, it is the
     # thing everything else falls back to. A keyword here would let it
     # cannibalise genres that deserve a real mode.
-    normalizer_ref="rca_core.extractor:normalize_generic_table_result",
+    normalizer_ref="rca_core.modes_impl.generic_table:normalize_generic_table_result",
     notes="Last-resort structural extraction for an unrecognised chart "
           "genre: report the grid that is actually visible, and refuse "
           "plainly when the figure is not a table at all.",

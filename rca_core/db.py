@@ -21,11 +21,38 @@ The DB lives at ``~/.range_chart_analyzer/rca.db``. Two tables:
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
+import warnings
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any, Iterator
+
+log = logging.getLogger(__name__)
+
+#: Only these errors mean "the FILE is unreadable". A DDL/schema error
+#: (``no such column``, ``no such table``) is a ``sqlite3.OperationalError``
+#: and must keep propagating exactly as before — quarantining a legitimate
+#: old-shape database would destroy the user's history for no reason.
+#: Measured on 4096 random bytes: ``PRAGMA journal_mode=WAL`` and
+#: ``executescript(SCHEMA)`` both raise the BASE ``sqlite3.DatabaseError``
+#: with "file is not a database", while an index on a missing column raises
+#: ``sqlite3.OperationalError: no such column: timestamp``.
+_CORRUPT_MARKERS = (
+    "file is not a database",
+    "database disk image is malformed",
+    "file is encrypted or is not a database",
+)
+
+
+def _is_corruption_error(exc: BaseException) -> bool:
+    """True only for a genuinely unreadable SQLite FILE, not a schema error."""
+    if not isinstance(exc, sqlite3.DatabaseError):
+        return False
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _CORRUPT_MARKERS)
 
 
 def default_db_path() -> str:
@@ -188,25 +215,45 @@ class Database:
         self._closed = False
         self._tx_depth = 0
         self._tx_owner: int | None = None
+        # P1-8 (2026-11): readable, non-fatal lifecycle notes. Both are
+        # ``None`` on a normal open and are consumed by ``doctor`` / the UI.
+        # ``schema_warning`` means the on-disk DB was written by a NEWER
+        # build; ``recovery_note`` means the original file was corrupt and
+        # has been preserved under a .corrupt-* name.
+        self.schema_warning: str | None = None
+        self.recovery_note: str | None = None
+        self._schema_downgrade = False
         # check_same_thread=False so any thread may borrow the connection.
         # Combined with WAL, multiple readers don't block each other and
         # the GIL keeps single-statement executes atomic. Multi-statement
         # transactions must be wrapped in ``self.transaction()``.
-        self._conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._apply_setup()
+        self._conn = self._new_connection()
         # Run a quick health probe so we fail fast on corrupt files
         # instead of the first real query.
+        #
+        # P1-8: the probe now COVERS ``_apply_setup()`` as well. Measured on
+        # a file of 4096 random bytes: ``SELECT 1`` returns (1,) without ever
+        # reading the file header, while ``executescript(SCHEMA)`` raises
+        # "file is not a database". The old code called _apply_setup() OUTSIDE
+        # the try, so the exception escaped __init__ before the probe ran and
+        # the "reopen once" recovery was unreachable for a genuinely corrupt
+        # file. Both phases now live inside one guard.
         try:
-            self._conn.execute("SELECT 1").fetchone()
-        except sqlite3.DatabaseError:
+            self._apply_setup()
+            self._health_probe()
+        except sqlite3.DatabaseError as first_exc:
+            if not _is_corruption_error(first_exc):
+                # A schema/DDL error is NOT a corrupt file. Re-raise so the
+                # caller sees the same sqlite3.OperationalError it always
+                # did (pinned by tests/test_history_schema_migration.py).
+                # Quarantining here would delete a legitimate old database.
+                raise
+            log.warning("initial DB health probe failed for %s: %s",
+                        self.path, first_exc)
             # Reopen in case the connection was invalidated by an
             # interrupted write on a previous launch.
-            self._conn.close()
-            self._conn = sqlite3.connect(
-                self.path, timeout=30, check_same_thread=False
-            )
-            self._conn.row_factory = sqlite3.Row
+            self._close_connection()
+            self._conn = self._new_connection()
             # LOW finding 2026-07-20: every reopen path must re-apply
             # PRAGMAs and re-run SCHEMA / migrations so the recovered
             # connection behaves identically to the first open (WAL for
@@ -214,7 +261,116 @@ class Database:
             # Without this, a fallback reopen ran with default journal
             # mode and FK off — directly undermining the Bug-5 fix the
             # same file introduced.
-            self._apply_setup()
+            #
+            # A setup failure on the reopened connection counts as a failed
+            # second probe: we still run the explicit SELECT 1 below so the
+            # recovery path has one unambiguous, readable decision point.
+            setup_failed = False
+            try:
+                self._apply_setup()
+            except sqlite3.DatabaseError as second_exc:
+                setup_failed = True
+                log.warning("reopened DB setup failed for %s: %s",
+                            self.path, second_exc)
+            try:
+                # P1-8: the SECOND `SELECT 1` probe, after the single reopen.
+                self._health_probe()
+            except sqlite3.DatabaseError as second_exc:
+                setup_failed = True
+                log.warning("second DB health probe failed for %s: %s",
+                            self.path, second_exc)
+            if setup_failed:
+                self._quarantine_corrupt_db()
+            # else: the reopen healed it (an interrupted write, not a bad
+            # file). The SECOND successful _apply_setup() already ran
+            # _apply_migrations(), which is the single authority on
+            # schema_warning / _schema_downgrade. Do not overwrite it here:
+            # a higher-version database that transiently failed the first
+            # probe must still keep its downgrade warning.
+
+    def _new_connection(self) -> sqlite3.Connection:
+        """One connection, always configured the same way."""
+        conn = sqlite3.connect(self.path, timeout=30,
+                               check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _close_connection(self) -> None:
+        """Release the file handle (Windows holds a lock until close())."""
+        conn = getattr(self, "_conn", None)
+        self._conn = None
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _health_probe(self) -> None:
+        """Read-only liveness check that actually touches the file header.
+
+        A bare ``SELECT 1`` is vacuous on a corrupt SQLite file (measured:
+        it returns (1,) from a 4096-byte random blob), so the probe also
+        reads ``sqlite_master``. Both statements are reads; nothing is
+        created or migrated here.
+        """
+        self._conn.execute("SELECT 1").fetchone()
+        self._conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+
+    def _quarantine_corrupt_db(self) -> None:
+        """Preserve an unrecoverable file and start a fresh empty DB.
+
+        NEVER deletes the original. ``os.replace`` renames it in place to
+        ``<path>.corrupt-<UTC timestamp>`` so the bytes survive for manual
+        inspection, then a new empty database is created at the original
+        path. ``:memory:`` (and any non-regular path) has nothing to rename,
+        so that branch is skipped and the caller just keeps its connection.
+
+        The original connection MUST be closed before the rename on Windows:
+        an open SQLite handle keeps the file locked and os.replace() then
+        raises PermissionError, which would turn a recoverable corruption
+        into a hard crash.
+        """
+        # Special paths: cannot be renamed. On a real :memory: database the
+        # probes above never fail, so this is a defensive no-op rather than
+        # a behaviour the app depends on.
+        if self.path == ":memory:" or self.path.startswith("file:"):
+            log.warning("corruption detected on a non-file DB (%s); "
+                        "no rename performed", self.path)
+            return
+        self._close_connection()
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        preserved = f"{self.path}.corrupt-{stamp}"
+        # A collision (two opens in the same microsecond) must never cause
+        # os.replace to silently overwrite a previously preserved file.
+        suffix = 0
+        while os.path.exists(preserved):
+            suffix += 1
+            preserved = f"{self.path}.corrupt-{stamp}-{suffix}"
+        try:
+            os.replace(self.path, preserved)
+        except OSError as exc:
+            # Preserving failed: do NOT create a new DB on top of the old
+            # one and do NOT retry the write in a loop. The original file
+            # is still there; the caller gets a clear, non-destructive
+            # error instead of a silently truncated history.
+            self._conn = self._new_connection()
+            raise sqlite3.DatabaseError(
+                f"could not preserve corrupt database {self.path!r} "
+                f"as {preserved!r}: {exc}"
+            ) from exc
+        self.recovery_note = (
+            f"原数据库无法读取，已完整保留为 {preserved}（未删除）。"
+            "已在该路径新建空库；请先备份该文件并人工检查后再继续写入。"
+            f" / The unreadable database was preserved at {preserved}; "
+            "a fresh empty database now lives at the original path. "
+            "Please back it up and inspect it manually."
+        )
+        log.warning("%s", self.recovery_note)
+        warnings.warn(self.recovery_note, RuntimeWarning, stacklevel=2)
+        self.schema_warning = None
+        self._schema_downgrade = False
+        self._conn = self._new_connection()
+        self._apply_setup()
 
     def _apply_setup(self) -> None:
         """Idempotent connection setup: pragmas + schema + migrations.
@@ -243,11 +399,17 @@ class Database:
         with self._lock:
             self._conn.executescript(SCHEMA)
             self._apply_migrations(self._conn)
-            # P1-5 (REVIEW-2026-07-25): add edit-provenance columns to
-            # pre-existing databases that predate this schema. Idempotent
-            # — silent no-op if columns already exist.
-            self._add_provenance_columns(self._conn)
-            self._add_usage_columns(self._conn)
+            # P1-8: when the on-disk DB was written by a NEWER build, do not
+            # let the additive column helpers ALTER it either. They are
+            # no-ops in practice (the newer schema already has the columns),
+            # but skipping them makes "downgrade = read-only" a real
+            # invariant rather than a lucky consequence of IF NOT EXISTS.
+            if not getattr(self, "_schema_downgrade", False):
+                # P1-5 (REVIEW-2026-07-25): add edit-provenance columns to
+                # pre-existing databases that predate this schema. Idempotent
+                # — silent no-op if columns already exist.
+                self._add_provenance_columns(self._conn)
+                self._add_usage_columns(self._conn)
             self._conn.commit()
 
     # Columns added to `usage` after it first shipped. A pre-existing database
@@ -418,8 +580,14 @@ class Database:
     # tuple to _MIGRATIONS; opening an old DB runs them in order so a
     # user's existing history / usage records survive an app upgrade.
     #
-    # We never delete or rename columns — only additive changes — so
-    # downgrades remain a no-op (new columns just become unused).
+    # We never delete or rename columns — only additive changes. A downgrade
+    # used to be described as "a no-op (new columns just become unused)", but
+    # that was FALSE (P1-8, 2026-11): _apply_migrations unconditionally ran
+    # ``INSERT OR REPLACE INTO _schema_version`` and wrote the OLD build's
+    # version number over the newer one. On the next upgrade every
+    # migration's ``from_v`` no longer matched, so the migrations were
+    # SILENTLY SKIPPED while the file already carried the new columns. Now a
+    # downgrade touches nothing and says so via ``schema_warning``.
     #
     # Bug-14 fix: _CURRENT_SCHEMA_VERSION is auto-derived from
     # len(_MIGRATIONS) at import time. New migrations no longer require
@@ -436,16 +604,53 @@ class Database:
         the current state. Migrations are atomic per-step (one
         COMMIT per migration) so a partially-upgraded DB can resume on
         next launch.
+
+        P1-8: a stored version ABOVE this build's target is a DOWNGRADE run.
+        In that case no migration runs and, critically, NO version row is
+        written. The old unconditional INSERT OR REPLACE used to lower the
+        on-disk version, which permanently broke the next upgrade's
+        migration chain. Instead we record a readable ``schema_warning``,
+        emit a warning, and leave the old build usable for reading.
         """
+        # Read FIRST, before any DDL, so a downgrade run issues no write at
+        # all. A missing table (a pre-versioning database) is not an error:
+        # it is the normal first-migration case handled below.
+        row = None
+        try:
+            row = conn.execute(
+                "SELECT version FROM _schema_version LIMIT 1"
+            ).fetchone()
+        except sqlite3.DatabaseError:
+            row = None
+        current = 0
+        if row is not None:
+            try:
+                current = int(row["version"])
+            except (TypeError, ValueError, IndexError, KeyError):
+                current = 0
+            if current > self._CURRENT_SCHEMA_VERSION:
+                self._schema_downgrade = True
+                self.schema_warning = (
+                    f"磁盘上的数据库由更高版本创建（schema v{current}），"
+                    f"当前程序只认识 v{self._CURRENT_SCHEMA_VERSION}。"
+                    "已保留原版本号、未执行任何迁移、未改写版本行；"
+                    "请升级到最新版，或先备份后不要再继续写入。"
+                    f" / On-disk schema v{current} is newer than this build "
+                    f"(v{self._CURRENT_SCHEMA_VERSION}). The version row was "
+                    "preserved and no migration ran. Please upgrade to the "
+                    "latest release, or back up the file and stop writing."
+                )
+                log.warning("%s", self.schema_warning)
+                warnings.warn(self.schema_warning, RuntimeWarning,
+                              stacklevel=2)
+                return
+        self._schema_downgrade = False
+        self.schema_warning = None
         conn.execute(
             "CREATE TABLE IF NOT EXISTS _schema_version ("
             " version INTEGER PRIMARY KEY"
             ")"
         )
-        row = conn.execute(
-            "SELECT version FROM _schema_version LIMIT 1"
-        ).fetchone()
-        current = int(row["version"]) if row else 0
         for from_v, to_v, sql in self._MIGRATIONS:
             if current == from_v:
                 conn.executescript(sql)
@@ -462,7 +667,8 @@ class Database:
                 # tuple actually declares; trust it.
                 current = to_v
         # Record the final state on disk. INSERT OR REPLACE handles both
-        # first-launch (no row) and subsequent launches (idempotent).
+        # first-launch (no row) and subsequent launches (idempotent). This
+        # line is deliberately UNREACHABLE on a downgrade (early return).
         conn.execute(
             "INSERT OR REPLACE INTO _schema_version(version) VALUES (?)",
             (self._CURRENT_SCHEMA_VERSION,),

@@ -76,6 +76,60 @@ def _sqlite_status(path: Path) -> str:
         return f"无法读取：{type(exc).__name__}: {exc}"
 
 
+def _schema_version_status(path: Path) -> tuple[str, str | None]:
+    """Read-only comparison of the on-disk schema version with this build.
+
+    P1-8 (2026-11): an older program opening a database written by a NEWER
+    one used to lower the stored version, silently breaking the next
+    upgrade's migration chain. ``rca_core.db.Database`` now refuses to do
+    that and records ``schema_warning`` instead; doctor must be able to see
+    the same condition WITHOUT opening the database read-write (which would
+    itself run the migrations it is trying to warn about).
+
+    Returns ``(line_to_print, issue_or_None)``. Returns ``("", None)`` when
+    the file does not exist, has no ``_schema_version`` table (a legacy
+    pre-versioning database), or cannot be read — the ``quick_check`` line
+    already reports actual damage, and a missing version is not a downgrade.
+
+    This function NEVER calls ``Database()`` and NEVER writes: the only
+    SQLite access is a ``mode=ro`` URI on a file that already exists.
+    """
+    if not path.is_file():
+        return "", None
+    try:
+        # Imported lazily and purely as data: rca_core.db has no import-time
+        # side effects (no directory creation, no connect). Do NOT construct
+        # a Database here — that would migrate the very file we are checking.
+        from .db import Database
+        target = int(Database._CURRENT_SCHEMA_VERSION)
+    except Exception:  # noqa: BLE001 - doctor must never crash
+        return "", None
+    try:
+        uri = f"file:{path.as_posix()}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=2)
+        try:
+            row = conn.execute(
+                "SELECT version FROM _schema_version LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - no table / unreadable -> not a downgrade
+        return "", None
+    if row is None:
+        return "", None
+    try:
+        current = int(row[0])
+    except (TypeError, ValueError, IndexError):
+        return "", None
+    if current > target:
+        msg = (f"磁盘 schema v{current} 高于本程序 v{target}（降级运行）"
+               f" — 请升级到最新版，或备份 {path.name} 后不要继续写入")
+        issue = (f"rca.db: 磁盘 schema v{current} > 本程序 v{target}，"
+                 "当前程序版本较旧；已保留原版本号，请升级到最新版")
+        return msg, issue
+    return f"schema v{current} / 本程序 v{target}", None
+
+
 def _encryption_status() -> str:
     try:
         from .secrets_store import encryption_status
@@ -141,6 +195,15 @@ def run_doctor(stream=None) -> int:
                 issues.append(f"{name}: {state} — {purpose}")
             print(f"  [{'OK ' if ok else '!! '}] {name:24} {state}  "
                   f"{size / 1024:.1f} KiB — {purpose}", file=out)
+        # P1-8: a NEWER on-disk schema than this build is a downgrade run.
+        # The check is read-only and never creates/migrates the file, so it
+        # is safe even on a machine whose history must not be touched.
+        sch_line, sch_issue = _schema_version_status(data_dir / "rca.db")
+        if sch_line:
+            mark = "!! " if sch_issue else "OK "
+            print(f"  [{mark}] {'rca.db schema':24} {sch_line}", file=out)
+        if sch_issue:
+            issues.append(sch_issue)
     print("", file=out)
 
     enc = _encryption_status()
@@ -168,7 +231,8 @@ def run_doctor(stream=None) -> int:
         print("\n依赖修复：pip install -r requirements.txt -c constraints.txt",
               file=out)
         print("历史数据库损坏时：先备份 ~/.range_chart_analyzer/rca.db，"
-              "再删除并重启（历史记录会清空，无法自动恢复）", file=out)
+              "再删除并重启（历史记录会清空，无法自动恢复）；"
+              "新版会自动把损坏文件保留为 rca.db.corrupt-<UTC> 而不删除", file=out)
         return 1
     print("=== 体检通过 ===", file=out)
     return 0

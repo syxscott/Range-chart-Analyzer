@@ -12,6 +12,7 @@ thread crashes Qt). All LLM / merge / i18n logic is reused from rca_core.
 from __future__ import annotations
 
 import base64  # AUDIT-2026-09-27 [item 2.4]: see _show_history_thumbnail
+import copy  # CAPABILITY-2026-11: deep-copy the result before the name worker
 import functools  # UX-2026-10-18: _xlsx_available is lru_cached (see its docstring)
 import logging
 import os
@@ -325,6 +326,351 @@ def save_config(cfg: dict) -> None:
         # settings were NOT persisted (the silent failure was the bug).
         log.exception("save_config failed for %s", CONFIG_PATH)
         raise
+
+
+# ---------------------------------------------------------------------------
+# Opt-in name checks: names.verify / names.fuzzy / grounding
+# ---------------------------------------------------------------------------
+# CAPABILITY-2026-11 (G2/G6 in docs/OWNER_DECISIONS.md). Before this change
+# ``grep -nE "verify_names|fuzzy|check_name_grounding" gui_fluent*.py`` had
+# ZERO hits: the DEFAULT desktop UI could not distinguish a name READ off the
+# figure from one the model RECALLED, and had no GBIF safety net. This is a
+# scientific-correctness gap, not a missing button.
+#
+# Three hard rules, all enforced below:
+#   * verify_names (GBIF network) and check_name_grounding (a SECOND vision
+#     call) NEVER run on the GUI thread. Both live in NameCapabilityWorker
+#     (QThread) and only the payload crosses back via a queued signal.
+#   * DEFAULT OFF. Both cost extra requests/money. The switches on the
+#     Settings page start unchecked; the previous Fluent behaviour (no extra
+#     calls at all) is preserved until the user explicitly opts in. The UI
+#     says out loud that extra requests will be made.
+#   * FAILURE IS VISIBLE AND NEVER "CLEAN". Mirrors server.py's
+#     _safe_ground_and_score: a not_performed verdict is reported as "could
+#     not check", never as "checked and clean"; a raised exception degrades
+#     to a payload with ``errors`` and never blocks the extraction.
+#
+# Qt thread model (measured in this repo, see _Heartbeat / qt_thread_probe.py):
+# a QTimer created inside QThread.run() NEVER fires because that thread has
+# no event loop. NO timer is used anywhere here — the worker emits ONE signal
+# when it is done, and the GUI thread owns every widget and every label.
+# The signal carries ``(worker, payload)`` so the slot is a BOUND METHOD of a
+# persistent QObject (the page) and Qt uses a queued connection. A slot bound
+# to a temporary receiver (``w.connect(Page().on_x)``) is only weakly held
+# and is silently garbage-collected; tests/test_fluent_capabilities.py
+# explicitly asserts the slot was actually invoked.
+
+#: Fluent-only, three-language labels. ``rca_core/i18n.py`` is shared by every
+#: endpoint (and is concurrently owned in this wave), so these opt-in labels
+#: live here as a small table in the same dict style as
+#: ``RangeChartFluentWindow._lang_label``. EVERY key has zh / en / ja; a
+#: missing language falls back to English, then to the key itself.
+NAME_CAP_TEXT = {
+    "title": {
+        "zh": "名称核对（可选）",
+        "en": "Name checks (optional)",
+        "ja": "名称チェック（任意）",
+    },
+    "verify": {
+        "zh": "GBIF 学名核验",
+        "en": "GBIF name verification",
+        "ja": "GBIF 学名照合",
+    },
+    "ground": {
+        "zh": "名称落地核对（二次视觉核对）",
+        "en": "Name grounding (a second vision call)",
+        "ja": "名称接地検証（2 回目の視覚呼び出し）",
+    },
+    "cost": {
+        "zh": "开启后会额外发起 GBIF 网络请求 / 一次额外的模型调用，可能产生费用；默认关闭。",
+        "en": "Enabling this makes extra GBIF requests / one extra model call "
+              "and may incur cost. Off by default.",
+        "ja": "有効にすると GBIF への追加リクエスト／モデルへの追加呼び出しが発生し、"
+              "費用がかかる場合があります。既定はオフです。",
+    },
+    "run": {
+        "zh": "执行名称核对",
+        "en": "Run name checks",
+        "ja": "名称チェックを実行",
+    },
+    "running": {
+        "zh": "正在后台核对名称…",
+        "en": "Checking names in the background…",
+        "ja": "バックグラウンドで名称を確認中…",
+    },
+    "empty": {
+        "zh": "尚未执行名称核对。",
+        "en": "Name checks have not run.",
+        "ja": "名称チェックは未実行です。",
+    },
+    "off": {
+        "zh": "请先在设置页开启名称核对（默认关闭）。",
+        "en": "Enable name checks on the Settings page first (off by default).",
+        "ja": "先に設定ページで名称チェックを有効にしてください（既定はオフ）。",
+    },
+    "noResult": {
+        "zh": "还没有提取结果；核对会在结果到达后可用。",
+        "en": "No result yet — checks become available once a result arrives.",
+        "ja": "結果がまだありません。結果の到着後にチェックできます。",
+    },
+    "armed": {
+        "zh": "已开启：每次提取完成后会在后台自动执行名称核对。",
+        "en": "Enabled: name checks run in the background after every extraction.",
+        "ja": "有効：抽出完了後にバックグラウンドで自動的に名称チェックします。",
+    },
+    "summary": {
+        "zh": "候选名称 {candidates} 个，核验问题 {issues} 项，图面未找到 {unverified} 个。",
+        "en": "{candidates} candidate names, {issues} verification issues, "
+              "{unverified} not found in the figure.",
+        "ja": "候補名 {candidates} 件、照合上の指摘 {issues} 件、"
+              "図面で未確認 {unverified} 件。",
+    },
+    "candidates": {
+        "zh": "候选名称",
+        "en": "Candidates",
+        "ja": "候補名",
+    },
+    "fuzzy": {
+        "zh": "模糊匹配建议",
+        "en": "Fuzzy suggestions",
+        "ja": "ファジーマッチ候補",
+    },
+    "unverified": {
+        "zh": "图面未找到（可能来自模型记忆）",
+        "en": "Not found in the figure (may be recalled, not read)",
+        "ja": "図面に見つからない（モデルの記憶由来の可能性）",
+    },
+    "warning": {
+        "zh": "未完成核对",
+        "en": "Could not check",
+        "ja": "検証できませんでした",
+    },
+    "error": {
+        "zh": "失败",
+        "en": "Failed",
+        "ja": "失敗",
+    },
+    "extraCalls": {
+        "zh": "本次核对额外产生了 1 次模型调用。",
+        "en": "This check cost 1 extra model call.",
+        "ja": "このチェックでモデル呼び出しが 1 回追加されました。",
+    },
+}
+
+#: Hard bounds for the two opt-in external calls. verify_names has a
+#: per-request timeout AND a whole-batch wall-clock budget; grounding has a
+#: single per-call timeout. No bare network call is allowed in this module.
+NAME_VERIFY_TIMEOUT_SEC = 15.0
+NAME_VERIFY_BUDGET_SEC = 60.0
+NAME_GROUNDING_TIMEOUT_SEC = 90
+
+
+def _cap_t(win, key: str) -> str:
+    """Three-language Fluent-only label; never raises on an unknown key."""
+    lang = getattr(getattr(win, "tr", None), "lang", "zh")
+    table = NAME_CAP_TEXT.get(key) or {}
+    return table.get(lang) or table.get("en") or key
+
+
+def _run_name_capabilities(*, data: dict, image_b64: str = "",
+                           media_type: str = "image/png",
+                           provider: object = None,
+                           verify_enabled: bool = True,
+                           grounding_enabled: bool = True,
+                           fuzzy_min_confidence: float = 50.0,
+                           name_fetch: object = None,
+                           llm_caller: object = None,
+                           should_cancel: object = None,
+                           verify_timeout: float = NAME_VERIFY_TIMEOUT_SEC,
+                           verify_budget: float = NAME_VERIFY_BUDGET_SEC,
+                           grounding_timeout: int = NAME_GROUNDING_TIMEOUT_SEC) -> dict:
+    """Qt-free payload of :class:`NameCapabilityWorker`. NEVER raises.
+
+    This is the whole kernel path, deliberately a plain function so it can be
+    executed and asserted WITHOUT importing PySide6 (see
+    tests/test_fluent_capabilities.py, which extracts this function's AST).
+    It calls exactly the same symbols as server.py::_safe_ground_and_score and
+    the browser mirror:
+
+      * ``collect_candidate_names`` -> the candidate list shown in the panel
+        AND the input to ``verify_names`` (names.verify);
+      * ``verify_names`` + ``name_issues`` -> FUZZY suggestions (names.fuzzy)
+        and GBIF/unmatched hints, keyed by the collected candidates;
+      * ``check_name_grounding`` -> a second vision call. Its
+        ``not_performed`` verdict is reported as "could not check", never as
+        a clean result.
+
+    ``name_fetch`` / ``llm_caller`` are offline injection seams; in production
+    they are ``None`` and the real (bounded) transports are used. Failures
+    accumulate in ``errors`` / ``warnings`` instead of escaping, so a broken
+    provider can never break an extraction that already succeeded.
+    """
+    from rca_core.grounding import (
+        GROUNDING_NOT_PERFORMED, check_name_grounding, collect_candidate_names,
+    )
+    from rca_core.names import name_issues, verify_names
+
+    payload = {
+        "candidates": [], "candidates_truncated": 0, "issues": [],
+        "verification": {}, "grounding": None, "errors": [], "warnings": [],
+        "extra_model_calls": 0,
+    }
+
+    def _cancelled() -> bool:
+        if should_cancel is None:
+            return False
+        try:
+            return bool(should_cancel())
+        except Exception:
+            return False
+
+    try:
+        candidates, dropped = collect_candidate_names(data)
+        payload["candidates"] = list(candidates)
+        payload["candidates_truncated"] = int(dropped)
+    except Exception as exc:  # pragma: no cover - defensive belt
+        payload["candidates"] = []
+        payload["errors"].append(
+            "collect_candidate_names: %s: %s" % (type(exc).__name__, exc))
+
+    if verify_enabled and not _cancelled():
+        try:
+            verification = verify_names(
+                list(payload["candidates"]), fetch=name_fetch,
+                timeout=verify_timeout, budget=verify_budget)
+            payload["verification"] = verification
+            payload["issues"] = name_issues(
+                verification, fuzzy_min_confidence=fuzzy_min_confidence)
+        except Exception as exc:  # never let GBIF break the result
+            payload["errors"].append(
+                "verify_names: %s: %s" % (type(exc).__name__, exc))
+    elif verify_enabled and _cancelled():
+        payload["warnings"].append("name verification cancelled")
+
+    if grounding_enabled and not _cancelled():
+        try:
+            gr = check_name_grounding(
+                data=data, image_b64=image_b64 or "", media_type=media_type,
+                provider=provider, llm_caller=llm_caller,
+                timeout_sec=grounding_timeout)
+            report = gr.to_dict()
+            payload["grounding"] = report
+            payload["extra_model_calls"] = 1 if gr.performed else 0
+            # server.py semantics: NOT performed is UNKNOWN, not clean.
+            if report.get("status") == GROUNDING_NOT_PERFORMED:
+                payload["warnings"].append(str(report.get("reason") or
+                                               "name grounding not performed"))
+        except Exception as exc:  # check_name_grounding swallows its own
+            payload["grounding"] = {
+                "status": GROUNDING_NOT_PERFORMED,
+                "checked": 0, "unverified": [],
+                "reason": "%s: %s" % (type(exc).__name__, exc),
+                "candidates_truncated": 0,
+            }
+            payload["errors"].append(
+                "check_name_grounding: %s: %s" % (type(exc).__name__, exc))
+    elif grounding_enabled and _cancelled():
+        payload["warnings"].append("name grounding cancelled")
+    return payload
+
+
+def _apply_name_capability_payload(data: dict, payload: dict) -> dict:
+    """Qt-free part of the GUI slot: fold findings into the result dict.
+
+    Called on the GUI thread ONLY, so mutating ``data`` (row flags) cannot
+    race the worker (which was handed a deep copy). Never raises — a bad
+    payload must not take down the result panel.
+    """
+    from rca_core.grounding import flag_unverified_rows
+
+    out = {"candidates": 0, "issues": 0, "fuzzy": 0, "unverified": 0}
+    if not isinstance(data, dict) or not isinstance(payload, dict):
+        return out
+    try:
+        out["candidates"] = len(payload.get("candidates") or [])
+        out["issues"] = len(payload.get("issues") or [])
+        out["fuzzy"] = sum(
+            1 for i in (payload.get("issues") or [])
+            if isinstance(i, dict) and i.get("msg_key") == "names.fuzzy")
+        gr = payload.get("grounding")
+        unverified = list((gr or {}).get("unverified") or []) if isinstance(gr, dict) else []
+        out["unverified"] = len(unverified)
+        # Keep the findings in the exported result (JSON / history) as well
+        # as in the visible panel, so the evidence chain is not GUI-only.
+        data["name_candidates"] = list(payload.get("candidates") or [])
+        data["name_issues"] = list(payload.get("issues") or [])
+        if isinstance(gr, dict):
+            data["grounding"] = dict(gr)
+        flagged = flag_unverified_rows(data, unverified)
+        data["grounding_rows_flagged"] = flagged
+    except Exception as exc:  # pragma: no cover - defensive belt
+        out["error"] = "%s: %s" % (type(exc).__name__, exc)
+    return out
+
+
+class NameCapabilityWorker(QThread):
+    """Runs GBIF verification + name grounding OFF the GUI thread.
+
+    Emits ONE ``done(worker, payload)`` signal. Carrying the worker gives the
+    page's bound-method slot a queued (auto) connection — a lambda has no
+    receiver QObject and would run the slot on THIS thread, where touching
+    widgets crashes Qt. The page holds a STRONG reference to this worker for
+    the whole run; a temporary worker would be collected mid-request.
+    """
+
+    done = Signal(object, object)  # (worker, payload dict)
+
+    def __init__(self, *, data: dict, image_b64: str = "",
+                 media_type: str = "image/png", provider: object = None,
+                 verify_enabled: bool = True, grounding_enabled: bool = True,
+                 gen: int = 0, name_fetch: object = None,
+                 llm_caller: object = None) -> None:
+        super().__init__()
+        self._data = data
+        self._image_b64 = image_b64
+        self._media_type = media_type
+        self._provider = provider
+        self._verify_enabled = verify_enabled
+        self._grounding_enabled = grounding_enabled
+        self._name_fetch = name_fetch
+        self._llm_caller = llm_caller
+        self._cancel_requested = False
+        self.gen = gen
+
+    def request_cancel(self) -> None:
+        """Cooperative cancel (checked between the two external calls).
+
+        A single in-flight socket read cannot be interrupted, but this stops
+        the SECOND call from being issued after the window closes.
+        """
+        self._cancel_requested = True
+
+    def cancel_requested(self) -> bool:
+        return self._cancel_requested
+
+    def run(self) -> None:
+        # NO QTimer here. This QThread overrides run() and has no event loop;
+        # a timer built on it would never fire (measured — see _Heartbeat).
+        try:
+            payload = _run_name_capabilities(
+                data=self._data, image_b64=self._image_b64,
+                media_type=self._media_type, provider=self._provider,
+                verify_enabled=self._verify_enabled,
+                grounding_enabled=self._grounding_enabled,
+                name_fetch=self._name_fetch, llm_caller=self._llm_caller,
+                should_cancel=self.cancel_requested)
+        except Exception as exc:  # never let run() raise into Qt
+            log.exception("NameCapabilityWorker failed")
+            payload = {
+                "candidates": [], "candidates_truncated": 0, "issues": [],
+                "verification": {}, "grounding": None,
+                "errors": ["worker: %s: %s" % (type(exc).__name__, exc)],
+                "warnings": [], "extra_model_calls": 0,
+            }
+        try:
+            self.done.emit(self, payload)
+        except Exception:  # pragma: no cover - a dead receiver must not abort
+            log.exception("NameCapabilityWorker.done emit failed")
 
 
 # ---------------------------------------------------------------------------
@@ -1119,6 +1465,13 @@ class ExtractPage(ScrollArea):
         # carries the stored mode). None → _current_mode() falls back to shape
         # detection. Kept in sync by _on_result() and load_result().
         self._resolved_mode = None
+        # CAPABILITY-2026-11: state for the opt-in, off-GUI-thread name
+        # checks. ``_name_worker`` is a STRONG reference — a temporary
+        # QThread wrapper gets GC'd mid-request and Qt6 aborts the process.
+        self._name_worker = None
+        self._name_cap_gen = 0
+        self._name_cap_payload = None
+        self._name_cap_running = False
 
         self.setObjectName("extractPage")
         self.setWidgetResizable(True)
@@ -1366,6 +1719,27 @@ class ExtractPage(ScrollArea):
         self.btn_export_standards.clicked.connect(self._export_standards)
         self.result_head.addWidget(self.btn_export_standards)
         right_lay.addLayout(self.result_head)
+
+        # CAPABILITY-2026-11 (G2/G6): the result panel's name-check strip.
+        # All three controls are constructed HERE, re-translated in
+        # retranslate(), and gated in _update_result_actions() — the
+        # three-piece rule. A zero-row / no-result state must not leave a
+        # live "Run name checks" button that silently does nothing.
+        self.btn_name_check = PushButton(_cap_t(self.win, "run"))
+        self.btn_name_check.setToolTip(_cap_t(self.win, "cost"))
+        self.btn_name_check.clicked.connect(self._on_name_check_clicked)
+        self.result_head.addWidget(self.btn_name_check)
+        cap_box = QWidget()
+        cap_lay = QVBoxLayout(cap_box)
+        cap_lay.setContentsMargins(0, 0, 0, 0)
+        cap_lay.setSpacing(2)
+        self.lbl_name_cap = BodyLabel(_cap_t(self.win, "empty"))
+        self.lbl_name_cap.setWordWrap(True)
+        cap_lay.addWidget(self.lbl_name_cap)
+        self.lbl_name_cap_cost = CaptionLabel(_cap_t(self.win, "cost"))
+        self.lbl_name_cap_cost.setWordWrap(True)
+        cap_lay.addWidget(self.lbl_name_cap_cost)
+        right_lay.addWidget(cap_box)
 
         # AUDIT-2026-09-27 [item 2.5] (U-03): a real empty state. Before this
         # the right panel was ~55% of the window and completely blank on a
@@ -1965,6 +2339,30 @@ class ExtractPage(ScrollArea):
         # AUDIT-2026-10-22: the standards export takes the same export gate.
         self.btn_export_standards.setEnabled(armed)
 
+        # CAPABILITY-2026-11: the SINGLE gate for every new name-check
+        # control. A fresh launch / zero-row result has nothing to check, so
+        # the button must be disabled rather than being a dead control. The
+        # switches themselves are CONFIGURATION (usable before any
+        # extraction) and therefore stay enabled; their status caption is
+        # still driven from this gate so a language/result change cannot
+        # leave stale text behind.
+        name_ready = has_result and has_tables and not self.busy
+        try:
+            self.btn_name_check.setEnabled(
+                name_ready and not self._name_cap_running)
+            self.lbl_name_cap.setEnabled(has_result)
+            self.lbl_name_cap_cost.setEnabled(has_result)
+            self.lbl_name_cap.setVisible(has_result)
+            self.lbl_name_cap_cost.setVisible(has_result)
+        except Exception:
+            log.exception("failed to gate the name-check controls")
+        try:
+            sp = getattr(self.win, "settings_page", None)
+            if sp is not None and hasattr(sp, "gate_name_capabilities"):
+                sp.gate_name_capabilities(has_result)
+        except Exception:
+            log.exception("failed to update the settings name-check hint")
+
     @staticmethod
     @functools.lru_cache(maxsize=1)
     def _xlsx_available() -> bool:
@@ -2143,7 +2541,152 @@ class ExtractPage(ScrollArea):
         described by the original comments could never trigger.
         """
         self._extract_gen = getattr(self, "_extract_gen", 0) + 1
+        # A new extraction / history load supersedes any in-flight name
+        # check too: its payload belongs to the PREVIOUS result.
+        self._name_cap_gen = getattr(self, "_name_cap_gen", 0) + 1
         return self._extract_gen
+
+    # ---- opt-in name checks (CAPABILITY-2026-11) -------------------------
+
+    def _refresh_name_cap_label(self) -> None:
+        """Render the last name-check payload in the CURRENT UI language."""
+        p = self._name_cap_payload
+        if not p:
+            self.lbl_name_cap.setText(_cap_t(self.win, "empty"))
+            return
+        try:
+            candidates = [str(c) for c in (p.get("candidates") or [])]
+            issues = [i for i in (p.get("issues") or []) if isinstance(i, dict)]
+            fuzzy = [i for i in issues
+                     if i.get("msg_key") == "names.fuzzy"]
+            gr = p.get("grounding") if isinstance(p.get("grounding"), dict) else {}
+            unverified = [str(x) for x in (gr.get("unverified") or [])]
+            lines = [_cap_t(self.win, "summary")
+                     .replace("{candidates}", str(len(candidates)))
+                     .replace("{issues}", str(len(issues)))
+                     .replace("{unverified}", str(len(unverified)))]
+            if candidates:
+                shown = "、".join(candidates[:8])
+                if len(candidates) > 8:
+                    shown += " …"
+                lines.append(f"{_cap_t(self.win, 'candidates')}: {shown}")
+            # names.fuzzy: the whole point of the feature — put the actual
+            # suggested canonical names in the result panel, not just a count.
+            for i in fuzzy[:5]:
+                lines.append(
+                    f"{_cap_t(self.win, 'fuzzy')}: {i.get('name', '')} → "
+                    f"{i.get('suggestion', '')}")
+            if unverified:
+                lines.append(
+                    f"{_cap_t(self.win, 'unverified')}: "
+                    + "、".join(unverified[:8]))
+            for msg in (p.get("warnings") or [])[:3]:
+                lines.append(f"{_cap_t(self.win, 'warning')}: {msg}")
+            for msg in (p.get("errors") or [])[:3]:
+                lines.append(f"{_cap_t(self.win, 'error')}: {msg}")
+            if p.get("extra_model_calls"):
+                lines.append(_cap_t(self.win, "extraCalls"))
+            self.lbl_name_cap.setText("\n".join(lines))
+        except Exception:
+            log.exception("failed to render the name-check summary")
+            self.lbl_name_cap.setText(_cap_t(self.win, "error"))
+
+    def _on_name_check_clicked(self) -> None:
+        """Manual re-run against the CURRENT result (GUI thread only)."""
+        self._maybe_run_name_capabilities(auto=False)
+
+    def _maybe_run_name_capabilities(self, *, auto: bool = False) -> None:
+        """Start the background checks when (and only when) the user opted in.
+
+        GUI thread: builds a DEEP COPY of the result, creates ONE QThread,
+        holds a strong reference, connects a BOUND METHOD (queued connection),
+        and starts. Zero network / LLM work happens here.
+        """
+        if self.busy or not self.result:
+            return
+        try:
+            verify = bool(self.win.verify_names_enabled())
+            ground = bool(self.win.ground_names_enabled())
+        except Exception:
+            log.exception("could not read the name-check switches")
+            return
+        if not (verify or ground):
+            if not auto:
+                InfoBar.info("", _cap_t(self.win, "off"), parent=self.win,
+                             position=InfoBarPosition.TOP, duration=4000)
+            return
+        running = getattr(self, "_name_worker", None)
+        if running is not None and running.isRunning():
+            return  # no duplicate GBIF / model calls
+        gen = getattr(self, "_name_cap_gen", 0) + 1
+        self._name_cap_gen = gen
+        try:
+            data = copy.deepcopy(self.result)
+        except Exception:
+            data = dict(self.result or {})
+        try:
+            provider = self.win.current_provider()
+        except Exception:
+            provider = None
+        worker = NameCapabilityWorker(
+            data=data, image_b64=self.image_b64 or "",
+            media_type=self.media_type or "image/png", provider=provider,
+            verify_enabled=verify, grounding_enabled=ground, gen=gen)
+        # STRONG reference. A `NameCapabilityWorker(...).start()` temporary
+        # would be collected while the socket read is in flight.
+        self._name_worker = worker
+        self._name_cap_running = True
+        # BOUND METHOD of this persistent QObject -> queued onto the GUI
+        # thread. Never a lambda / temporary receiver: those are weakly held
+        # and their slot is silently never invoked (see the module note).
+        worker.done.connect(self._on_name_capabilities_done)
+        worker.finished.connect(self._on_name_worker_finished)
+        try:
+            self.lbl_name_cap.setText(_cap_t(self.win, "running"))
+        except Exception:
+            pass
+        self._update_result_actions()
+        worker.start()
+
+    def _on_name_worker_finished(self) -> None:
+        """GUI-thread slot: clear the in-flight flag after the worker exits."""
+        self._name_cap_running = False
+        try:
+            self._update_result_actions()
+        except Exception:
+            log.exception("failed to re-gate after the name worker finished")
+
+    def _on_name_capabilities_done(self, worker, payload) -> None:
+        """GUI-thread slot: RENDER ONLY. All I/O already happened off-thread.
+
+        Drops stale payloads (a newer extraction / history load started
+        meanwhile), folds the findings into ``self.result``, shows the failure
+        reasons, and re-gates the action buttons.
+        """
+        try:
+            if getattr(worker, "gen", None) != getattr(self, "_name_cap_gen", 0):
+                return
+            if not self.result:
+                return
+            self._name_cap_payload = payload if isinstance(payload, dict) else {}
+            _apply_name_capability_payload(self.result, self._name_cap_payload)
+            self._refresh_name_cap_label()
+            # Failure must be VISIBLE and must never read as "checked clean".
+            problems = (list(self._name_cap_payload.get("errors") or [])
+                        + list(self._name_cap_payload.get("warnings") or []))
+            if problems:
+                InfoBar.warning("", _cap_t(self.win, "warning") + ": "
+                                + str(problems[0]), parent=self.win,
+                                position=InfoBarPosition.TOP, duration=8000)
+        except Exception as exc:
+            log.exception("name-check result handling failed")
+            try:
+                InfoBar.warning("", f"Name checks: {exc}", parent=self.win,
+                                position=InfoBarPosition.TOP, duration=6000)
+            except Exception:
+                pass
+        finally:
+            self._update_result_actions()
 
     def _on_extract(self):
         if self.busy:
@@ -2596,6 +3139,15 @@ class ExtractPage(ScrollArea):
             except Exception:
                 pass
         _Q.singleShot(50, _jump)
+        # CAPABILITY-2026-11: opt-in, OFF the GUI thread, AFTER the result is
+        # rendered, persisted and the UI is usable. A failure here can never
+        # affect the extraction that already succeeded.
+        self._name_cap_payload = None
+        self._refresh_name_cap_label()
+        try:
+            self._maybe_run_name_capabilities(auto=True)
+        except Exception:
+            log.exception("auto name checks failed to start")
 
     def _current_mode(self) -> str:
         """Return the mode string for the current extraction.
@@ -3330,6 +3882,16 @@ class ExtractPage(ScrollArea):
             self._update_result_actions()
         except Exception as exc:
             log.warning("load_result render failed: %s", exc)
+        # Loaded history records have NO image (load_result deliberately
+        # wipes image_b64 to prevent a "ghost image" re-extraction), so the
+        # grounding pass will honestly report "no image supplied" while the
+        # GBIF verification still works. Both are opt-in and off-thread.
+        self._name_cap_payload = None
+        self._refresh_name_cap_label()
+        try:
+            self._maybe_run_name_capabilities(auto=True)
+        except Exception:
+            log.exception("auto name checks failed to start on a loaded record")
 
     def _export_prefix(self) -> str:
         """Filename prefix reflecting the current result's chart kind."""
@@ -3689,6 +4251,14 @@ class ExtractPage(ScrollArea):
         self.btn_table_csv.setText(self._t("export.csv"))
         self.btn_table_tsv.setText(self._t("export.tsv"))
         self.btn_apply_edits.setText(self._t("edit.apply"))
+        # CAPABILITY-2026-11: every new name-check control rides the
+        # retranslate pass, so switching zh -> en -> ja cannot leave an old
+        # label behind. The result summary is rebuilt from the stored payload
+        # (not a frozen string) for the same reason.
+        self.btn_name_check.setText(_cap_t(self.win, "run"))
+        self.btn_name_check.setToolTip(_cap_t(self.win, "cost"))
+        self.lbl_name_cap_cost.setText(_cap_t(self.win, "cost"))
+        self._refresh_name_cap_label()
         if not self.result:
             self.lbl_status.setText(self._t("status.ready"))
             self.lbl_imginfo.setText(self._t("image.none") if not self.image_path else self.lbl_imginfo.text())
@@ -3919,6 +4489,41 @@ class SettingsPage(ScrollArea):
         self.btn_save_advanced.clicked.connect(self._save_advanced)
         cv.addWidget(self.btn_save_advanced, 0, Qt.AlignLeft)
         lay.addWidget(self.card_advanced)
+
+        # ----- CAPABILITY-2026-11: explicit, DEFAULT-OFF name checks -----
+        # These two switches are the ONLY way to enable the extra GBIF /
+        # model requests. They are configuration, not result actions, so
+        # they stay enabled even with no result — but their status caption
+        # IS driven from ExtractPage._update_result_actions() so the
+        # three-piece rule (construct / retranslate / gate) holds here too.
+        self.card_name_cap = CardWidget()
+        cn = QVBoxLayout(self.card_name_cap)
+        cn.setContentsMargins(20, 18, 20, 18)
+        cn.setSpacing(8)
+        self.lbl_name_cap_title = StrongBodyLabel(_cap_t(self.win, "title"))
+        cn.addWidget(self.lbl_name_cap_title)
+        self.lbl_name_cap_cost = CaptionLabel(_cap_t(self.win, "cost"))
+        self.lbl_name_cap_cost.setWordWrap(True)
+        cn.addWidget(self.lbl_name_cap_cost)
+
+        self.lbl_verify_names = StrongBodyLabel(_cap_t(self.win, "verify"))
+        self.sw_verify_names = SwitchButton()
+        # Default OFF: no behaviour change, no surprise bill, no surprise
+        # network traffic. Read from the shared config on every launch.
+        self.sw_verify_names.setChecked(bool(cfg.get("verify_names", False)))
+        cn.addWidget(self.lbl_verify_names)
+        cn.addWidget(self.sw_verify_names, 0, Qt.AlignLeft)
+
+        self.lbl_ground_names = StrongBodyLabel(_cap_t(self.win, "ground"))
+        self.sw_ground_names = SwitchButton()
+        self.sw_ground_names.setChecked(bool(cfg.get("ground_names", False)))
+        cn.addWidget(self.lbl_ground_names)
+        cn.addWidget(self.sw_ground_names, 0, Qt.AlignLeft)
+
+        self.lbl_name_cap_state = CaptionLabel(_cap_t(self.win, "noResult"))
+        self.lbl_name_cap_state.setWordWrap(True)
+        cn.addWidget(self.lbl_name_cap_state)
+        lay.addWidget(self.card_name_cap)
         lay.addStretch(1)
 
         self.refresh_active()
@@ -4264,6 +4869,31 @@ class SettingsPage(ScrollArea):
         """
         self._selector_mirror_holder.setVisible(not collapsed)
 
+    def gate_name_capabilities(self, has_result: bool) -> None:
+        """Called by ExtractPage._update_result_actions (the SINGLE gate).
+
+        The switches are deliberately NOT disabled when there is no result —
+        they are pre-extraction configuration. This caption still rides the
+        gate so a language switch or a result change cannot leave it saying
+        "armed" over an empty panel.
+        """
+        try:
+            # Re-assert the whole card's text here as well as in
+            # retranslate(): _update_result_actions() runs on every progress
+            # tick, so a language switch that happened while a worker was in
+            # flight cannot leave one label in the previous language.
+            self.lbl_name_cap_title.setText(_cap_t(self.win, "title"))
+            self.lbl_name_cap_cost.setText(_cap_t(self.win, "cost"))
+            self.lbl_verify_names.setText(_cap_t(self.win, "verify"))
+            self.lbl_ground_names.setText(_cap_t(self.win, "ground"))
+            enabled = (self.sw_verify_names.isChecked()
+                       or self.sw_ground_names.isChecked())
+            key = "noResult" if not has_result else (
+                "armed" if enabled else "off")
+            self.lbl_name_cap_state.setText(_cap_t(self.win, key))
+        except Exception:
+            log.exception("failed to update the name-check status caption")
+
     def _save_advanced(self) -> None:
         """Persist the generation parameters.
 
@@ -4295,6 +4925,9 @@ class SettingsPage(ScrollArea):
                 "chart_lang": clang_codes[clang_idx],
                 "remember": bool(self.sw_remember.isChecked()),
                 "enhance": bool(self.sw_enhance.isChecked()),
+                # CAPABILITY-2026-11: persist the two opt-in switches.
+                "verify_names": bool(self.sw_verify_names.isChecked()),
+                "ground_names": bool(self.sw_ground_names.isChecked()),
             })
             self.win.save_generation()
             InfoBar.success(
@@ -4328,6 +4961,22 @@ class SettingsPage(ScrollArea):
         self.lbl_clang.setText(self._t("settings.chartLang"))
         self.lbl_remember.setText(self._t("settings.remember"))
         self.btn_save_advanced.setText(self._t("settings.save"))
+        # CAPABILITY-2026-11: the name-check card is fully re-translated too.
+        self.lbl_name_cap_title.setText(_cap_t(self.win, "title"))
+        self.lbl_name_cap_cost.setText(_cap_t(self.win, "cost"))
+        self.lbl_verify_names.setText(_cap_t(self.win, "verify"))
+        self.lbl_ground_names.setText(_cap_t(self.win, "ground"))
+        # The state caption is derived, not frozen: recompute it in the NEW
+        # language (the gate may not run during a pure language switch).
+        try:
+            enabled = (self.sw_verify_names.isChecked()
+                       or self.sw_ground_names.isChecked())
+            has_result = bool(getattr(self.win.extract_page, "result", None))
+            key = "noResult" if not has_result else (
+                "armed" if enabled else "off")
+            self.lbl_name_cap_state.setText(_cap_t(self.win, key))
+        except Exception:
+            log.exception("failed to retranslate the name-check status")
         # Refresh combobox option labels without losing the current choice.
         ci = self.cmb_ctype.currentIndex()
         self.cmb_ctype.clear()
@@ -4743,6 +5392,20 @@ class RangeChartFluentWindow(FluentWindow):
     def enhance(self):
         return bool(self.settings_page.sw_enhance.isChecked())
 
+    def verify_names_enabled(self):
+        """CAPABILITY-2026-11: DEFAULT OFF. Extra GBIF requests."""
+        s = getattr(self, "settings_page", None)
+        if s is not None and hasattr(s, "sw_verify_names"):
+            return bool(s.sw_verify_names.isChecked())
+        return bool(self.cfg.get("verify_names", False))
+
+    def ground_names_enabled(self):
+        """CAPABILITY-2026-11: DEFAULT OFF. One extra vision-model call."""
+        s = getattr(self, "settings_page", None)
+        if s is not None and hasattr(s, "sw_ground_names"):
+            return bool(s.sw_ground_names.isChecked())
+        return bool(self.cfg.get("ground_names", False))
+
     def runs(self):
         val = self.settings_page.spin_runs.value()
         return max(1, min(int(val), 5)) if val is not None else 1
@@ -4869,6 +5532,11 @@ class RangeChartFluentWindow(FluentWindow):
             "chart_type": self.chart_type(),
             "remember": s.sw_remember.isChecked(),
             "enhance": self.enhance(),
+            # CAPABILITY-2026-11: the two opt-in switches survive restarts.
+            # Both default to False, so a first launch after upgrading makes
+            # ZERO extra network / model calls.
+            "verify_names": self.verify_names_enabled(),
+            "ground_names": self.ground_names_enabled(),
         })
         save_config(self.cfg)
 
@@ -5066,6 +5734,29 @@ class RangeChartFluentWindow(FluentWindow):
                     _wait(xw, 500)
                 if xw.isRunning():
                     _park_orphaned_worker(xw)
+        except Exception:
+            pass
+        # CAPABILITY-2026-11: the opt-in name-check worker is also a QThread
+        # holding a live GBIF / model socket. Disconnect BOTH signals (done
+        # and finished) so a late payload cannot touch a half-destroyed page,
+        # ask it to stop before the second external call, wait briefly and
+        # park it exactly like every other worker above.
+        try:
+            nw = getattr(self.extract_page, "_name_worker", None)
+            if nw is not None:
+                try:
+                    nw.done.disconnect()
+                    nw.finished.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+                if nw.isRunning():
+                    try:
+                        nw.request_cancel()
+                    except Exception:
+                        pass
+                    _wait(nw, 500)
+                if nw.isRunning():
+                    _park_orphaned_worker(nw)
         except Exception:
             pass
         # Same deal for the providers page's connection-test workers.

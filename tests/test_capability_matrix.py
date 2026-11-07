@@ -72,19 +72,35 @@ def test_waiver_contract_detects_a_missing_waiver() -> None:
     """The guard must be able to fail, not merely describe a happy state."""
     import rca_core.capability_matrix as cm
 
-    spec = cm.CAPABILITIES["names.verify"]
+    # CAPABILITY-2026-11: this fixture used to hard-code names.verify's
+    # "fluent" waiver. Fluent is now LANDED for that capability (and its
+    # waiver must therefore be deleted -- missing_waivers() rejects a stale
+    # one), so NOTHING here may name a specific capability or endpoint.
+    # Pick the first spec that has any waiver, then derive both the endpoint
+    # to delete and an endpoint that IS wired purely from the data. The
+    # three branches keep their original meaning: deleting a required
+    # waiver, blanking it, and adding a stale one to a wired endpoint must
+    # each be detected. Deriving instead of hard-coding means wiring more
+    # capabilities into Fluent (or any other endpoint) can never turn this
+    # into a StopIteration "test infrastructure broke" failure.
+    spec = next((s for s in cm.CAPABILITIES.values()
+                 if s.get("waivers")), None)
+    assert spec is not None, (
+        "no capability carries a waiver; the mutation test needs one")
+    endpoint = sorted(spec["waivers"])[0]
+    landed = sorted(spec["landed"])[0]
     saved = spec["waivers"]
     try:
         spec["waivers"] = dict(saved)
-        del spec["waivers"]["fluent"]
-        assert any("'fluent' is unwired with no waiver" in m
+        del spec["waivers"][endpoint]
+        assert any(f"'{endpoint}' is unwired with no waiver" in m
                    for m in cm.missing_waivers()), (
-            "missing_waivers() did not notice a deleted Fluent waiver")
-        spec["waivers"]["fluent"] = "   "
-        assert any("waiver for 'fluent' is empty" in m
+            f"missing_waivers() did not notice a deleted {endpoint!r} waiver")
+        spec["waivers"][endpoint] = "   "
+        assert any(f"waiver for '{endpoint}' is empty" in m
                    for m in cm.missing_waivers()), (
             "missing_waivers() did not notice a blank waiver")
-        spec["waivers"]["core"] = "stale"
+        spec["waivers"][landed] = "stale"
         assert any("has a waiver but IS wired" in m
                    for m in cm.missing_waivers()), (
             "missing_waivers() did not notice a stale wired-endpoint waiver")

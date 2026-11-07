@@ -90,3 +90,14 @@ build/
 
 # --junitxml reports written by release-time verification runs.
 _*_*.xml
+
+# P0-3 (2026-11-07): references/ holds five local clone-only literature repos.
+# They were recorded in the index as mode-160000 gitlinks but the repository
+# has NO .gitmodules, so every actions/checkout post-step ran
+# `git submodule foreach` and died with "No url found for submodule path ...
+# in .gitmodules" (exit 128 warning) on every CI job. The gitlinks were
+# removed from the index with `git rm --cached`; the directories stay on disk
+# and are now ignored so `git add .` can never re-introduce them as embedded
+# repos. Directories only (trailing slash): files directly under references/
+# would still be visible.
+references/*/

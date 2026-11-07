@@ -11,7 +11,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12"]
+        # 3.13 added 2026-11-07 (P1-7). 3.14 is deliberately NOT here:
+        # PySide6 6.12's 3.14 compatibility is unverified, and adding an
+        # unproven interpreter to the gate would introduce uncertainty for
+        # no coverage gain. Revisit when the Qt stack is qualified on 3.14.
+        python-version: ["3.10", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7
 
@@ -71,8 +75,21 @@ jobs:
       #
       # tests_core.py still runs in this job -- as a script, in its own step
       # below, where its exit code is the gate. Do not "restore" it here.
+      #
+      # P1-6 (2026-11-07, impl-qa): tests/standalone/conftest.py's
+      # pytest_collect_file hook is DIRECTORY-LEVEL, so `pytest tests/` also
+      # collects the 14 script-style suites as `standalone_script` items.
+      # They have a dedicated step below (one item per file, child
+      # interpreter, `standalone::<file>` failure attribution). Without this
+      # -m they run TWICE per matrix entry (~37 s each, ~2 min/CI) and one
+      # failure gets reported in both steps. Deselect them here so the
+      # dedicated step is the single entry point -- same rationale as the
+      # qt job's -m below. A local `pytest tests/` (no -m) still covers them,
+      # so this does not re-introduce the "new suite is never collected" gap
+      # P1-6 exists to close. Measured 2026-11-07: 4472 collected -> 4458
+      # with this -m (exactly 14 deselected), 0 standalone nodeids, exit 0.
       - name: Run full pytest suite
-        run: python -m pytest tests/ -q --tb=short
+        run: python -m pytest tests/ -q --tb=short -m "not standalone_script"
 
       # AUDIT-2026-09-29: F821 (undefined name) only, deliberately.
       #
@@ -171,26 +188,23 @@ jobs:
       # never collects these on its own. This is the third recurrence of that
       # exact rot (Python side REVIEW-2026-09-10, JS side this round, and
       # root .py files here).
-      - name: Run standalone Python suites
+      - name: Run standalone Python suites (pytest, per-file isolation)
         run: |
           set -e
-          # Glob, not a list, for the same reason as the Node suites above.
-          # Three exclusions:
-          #   tests_core.py        — runs under pytest above, and again below
-          #                          as a script (its exit code is the gate
-          #                          in that mode).
-          #   tests_real_corpus.py — needs outputs/lit2020*/ (299 MB of
-          #                          copyrighted figures, gitignored) plus a
-          #                          live API key.
-          #   tests_onboarding.py  — touches $HOME, so it gets a scratch HOME
-          #                          in the dedicated step below.
-          for f in tests/standalone/tests_*.py; do
-            case "$f" in
-              *tests_core.py|*tests_real_corpus.py|*tests_onboarding.py) continue ;;
-            esac
-            echo "=== $f ==="
-            python "$f"
-          done
+          # P1-6 (2026-11-07): tests/standalone/conftest.py now collects the
+          # script-style tests_*.py suites as one pytest item PER FILE, via a
+          # subprocess (not runpy: tests_gui_fluent.py calls os._exit(rc),
+          # which would kill the pytest process itself). A collection error
+          # under Qt 6.8.3 is also impossible this way, because each script
+          # runs in its own interpreter and the qt job excludes this marker
+          # below. The script entry point `python <file>` is unchanged and is
+          # still what the qt job uses for its four GUI suites.
+          #
+          # tests_core.py is excluded (it has real test_* functions and runs in
+          # its own two steps above), tests_real_corpus.py needs 299 MB of
+          # copyrighted figures + a live API key, and tests_onboarding.py
+          # needs a scratch HOME (dedicated step below). See conftest.py.
+          python -m pytest tests/standalone/ -q --tb=short
 
       - name: Run tests_onboarding with a scratch HOME
         run: |
@@ -203,6 +217,71 @@ jobs:
         run: |
           python tests/fixtures/gold/_gen_canned.py >/dev/null
           git diff --exit-code -- tests/fixtures/gold/
+
+  # ---------------------------------------------------------------------
+  # P1-7 (2026-11-07): 这是「无外网前提下的核心路径冒烟」，不是网络策略测试。
+  #
+  # 把代理指向 127.0.0.1:1（必然不可达）只是为了制造一个「没有外网」的
+  # 前提，证明 doctor / extract --help / tests/test_cli.py 这三条核心路径
+  # 不依赖外网即可跑完。它不验证代理自身的拦截行为，也不对任何网络策略
+  # 做断言 —— 网络策略由 rca_core/ssrf.py 及其自动化测试覆盖，与本 job 无关。
+  #
+  # 代理必须在依赖安装之后设置：否则 pip 也会走这个死代理而失败。
+  # 不复用上面的 test job：矩阵里每条都要装 Qt / 跑全量套件，而这里只需要
+  # 一条 3.12 上的核心路径证据，单独一个 job 更快也更好归因。
+  # ---------------------------------------------------------------------
+  offline-smoke:
+    name: 核心路径无外网冒烟 / core-path offline smoke (NOT a network-policy test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # 此步必须用真实网络装依赖；代理在下一步才设置。
+      - name: Install dependencies (network ON)
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest==8.3.4 cryptography keyring openpyxl Pillow numpy
+
+      - name: Core paths work with no external network
+        env:
+          HTTP_PROXY: "http://127.0.0.1:1"
+          HTTPS_PROXY: "http://127.0.0.1:1"
+          ALL_PROXY: "http://127.0.0.1:1"
+          NO_PROXY: ""
+          http_proxy: "http://127.0.0.1:1"
+          https_proxy: "http://127.0.0.1:1"
+          all_proxy: "http://127.0.0.1:1"
+          no_proxy: ""
+        run: |
+          # 1) doctor 是只读体检，本就不联网。允许 rc 0 或 1（1 表示体检
+          #    发现某项不满足，如缺少 keyring 后端），但输出必须含「体检」
+          #    与「encryption_status」；不满足即视为核心路径本身坏了。
+          set +e
+          doc_out="$(python main.py doctor 2>&1)"
+          doc_rc=$?
+          set -e
+          printf '%s\n' "$doc_out"
+          if [ "$doc_rc" -ne 0 ] && [ "$doc_rc" -ne 1 ]; then
+            echo "::error::doctor exited $doc_rc (expected 0 or 1)"
+            exit 1
+          fi
+          grep -q "体检" <<< "$doc_out" || {
+            echo "::error::doctor output missing 体检"; exit 1; }
+          grep -q "encryption_status" <<< "$doc_out" || {
+            echo "::error::doctor output missing encryption_status"; exit 1; }
+
+          # 2) extract --help 走 argparse，不联网、不写文件、不需要 Qt。
+          python main.py extract --help
+
+          # 3) tests/test_cli.py 把真实 LLM 调用 / ProviderStore /
+          #    resolve_auto_mode 全部 stub 掉了，不联网。
+          python -m pytest tests/test_cli.py -q --tb=short
 
   # AUDIT-2026-09-27 [item 0.4]: the desktop GUI had ZERO effective assertion
   # coverage in CI. Three gates were open at the same time:
@@ -267,9 +346,24 @@ jobs:
           # unconditionally calls mark_onboarding_seen, so this suite was
           # writing ~/.range_chart_analyzer/onboarding_seen into the home of
           # whoever ran it.
+          #
+          # P1-6 (2026-11-07, impl-qa): tests/standalone/conftest.py now
+          # collects the script-style tests_*.py suites as pytest items marked
+          # `standalone_script`. Without the -m below, this -k expression also
+          # selects tests/standalone/tests_gui_fluent.py::tests_gui_fluent.py
+          # (its nodeid contains "gui"/"fluent"), i.e. a SECOND copy of that
+          # GUI script would run inside this Qt-enabled pytest process. That
+          # script ends its __main__ block with os._exit(rc) to dodge a
+          # QWebEngineView teardown access violation -- in-process it would
+          # take the whole gate down. Deselect all 14 script items here; the
+          # dedicated "Run root-level GUI suites standalone" step below still
+          # runs the four GUI scripts the intended way, in child processes.
+          # Verified locally: -k alone selects that item, -k + this -m selects
+          # none of the standalone items (0 collected).
           _scratch_home="$(mktemp -d)"
           HOME="$_scratch_home" python -m pytest tests/ -q --tb=short \
-            -k "gui or fluent or dwc_archive or table_widgets"
+            -k "gui or fluent or dwc_archive or table_widgets" \
+            -m "not standalone_script"
           rc=$?
           rm -rf "$_scratch_home"
           exit $rc

@@ -2130,15 +2130,23 @@ class TestP1MultiRunRequestMetaResolvesItsPromptVersion:
     def test_the_method_binds_the_name_it_uses(self):
         import ast
         from pathlib import Path
-        import server
-        tree = ast.parse(Path(server.__file__).read_text(encoding="utf-8"))
+
+        import rca_core.pipeline as pipeline
+        # v0.4.0: the multi-run branch moved VERBATIM from
+        # server.py::Handler._handle_extract_body into
+        # rca_core/pipeline.py::run_extraction_request. The bug this guards
+        # (a function-local import with no module-level binding in scope) is a
+        # property of the code, not of the file it happens to live in, so the
+        # assertion follows the code. The import-before-use ordering check is
+        # unchanged -- only the parse target moved.
+        tree = ast.parse(Path(pipeline.__file__).read_text(encoding="utf-8"))
         fn = None
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and \
-                    node.name == "_handle_extract_body":
+                    node.name == "run_extraction_request":
                 fn = node
                 break
-        assert fn is not None, "_handle_extract_body disappeared"
+        assert fn is not None, "run_extraction_request disappeared"
         imports = [n.lineno for n in ast.walk(fn)
                    if isinstance(n, ast.ImportFrom) and any(
                        a.name == "prompt_version_for_mode" for a in n.names)]
@@ -2147,7 +2155,7 @@ class TestP1MultiRunRequestMetaResolvesItsPromptVersion:
                  and isinstance(n.ctx, ast.Load)]
         assert loads, "the multi-run branch no longer reads the prompt version"
         assert imports, ("prompt_version_for_mode is used in "
-                         "_handle_extract_body with no binding in scope")
+                         "run_extraction_request with no binding in scope")
         assert imports[0] < loads[0], (
             "the import must precede the use; got import at %s, use at %s"
             % (imports, loads))

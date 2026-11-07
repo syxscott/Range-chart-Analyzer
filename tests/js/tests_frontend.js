@@ -2912,10 +2912,20 @@ function test_auto_classify() {
   // mode the gate allows. Importing server.py from node is not an option (it
   // binds a socket), so assert on the derivation instead: the registry import
   // is present and 'auto' is added explicitly rather than inherited.
+  // v0.4.0: the HTTP mode gate moved VERBATIM into
+  // rca_core/pipeline.py::run_extraction_request when the 997-line handler was
+  // split out of server.py. The invariant is unchanged -- the gate is DERIVED
+  // from the registry and 'auto' is added EXPLICITLY rather than inherited --
+  // so the assertion follows the code instead of pinning one file name.
   const serverSrc = require('fs').readFileSync(path.join(REPO, 'server.py'), 'utf8');
+  const pipelineSrc = require('fs').readFileSync(
+      path.join(REPO, 'rca_core', 'pipeline.py'), 'utf8');
+  const gateSrc = pipelineSrc.indexOf('_SUPPORTED_MODES') !== -1
+      ? pipelineSrc
+      : serverSrc;
   check('cls-server-auto-whitelisted',
-        /from rca_core\.modes import SERVER_MODE_NAMES/.test(serverSrc)
-        && /\{\s*["']auto["']\s*\}/.test(serverSrc));
+        /from rca_core\.modes import SERVER_MODE_NAMES/.test(serverSrc + pipelineSrc)
+        && /\{\s*["']auto["']\s*\}/.test(gateSrc));
 }
 test_auto_classify();
 

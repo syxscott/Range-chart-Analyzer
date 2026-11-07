@@ -270,10 +270,18 @@ class TestServerCSPHeader:
 
 class TestServerMergedUsageOrder:
     def test_merged_usage_built_before_audit_write(self):
-        """server.py: merged_usage must be assigned BEFORE the try block
-        that writes the history record (the old order raised a swallowed
-        UnboundLocalError, so multi-run audit records were never written)."""
-        src = (REPO / "server.py").read_text(encoding="utf-8")
+        """merged_usage must be assigned BEFORE the try block that writes the
+        history record (the old order raised a swallowed UnboundLocalError, so
+        multi-run audit records were never written).
+
+        v0.4.0: the multi-run orchestration moved VERBATIM out of
+        ``server.py::Handler._handle_extract_body`` into
+        ``rca_core/pipeline.py::run_extraction_request``. The invariant is
+        unchanged and still worth pinning -- only its location moved, so this
+        assertion follows the code instead of being deleted. Keeping the class
+        name preserves ``-k TestServerMergedUsageOrder`` selection.
+        """
+        src = (REPO / "rca_core" / "pipeline.py").read_text(encoding="utf-8")
         audit_idx = src.index("merged_usage = {")
         usage_idx = src.index("usage=merged_usage")
         assert audit_idx < usage_idx, (

@@ -38,6 +38,13 @@ NAN = float("nan")
 INF = float("inf")
 
 EXTRACTOR = os.path.join(PROJECT_ROOT, "rca_core", "extractor.py")
+# Phase 3 / P1-4: ``_confidence_clamped`` (the single gate) was MOVED VERBATIM
+# into modes_impl/_shared.py and re-exported by extractor.py. The invariant is
+# unchanged -- exactly ONE clamp in the whole Python core -- so scan BOTH files.
+# Scanning both also STRENGTHENS the guard: a 14th hand-copied clamp in the new
+# module now fails the build too, instead of hiding outside the old file.
+SHARED = os.path.join(PROJECT_ROOT, "rca_core", "modes_impl", "_shared.py")
+CLAMP_SOURCES = (EXTRACTOR, SHARED)
 
 
 # --------------------------------------------------------------------------
@@ -153,19 +160,25 @@ _NORMALIZERS = {
 
 
 def _clamp_sites():
-    """Every max(0.0, min(1.0, x)) / min(1.0, max(0.0, x)) in extractor.py."""
-    tree = ast.parse(open(EXTRACTOR, encoding="utf-8").read())
+    """Every max(0.0, min(1.0, x)) / min(1.0, max(0.0, x)) in the Python core.
+
+    After P1-4 the single gate lives in modes_impl/_shared.py, not in
+    extractor.py. Both files are scanned so the invariant covers the whole
+    core rather than one file's accidental layout.
+    """
     hits = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if not isinstance(node.func, ast.Name):
-            continue
-        if node.func.id not in ("min", "max"):
-            continue
-        src = ast.unparse(node)
-        if "1.0" in src and "0.0" in src:
-            hits.append((node.lineno, src))
+    for path in CLAMP_SOURCES:
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id not in ("min", "max"):
+                continue
+            src = ast.unparse(node)
+            if "1.0" in src and "0.0" in src:
+                hits.append((node.lineno, src))
     return sorted(hits)
 
 
@@ -186,11 +199,12 @@ def _confidence_clamped_span():
     cannot go stale that way. The decision is unchanged and still asserted:
     the ONE clamp must live inside _confidence_clamped.
     """
-    tree = ast.parse(open(EXTRACTOR, encoding="utf-8").read())
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "_confidence_clamped":
-            return node.lineno, (node.end_lineno or node.lineno)
-    raise AssertionError("_confidence_clamped not found in extractor.py")
+    for path in CLAMP_SOURCES:
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "_confidence_clamped":
+                return node.lineno, (node.end_lineno or node.lineno)
+    raise AssertionError("_confidence_clamped not found in extractor.py / _shared.py")
 
 
 def test_there_is_exactly_one_confidence_clamp_in_the_module():
@@ -243,8 +257,9 @@ def test_the_single_gate_is_actually_guarded():
 
 
 def _find_func(name):
-    tree = ast.parse(open(EXTRACTOR, encoding="utf-8").read())
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == name:
-            return node
-    raise AssertionError(f"function {name} not found in extractor.py")
+    for path in CLAMP_SOURCES:
+        tree = ast.parse(open(path, encoding="utf-8").read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                return node
+    raise AssertionError(f"function {name} not found in extractor.py / _shared.py")

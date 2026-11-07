@@ -135,6 +135,34 @@ def _glob_match(rel: str, pattern: str) -> bool:
     return all(fnmatch.fnmatchcase(a, b) for a, b in zip(r, p))
 
 
+def _standalone_collector_excludes() -> set[str]:
+    """File names ``tests/standalone/conftest.py`` refuses to collect.
+
+    The directory-level pytest step is only wiring for the files that hook
+    actually collects. Parsed with AST instead of imported: importing a
+    conftest from this script would drag pytest into a stdlib-only sweep.
+    """
+    import ast as _ast
+
+    path = REPO / "tests" / "standalone" / "conftest.py"
+    if not path.is_file():
+        return set()
+    try:
+        tree = _ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except SyntaxError:
+        return set()
+    for node in tree.body:
+        if not isinstance(node, _ast.Assign):
+            continue
+        if not any(isinstance(t, _ast.Name) and t.id == "_EXCLUDED"
+                   for t in node.targets):
+            continue
+        if isinstance(node.value, _ast.Dict):
+            return {k.value for k in node.value.keys
+                    if isinstance(k, _ast.Constant) and isinstance(k.value, str)}
+    return set()
+
+
 def check_harnesses_are_wired() -> None:
     workflow_dir = REPO / ".github" / "workflows"
     if not workflow_dir.is_dir():
@@ -157,6 +185,43 @@ def check_harnesses_are_wired() -> None:
     body, excludes = _split_shell_text(ci_text)
     globs = set(re.findall(
         r"[A-Za-z0-9_./-]*\*[A-Za-z0-9_./*-]*\.(?:py|js)", body))
+    directory_excludes = _standalone_collector_excludes()
+
+    def covered_by_directory_pytest(path: Path) -> bool:
+        """A directory-level pytest run wires every file the hook collects.
+
+        2026-11-07 (P1-6): `tests/standalone/conftest.py` collects the
+        script-style suites via ``pytest_collect_file``, so
+        ``python -m pytest tests/standalone/`` runs them without naming any of
+        them — the old "filename must appear in a workflow" rule then reported
+        ten wired suites as unwired. Only lines WITHOUT ``-m`` / ``-k`` /
+        ``--deselect`` / ``--ignore`` count: the full-suite step runs
+        ``-m "not standalone_script"``, i.e. it excludes exactly these items,
+        and treating that as coverage would make this check vacuous again.
+        """
+        if path.name in directory_excludes:
+            return False
+        rel = path.relative_to(REPO).as_posix()
+        parent = rel.rsplit("/", 1)[0] + "/"
+        for line in body.splitlines():
+            if "pytest" not in line:
+                continue
+            # Everything AFTER the word `pytest`: `python -m pytest` carries
+            # its own `-m` (the module flag), which is not an exclusion.
+            after = line.split("pytest", 1)[1]
+            if re.search(r"(?:^|\s)-[mk](?:\s|$)", after):
+                continue
+            if "--deselect" in after or "--ignore" in after:
+                continue
+            # Positional arguments only. This must be an EXACT directory
+            # argument: `pytest tests/standalone/tests_core.py` contains the
+            # same prefix but collects one file, and treating it as directory
+            # coverage made every standalone suite look wired (caught by the
+            # mutation test that removes the dedicated step).
+            positional = [t for t in after.split() if not t.startswith("-")]
+            if any(t.rstrip("/") + "/" == parent for t in positional):
+                return True
+        return False
 
     def wired(path: Path) -> bool:
         rel = path.relative_to(REPO).as_posix()
@@ -170,7 +235,10 @@ def check_harnesses_are_wired() -> None:
         if any(fnmatch.fnmatchcase(rel, x) for x in excludes):
             return False
         # 3. Covered by a pathname-expansion glob.
-        return any(_glob_match(rel, g) for g in globs)
+        if any(_glob_match(rel, g) for g in globs):
+            return True
+        # 4. Collected by a directory-level pytest hook (conftest.py).
+        return covered_by_directory_pytest(path)
 
     unwired = [p for p in harnesses if not wired(p)]
     for p in unwired:
