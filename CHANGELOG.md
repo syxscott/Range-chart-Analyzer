@@ -25,24 +25,25 @@ would have produced.
 
 ### Changed
 
-- **The onefile shrank from 212.8 MB to 199.8 MB (-6.1%)** — measured on the
-  same machine, same interpreter, same dependency set. The cause is one rule
-  in `scripts/qt_payload.py`: of the 357 translation assets Qt installs
-  (`translations/`, 60 MB raw, **13.9 MB inside the archive**), only Chinese
-  and English are kept (0.88 MB). QtWebEngine resolves exactly one Chromium
-  locale pack from the system locale and falls back to `en-US`, and this app
-  installs no `QTranslator` at all — its three languages are its own
-  dictionaries — so the other 50 locales were unreachable on every machine.
-- **UPX is now enabled for CI builds**, inside the spec rather than as a
-  post-process. The earlier "UPX buys nothing" measurement was about
-  re-compressing the already-zlib'd PKG; compressing each `.pyd` *before* it
-  enters the PKG is a different operation. Measured with lzma (UPX's `-9`
-  algorithm) on this payload: `cv2.pyd` 30.7 → 20.7 MB, openblas 6.4 → 3.6,
-  `_rust.pyd` 3.3 → 2.5, `QtOpenGL.pyd` 2.2 → 1.2, roughly 15 MB across the
-  non-Qt binaries. `UPX_EXCLUDE` is unchanged and still keeps every
-  `Qt6*`/`Qt5*` DLL (including WebEngineCore), the CPython interpreter, the
-  MS runtime and OpenSSL out of UPX — the class of binary behind "it worked
-  until I added UPX".
+- **The published executable is 159.3 MiB (167.0 MB).** Two independent
+  effects, measured separately so neither is credited to the other:
+  * **Qt translation pruning**: 212.8 → 199.8 MB (-6.1%) on the same
+    machine, same interpreter, same dependency set. Of the 357 translation
+    assets Qt installs (`translations/`, 60 MB raw, **13.9 MB inside the
+    archive**), only Chinese and English are kept (0.88 MB). QtWebEngine
+    resolves exactly one Chromium locale pack from the system locale and
+    falls back to `en-US`, and this app installs no `QTranslator` at all —
+    its three languages are its own dictionaries — so the other 50 locales
+    were unreachable on every machine.
+  * **UPX inside the spec**, not as a post-process. The earlier "UPX buys
+    nothing" measurement was about re-compressing the already-zlib'd PKG;
+    compressing each `.pyd` *before* it enters the PKG is a different
+    operation. Verified in the released artifact by reading each PE's
+    section table: openblas 6.4 → 3.64 MB, `_rust.pyd` 3.31 → 2.67,
+    `etree` 2.0 → 1.48, `QtOpenGL.pyd` 2.16 → 1.21, `QtWidgets.pyd`
+    1.52 → 1.03. Every `Qt6*` DLL, the CPython interpreter, the MS runtime
+    and OpenSSL stay uncompressed, and the artifact was smoke-tested
+    (`/health`, index, Fluent GUI launch) after the change.
 - **`build.yml` gained job-scoped `contents: write`** so only a tag build can
   reach the Release; a PR build still reads the repository.
 
@@ -58,6 +59,18 @@ would have produced.
 
 ### Fixed
 
+- **The packaged exe has never contained OpenCV — now stated, not assumed.**
+  `RangeChartAnalyzer.spec` lists cv2 under "deliberately NOT excluded:
+  cv2 (deskew)", and the local dev environment has it, but
+  `requirements.txt` never listed `opencv-python`, so every CI-built
+  artifact has fallen back to the pure-Pillow deskew path.
+  `rca_core/deskew.py` is explicit that the projection-profile estimator is
+  the complete implementation and Hough is an optional fast path, so the
+  release loses speed on skewed plates, not a capability. It is recorded
+  because "the spec keeps cv2" and "the artifact has cv2" were two different
+  claims and only the first was true. Adding the package would grow the
+  download by ~30 MB — a product decision to make on purpose, not a
+  packaging accident to discover at runtime.
 - **Two comments that contradicted the code they sat next to.**
   `RangeChartAnalyzer.spec` claimed UPX was a post-process (it is not — the
   `upx=` kwarg on both `EXE()` calls is the live path), and `upx-check.yml`
