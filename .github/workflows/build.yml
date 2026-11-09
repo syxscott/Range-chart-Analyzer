@@ -164,7 +164,7 @@ jobs:
       # the exe as a workflow artifact, so a release candidate can be
       # downloaded and exercised before it is tagged.
       - name: Upload the windowed executable as a workflow artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: RangeChartAnalyzer-win64
           path: dist/RangeChartAnalyzer.exe
