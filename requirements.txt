@@ -54,7 +54,7 @@ PySide6-Addons>=6.12.0 ; python_version >= "3.10"
 #   the `rca_core.exporter.to_xlsx` function. Optional: the rest of the
 #   app (CSV / JSON / TSV) works fine without it.
 openpyxl>=3.1.5 ; python_version >= "3.10"
-lxml>=5.3.0 ; python_version >= "3.10"
+lxml>=6.1.3 ; python_version >= "3.10"
 # Token-usage charts — rendered on the Usage page. Falls back to plain
 #   text tables if missing.
 matplotlib>=3.10.9 ; python_version >= "3.10"
