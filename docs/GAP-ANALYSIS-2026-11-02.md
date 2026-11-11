@@ -58,6 +58,7 @@
   - `grep -rn "fuzzy" js/*.js index.html` → 命中 `js/app.js:1183`（构造 `msg_key: 'names.fuzzy'`）、`js/table.js:1636-1639`（渲染 🔍 图标与标签）、`js/i18n.js` 三语条目。**Web 端已接，桌面端未接**。
   - README 路线图第 2 项「学名验证的 **UI 接线**（结果面板显示 `names.fuzzy` 候选）」—— **未勾选**，且只提了"UI 接线"，没说明"Web 端已接、桌面端未接"这个不对称。
 - **影响**：README 承诺的 ICZN 安全兜底，桌面用户拿不到。**能力声明与实现不一致**，且这是一条明确在路线图上、成本很低的路。
+- **裁定（2026-11-12 复核，本节证据已过时）**：**已闭环**。`CAPABILITY-2026-11` 把 Fluent 接成显式的、默认关闭的可选项——`gui_fluent.py:433` 起声明 `verify_names` / `name_issues` → `names.fuzzy` 管线（后台 QThread + 超时，`gui_fluent.py:480/497/543`），结果页 `gui_fluent.py:2560-2573` 把模糊匹配候选直接渲染进 UI；README 路线图第 2 项已勾选并写明「默认关闭（会产生 GBIF 请求与一次额外模型调用）」；`rca_core/capability_matrix.py`（11-15 行）把这段历史记录为模块存在的原因，并以「每个未接线端点必须有自己的书面豁免」守护——Tk 端维持 G6 冻结（只修 bug 不加功能），属有意豁免。本节证据（零 grep 命中、路线图未勾选）在 Fluent 接线落地后已不再成立，保留为历史记录。
 
 #### A6. ICS 表在不同端曾不一致（已修，但需持续守护）
 

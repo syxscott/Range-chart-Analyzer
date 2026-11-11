@@ -5,6 +5,44 @@ All notable changes to Range Chart Analyzer are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The web UI's max_tokens slider can now reach the ceiling the code allows.**
+  `index.html` capped the slider at `max="32000"` — the old product-side cap
+  that REVIEW-2026-10-19 removed everywhere else (`RCA_CONFIG.maxMaxTokens`
+  has been 524288, the model's real limit, since then). Anyone who understood
+  why 32000 starves a reasoning model's output still could not dial past
+  32000 in the browser. The slider now tops out at 524288; the 500-step keeps
+  small values precise, stored values are untouched, and the save path
+  clamps through `rcaClampMaxTokens` exactly as before.
+- **A dead effort gate in the direct-mode classifier is gone.**
+  `js/minimax.js` keyed a `clsBody.output_config` branch on
+  `RCA_CONFIG.reasoningEffortLevels` — a field no config object defines
+  (`reasoningLevels` is the real name), so the guard short-circuited false on
+  every call and the block could not run. The live `rcaReasoningWireValue`
+  block beside it does the same job and more (it also sets
+  `thinking.type: "adaptive"`), so removing the dead branch changes nothing
+  at runtime and leaves one copy of the REVIEW-2026-10-19 comment instead of
+  two contradictory neighbours.
+
+### Changed
+
+- `build.yml` uploads its exe artifact with `actions/upload-artifact@v7`.
+  v5 carried a Node20 deprecation warning (noted in the v0.4.1 release
+  notes); every other workflow in this repo already runs @v7 actions.
+- `requirements.txt` records the deliberate opencv-python exclusion. The
+  v0.4.1 changelog stated the fact ("the packaged exe has never contained
+  OpenCV"); the decision now lives in the file someone would edit to
+  "fix" the missing import, with the measured size consequence attached.
+- `docs/GAP-ANALYSIS-2026-11-02.md` A5 carries a dated resolution note.
+  Its evidence ("zero grep hits in gui_fluent.py", "roadmap item unticked")
+  predates CAPABILITY-2026-11: Fluent now ships a default-OFF names
+  verification / fuzzy pipeline with candidates rendered in the result page,
+  the README roadmap item is ticked, and `capability_matrix.py` + its test
+  guard the asymmetry as data. The section is kept as a historical record.
+
 ## [0.4.1] — 2026-11-07
 
 **No functional change.** This release exists because v0.4.0 was tagged with
