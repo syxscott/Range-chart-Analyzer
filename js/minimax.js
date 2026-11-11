@@ -3976,15 +3976,12 @@ async function extractRangeChart(opts) {
           ],
         }],
       };
-      // REVIEW-2026-10-19: the classification call is the SAME model, and
-      // its budget is only 500 tokens -- which the thinking of an M3.1 at
-      // effort=max would eat completely, leaving an empty classification and
-      // a silently mis-detected chart type. The effort applies here too.
-      if (effort && typeof RCA_CONFIG !== 'undefined'
-          && RCA_CONFIG.reasoningEffortLevels
-          && RCA_CONFIG.reasoningEffortLevels.indexOf(effort) >= 0) {
-        clsBody.output_config = { effort: effort };
-      }
+      // FIX-2026-11-12: removed a dead effort gate here. It keyed on
+      // `RCA_CONFIG.reasoningEffortLevels`, which no config object has ever
+      // defined (`RCA_CONFIG.reasoningLevels` is the real name), so the guard
+      // short-circuited false on every call and the block could not run. The
+      // live path below (`rcaReasoningWireValue`) supersedes it — same intent,
+      // plus the `thinking.type: "adaptive"` body the dead block omitted.
       // REVIEW-2026-10-19: the classification call is the SAME model, and
       // its budget is only 500 tokens -- which the thinking of an M3.1 at
       // effort=max would eat completely, leaving an empty classification and
