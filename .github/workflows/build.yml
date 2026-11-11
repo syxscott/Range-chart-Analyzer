@@ -164,7 +164,10 @@ jobs:
       # the exe as a workflow artifact, so a release candidate can be
       # downloaded and exercised before it is tagged.
       - name: Upload the windowed executable as a workflow artifact
-        uses: actions/upload-artifact@v5
+        # FIX-2026-11-12: v5 carried a Node20 deprecation warning; v7 is the
+        # current major (2026-10) and matches the checkout/setup-* @v7 the
+        # other workflows already run.
+        uses: actions/upload-artifact@v7
         with:
           name: RangeChartAnalyzer-win64
           path: dist/RangeChartAnalyzer.exe
